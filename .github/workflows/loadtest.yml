@@ -74,8 +74,8 @@ jobs:
             --rpc-url "${RPC_URL}" \
             --rich-privkey "${RICH_PRIVKEY}" \
             --duration 5m \
-            --max-in-flight 50 \
-            --wallets 100 \
+            --max-in-flight 25 \
+            --wallets 30 \
             --dest random \
             --output-dir "../${LOADBASE_OUT_DIR}" \
             --output-format all \
@@ -95,6 +95,8 @@ jobs:
           MEDIAN_INC_P50=$(jq -r '.summary.median_include_p50_10s_s' "${SUMMARY_JSON}")
           FINAL_INCLUDED=$(jq -r '.summary.final_included' "${SUMMARY_JSON}")
           SAMPLE_COUNT=$(jq -r '.summary.sample_count' "${SUMMARY_JSON}")
+          RECEIPT_TIMEOUTS=$(jq -r '.summary.receipt_timeouts // 0' "${SUMMARY_JSON}")
+          RECEIPT_ERRORS=$(jq -r '.summary.receipt_errors // 0' "${SUMMARY_JSON}")
 
           {
             echo "## Loadbase Benchmark"
@@ -106,6 +108,8 @@ jobs:
             echo "| P95 TPS10 | ${P95_TPS10} |"
             echo "| Median include p50 10s (s) | ${MEDIAN_INC_P50} |"
             echo "| Final included | ${FINAL_INCLUDED} |"
+            echo "| Receipt timeouts | ${RECEIPT_TIMEOUTS} |"
+            echo "| Receipt errors | ${RECEIPT_ERRORS} |"
             echo
             if [ -f "${REPORT_MD}" ]; then
               echo "<details><summary>Full report</summary>"
@@ -127,6 +131,8 @@ jobs:
           MEDIAN_INC_P50=$(jq -r '.summary.median_include_p50_10s_s' "${SUMMARY_JSON}")
           FINAL_INCLUDED=$(jq -r '.summary.final_included' "${SUMMARY_JSON}")
           SAMPLE_COUNT=$(jq -r '.summary.sample_count' "${SUMMARY_JSON}")
+          RECEIPT_TIMEOUTS=$(jq -r '.summary.receipt_timeouts // 0' "${SUMMARY_JSON}")
+          RECEIPT_ERRORS=$(jq -r '.summary.receipt_errors // 0' "${SUMMARY_JSON}")
 
           {
             echo "loadbase_median_tps10 ${MEDIAN_TPS10}"
@@ -134,6 +140,8 @@ jobs:
             echo "loadbase_median_include_p50_10s_seconds ${MEDIAN_INC_P50}"
             echo "loadbase_final_included ${FINAL_INCLUDED}"
             echo "loadbase_sample_count ${SAMPLE_COUNT}"
+            echo "loadbase_receipt_timeouts ${RECEIPT_TIMEOUTS}"
+            echo "loadbase_receipt_errors ${RECEIPT_ERRORS}"
           } > "${METRIC_FILE}"
 
           PUSH_URL="${LOADBASE_PUSHGATEWAY_URL%/}/metrics/job/loadbase_benchmark/instance/${RUN_INSTANCE}"

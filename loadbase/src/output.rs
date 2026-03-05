@@ -36,6 +36,8 @@ pub struct RunMetadata {
     pub duration_s: u64,
     pub destination_mode: String,
     pub rpc_url: String,
+    pub receipt_timeouts: u64,
+    pub receipt_errors: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -202,6 +204,8 @@ fn render_summary_json(metadata: &RunMetadata, summary: &BenchmarkSummary) -> St
             "median_include_p50_10s_s": summary.median_include_p50_10s_s,
             "max_in_flight": summary.max_in_flight,
             "final_included": summary.final_included,
+            "receipt_timeouts": metadata.receipt_timeouts,
+            "receipt_errors": metadata.receipt_errors,
         }
     });
     serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned())
@@ -237,7 +241,11 @@ fn render_report_md(metadata: &RunMetadata, summary: &BenchmarkSummary) -> Strin
         summary.p95_tps10,
         summary.median_include_p50_10s_s,
         summary.max_in_flight,
-        summary.final_included
+        summary.final_included,
+    ) + &format!(
+        "| Receipt timeouts | {} |\n\
+         | Receipt errors | {} |\n",
+        metadata.receipt_timeouts, metadata.receipt_errors
     )
 }
 
@@ -297,5 +305,31 @@ mod tests {
         assert_eq!(summary.median_include_p50_10s_s, 0.3);
         assert_eq!(summary.max_in_flight, 5);
         assert_eq!(summary.final_included, 50);
+    }
+
+    #[test]
+    fn renders_receipt_outcomes_in_summary_json() {
+        let metadata = RunMetadata {
+            chain_id: 6565,
+            wallets: 30,
+            max_in_flight: 25,
+            duration_s: 300,
+            destination_mode: "random".to_owned(),
+            rpc_url: "http://localhost:3050".to_owned(),
+            receipt_timeouts: 7,
+            receipt_errors: 2,
+        };
+        let summary = BenchmarkSummary {
+            sample_count: 1,
+            duration: Duration::from_secs(1),
+            median_tps10: 10.0,
+            p95_tps10: 12.0,
+            median_include_p50_10s_s: 0.5,
+            max_in_flight: 20,
+            final_included: 100,
+        };
+        let payload = render_summary_json(&metadata, &summary);
+        assert!(payload.contains("\"receipt_timeouts\": 7"));
+        assert!(payload.contains("\"receipt_errors\": 2"));
     }
 }

@@ -6,7 +6,10 @@ use parking_lot::Mutex;
 use std::{
     collections::VecDeque,
     io::Write,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 use tokio::time::interval;
@@ -55,6 +58,8 @@ pub struct Metrics {
     submit: Arc<Mutex<TxStats>>,
     include: Arc<Mutex<TxStats>>,
     samples: Arc<Mutex<Vec<BenchmarkSample>>>,
+    receipt_timeouts: Arc<AtomicU64>,
+    receipt_errors: Arc<AtomicU64>,
 }
 
 impl Metrics {
@@ -63,6 +68,8 @@ impl Metrics {
             submit: Arc::new(Mutex::new(TxStats::new()?)),
             include: Arc::new(Mutex::new(TxStats::new()?)),
             samples: Arc::new(Mutex::new(Vec::new())),
+            receipt_timeouts: Arc::new(AtomicU64::new(0)),
+            receipt_errors: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -77,6 +84,21 @@ impl Metrics {
     pub fn spawn_reporter(&self, started: Instant) {
         let me = self.clone();
         tokio::spawn(async move { me.report_loop(started).await });
+    }
+
+    pub fn record_receipt_timeout(&self) {
+        self.receipt_timeouts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_receipt_error(&self) {
+        self.receipt_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn receipt_outcomes(&self) -> (u64, u64) {
+        (
+            self.receipt_timeouts.load(Ordering::Relaxed),
+            self.receipt_errors.load(Ordering::Relaxed),
+        )
     }
 
     pub fn samples(&self) -> Vec<BenchmarkSample> {
@@ -194,5 +216,16 @@ mod tests {
         assert_eq!(snapshot.sent, 1);
         assert_eq!(snapshot.included, 1);
         assert_eq!(snapshot.in_flight, 0);
+    }
+
+    #[test]
+    fn tracks_receipt_outcomes() {
+        let metrics = Metrics::new().expect("metrics");
+        metrics.record_receipt_timeout();
+        metrics.record_receipt_timeout();
+        metrics.record_receipt_error();
+        let (timeouts, errors) = metrics.receipt_outcomes();
+        assert_eq!(timeouts, 2);
+        assert_eq!(errors, 1);
     }
 }

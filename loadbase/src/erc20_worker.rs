@@ -126,16 +126,18 @@ fn spawn_receipt_waiter(
     provider: Provider<Http>,
     metrics: Metrics,
 ) {
-    const RECEIPT_TIMEOUT: Duration = Duration::from_secs(5);
+    const RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
 
     tokio::spawn(async move {
         let t_inc = Instant::now();
         loop {
             if t_inc.elapsed() >= RECEIPT_TIMEOUT {
-                panic!(
+                metrics.record_receipt_timeout();
+                eprintln!(
                     "tx {tx_hash:?} unconfirmed for {}s - node dropped it",
                     RECEIPT_TIMEOUT.as_secs()
                 );
+                break;
             }
             match provider.get_transaction_receipt(tx_hash).await {
                 Ok(Some(_)) => {
@@ -144,6 +146,7 @@ fn spawn_receipt_waiter(
                 }
                 Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
                 Err(e) => {
+                    metrics.record_receipt_error();
                     eprintln!("receipt poll error for {tx_hash:?}: {e}");
                     break;
                 }

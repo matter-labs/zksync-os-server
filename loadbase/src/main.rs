@@ -187,6 +187,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     if let Some(output_dir) = &args.output_dir {
+        let (receipt_timeouts, receipt_errors) = metrics.receipt_outcomes();
         let metadata = RunMetadata {
             chain_id,
             wallets: args.wallets,
@@ -197,6 +198,8 @@ async fn main() -> anyhow::Result<()> {
                 DestMode::Random => "random".to_owned(),
             },
             rpc_url: args.rpc_url.clone(),
+            receipt_timeouts,
+            receipt_errors,
         };
         let samples = metrics.samples();
         output::write_outputs(output_dir, args.output_format.into(), &metadata, &samples)?;
