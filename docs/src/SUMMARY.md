@@ -32,3 +32,4 @@
 
 - [Guides](guides/index.md)
   - [Updating local chains: genesis and L1 state](guides/local_setup_update.md)
+  - [Load test regression monitoring](guides/loadtest_regression_monitoring.md)
