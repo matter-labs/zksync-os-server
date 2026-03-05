@@ -38,6 +38,16 @@ Run all of the following checks locally and ensure they pass before pushing:
 2. **Lint**: `cargo clippy --all-targets --all-features --workspace -- -D warnings`
 3. **Unit tests**: `cargo nextest run --release --workspace`
 
+### Tests
+
+Judge whether the change warrants new tests:
+
+- **Bug fix or new logic** — add a unit test covering the case.
+- **New subsystem interaction or cross-component flow** — consider an integration test in `zksync_os_integration_tests`.
+- **Pure refactor, doc change, or config tweak** — tests may not be needed.
+
+If no tests were added, include one sentence in the PR description explaining why (e.g. _"No tests added — this is a documentation-only change."_ or _"No tests added — the behaviour is already covered by existing integration tests."_).
+
 ### PR title
 
 PR titles must follow the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification:
