@@ -1,6 +1,6 @@
 # AI Code Review Guide for zksync-os-server
 
-*Synthesized from observed review patterns in zksync-era and tailored to this codebase. This guide covers the conventions, idioms, and correctness expectations that apply specifically to zksync-os-server.*
+*This guide covers the conventions, idioms, and correctness expectations that apply to zksync-os-server.*
 
 ---
 
@@ -8,7 +8,7 @@
 
 ### 1.1 Pipeline Component Discipline
 
-This codebase uses a custom pipeline framework (`lib/pipeline/`) rather than a node-framework task registry. Components implement `PipelineComponent` and are chained via `Pipeline::pipe()`. Tasks are collected into a `JoinSet<()>` in `run()`.
+This codebase uses a custom pipeline framework (`lib/pipeline/`). Components implement `PipelineComponent` and are chained via `Pipeline::pipe()`. Tasks are collected into a `JoinSet<()>` in `run()`.
 
 **What to flag:**
 - `tokio::spawn` in library crates — background work must go through the pipeline framework or be explicitly registered into the `JoinSet` in `node/bin/src/lib.rs`
@@ -189,7 +189,7 @@ Every redundant clone is worth flagging:
 
 ### 3.1 RocksDB Usage
 
-This codebase uses RocksDB (not Postgres) via column families defined with `NamedColumnFamily`. RocksDB handles are cheap to clone; there are no "connection pools" or SQL transaction isolation levels.
+This codebase uses RocksDB via column families defined with `NamedColumnFamily`. RocksDB handles are cheap to clone; there are no connection pools or SQL transaction isolation levels.
 
 **What to flag:**
 - Operations that must be atomic but are split across two separate `WriteBatch` commits — use a single batch
