@@ -69,7 +69,10 @@ pub async fn distribute_varied<M: Middleware + 'static>(
             };
             match send_result {
                 Ok(tx_hash) => break tx_hash,
-                Err(err) if is_replacement_gas_error(&err.to_string()) && send_attempt < SEND_RETRIES => {
+                Err(err)
+                    if is_replacement_gas_error(&err.to_string())
+                        && send_attempt < SEND_RETRIES =>
+                {
                     send_attempt += 1;
                     let backoff_ms = 300 * send_attempt as u64;
                     println!(
@@ -139,7 +142,9 @@ mod tests {
         assert!(is_replacement_gas_error(
             "insufficient gas price to replace existing transaction"
         ));
-        assert!(is_replacement_gas_error("replacement transaction underpriced"));
+        assert!(is_replacement_gas_error(
+            "replacement transaction underpriced"
+        ));
         assert!(!is_replacement_gas_error("nonce too low"));
     }
 }

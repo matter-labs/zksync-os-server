@@ -95,6 +95,8 @@ jobs:
         id: baseline
         if: github.event_name == 'pull_request'
         continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           chmod +x .github/scripts/loadtest-compare-baseline.sh

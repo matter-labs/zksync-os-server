@@ -30,6 +30,7 @@ struct PendingTx {
     raw: Bytes,
     permit: tokio::sync::OwnedSemaphorePermit,
     sent_at: Instant,
+    nonce: u64,
 }
 
 pub struct WorkerConfig {
@@ -100,7 +101,8 @@ async fn build_batch(
         let mut call = token.transfer(dest, amt);
         call.tx.set_gas(cfg.gas_limit);
         call.tx.set_gas_price(gas_price); // **the fix**
-        call.tx.set_nonce(*nonce);
+        let tx_nonce = *nonce;
+        call.tx.set_nonce(tx_nonce);
         *nonce += 1;
 
         let sig = signer
@@ -114,6 +116,7 @@ async fn build_batch(
             raw,
             permit,
             sent_at: Instant::now(),
+            nonce: tx_nonce,
         });
     }
 
@@ -125,6 +128,7 @@ fn spawn_receipt_waiter(
     permit: tokio::sync::OwnedSemaphorePermit,
     provider: Provider<Http>,
     metrics: Metrics,
+    nonce_refresh: Arc<AtomicBool>,
 ) {
     const RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -133,6 +137,7 @@ fn spawn_receipt_waiter(
         loop {
             if t_inc.elapsed() >= RECEIPT_TIMEOUT {
                 metrics.record_receipt_timeout();
+                nonce_refresh.store(true, Ordering::Relaxed);
                 eprintln!(
                     "tx {tx_hash:?} unconfirmed for {}s - node dropped it",
                     RECEIPT_TIMEOUT.as_secs()
@@ -147,6 +152,7 @@ fn spawn_receipt_waiter(
                 Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
                 Err(e) => {
                     metrics.record_receipt_error();
+                    nonce_refresh.store(true, Ordering::Relaxed);
                     eprintln!("receipt poll error for {tx_hash:?}: {e}");
                     break;
                 }
@@ -156,11 +162,26 @@ fn spawn_receipt_waiter(
     });
 }
 
+fn should_refresh_nonce_for_rpc_error(err: &Value) -> bool {
+    let msg = err
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    msg.contains("nonce too low")
+        || msg.contains("nonce too high")
+        || msg.contains("already known")
+        || msg.contains("known transaction")
+        || msg.contains("replacement transaction underpriced")
+        || msg.contains("transaction underpriced")
+}
+
 fn process_replies(
     batch: Vec<PendingTx>,
     replies: Vec<Value>,
     provider: &Provider<Http>,
     metrics: &Metrics,
+    nonce_refresh: &Arc<AtomicBool>,
 ) {
     for (tx, reply) in batch.into_iter().zip(replies) {
         let sub_ms = tx.sent_at.elapsed().as_millis() as u64;
@@ -168,10 +189,19 @@ fn process_replies(
         if let Some(tx_hash_str) = reply.get("result").and_then(|v| v.as_str()) {
             let tx_hash: H256 = tx_hash_str.parse().unwrap_or_default();
             metrics.record_submitted(sub_ms);
-            spawn_receipt_waiter(tx_hash, tx.permit, provider.clone(), metrics.clone());
+            spawn_receipt_waiter(
+                tx_hash,
+                tx.permit,
+                provider.clone(),
+                metrics.clone(),
+                nonce_refresh.clone(),
+            );
         } else {
             if let Some(err) = reply.get("error") {
-                eprintln!("❗ tx error {err}");
+                if should_refresh_nonce_for_rpc_error(err) {
+                    nonce_refresh.store(true, Ordering::Relaxed);
+                }
+                eprintln!("❗ tx error for nonce {}: {err}", tx.nonce);
             }
             // tx.permit dropped here, freeing the slot
         }
@@ -224,9 +254,30 @@ async fn run_wallet(
         .await
         .expect("nonce")
         .as_u64();
+    let nonce_refresh = Arc::new(AtomicBool::new(false));
     println!("erc20 wallet {idx} start‑nonce {nonce}");
 
     while running.load(Ordering::Relaxed) {
+        if nonce_refresh.swap(false, Ordering::Relaxed) {
+            match signer
+                .get_transaction_count(signer.address(), Some(BlockNumber::Pending.into()))
+                .await
+            {
+                Ok(chain_nonce) => {
+                    let chain_nonce = chain_nonce.as_u64();
+                    if chain_nonce != nonce {
+                        eprintln!(
+                            "erc20 wallet {idx} nonce resync: local={nonce}, chain_pending={chain_nonce}"
+                        );
+                        nonce = chain_nonce;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❗ nonce refresh failed for wallet {idx}: {e}");
+                }
+            }
+        }
+
         let gas_price = match provider.get_gas_price().await {
             Ok(p) => p,
             Err(e) => {
@@ -246,7 +297,7 @@ async fn run_wallet(
             continue;
         };
 
-        process_replies(batch, replies, &provider, &metrics);
+        process_replies(batch, replies, &provider, &metrics, &nonce_refresh);
     }
 }
 
@@ -278,4 +329,30 @@ pub fn spawn_erc20_workers(
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_refresh_nonce_for_rpc_error;
+    use serde_json::json;
+
+    #[test]
+    fn nonce_related_errors_trigger_refresh() {
+        assert!(should_refresh_nonce_for_rpc_error(
+            &json!({"code": -32000, "message": "nonce too low"})
+        ));
+        assert!(should_refresh_nonce_for_rpc_error(
+            &json!({"code": -32000, "message": "replacement transaction underpriced"})
+        ));
+        assert!(should_refresh_nonce_for_rpc_error(
+            &json!({"code": -32000, "message": "already known"})
+        ));
+    }
+
+    #[test]
+    fn unrelated_errors_do_not_trigger_refresh() {
+        assert!(!should_refresh_nonce_for_rpc_error(
+            &json!({"code": -32602, "message": "invalid params"})
+        ));
+    }
 }
