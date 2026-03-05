@@ -158,7 +158,9 @@ impl Genesis {
     pub async fn state(&self) -> &GenesisState {
         let protocol_version = self.genesis_upgrade_tx().await.protocol_version.clone();
         self.state
-            .get_or_try_init(|| build_genesis(self.input_source.as_ref(), self.chain_id, protocol_version))
+            .get_or_try_init(|| {
+                build_genesis(self.input_source.as_ref(), self.chain_id, protocol_version)
+            })
             .await
             .expect("Failed to build genesis state")
     }
@@ -215,8 +217,12 @@ async fn build_genesis(
     protocol_version: ProtocolSemanticVersion,
 ) -> anyhow::Result<GenesisState> {
     let genesis_input = genesis_input_source.genesis_input().await?;
-    let execution_version = ExecutionVersion::try_from(protocol_version.clone())
-        .with_context(|| format!("Cannot determine execution version for genesis protocol version {protocol_version}"))?;
+    let execution_version =
+        ExecutionVersion::try_from(protocol_version.clone()).with_context(|| {
+            format!(
+                "Cannot determine execution version for genesis protocol version {protocol_version}"
+            )
+        })?;
 
     // BTreeMap is used to ensure that the storage logs are sorted by key, so that the order is deterministic
     // which is important for tree.
