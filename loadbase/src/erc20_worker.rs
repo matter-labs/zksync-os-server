@@ -23,6 +23,7 @@ use tokio::sync::Semaphore;
 
 const JITTER_SIGMA: f64 = 0.20;
 const BATCH_SIZE: usize = 10;
+const GAS_PRICE_HEADROOM_MULTIPLIER: u64 = 4;
 
 type EthSigner = SignerMiddleware<Provider<Http>, LocalWallet>;
 
@@ -79,6 +80,10 @@ fn choose_dest(
     }
 }
 
+fn with_gas_price_headroom(gas_price: U256) -> U256 {
+    gas_price.saturating_mul(U256::from(GAS_PRICE_HEADROOM_MULTIPLIER))
+}
+
 async fn build_batch(
     signer: &EthSigner,
     token: &SimpleERC20<EthSigner>,
@@ -100,7 +105,7 @@ async fn build_batch(
 
         let mut call = token.transfer(dest, amt);
         call.tx.set_gas(cfg.gas_limit);
-        call.tx.set_gas_price(gas_price); // **the fix**
+        call.tx.set_gas_price(gas_price);
         let tx_nonce = *nonce;
         call.tx.set_nonce(tx_nonce);
         *nonce += 1;
@@ -285,6 +290,7 @@ async fn run_wallet(
                 U256::from(3_000_000_000u64) // 3 gwei fallback
             }
         };
+        let gas_price = with_gas_price_headroom(gas_price);
 
         let batch = build_batch(&signer, &token, &sem, &mut nonce, gas_price, &cfg).await;
 
@@ -333,7 +339,8 @@ pub fn spawn_erc20_workers(
 
 #[cfg(test)]
 mod tests {
-    use super::should_refresh_nonce_for_rpc_error;
+    use super::{should_refresh_nonce_for_rpc_error, with_gas_price_headroom};
+    use ethers::types::U256;
     use serde_json::json;
 
     #[test]
@@ -354,5 +361,13 @@ mod tests {
         assert!(!should_refresh_nonce_for_rpc_error(
             &json!({"code": -32602, "message": "invalid params"})
         ));
+    }
+
+    #[test]
+    fn applies_gas_price_headroom_multiplier() {
+        assert_eq!(
+            with_gas_price_headroom(U256::from(10u64)),
+            U256::from(40u64)
+        );
     }
 }
