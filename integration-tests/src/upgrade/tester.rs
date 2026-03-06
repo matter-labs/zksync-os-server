@@ -10,7 +10,7 @@ use crate::dyn_wallet_provider::EthDynProvider;
 use crate::provider::{ZksyncApi as _, ZksyncTestingProvider as _};
 use crate::upgrade::interfaces::FacetCut;
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
+use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::providers::ext::AnvilApi;
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
@@ -332,27 +332,14 @@ impl UpgradeTester {
         &self,
         bytecodes: I,
     ) -> anyhow::Result<()> {
-        // TODO: right now, using bytecode publisher doesn't work.
-        // so instead, we just deploy each contract once on L2 to make sure that preimages are known.
-        for bytecode in bytecodes {
-            self.tester
-                .l2_provider
-                .send_transaction(
-                    TransactionRequest::default()
-                        .with_kind(TxKind::Create)
-                        .with_input(bytecode),
-                )
-                .await?
-                .expect_successful_receipt()
-                .await?;
-        }
-
-        // self.bytecode_supplier
-        //     .publishBytecodes(bytecodes.into_iter().collect())
-        //     .send()
-        //     .await?
-        //     .expect_successful_receipt()
-        //     .await?;
+        // Publish bytecodes to the supplier contract on L1 so the server can
+        // fetch them as force preimages via `EVMBytecodePublished` events.
+        self.bytecode_supplier
+            .publishBytecodes(bytecodes.into_iter().collect())
+            .send()
+            .await?
+            .expect_successful_receipt()
+            .await?;
         Ok(())
     }
 

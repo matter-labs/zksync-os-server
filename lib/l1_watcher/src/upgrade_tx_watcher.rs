@@ -1,6 +1,6 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::factory_deps::load_factory_deps;
 use crate::util::ANVIL_L1_CHAIN_ID;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
@@ -9,6 +9,7 @@ use alloy::primitives::{Address, B256, BlockNumber, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
+use blake2::{Blake2s256, Digest as BlakeDigest};
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
 use zksync_os_contract_interface::ZkChain;
@@ -17,10 +18,16 @@ use zksync_os_types::{
     L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
     UpgradeMetadata,
 };
-// TODO: disabled until bytecode supplier integration is ready
-// use zksync_os_contract_interface::IBytecodeSupplier::BytecodePublished;
-// use zk_os_api::helpers::set_properties_code;
-// use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
+
+alloy::sol! {
+    #[derive(Debug)]
+    event EVMBytecodePublished(bytes32 indexed bytecodeHash, bytes bytecode);
+
+    #[sol(rpc)]
+    interface IChainTypeManagerBytecodeSupplier {
+        function L1_BYTECODES_SUPPLIER() external view returns (address);
+    }
+}
 
 /// Limit the number of L1 blocks to scan when looking for the set timestamp transaction.
 const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
@@ -34,7 +41,6 @@ pub struct L1UpgradeTxWatcher {
     provider_l1: DynProvider,
     provider_sl: DynProvider,
     /// Address of the bytecode supplier contract (used to detect published bytecode preimages)
-    #[allow(dead_code)] // TODO: enable once bytecode supplier integration is ready
     bytecode_supplier_address: Address,
     /// Address of the CTM contract (used to detect upgrade priority transactions)
     ctm_sl: Address,
@@ -176,11 +182,11 @@ impl L1UpgradeTxWatcher {
             (None, Vec::new())
         } else {
             let tx = L1UpgradeEnvelope::try_from(proposed_upgrade.l2ProtocolUpgradeTx).unwrap();
-            let force_preimages = self.fetch_force_preimages(&tx.inner.factory_deps).await?;
+            let force_preimages = self.fetch_force_preimages().await?;
 
             tracing::info!(
-                "Fetched {} preimages from the hardcoded file.",
-                force_preimages.len()
+                resolved_preimages = force_preimages.len(),
+                "resolved force deployment preimages from bytecode supplier"
             );
             (Some(tx), force_preimages)
         };
@@ -218,54 +224,88 @@ impl L1UpgradeTxWatcher {
         }
     }
 
-    async fn fetch_force_preimages(
-        &self,
-        _hashes: &[B256],
-    ) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
-        // HACK: For now, we load preimages from a hardcoded JSON file.
-        load_factory_deps()
+    async fn fetch_force_preimages(&self) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
+        let active_supplier = self.resolve_active_bytecode_supplier().await;
 
-        // // TODO: Bytecode supplier is not ready yet for ZKsync OS.
-        // panic!("fetching force deployment preimages is not yet implemented");
+        let mut current_block = self.provider_l1.get_block_number().await?;
+        let start_block = current_block
+            .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS)
+            .max(1u64);
 
-        // tracing::info!(
-        //     num_hashes = hashes.len(),
-        //     "fetching force deployment preimages from bytecode supplier"
-        // );
+        let mut by_hash: HashMap<B256, Vec<u8>> = HashMap::new();
 
-        // // TODO: for now we assume that bytecodes are published within lookbehind range
-        // let current_block = self.provider.get_block_number().await?;
-        // let start_block = current_block
-        //     .saturating_sub(MAX_L1_BLOCKS_LOOKBEHIND)
-        //     .max(1u64);
+        while current_block >= start_block {
+            let from_block = current_block
+                .saturating_sub(self.max_blocks_to_process - 1)
+                .max(start_block);
+            let filter = Filter::new()
+                .from_block(from_block)
+                .to_block(current_block)
+                .address(active_supplier)
+                .event_signature(EVMBytecodePublished::SIGNATURE_HASH);
+            let logs = self.provider_l1.get_logs(&filter).await?;
 
-        // let mut preimages = Vec::new();
-        // for hash in hashes {
-        //     let filter = Filter::new()
-        //         .from_block(start_block)
-        //         .to_block(current_block)
-        //         .address(self.bytecode_supplier_address)
-        //         .event_signature(BytecodePublished::SIGNATURE_HASH)
-        //         .topic1(*hash);
-        //     let logs = self.provider.get_logs(&filter).await?;
-        //     anyhow::ensure!(
-        //         logs.len() == 1,
-        //         "expected exactly one log for bytecode hash {hash:?}, got {logs:?}"
-        //     );
-        //     let sol_event = BytecodePublished::decode_log(&logs[0].inner)?.data;
+            for log in logs {
+                let published = EVMBytecodePublished::decode_log(&log.inner)?.data;
+                let evm_hash = B256::from(published.bytecodeHash);
+                let zkos_hash = zkos_hash_from_bytecode(&published.bytecode);
+                let bytecode = published.bytecode.to_vec();
 
-        //     // NOTE: it is guaranteed that `bytecodeHashes` from the transaction correspond to
-        //     // the `BytecodePublished` events, but there is no guarantee that the bytecode hash
-        //     // the server expects is the same as the one used in the event. So, we need to re-calculate
-        //     // the hash here.
-        //     let mut account_properties = AccountProperties::default();
-        //     set_properties_code(&mut account_properties, &sol_event.bytecode);
-        //     let calculated_hash = B256::from_slice(account_properties.bytecode_hash.as_u8_ref());
+                by_hash.insert(evm_hash, bytecode.clone());
+                by_hash.insert(zkos_hash, bytecode);
+            }
 
-        //     preimages.push((calculated_hash, sol_event.bytecode.to_vec()));
-        // }
-        // Ok(preimages)
+            current_block = from_block.saturating_sub(1);
+        }
+
+        tracing::info!(
+            supplier = ?active_supplier,
+            num_preimages = by_hash.len(),
+            "fetched force deployment preimages from bytecode supplier"
+        );
+
+        Ok(by_hash.into_iter().collect())
     }
+
+    async fn resolve_active_bytecode_supplier(&self) -> Address {
+        let ctm = IChainTypeManagerBytecodeSupplier::new(self.ctm_sl, self.provider_sl.clone());
+        match ctm.L1_BYTECODES_SUPPLIER().call().await {
+            Ok(l1_address) if l1_address != Address::ZERO => {
+                if l1_address != self.bytecode_supplier_address {
+                    tracing::warn!(
+                        configured_supplier = ?self.bytecode_supplier_address,
+                        l1_supplier = ?l1_address,
+                        ctm = ?self.ctm_sl,
+                        "bytecode supplier changed on L1; using L1 supplier for this fetch"
+                    );
+                }
+                l1_address
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    configured_supplier = ?self.bytecode_supplier_address,
+                    ctm = ?self.ctm_sl,
+                    "CTM returned zero bytecode supplier; using configured supplier for this fetch"
+                );
+                self.bytecode_supplier_address
+            }
+            Err(err) => {
+                tracing::warn!(
+                    configured_supplier = ?self.bytecode_supplier_address,
+                    ctm = ?self.ctm_sl,
+                    error = ?err,
+                    "failed to fetch bytecode supplier from CTM on L1; using configured supplier for this fetch"
+                );
+                self.bytecode_supplier_address
+            }
+        }
+    }
+}
+
+fn zkos_hash_from_bytecode(bytecode: &[u8]) -> B256 {
+    // Matches Utils.getZKOSBytecodeInfo -> blake2s256(bytecode)
+    let digest = Blake2s256::digest(bytecode);
+    B256::from_slice(digest.as_slice())
 }
 
 #[async_trait::async_trait]
@@ -383,4 +423,39 @@ async fn find_l1_block_by_protocol_version(
         Ok(res >= protocol_version)
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zkos_hash_matches_blake2s256() {
+        let bytecode = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let result = zkos_hash_from_bytecode(&bytecode);
+        let expected = B256::from_slice(Blake2s256::digest(&bytecode).as_slice());
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn zkos_hash_empty_bytecode() {
+        let result = zkos_hash_from_bytecode(&[]);
+        let expected = B256::from_slice(Blake2s256::digest([]).as_slice());
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn zkos_hash_is_deterministic() {
+        let bytecode = b"some evm bytecode here";
+        let hash1 = zkos_hash_from_bytecode(bytecode);
+        let hash2 = zkos_hash_from_bytecode(bytecode);
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn zkos_hash_differs_for_different_bytecodes() {
+        let a = zkos_hash_from_bytecode(b"bytecode_a");
+        let b = zkos_hash_from_bytecode(b"bytecode_b");
+        assert_ne!(a, b);
+    }
 }
