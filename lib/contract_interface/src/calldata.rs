@@ -138,7 +138,7 @@ pub fn encode_commit_batch_data(
             // Prefixed by current encoding version as expected by protocol
             [[V30_ENCODING_VERSION].to_vec(), encoded_data].concat()
         }
-        31 => {
+        31 | 32 => {
             let commit_batch_info = IExecutor::CommitBatchInfoZKsyncOS::from(commit_info.clone());
             tracing::debug!(
                 last_batch_hash = ?prev_batch_info.hash(),

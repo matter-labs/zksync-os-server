@@ -3,10 +3,11 @@ use alloy::providers::Provider;
 use alloy::sol_types::SolCall;
 use std::collections::BTreeMap;
 use zksync_os_integration_tests::Tester;
-use zksync_os_integration_tests::contracts::SampleForceDeployment;
+use zksync_os_integration_tests::contracts::{EventEmitter, SampleForceDeployment};
 use zksync_os_integration_tests::upgrade::{
     Action, CommitterFacetV31, DefaultUpgrade, FacetCut, UpgradeTester,
 };
+use zksync_os_types::ProtocolSemanticVersion;
 
 /// Executes the simplest patch protocol upgrade:
 /// - no contracts are deployed
@@ -132,29 +133,35 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Tests that the l1_watcher correctly handles a chain that skips an intermediate version.
+/// Tests that the l1_watcher correctly handles a chain that skips an intermediate version,
+/// and that force deployments are applied in the correct order across multiple minor upgrades.
 ///
-/// Scenario: chain is at v30.X. Two upgrade cut-data entries are published on the CTM:
-///   - v30.X+1 (patch, no L2 upgrade tx) — only the cut data is registered, no timestamp.
-///   - v31     (minor, has L2 upgrade tx) — cut data registered AND timestamp set.
+/// Scenario:
+///   - Chain starts at v30.2.
+///   - v30.3 (patch) is registered on CTM but NO timestamp is set — the chain skips it.
+///   - v31.0 (minor) is registered with a timestamp. The l1_watcher detects v30.3 as an
+///     intermediate via `fetch_intermediate_upgrade_infos` and submits both to UpgradeSubpool.
+///     The v31.0 upgrade force-deploys GIBBERISH bytecode to the target address.
+///   - v32.0 (minor) is registered; it force-deploys the CORRECT `SampleForceDeployment`.
 ///
-/// The chain receives only the v31 `UpdateUpgradeTimestamp` event, so
-/// `fetch_intermediate_upgrade_infos` must detect the v30.X+1 cut data and insert it into
-/// the `UpgradeSubpool` (with `tx: None`) before the v31 entry. The sequencer then processes
-/// v30.X+1 as a patch-only step (no block tx) and v31 as a minor upgrade (upgrade tx in
-/// block), yielding a final chain version of v31.
+/// After both upgrades are finalized, `SampleForceDeployment.return42()` must return 42,
+/// confirming that the second upgrade's force deployment overwrote the gibberish.
 #[test_log::test(tokio::test)]
 async fn upgrade_skip_intermediate_patch_then_minor() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(0); // Upgrade can be executed immediately.
     let deadline = U256::MAX; // No deadline for old protocol version.
 
-    let tester = Tester::setup().await?;
-    let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+    let sample_force_deployment_address: Address = "0x000000000000000000000000000000000000dead"
+        .parse()
+        .unwrap();
 
-    // Build the intermediate patch upgrade (e.g., v30.0 → v30.1).
-    // We register the cut data on the CTM so the watcher can detect it as an
-    // intermediate version, but we intentionally withhold the `setUpgradeTimestamp`
-    // call for this chain — the chain will skip straight to v31.
+    let tester = Tester::setup().await?;
+    let mut upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+
+    // ======= PHASE 1: Skip v30.3 patch, upgrade to v31.0 with gibberish force deployment =======
+
+    // Register the intermediate patch upgrade (v30.2 → v30.3) on CTM without a timestamp.
+    // The chain skips this version; the l1_watcher detects it as intermediate cut data.
     let intermediate_upgrade = upgrade_tester
         .protocol_upgrade_builder()
         .await?
@@ -167,13 +174,7 @@ async fn upgrade_skip_intermediate_patch_then_minor() -> anyhow::Result<()> {
         DefaultUpgrade::deploy(upgrade_tester.tester.l1_provider(), &intermediate_upgrade).await?;
     let intermediate_cut_data = intermediate_upgrade_contract.diamond_cut_data(vec![]);
 
-    // Bridgehub migrations must be paused before any setNewVersionUpgrade call.
     upgrade_tester.pause_bridgehub_migrations().await?;
-
-    // Register the intermediate patch upgrade on the CTM.
-    // This emits NewUpgradeCutData(v30.1, patchCutData), which the watcher will later find
-    // when scanning for intermediate versions between the chain's current and target versions.
-    // No setUpgradeTimestamp is called for v30.1 — this chain skips it.
     upgrade_tester
         .set_new_version_on_ctm(
             intermediate_cut_data,
@@ -183,60 +184,139 @@ async fn upgrade_skip_intermediate_patch_then_minor() -> anyhow::Result<()> {
         .await?;
     tracing::info!(
         intermediate_version = ?intermediate_upgrade.newProtocolVersion,
-        "Intermediate patch upgrade registered on CTM (no timestamp set)"
+        "Intermediate patch (v30.3) registered on CTM without timestamp"
     );
 
-    // Build the final minor upgrade (e.g., v30.0 → v31).
-    // The chain is still at v30.0, so we pass v30.0 as the old version to the CTM.
-    // This second setNewVersionUpgrade call overwrites upgradeCutHash[v30.0] with the
-    // minor cut data hash, which is what upgradeChainFromVersion will verify against.
-    let final_upgrade = upgrade_tester
+    // Publish gibberish bytecode (EventEmitter) so its preimage is known on L2.
+    upgrade_tester
+        .publish_bytecodes([EventEmitter::BYTECODE.clone()])
+        .await?;
+
+    // Build the v31.0 minor upgrade with GIBBERISH force deployment to the target address.
+    let gibberish_deployments: BTreeMap<Address, Bytes> = [(
+        sample_force_deployment_address,
+        EventEmitter::DEPLOYED_BYTECODE.clone(),
+    )]
+    .into_iter()
+    .collect();
+
+    let v31_upgrade = upgrade_tester
         .protocol_upgrade_builder()
         .await?
         .bump_minor(1)
-        .with_force_deployments(BTreeMap::new())
+        .with_force_deployments(gibberish_deployments)
         .with_timestamp(upgrade_timestamp)
         .build();
 
-    let final_upgrade_contract =
-        DefaultUpgrade::deploy(upgrade_tester.tester.l1_provider(), &final_upgrade).await?;
-    let final_cut_data = final_upgrade_contract.diamond_cut_data(vec![]);
+    let v31_upgrade_contract =
+        DefaultUpgrade::deploy(upgrade_tester.tester.l1_provider(), &v31_upgrade).await?;
 
-    // Register the final minor upgrade on the CTM and set the upgrade timestamp.
-    // NewUpgradeCutData(v31, minorCutData) is emitted. The watcher picks up the
-    // UpdateUpgradeTimestamp event, calls fetch_intermediate_upgrade_infos, finds v30.1,
-    // and submits both entries to the UpgradeSubpool in ascending order.
+    // Install CommitterFacetV31 as part of the v31.0 diamond cut so the chain can commit
+    // batches encoded with the V31 format after the upgrade.
+    let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
+    let committer_facet = CommitterFacetV31::deploy(
+        upgrade_tester.tester.l1_provider().clone(),
+        U256::from(l1_chain_id),
+    )
+    .await?;
+    let v31_facet_cut = FacetCut {
+        facet: *committer_facet.address(),
+        action: Action::Replace,
+        isFreezable: true,
+        selectors: vec![FixedBytes(
+            CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR,
+        )],
+    };
+    let v31_cut_data = v31_upgrade_contract.diamond_cut_data(vec![v31_facet_cut]);
+
+    // Register v31.0 on CTM and set its upgrade timestamp.
+    // The l1_watcher will detect the v30.3 intermediate via fetch_intermediate_upgrade_infos
+    // and enqueue both upgrades (v30.3 patch then v31.0 minor) into the UpgradeSubpool.
     upgrade_tester
-        .set_new_version_on_ctm(
-            final_cut_data.clone(),
-            deadline,
-            final_upgrade.newProtocolVersion,
-        )
+        .set_new_version_on_ctm(v31_cut_data.clone(), deadline, v31_upgrade.newProtocolVersion)
         .await?;
     upgrade_tester
-        .set_upgrade_timestamp(final_upgrade.newProtocolVersion, upgrade_timestamp)
+        .set_upgrade_timestamp(v31_upgrade.newProtocolVersion, upgrade_timestamp)
         .await?;
     tracing::info!(
-        final_version = ?final_upgrade.newProtocolVersion,
-        "Final minor upgrade registered on CTM with timestamp"
+        v31_version = ?v31_upgrade.newProtocolVersion,
+        "v31.0 upgrade registered on CTM with timestamp"
     );
 
-    // Wait for the v31 upgrade tx to land on L2.
-    // The sequencer first processes v30.1 (patch-only, no tx in block) then v31 (upgrade tx).
+    // Wait for the v31.0 upgrade tx to land on L2.
+    // The sequencer first applies the v30.3 patch (no tx in block), then the v31.0 upgrade tx.
     upgrade_tester
-        .wait_for_upgrade(final_upgrade_contract.upgrade_tx_l2_hash())
+        .wait_for_upgrade(v31_upgrade_contract.upgrade_tx_l2_hash())
         .await?;
-    tracing::info!("Final minor upgrade tx confirmed on L2, executing L1 upgrade");
+    tracing::info!("v31.0 upgrade tx confirmed on L2, executing L1 upgrade");
 
-    // Finalize the chain upgrade on L1: upgrades from v30.0 to v31.
-    // upgradeChainFromVersion verifies hash(finalCutData) == CTM.upgradeCutHash[v30.0],
-    // which holds because the second setNewVersionUpgrade overwrote it.
-    upgrade_tester.upgrade_chain(final_cut_data).await?;
+    // Execute the L1 upgrade from v30.2 → v31.0 (installs CommitterFacetV31 + gibberish).
+    upgrade_tester.upgrade_chain(v31_cut_data).await?;
+    upgrade_tester
+        .wait_for_upgrade_finalization(v31_upgrade_contract.upgrade_tx_l2_hash())
+        .await?;
+    tracing::info!("v31.0 upgrade (with gibberish force deployment) fully finalized");
+
+    // ======= PHASE 2: Upgrade v31.0 → v32.0 with correct SampleForceDeployment =======
+
+    // Update the tester's tracked protocol_version to v31.0 so subsequent calls to
+    // set_new_version_on_ctm and upgrade_chain use it as the old/current version.
+    upgrade_tester.protocol_version = ProtocolSemanticVersion::new(0, 31, 0);
+
+    // Publish the correct SampleForceDeployment bytecode.
+    upgrade_tester
+        .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
+        .await?;
+
+    let correct_deployments: BTreeMap<Address, Bytes> = [(
+        sample_force_deployment_address,
+        SampleForceDeployment::DEPLOYED_BYTECODE.clone(),
+    )]
+    .into_iter()
+    .collect();
+
+    let v32_upgrade = upgrade_tester
+        .protocol_upgrade_builder()
+        .await?
+        .bump_minor(1)
+        .with_force_deployments(correct_deployments)
+        .with_timestamp(upgrade_timestamp)
+        .build();
+
+    let v32_upgrade_contract =
+        DefaultUpgrade::deploy(upgrade_tester.tester.l1_provider(), &v32_upgrade).await?;
+    let v32_cut_data = v32_upgrade_contract.diamond_cut_data(vec![]);
 
     upgrade_tester
-        .wait_for_upgrade_finalization(final_upgrade_contract.upgrade_tx_l2_hash())
+        .set_new_version_on_ctm(v32_cut_data.clone(), deadline, v32_upgrade.newProtocolVersion)
         .await?;
-    tracing::info!("Upgrade to v31 via skipped intermediate v30.X+1 fully finalized");
+    upgrade_tester
+        .set_upgrade_timestamp(v32_upgrade.newProtocolVersion, upgrade_timestamp)
+        .await?;
+    tracing::info!(
+        v32_version = ?v32_upgrade.newProtocolVersion,
+        "v32.0 upgrade registered on CTM with timestamp"
+    );
+
+    upgrade_tester
+        .wait_for_upgrade(v32_upgrade_contract.upgrade_tx_l2_hash())
+        .await?;
+    tracing::info!("v32.0 upgrade tx confirmed on L2, executing L1 upgrade");
+
+    upgrade_tester.upgrade_chain(v32_cut_data).await?;
+    upgrade_tester
+        .wait_for_upgrade_finalization(v32_upgrade_contract.upgrade_tx_l2_hash())
+        .await?;
+    tracing::info!("v32.0 upgrade (with correct SampleForceDeployment) fully finalized");
+
+    // Verify that the CORRECT SampleForceDeployment bytecode is now installed at the target
+    // address (the second upgrade must have overwritten the gibberish from the first).
+    let force_deployed_contract = SampleForceDeployment::new(
+        sample_force_deployment_address,
+        upgrade_tester.tester.l2_provider.clone(),
+    );
+    let stored_value = force_deployed_contract.return42().call().await?;
+    assert_eq!(stored_value, U256::from(42));
 
     Ok(())
 }

@@ -49,11 +49,18 @@ impl UpgradeGatekeeper {
         loop {
             match current_protocol_version.cmp(target_protocol_version) {
                 Ordering::Greater => {
-                    // We don't expect protocol version on L1 to be greater than the version of non-committed
-                    // batch, it's an unexpected hard error.
-                    anyhow::bail!(
-                        "Protocol version on the contract {current_protocol_version} is greater than protocol version for the next uncommitted batch: {target_protocol_version}"
+                    // L1 has already been upgraded past the batch's protocol version.
+                    // This can happen when the chain skips an intermediate version (e.g., v30.3 patch
+                    // is registered on CTM but no timestamp is set, so L1 jumps straight to v31.0
+                    // while v30.3 batches are still pending commit). The L1 committer facet is
+                    // expected to accept batches encoded for older protocol versions.
+                    tracing::warn!(
+                        %current_protocol_version,
+                        %target_protocol_version,
+                        "Protocol version on L1 is greater than the next uncommitted batch version; \
+                         proceeding anyway (batch may have been superseded by a skipped upgrade)"
                     );
+                    return Ok(());
                 }
                 Ordering::Equal => {
                     tracing::info!(
