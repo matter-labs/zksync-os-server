@@ -293,7 +293,12 @@ impl L1UpgradeTxWatcher {
 }
 
 fn zkos_hash_from_bytecode(bytecode: &[u8]) -> B256 {
-    // Matches Utils.getZKOSBytecodeInfo -> blake2s256(bytecode)
+    // Computes blake2s256 of the raw bytecode bytes, matching the `bytecodeBlakeHash` field
+    // defined in era-contracts' `ZKSyncOSBytecodeInfo.sol`. Stored as a secondary lookup key
+    // alongside the EVM keccak256 hash (taken directly from the `EVMBytecodePublished` event).
+    // Note: the ZKsync OS VM's native preimage key is blake2s256(bytecode + artifacts), which
+    // differs from this value for contracts with non-trivial artifacts. The direct L2 deployment
+    // step in upgrade tests ensures that key is also populated in persistent state.
     let digest = Blake2s256::digest(bytecode);
     B256::from_slice(digest.as_slice())
 }
