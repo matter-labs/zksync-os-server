@@ -256,7 +256,7 @@ impl UpgradeTester {
         Ok(())
     }
 
-    async fn wait_for_upgrade(&self, upgrade_tx_l2_hash: B256) -> anyhow::Result<()> {
+    pub async fn wait_for_upgrade(&self, upgrade_tx_l2_hash: B256) -> anyhow::Result<()> {
         let pending_tx = PendingTransactionBuilder::new(
             self.tester.l2_zk_provider.root().clone(),
             upgrade_tx_l2_hash,
@@ -278,7 +278,7 @@ impl UpgradeTester {
         Ok(())
     }
 
-    async fn wait_for_upgrade_finalization(&self, upgrade_tx_l2_hash: B256) -> anyhow::Result<()> {
+    pub async fn wait_for_upgrade_finalization(&self, upgrade_tx_l2_hash: B256) -> anyhow::Result<()> {
         let pending_tx = PendingTransactionBuilder::new(
             self.tester.l2_zk_provider.root().clone(),
             upgrade_tx_l2_hash,
