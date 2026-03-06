@@ -17,18 +17,31 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 rm -rf /var/lib/apt/lists/*
 
 # Install cargo tools required for development and testing.
-# These must be run as the target (non-root) user, so we detect who that is.
-if [ -n "${SUDO_USER:-}" ]; then
-    TARGET_USER="$SUDO_USER"
-else
-    TARGET_USER="$(whoami)"
+# cargo lives in the developer's home, not root's — find the right user.
+CARGO_USER=""
+for candidate in "${SUDO_USER:-}" "${DOAS_USER:-}" "${USER:-}"; do
+    if [ -n "$candidate" ] && [ "$candidate" != "root" ] && [ -x "/home/$candidate/.cargo/bin/cargo" ]; then
+        CARGO_USER="$candidate"
+        break
+    fi
+done
+# Fall back: find any non-root user that has cargo installed
+if [ -z "$CARGO_USER" ]; then
+    CARGO_USER=$(find /home -maxdepth 2 -name cargo -path '*/.cargo/bin/cargo' -executable 2>/dev/null | head -1 | cut -d/ -f3)
 fi
 
-echo "Installing cargo tools for user: $TARGET_USER"
-sudo -u "$TARGET_USER" bash -c '
-    export PATH="$HOME/.cargo/bin:$PATH"
-    cargo install cargo-nextest --locked
-'
+if [ -z "$CARGO_USER" ]; then
+    echo ""
+    echo "Could not find a user with cargo installed."
+    echo "Please run the following as your regular (non-root) user:"
+    echo "  cargo install cargo-nextest --locked"
+else
+    echo "Installing cargo tools for user: $CARGO_USER"
+    sudo -u "$CARGO_USER" bash -c '
+        export PATH="$HOME/.cargo/bin:$PATH"
+        cargo install cargo-nextest --locked
+    '
+fi
 
 echo ""
 echo "All dependencies installed."
