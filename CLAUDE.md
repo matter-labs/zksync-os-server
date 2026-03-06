@@ -32,19 +32,24 @@ cargo run --release
 
 ## Before Submitting a PR
 
-Run all of the following checks locally and ensure they pass before pushing:
+**Run all of the following checks before EVERY push to the branch — not just the first one.** Skipping any of these is not acceptable; every push must pass all checks.
 
 1. **Format**: `cargo fmt --all --check`
 2. **Lint**: `cargo clippy --all-targets --all-features --workspace -- -D warnings`
-3. **Unit tests**: `cargo nextest run --release --workspace`
+3. **Unit tests**: `cargo nextest run --release --workspace --exclude zksync_os_integration_tests`
+4. **Integration tests**: `cargo nextest run --profile ci -p zksync_os_integration_tests`
+
+Running every single one of these checks is critically important. CI will catch failures, but catching them locally before pushing saves everyone time and keeps the branch green.
 
 ### Tests
 
 Judge whether the change warrants new tests:
 
 - **Bug fix or new logic** — add a unit test covering the case.
-- **New subsystem interaction or cross-component flow** — consider an integration test in `zksync_os_integration_tests`.
+- **New subsystem interaction or cross-component flow** — add an integration test in `zksync_os_integration_tests`.
 - **Pure refactor, doc change, or config tweak** — tests may not be needed.
+
+**Any bigger change to the server logic must have corresponding integration tests. Adding those integration tests is part of the scope of the PR — do not consider the PR complete until they are included.**
 
 If no tests were added, include one sentence in the PR description explaining why (e.g. _"No tests added — this is a documentation-only change."_ or _"No tests added — the behaviour is already covered by existing integration tests."_).
 
