@@ -202,7 +202,7 @@ impl L1UpgradeTxWatcher {
     /// Each is returned as an `UpgradeInfo` with:
     /// - `tx: None`  — the chain does not execute the intermediate upgrade transaction, or
     /// - `tx: Some`  — the intermediate minor-version cut data contains a real L2 upgrade tx
-    ///                 that the chain will still execute on its way to the target version.
+    ///   that the chain will still execute on its way to the target version.
     ///
     /// Results are sorted in strictly ascending version order so the `UpgradeSubpool`
     /// receives one entry per version step before the final target.
