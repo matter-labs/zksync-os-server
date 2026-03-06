@@ -9,7 +9,8 @@ use alloy::primitives::{Address, B256, BlockNumber, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
-use blake2::{Blake2s256, Digest as BlakeDigest};
+use zk_os_api::helpers::set_properties_code;
+use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
 use zksync_os_contract_interface::ZkChain;
@@ -293,14 +294,15 @@ impl L1UpgradeTxWatcher {
 }
 
 fn zkos_hash_from_bytecode(bytecode: &[u8]) -> B256 {
-    // Computes blake2s256 of the raw bytecode bytes, matching the `bytecodeBlakeHash` field
-    // defined in era-contracts' `ZKSyncOSBytecodeInfo.sol`. Stored as a secondary lookup key
-    // alongside the EVM keccak256 hash (taken directly from the `EVMBytecodePublished` event).
-    // Note: the ZKsync OS VM's native preimage key is blake2s256(bytecode + artifacts), which
-    // differs from this value for contracts with non-trivial artifacts. The direct L2 deployment
-    // step in upgrade tests ensures that key is also populated in persistent state.
-    let digest = Blake2s256::digest(bytecode);
-    B256::from_slice(digest.as_slice())
+    // Computes blake2s256(bytecode + padding + artifacts), which is the ZKsync OS VM's native
+    // preimage key. Artifacts are computed deterministically from the bytecode via
+    // `BytecodePreprocessingData::create_artifacts_inner`, matching what `set_properties_code`
+    // does when the VM deploys a contract. This key must match the `bytecodeHash` field in the
+    // force deployment's `ForceDeploymentBytecodeInfo` so the VM can look up the preimage during
+    // upgrade tx execution and persist it with the correct key for subsequent EVM calls.
+    let mut account = AccountProperties::default();
+    set_properties_code(&mut account, bytecode);
+    B256::from_slice(account.bytecode_hash.as_u8_ref())
 }
 
 #[async_trait::async_trait]
@@ -425,18 +427,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zkos_hash_matches_blake2s256() {
+    fn zkos_hash_matches_set_properties_code() {
         let bytecode = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let result = zkos_hash_from_bytecode(&bytecode);
-        let expected = B256::from_slice(Blake2s256::digest(&bytecode).as_slice());
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn zkos_hash_empty_bytecode() {
-        let result = zkos_hash_from_bytecode(&[]);
-        let expected = B256::from_slice(Blake2s256::digest([]).as_slice());
-        assert_eq!(result, expected);
+        let mut account = AccountProperties::default();
+        set_properties_code(&mut account, &bytecode);
+        let expected = B256::from_slice(account.bytecode_hash.as_u8_ref());
+        assert_eq!(zkos_hash_from_bytecode(&bytecode), expected);
     }
 
     #[test]

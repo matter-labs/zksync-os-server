@@ -108,19 +108,16 @@ impl ProtocolUpgradeBuilder {
         let patch_only = self.protocol_version.minor == self.current_protocol_version.minor;
 
         let mut force_deployments: Vec<UniversalContractUpgradeInfo> = Vec::new();
-        let factory_deps = Vec::new();
+        let mut factory_deps = Vec::new();
 
         for (address, bytecode) in self.force_deployments.unwrap_or_default() {
             let mut account_properties = AccountProperties::default();
             set_properties_code(&mut account_properties, &bytecode);
 
-            // TODO: the current implementation is faulty, since it uses `full_bytecode_len`; the reason for that
-            // is the fact that we deploy preimages using creation bytecode (which includes bytecode artifacts),
-            // but for "real" force deployments we need to use the actual deployed bytecode.
-            // Once BytecodesSupplier is ready for zksync-os, we need to change this logic to use observable bytecode len.
             let deployed_bytecode_info = super::interfaces::ForceDeploymentBytecodeInfo {
                 bytecodeHash: B256::from_slice(account_properties.bytecode_hash.as_u8_ref()),
-                bytecodeSize: account_properties.full_bytecode_len(),
+                // Observable bytecode length (raw bytecode without padding/artifacts).
+                bytecodeSize: account_properties.unpadded_code_len,
                 observableBytecodeHash: B256::from_slice(
                     account_properties.observable_bytecode_hash.as_u8_ref(),
                 ),
@@ -131,10 +128,9 @@ impl ProtocolUpgradeBuilder {
                 newAddress: address,
             });
 
-            // TODO: with current version of bytecodes supplier, we cannot really publish EVM bytecodes
-            // factory_deps.push(U256::from_be_slice(
-            //     deployed_bytecode_info.bytecodeHash.as_ref(),
-            // ));
+            factory_deps.push(U256::from_be_slice(
+                deployed_bytecode_info.bytecodeHash.as_ref(),
+            ));
         }
 
         let tx_type = if patch_only {

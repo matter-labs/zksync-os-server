@@ -1,7 +1,5 @@
-use alloy::network::TransactionBuilder;
-use alloy::primitives::{Address, Bytes, FixedBytes, TxKind, U256};
+use alloy::primitives::{Address, Bytes, FixedBytes, U256};
 use alloy::providers::Provider;
-use alloy::rpc::types::TransactionRequest;
 use alloy::sol_types::SolCall;
 use std::collections::BTreeMap;
 use zksync_os_integration_tests::Tester;
@@ -52,11 +50,9 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
 /// This test verifies the full upgrade flow including bytecodes supplier integration:
 /// the `DEPLOYED_BYTECODE` is published to the `BytecodesSupplier` contract on L1 so
 /// the server can fetch it as a force preimage via `EVMBytecodePublished` events.
-///
-/// Note: the contract is also deployed on L2 directly to ensure its ZKsync OS preimage
-/// (keyed by `blake2s256(bytecode + artifacts)`) is available for post-upgrade EVM
-/// execution. Once the protocol aligns the on-chain and server-side hash formats,
-/// the direct L2 deployment step will no longer be necessary.
+/// The server keys the preimage by `blake2s256(bytecode + padding + artifacts)` — the
+/// ZKsync OS VM's native lookup key — so the VM can find it during upgrade tx execution
+/// and persist it with the correct key for subsequent EVM calls.
 #[test_log::test(tokio::test)]
 async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(0); // Protocol upgrade can be executed immediately.
@@ -80,20 +76,6 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
     // collects it as a force preimage via `EVMBytecodePublished` events.
     upgrade_tester
         .publish_bytecodes([SampleForceDeployment::DEPLOYED_BYTECODE.clone()])
-        .await?;
-
-    // Also deploy on L2 so the ZKsync OS preimage (blake2s256 of bytecode+artifacts)
-    // is available in state for post-upgrade EVM execution.
-    upgrade_tester
-        .tester
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_kind(TxKind::Create)
-                .with_input(SampleForceDeployment::BYTECODE.clone()),
-        )
-        .await?
-        .expect_successful_receipt()
         .await?;
 
     // Prepare protocol upgrade
