@@ -124,9 +124,6 @@ impl L1UpgradeTxWatcher {
             raw_protocol_version,
         } = request;
 
-        // TODO: for now we assume that upgrades cannot be skipped, e.g.
-        // each chain upgrades before the new upgrade is published.
-        // This is a temporary solution and should be fixed ASAP.
         let mut current_block = self.provider_sl.get_block_number().await?;
         let start_block = current_block
             .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS) // Upgrade could've been set a long time ago.
@@ -195,6 +192,123 @@ impl L1UpgradeTxWatcher {
         };
 
         Ok(upgrade_tx)
+    }
+
+    /// Queries the CTM for all `NewUpgradeCutData` events whose packed protocol version
+    /// is strictly between `self.current_protocol_version` and `request.protocol_version`.
+    ///
+    /// These are versions the chain is effectively skipping because a newer
+    /// `UpdateUpgradeTimestamp` superseded their timestamps before the chain executed them.
+    /// Each is returned as an `UpgradeInfo` with:
+    /// - `tx: None`  — the chain does not execute the intermediate upgrade transaction, or
+    /// - `tx: Some`  — the intermediate minor-version cut data contains a real L2 upgrade tx
+    ///                 that the chain will still execute on its way to the target version.
+    ///
+    /// Results are sorted in strictly ascending version order so the `UpgradeSubpool`
+    /// receives one entry per version step before the final target.
+    async fn fetch_intermediate_upgrade_infos(
+        &self,
+        request: &L1UpgradeRequest,
+    ) -> anyhow::Result<Vec<UpgradeInfo>> {
+        let current_packed = self.current_protocol_version.packed()?;
+        let target_packed = request.raw_protocol_version;
+
+        // Scan the full lookbehind range for all NewUpgradeCutData events emitted by
+        // the CTM, without filtering on a specific version so we collect every version
+        // in the gap in a single pass.
+        let mut scan_block = self.provider_sl.get_block_number().await?;
+        let start_block = scan_block
+            .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS)
+            .max(1u64);
+
+        let mut all_logs: Vec<Log> = Vec::new();
+        loop {
+            let from_block = scan_block
+                .saturating_sub(self.max_blocks_to_process - 1)
+                .max(start_block);
+
+            let filter = Filter::new()
+                .from_block(from_block)
+                .to_block(scan_block)
+                .address(self.ctm_sl)
+                .event_signature(NewUpgradeCutData::SIGNATURE_HASH);
+            all_logs.extend(self.provider_sl.get_logs(&filter).await?);
+
+            if from_block <= start_block {
+                break;
+            }
+            scan_block = from_block.saturating_sub(1);
+        }
+
+        // Parse each log, filter for versions strictly between current and target,
+        // and deduplicate by version (keeping the most-recent definition for each).
+        // BTreeMap with U256 key provides ascending order and automatic deduplication.
+        // We let Rust infer the value type from the log_decode call below.
+        let mut intermediate = std::collections::BTreeMap::new();
+
+        for log in all_logs {
+            let Ok(decoded) = log.log_decode::<NewUpgradeCutData>() else {
+                continue;
+            };
+            // protocolVersion is an indexed topic; alloy decodes it into the event struct.
+            let raw_version: U256 = decoded.inner.data.protocolVersion;
+            if raw_version > current_packed && raw_version < target_packed {
+                let version = ProtocolSemanticVersion::try_from(raw_version).map_err(|e| {
+                    anyhow::anyhow!("failed to parse intermediate protocol version: {e}")
+                })?;
+                intermediate.insert(raw_version, (version, decoded));
+            }
+        }
+
+        if intermediate.is_empty() {
+            return Ok(vec![]);
+        }
+
+        tracing::info!(
+            count = intermediate.len(),
+            current_protocol_version = %self.current_protocol_version,
+            target_protocol_version = %request.protocol_version,
+            "detected intermediate protocol versions to fill before target upgrade"
+        );
+
+        // Build one UpgradeInfo per intermediate version in ascending order.
+        // Track the previous version so we can apply the same patch_only logic as
+        // fetch_upgrade_info: a version whose minor component equals the previous
+        // minor has no L2 upgrade tx (patch-only); a minor bump has a real tx.
+        let mut prev_minor = self.current_protocol_version.minor;
+        let mut result = Vec::with_capacity(intermediate.len());
+
+        for (_, (version, decoded)) in intermediate {
+            let patch_only = version.minor == prev_minor;
+            let (l2_upgrade_tx, force_preimages) = if patch_only {
+                (None, Vec::new())
+            } else {
+                let diamond_cut_data = decoded.inner.data.diamondCutData;
+                let proposed_upgrade =
+                    ProposedUpgrade::abi_decode(&diamond_cut_data.initCalldata[4..]).map_err(
+                        |e| anyhow::anyhow!("failed to decode intermediate ProposedUpgrade: {e}"),
+                    )?;
+                let tx = L1UpgradeEnvelope::try_from(proposed_upgrade.l2ProtocolUpgradeTx)
+                    .map_err(|e| {
+                        anyhow::anyhow!("failed to build intermediate L1UpgradeEnvelope: {e}")
+                    })?;
+                let force_preimages = self.fetch_force_preimages(&tx.inner.factory_deps).await?;
+                (Some(tx), force_preimages)
+            };
+
+            prev_minor = version.minor;
+            result.push(UpgradeInfo {
+                tx: l2_upgrade_tx,
+                metadata: UpgradeMetadata {
+                    // Intermediate versions are effectively skipped; no timestamp to wait for.
+                    timestamp: 0,
+                    protocol_version: version,
+                    force_preimages,
+                },
+            });
+        }
+
+        Ok(result)
     }
 
     async fn wait_until_timestamp(&self, target_timestamp: u64) {
@@ -307,6 +421,24 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
                     request.protocol_version
                 );
             }
+        }
+
+        // Query the CTM for any NewUpgradeCutData events whose protocol versions sit
+        // strictly between self.current_protocol_version and request.protocol_version.
+        // A chain can legally skip intermediate minor versions when a newer
+        // UpdateUpgradeTimestamp is published before the chain executes the earlier one.
+        // The UpgradeSubpool requires one UpgradeInfo per version step in strictly
+        // ascending order, so we must submit entries for all skipped versions first.
+        let intermediate_infos = self
+            .fetch_intermediate_upgrade_infos(&request)
+            .await
+            .map_err(L1WatcherError::Batch)?;
+        for info in intermediate_infos {
+            tracing::info!(
+                protocol_version = ?info.protocol_version(),
+                "submitting intermediate (skipped) upgrade version to subpool"
+            );
+            self.upgrade_subpool.insert(info).await;
         }
 
         let upgrade_info = self
