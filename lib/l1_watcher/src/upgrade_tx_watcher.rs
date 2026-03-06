@@ -225,7 +225,7 @@ impl L1UpgradeTxWatcher {
     }
 
     async fn fetch_force_preimages(&self) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
-        let active_supplier = self.resolve_active_bytecode_supplier().await;
+        let active_supplier = self.resolve_active_bytecode_supplier().await?;
 
         let mut current_block = self.provider_l1.get_block_number().await?;
         let start_block = current_block
@@ -267,38 +267,28 @@ impl L1UpgradeTxWatcher {
         Ok(by_hash.into_iter().collect())
     }
 
-    async fn resolve_active_bytecode_supplier(&self) -> Address {
+    async fn resolve_active_bytecode_supplier(&self) -> anyhow::Result<Address> {
         let ctm = IChainTypeManagerBytecodeSupplier::new(self.ctm_sl, self.provider_sl.clone());
-        match ctm.L1_BYTECODES_SUPPLIER().call().await {
-            Ok(l1_address) if l1_address != Address::ZERO => {
-                if l1_address != self.bytecode_supplier_address {
-                    tracing::warn!(
-                        configured_supplier = ?self.bytecode_supplier_address,
-                        l1_supplier = ?l1_address,
-                        ctm = ?self.ctm_sl,
-                        "bytecode supplier changed on L1; using L1 supplier for this fetch"
-                    );
-                }
-                l1_address
-            }
-            Ok(_) => {
-                tracing::warn!(
-                    configured_supplier = ?self.bytecode_supplier_address,
-                    ctm = ?self.ctm_sl,
-                    "CTM returned zero bytecode supplier; using configured supplier for this fetch"
-                );
-                self.bytecode_supplier_address
-            }
-            Err(err) => {
-                tracing::warn!(
-                    configured_supplier = ?self.bytecode_supplier_address,
-                    ctm = ?self.ctm_sl,
-                    error = ?err,
-                    "failed to fetch bytecode supplier from CTM on L1; using configured supplier for this fetch"
-                );
-                self.bytecode_supplier_address
-            }
+        let l1_address =
+            ctm.L1_BYTECODES_SUPPLIER().call().await.map_err(|err| {
+                anyhow::anyhow!("failed to fetch bytecode supplier from CTM: {err}")
+            })?;
+
+        anyhow::ensure!(
+            l1_address != Address::ZERO,
+            "CTM returned zero address for bytecode supplier"
+        );
+
+        if l1_address != self.bytecode_supplier_address {
+            tracing::warn!(
+                configured_supplier = ?self.bytecode_supplier_address,
+                l1_supplier = ?l1_address,
+                ctm = ?self.ctm_sl,
+                "bytecode supplier address on L1 differs from configured; using L1 address"
+            );
         }
+
+        Ok(l1_address)
     }
 }
 
