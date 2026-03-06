@@ -88,9 +88,11 @@ impl<T: L2Subpool> Pool<T> {
                 biased;
 
                 // Upgrade branch is a bit special as it does not always produce a stream of
-                // transactions. Sometimes it only sets `upgrade_metadata` and some other stream
-                // needs to provide transactions. This is the reason behind `loop` above (which can
-                // iterate twice at max).
+                // transactions. For minor upgrades (with a tx) it returns immediately with the
+                // upgrade tx stream. For patch upgrades (no tx) it returns immediately with the
+                // l1/l2 stream so the block executor can seal on its deadline. The `loop` above
+                // is retained for the case where we need to wait for the first upgrade to arrive
+                // (e.g. when neither the upgrade stream nor any other stream has data yet).
                 Some(upgrade) = tokio_stream::StreamExt::next(&mut upgrade_info_stream) => {
                     if let Some(upgrade_tx) = &upgrade.tx {
                         tracing::info!(
@@ -113,6 +115,15 @@ impl<T: L2Subpool> Pool<T> {
                             stream: MarkingTxStream::unmarkable(UpgradeTransactionsStream::one(tx)),
                         });
                     }
+                    // Patch upgrade (no tx): return immediately with the l1/l2 stream so the
+                    // block executor can use its deadline. Without this, we'd loop back waiting
+                    // for l1/l2 transactions that may never arrive (e.g. when a minor upgrade is
+                    // queued immediately after a patch). The minor upgrade will be served in the
+                    // next block.
+                    return Some(StreamOutcome {
+                        upgrade_metadata,
+                        stream: MarkingTxStream::markable(l1_l2_stream, l2_marker),
+                    });
                 }
                 Some(_) = sl_chain_id_stream.peek() => {
                     // todo: this will make sure that SL chain ID transaction is in its own block.

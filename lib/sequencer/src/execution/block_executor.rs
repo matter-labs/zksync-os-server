@@ -61,7 +61,11 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         SealPolicy::Decide(d, _) => Some(d),
         SealPolicy::UntilExhausted { .. } => None,
     };
-    let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx attempt
+    // Arm the deadline at block start so that blocks seal even when no transactions arrive
+    // (e.g. patch upgrade blocks that have an empty l1/l2 stream). The old behavior of arming
+    // after the first tx attempt was equivalent for non-empty blocks, but caused an indefinite
+    // hang when the tx stream contained nothing and the deadline was never triggered.
+    let mut deadline: Option<Pin<Box<Sleep>>> = deadline_dur.map(|dur| Box::pin(tokio::time::sleep(dur)));
     let mut interop_roots_count = 0;
 
     /* ---------- main loop ------------------------------------------ */
@@ -111,18 +115,6 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                 );
 
                 all_processed_txs.push(tx.clone());
-
-                // Arm the deadline on the first tx attempt (success or failure).
-                // This prevents indefinite hangs when all L2 txs fail validation
-                // (e.g. BaseFeeGreaterThanMaxFee) and no L1 txs arrive to break
-                // the deadlock. Without this, the block executor would wait forever
-                // because the deadline only armed on success, and the sender is
-                // marked invalid in the BestTransactions iterator after a failure.
-                // Note that this behavior may result in an empty block being mined,
-                // which is supported server behavour.
-                if deadline.is_none() && let Some(dur) = deadline_dur {
-                    deadline = Some(Box::pin(tokio::time::sleep(dur)));
-                }
 
                 match runner.execute_next_tx(tx.clone().encode())
                     .await

@@ -259,9 +259,10 @@ async fn upgrade_skip_intermediate_patch_then_minor() -> anyhow::Result<()> {
 
     // ======= PHASE 2: Upgrade v31.0 → v32.0 with correct SampleForceDeployment =======
 
-    // Update the tester's tracked protocol_version to v31.0 so subsequent calls to
+    // Update the tester's tracked protocol_version to v31.2 so subsequent calls to
     // set_new_version_on_ctm and upgrade_chain use it as the old/current version.
-    upgrade_tester.protocol_version = ProtocolSemanticVersion::new(0, 31, 0);
+    // (Chain started at v30.2; bump_minor keeps the patch number, giving v31.2.)
+    upgrade_tester.protocol_version = ProtocolSemanticVersion::new(0, 31, 2);
 
     // Publish the correct SampleForceDeployment bytecode.
     upgrade_tester
