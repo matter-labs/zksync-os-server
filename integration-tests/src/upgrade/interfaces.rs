@@ -161,6 +161,11 @@ alloy::sol! {
         /// @notice Publishes multiple bytecodes.
         /// @param _bytecodes Array of bytecodes to be published.
         function publishBytecodes(bytes[] calldata _bytecodes) external;
+
+        /// @notice Publishes EVM bytecodes, keyed by keccak256(bytecode).
+        /// @dev Emits `EVMBytecodePublished` for each bytecode.
+        /// @param _bytecodes Array of EVM bytecodes to be published.
+        function publishEVMBytecodes(bytes[] calldata _bytecodes) external;
     }
 
     // Bytecode for committer facet is hardcoded, since putting it to dependencies would significantly

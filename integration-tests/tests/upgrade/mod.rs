@@ -3,9 +3,9 @@ use alloy::providers::Provider;
 use alloy::sol_types::SolCall;
 use std::collections::BTreeMap;
 use zksync_os_integration_tests::Tester;
-use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::SampleForceDeployment;
 use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV31, FacetCut, UpgradeTester};
+use zksync_os_server::default_protocol_version::NEXT_PROTOCOL_VERSION;
 
 /// Executes the simplest patch protocol upgrade:
 /// - no contracts are deployed
@@ -19,8 +19,10 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(0); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
-    // Test that we can deposit L2 funds from a rich L1 account
-    let tester = Tester::setup().await?;
+    let tester = Tester::builder()
+        .protocol_version(NEXT_PROTOCOL_VERSION)
+        .build()
+        .await?;
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
     // Prepare protocol upgrade
@@ -69,7 +71,10 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
     .into_iter()
     .collect();
 
-    let tester = Tester::setup().await?;
+    let tester = Tester::builder()
+        .protocol_version(NEXT_PROTOCOL_VERSION)
+        .build()
+        .await?;
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
     // Publish the deployed bytecode to the BytecodesSupplier on L1 so the server
@@ -150,7 +155,10 @@ async fn upgrade_with_bytecodes_from_supplier() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(0);
     let deadline = U256::MAX;
 
-    let tester = Tester::setup().await?;
+    let tester = Tester::builder()
+        .protocol_version(NEXT_PROTOCOL_VERSION)
+        .build()
+        .await?;
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
     // Publish a bytecode to the supplier contract on L1 before the upgrade.

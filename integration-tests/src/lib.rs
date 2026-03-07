@@ -71,6 +71,7 @@ static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
 #[derive(Debug)]
 pub struct Tester {
     pub l1: AnvilL1,
+    pub protocol_version: &'static str,
 
     pub l2_provider: EthDynProvider,
     /// ZKsync OS-specific provider. Generally prefer to use `l2_provider` as we strive for the
@@ -150,7 +151,7 @@ impl Tester {
             false,
             Some(overrides_fun),
             Some(self.main_node_tempdir.clone()),
-            PROTOCOL_VERSION,
+            self.protocol_version,
         )
         .await
     }
@@ -160,7 +161,7 @@ impl Tester {
         enable_prover: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
         main_node_tempdir: Option<Arc<tempfile::TempDir>>,
-        protocol_version: &str,
+        protocol_version: &'static str,
     ) -> anyhow::Result<Self> {
         // Initialize and **hold** locked ports for the duration of node initialization.
         let l2_locked_port = LockedPort::acquire_unused().await?;
@@ -394,6 +395,7 @@ impl Tester {
         );
         Ok(Tester {
             l1,
+            protocol_version,
             l2_provider: EthDynProvider::new(l2_provider.clone()),
             l2_zk_provider: DynProvider::new(l2_zk_provider.clone()),
             l2_wallet,
@@ -409,13 +411,26 @@ impl Tester {
     }
 }
 
-#[derive(Default)]
 pub struct TesterBuilder {
     enable_prover: bool,
     block_time: Option<Duration>,
     batch_verification_threshold: Option<u64>,
     fee_config: Option<FeeConfig>,
     estimate_gas_pubdata_price_factor: Option<f64>,
+    protocol_version: &'static str,
+}
+
+impl Default for TesterBuilder {
+    fn default() -> Self {
+        Self {
+            enable_prover: false,
+            block_time: None,
+            batch_verification_threshold: None,
+            fee_config: None,
+            estimate_gas_pubdata_price_factor: None,
+            protocol_version: PROTOCOL_VERSION,
+        }
+    }
 }
 
 impl TesterBuilder {
@@ -445,9 +460,14 @@ impl TesterBuilder {
         self
     }
 
+    pub fn protocol_version(mut self, v: &'static str) -> Self {
+        self.protocol_version = v;
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Tester> {
         let l1 = AnvilL1::start(ChainLayout::Default {
-            protocol_version: PROTOCOL_VERSION,
+            protocol_version: self.protocol_version,
         })
         .await?;
 
@@ -472,7 +492,7 @@ impl TesterBuilder {
             self.enable_prover,
             Some(overrides_fun),
             None,
-            PROTOCOL_VERSION,
+            self.protocol_version,
         )
         .await
     }

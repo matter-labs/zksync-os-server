@@ -9,14 +9,18 @@ use crate::config::{ChainLayout, load_chain_config};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::provider::{ZksyncApi as _, ZksyncTestingProvider as _};
 use crate::upgrade::interfaces::FacetCut;
+use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::providers::ext::AnvilApi;
+use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use anyhow::Context;
+use zksync_os_contract_interface::Bridgehub;
+use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_server::config::Config;
-use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
+use zksync_os_types::{REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE};
 use zksync_os_types::ProtocolSemanticVersion;
 
 /// Object that helps with preparation and execution of protocol upgrades in integration tests.
@@ -55,6 +59,7 @@ impl UpgradeTester {
         let upgrade_tester = Self::fetch(tester).await?;
         upgrade_tester.enable_impersonation().await?;
         upgrade_tester.wait_for_genesis_upgrade().await?;
+        upgrade_tester.fund_l2_wallet().await?;
         Ok(upgrade_tester)
     }
 
@@ -155,7 +160,7 @@ impl UpgradeTester {
     // Fetch the contracts configuration from the tester.
     async fn fetch(tester: Tester) -> anyhow::Result<Self> {
         let default_config: Config = load_chain_config(ChainLayout::Default {
-            protocol_version: PROTOCOL_VERSION,
+            protocol_version: tester.protocol_version,
         });
         let chain_id = default_config
             .genesis_config
@@ -185,12 +190,11 @@ impl UpgradeTester {
         let diamond_proxy_admin = diamond_proxy.getAdmin().call().await?;
         let l1_chain_admin_owner = l1_chain_admin.owner().call().await?;
 
-        // Bytecode supplier is a bit special: right now it's not discoverable
-        // The value is hardcoded, keep it aligned with `node/bin/src/config.rs`, it must correspond
-        // to the value stored in `l1-state.json.gz`.
+        // The bytecode supplier address is not discoverable through Bridgehub so it is read
+        // directly from the chain config, aligned with `node/bin/src/config.rs`.
         let bytecode_supplier_address = default_config
             .genesis_config
-            .bridgehub_address
+            .bytecode_supplier_address
             .expect("Bytecode supplier address is missing in the config");
         anyhow::ensure!(
             !tester
@@ -253,6 +257,87 @@ impl UpgradeTester {
             .l2_zk_provider
             .wait_finalized_with_timeout(1, crate::assert_traits::DEFAULT_TIMEOUT)
             .await?;
+        Ok(())
+    }
+
+    /// Funds the L2 wallet via an L1 deposit so it can pay for gas in upgrade tests.
+    async fn fund_l2_wallet(&self) -> anyhow::Result<()> {
+        let wallet = self.tester.l2_wallet.default_signer().address();
+        let balance = self.tester.l2_provider.get_balance(wallet).await?;
+        if balance > U256::ZERO {
+            return Ok(()); // Already funded (e.g. v30.2 genesis pre-funds via priority txs)
+        }
+
+        let amount = U256::from(10).pow(U256::from(18u64)); // 1 ETH
+        let chain_id = self.tester.l2_provider.get_chain_id().await?;
+
+        let bridgehub = Bridgehub::new(
+            self.tester.l2_zk_provider.get_bridgehub_contract().await?,
+            self.tester.l1_provider().clone(),
+            chain_id,
+        );
+
+        let max_priority_fee_per_gas =
+            self.tester.l1_provider().get_max_priority_fee_per_gas().await?;
+        let base_l1_fees_data = self
+            .tester
+            .l1_provider()
+            .estimate_eip1559_fees_with(Eip1559Estimator::new(|base_fee_per_gas, _| {
+                Eip1559Estimation {
+                    max_fee_per_gas: base_fee_per_gas * 3 / 2,
+                    max_priority_fee_per_gas: 0,
+                }
+            }))
+            .await?;
+        let max_fee_per_gas = base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas;
+        // Use a fixed gas limit to avoid calling estimate_gas when the wallet has 0 L2 balance.
+        // The gas estimator checks balance even for L1 priority txs, so estimation would fail.
+        // 300_000 is sufficient for a simple L1->L2 ETH transfer.
+        let gas_limit = 300_000u64;
+
+        let tx_base_cost = bridgehub
+            .l2_transaction_base_cost(
+                max_fee_per_gas + max_priority_fee_per_gas,
+                gas_limit,
+                REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+            )
+            .await?;
+
+        let l1_deposit_request = bridgehub
+            .request_l2_transaction_direct(
+                amount + tx_base_cost,
+                wallet,
+                amount,
+                vec![],
+                gas_limit,
+                REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+                wallet,
+            )
+            .value(amount + tx_base_cost)
+            .max_fee_per_gas(max_fee_per_gas)
+            .max_priority_fee_per_gas(max_priority_fee_per_gas)
+            .into_transaction_request();
+
+        let l1_deposit_receipt = self
+            .tester
+            .l1_provider()
+            .send_transaction(l1_deposit_request)
+            .await?
+            .expect_successful_receipt()
+            .await?;
+
+        let l1_to_l2_tx_log = l1_deposit_receipt
+            .logs()
+            .iter()
+            .filter_map(|log| log.log_decode::<NewPriorityRequest>().ok())
+            .next()
+            .expect("no L1->L2 logs produced by deposit tx");
+        let l2_tx_hash = l1_to_l2_tx_log.inner.txHash;
+
+        PendingTransactionBuilder::new(self.tester.l2_zk_provider.root().clone(), l2_tx_hash)
+            .expect_successful_receipt()
+            .await?;
+        tracing::info!("L2 wallet funded with 1 ETH via L1 deposit");
         Ok(())
     }
 
@@ -332,10 +417,10 @@ impl UpgradeTester {
         &self,
         bytecodes: I,
     ) -> anyhow::Result<()> {
-        // Publish bytecodes to the supplier contract on L1 so the server can
+        // Publish EVM bytecodes to the supplier contract on L1 so the server can
         // fetch them as force preimages via `EVMBytecodePublished` events.
         self.bytecode_supplier
-            .publishBytecodes(bytecodes.into_iter().collect())
+            .publishEVMBytecodes(bytecodes.into_iter().collect())
             .send()
             .await?
             .expect_successful_receipt()
