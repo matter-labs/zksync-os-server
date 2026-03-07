@@ -264,11 +264,14 @@ impl UpgradeTester {
     async fn fund_l2_wallet(&self) -> anyhow::Result<()> {
         let wallet = self.tester.l2_wallet.default_signer().address();
         let balance = self.tester.l2_provider.get_balance(wallet).await?;
-        if balance > U256::ZERO {
-            return Ok(()); // Already funded (e.g. v30.2 genesis pre-funds via priority txs)
+        // Ensure the wallet has at least 1000 ETH to cover high-gas operations in upgrade tests
+        // (e.g. EventEmitter deploy, upgrade tx, bogus finalization tx) even when L2 gas price
+        // is very high due to pubdata costs.
+        let target = U256::from(1000u64) * U256::from(10).pow(U256::from(18u64));
+        if balance >= target {
+            return Ok(());
         }
-
-        let amount = U256::from(10).pow(U256::from(18u64)); // 1 ETH
+        let amount = target - balance;
         let chain_id = self.tester.l2_provider.get_chain_id().await?;
 
         let bridgehub = Bridgehub::new(
@@ -337,7 +340,8 @@ impl UpgradeTester {
         PendingTransactionBuilder::new(self.tester.l2_zk_provider.root().clone(), l2_tx_hash)
             .expect_successful_receipt()
             .await?;
-        tracing::info!("L2 wallet funded with 1 ETH via L1 deposit");
+        let balance_after = self.tester.l2_provider.get_balance(wallet).await?;
+        tracing::info!(?balance_after, tx_base_cost=?tx_base_cost, amount=?amount, "L2 wallet funded via L1 deposit");
         Ok(())
     }
 
