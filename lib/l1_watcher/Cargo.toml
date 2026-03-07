@@ -26,5 +26,4 @@ thiserror.workspace = true
 futures.workspace = true
 backon.workspace = true
 rangemap.workspace = true
-zk_os_api.workspace = true
-zk_os_basic_system.workspace = true
+blake2.workspace = true

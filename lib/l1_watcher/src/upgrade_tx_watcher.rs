@@ -9,8 +9,7 @@ use alloy::primitives::{Address, B256, BlockNumber, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
-use zk_os_api::helpers::set_properties_code;
-use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
+use blake2::{Blake2s256, Digest};
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
 use zksync_os_contract_interface::ZkChain;
@@ -295,14 +294,45 @@ impl L1UpgradeTxWatcher {
 
 fn zkos_hash_from_bytecode(bytecode: &[u8]) -> B256 {
     // Computes blake2s256(bytecode + padding + artifacts), which is the ZKsync OS VM's native
-    // preimage key. Artifacts are computed deterministically from the bytecode via
-    // `BytecodePreprocessingData::create_artifacts_inner`, matching what `set_properties_code`
-    // does when the VM deploys a contract. This key must match the `bytecodeHash` field in the
-    // force deployment's `ForceDeploymentBytecodeInfo` so the VM can look up the preimage during
-    // upgrade tx execution and persist it with the correct key for subsequent EVM calls.
-    let mut account = AccountProperties::default();
-    set_properties_code(&mut account, bytecode);
-    B256::from_slice(account.bytecode_hash.as_u8_ref())
+    // preimage key. This key must match the `bytecodeHash` field in the force deployment's
+    // `ForceDeploymentBytecodeInfo` so the VM can look up the preimage during upgrade tx
+    // execution and persist it with the correct key for subsequent EVM calls.
+    //
+    // Layout: [raw bytecode][zero-padding to 8-byte boundary][JUMPDEST bitmap]
+    //
+    // The JUMPDEST bitmap has one bit per bytecode position (LSB-first within each byte):
+    // a bit is set iff the position holds a valid JUMPDEST opcode (not inside PUSH data).
+    // It is zero-padded to the next multiple of 8 bytes (64 bits).
+    //
+    // EIP-7702 delegation designators (0xEF 0x01 0x00 prefix) carry no jump table.
+    const EIP7702_MAGIC: &[u8; 3] = &[0xef, 0x01, 0x00];
+    let is_delegation = bytecode.len() >= 3 && &bytecode[..3] == EIP7702_MAGIC;
+
+    let len = bytecode.len();
+    let pad = len.wrapping_neg() % 8; // zero-pad to next multiple of 8
+    let bitmap_bytes = if is_delegation { 0 } else { len.next_multiple_of(64) / 8 };
+
+    let mut buf = vec![0u8; len + pad + bitmap_bytes];
+    buf[..len].copy_from_slice(bytecode);
+
+    if !is_delegation {
+        let bitmap = &mut buf[len + pad..];
+        let mut i = 0;
+        while i < len {
+            let op = bytecode[i];
+            if op == 0x5b {
+                // JUMPDEST: set the corresponding bit (LSB0)
+                bitmap[i / 8] |= 1u8 << (i % 8);
+            }
+            // PUSH1 (0x60) .. PUSH32 (0x7f): skip immediate data bytes
+            if (0x60..=0x7f).contains(&op) {
+                i += (op - 0x5f) as usize;
+            }
+            i += 1;
+        }
+    }
+
+    B256::from_slice(&Blake2s256::digest(&buf))
 }
 
 #[async_trait::async_trait]
@@ -425,14 +455,42 @@ async fn find_l1_block_by_protocol_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::hex;
+
+    // blake2s256([]) — canonical ZKsync OS empty bytecode hash, matches
+    // `EMPTY_BYTE_CODE_HASH` in `revm_consistency_checker::bytecode_hash`.
+    const EMPTY_BYTECODE_HASH: B256 = B256::new([
+        0x69, 0x21, 0x7a, 0x30, 0x79, 0x90, 0x80, 0x94, 0xe1, 0x11, 0x21, 0xd0, 0x42, 0x35,
+        0x4a, 0x7c, 0x1f, 0x55, 0xb6, 0x48, 0x2c, 0xa1, 0xa5, 0x1e, 0x1b, 0x25, 0x0d, 0xfd,
+        0x1e, 0xd0, 0xee, 0xf9,
+    ]);
 
     #[test]
-    fn zkos_hash_matches_set_properties_code() {
-        let bytecode = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let mut account = AccountProperties::default();
-        set_properties_code(&mut account, &bytecode);
-        let expected = B256::from_slice(account.bytecode_hash.as_u8_ref());
-        assert_eq!(zkos_hash_from_bytecode(&bytecode), expected);
+    fn zkos_hash_empty_bytecode() {
+        assert_eq!(zkos_hash_from_bytecode(&[]), EMPTY_BYTECODE_HASH);
+    }
+
+    #[test]
+    fn zkos_hash_jumpdest_not_counted_in_push_data() {
+        // 0x61 = PUSH2, followed by two data bytes (0x5b 0x5b), then a real JUMPDEST (0x5b).
+        // Only position 3 is a valid JUMPDEST; positions 1 and 2 are PUSH2 data.
+        let bytecode = hex!("61 5b5b 5b");
+        let hash = zkos_hash_from_bytecode(&bytecode);
+        // Verify that a version where we wrongly mark all 0x5b bytes as JUMPDESTs differs.
+        let naive_hash = {
+            let len = bytecode.len();
+            let pad = len.wrapping_neg() % 8;
+            let bitmap_bytes = len.next_multiple_of(64) / 8;
+            let mut buf = vec![0u8; len + pad + bitmap_bytes];
+            buf[..len].copy_from_slice(&bytecode);
+            for (i, &b) in bytecode.iter().enumerate() {
+                if b == 0x5b {
+                    buf[len + pad + i / 8] |= 1u8 << (i % 8);
+                }
+            }
+            B256::from_slice(&Blake2s256::digest(&buf))
+        };
+        assert_ne!(hash, naive_hash, "PUSH data bytes must not be treated as JUMPDESTs");
     }
 
     #[test]
