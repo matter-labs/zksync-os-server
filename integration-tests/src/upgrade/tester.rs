@@ -20,8 +20,8 @@ use anyhow::Context;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_server::config::Config;
-use zksync_os_types::{REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE};
 use zksync_os_types::ProtocolSemanticVersion;
+use zksync_os_types::REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE;
 
 /// Object that helps with preparation and execution of protocol upgrades in integration tests.
 ///
@@ -242,7 +242,7 @@ impl UpgradeTester {
                 .send_transaction(
                     TransactionRequest::default()
                         .with_to(addr)
-                        .with_value(U256::from(10).pow(U256::from(18u64))), // 1 ETH
+                        .with_value(U256::from(100u64) * U256::from(10).pow(U256::from(18u64))), // 100 ETH
                 )
                 .await?
                 .expect_successful_receipt()
@@ -280,8 +280,11 @@ impl UpgradeTester {
             chain_id,
         );
 
-        let max_priority_fee_per_gas =
-            self.tester.l1_provider().get_max_priority_fee_per_gas().await?;
+        let max_priority_fee_per_gas = self
+            .tester
+            .l1_provider()
+            .get_max_priority_fee_per_gas()
+            .await?;
         let base_l1_fees_data = self
             .tester
             .l1_provider()
