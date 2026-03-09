@@ -412,8 +412,7 @@ async fn test_interop_l2_to_l1_message_verification() -> Result<()> {
         .await?;
 
     // Verify message inclusion on chain B
-    let verifier =
-        IMessageVerification::new(L2_MESSAGE_VERIFICATION_ADDRESS, &chain_b.l2_provider);
+    let verifier = IMessageVerification::new(L2_MESSAGE_VERIFICATION_ADDRESS, &chain_b.l2_provider);
 
     let included = verifier
         .proveL2MessageInclusionShared(
