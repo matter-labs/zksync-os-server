@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Format**: `cargo fmt --all -- --check`
 - **Lint**: `cargo clippy --all-targets --all-features --workspace --exclude zksync_os_integration_tests -- -D warnings`
 - **Unit tests**: `cargo nextest run --workspace --exclude zksync_os_integration_tests`
-- **Integration tests**: `cargo nextest run --profile ci -p zksync_os_integration_tests`
+- **Integration tests**: `cargo nextest run -p zksync_os_integration_tests` (no live anvil needed — each test manages its own L1/node)
 
 ### Local Development Setup
 1. Run script: `./run_local.sh ./local-chains/v30.2/default`
