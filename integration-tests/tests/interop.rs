@@ -82,9 +82,7 @@ sol! {
     // Bundle attribute functions for encoding
     function indirectCall(uint256 _gasLimit) external pure returns (bytes memory);
     function unbundlerAddress(bytes calldata _address) external pure returns (bytes memory);
-}
 
-sol! {
     #[sol(rpc)]
     contract IL1Messenger {
         function sendToL1(bytes calldata _message) external returns (bytes32);
@@ -369,7 +367,6 @@ async fn fund_wallet_via_l1_deposit(tester: &Tester, wallet: Address, amount: U2
 
 #[test(tokio::test)]
 async fn test_interop_l2_to_l1_message_verification() -> Result<()> {
-    // Ports the JS tester.js test:
     // 1. Send an L2->L1 message ("hello interop") on chain A
     // 2. Wait for block finalization and obtain the log proof
     // 3. Wait for the interop root to appear on chain B
