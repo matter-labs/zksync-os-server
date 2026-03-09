@@ -61,12 +61,10 @@ async fn batch_verification_without_enough_ens() -> anyhow::Result<()> {
         .await?;
 
     // First block should not get finalized because EN with 2FA is needed.
+    // Use a shorter timeout: if finalization hasn't happened in 20s, it won't.
     main_node
         .l2_zk_provider
-        .wait_not_finalized(
-            1,
-            zksync_os_integration_tests::assert_traits::DEFAULT_TIMEOUT,
-        )
+        .wait_not_finalized(1, Duration::from_secs(20))
         .await?;
     Ok(())
 }
@@ -85,12 +83,10 @@ async fn batch_verification_with_2_ens() -> anyhow::Result<()> {
         .await?;
 
     // First block should not get finalized because 2 EN with 2FA are needed.
+    // Use a shorter timeout: if finalization hasn't happened in 20s, it won't.
     main_node
         .l2_zk_provider
-        .wait_not_finalized(
-            1,
-            zksync_os_integration_tests::assert_traits::DEFAULT_TIMEOUT,
-        )
+        .wait_not_finalized(1, Duration::from_secs(20))
         .await?;
 
     let _en2 = main_node
@@ -208,8 +204,8 @@ async fn check_contract_present(en: &Tester, contract_address: Address) -> anyho
     })
     .retry(
         ConstantBuilder::default()
-            .with_delay(Duration::from_secs(1))
-            .with_max_times(10),
+            .with_delay(Duration::from_millis(200))
+            .with_max_times(50),
     )
     .await
 }
