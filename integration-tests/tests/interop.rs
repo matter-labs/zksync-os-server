@@ -25,6 +25,8 @@ const L2_INTEROP_HANDLER_ADDRESS: Address = address!("00000000000000000000000000
 const L2_NATIVE_TOKEN_VAULT_ADDRESS: Address = address!("0000000000000000000000000000000000010004");
 const L2_ASSET_ROUTER_ADDRESS: Address = address!("0000000000000000000000000000000000010003");
 const L1_MESSENGER_ADDRESS: Address = address!("0000000000000000000000000000000000008008");
+const L2_MESSAGE_VERIFICATION_ADDRESS: Address =
+    address!("0000000000000000000000000000000000010009");
 
 sol! {
     #[sol(rpc)]
@@ -80,6 +82,30 @@ sol! {
     // Bundle attribute functions for encoding
     function indirectCall(uint256 _gasLimit) external pure returns (bytes memory);
     function unbundlerAddress(bytes calldata _address) external pure returns (bytes memory);
+}
+
+sol! {
+    #[sol(rpc)]
+    contract IL1Messenger {
+        function sendToL1(bytes calldata _message) external returns (bytes32);
+    }
+
+    #[sol(rpc)]
+    contract IMessageVerification {
+        struct L2Message {
+            uint16 txNumberInBatch;
+            address sender;
+            bytes data;
+        }
+
+        function proveL2MessageInclusionShared(
+            uint256 _chainId,
+            uint256 _blockOrBatchNumber,
+            uint256 _index,
+            L2Message calldata _message,
+            bytes32[] calldata _proof
+        ) external view returns (bool);
+    }
 }
 
 /// Helper to format ERC-7930 interoperable address with just address (no chain reference)
@@ -337,6 +363,81 @@ async fn fund_wallet_via_l1_deposit(tester: &Tester, wallet: Address, amount: U2
     PendingTransactionBuilder::new(tester.l2_zk_provider.root().clone(), l2_tx_hash)
         .expect_successful_receipt()
         .await?;
+
+    Ok(())
+}
+
+#[test(tokio::test)]
+async fn test_interop_l2_to_l1_message_verification() -> Result<()> {
+    // Ports the JS tester.js test:
+    // 1. Send an L2->L1 message ("hello interop") on chain A
+    // 2. Wait for block finalization and obtain the log proof
+    // 3. Wait for the interop root to appear on chain B
+    // 4. Call proveL2MessageInclusionShared on chain B and assert it returns true
+
+    let multi_chain = MultiChainTester::setup(2).await?;
+
+    let chain_a = multi_chain.chain_a();
+    let chain_b = multi_chain.chain_b();
+
+    let chain_a_id = chain_a.l2_provider.get_chain_id().await?;
+    let sender = chain_a.l2_wallet.default_signer().address();
+
+    // Fund sender on chain A
+    let deposit_amount = U256::from(100) * U256::from(10).pow(U256::from(18));
+    fund_wallet_via_l1_deposit(chain_a, sender, deposit_amount).await?;
+
+    // Send L2 -> L1 message via IL1Messenger
+    let messenger = IL1Messenger::new(L1_MESSENGER_ADDRESS, &chain_a.l2_provider);
+    let message_data = Bytes::from(b"hello interop".to_vec());
+
+    let receipt = messenger
+        .sendToL1(message_data.clone())
+        .gas(100_000)
+        .max_fee_per_gas(1_000_000_000)
+        .max_priority_fee_per_gas(0)
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    let block_number = receipt.block_number.expect("Block number not found");
+    let tx_hash = receipt.transaction_hash;
+
+    // Wait for block finalization and get the L2->L1 log proof
+    let log_proof =
+        relayer_get_message_proof(&chain_a.l2_zk_provider, tx_hash, block_number).await?;
+
+    // Wait for interop root to become available on chain B
+    chain_b
+        .l2_provider
+        .expect_interop_root_inclusion(chain_a_id, log_proof.batch_number)
+        .await?;
+
+    // Verify message inclusion on chain B
+    let verifier =
+        IMessageVerification::new(L2_MESSAGE_VERIFICATION_ADDRESS, &chain_b.l2_provider);
+
+    let included = verifier
+        .proveL2MessageInclusionShared(
+            U256::from(chain_a_id),
+            U256::from(log_proof.batch_number),
+            U256::from(log_proof.id),
+            IMessageVerification::L2Message {
+                txNumberInBatch: receipt
+                    .transaction_index
+                    .expect("Transaction index not found") as u16,
+                sender,
+                data: message_data,
+            },
+            log_proof.proof.clone(),
+        )
+        .call()
+        .await?;
+
+    assert!(included, "Message was NOT included in the interop proof");
+
+    tracing::info!("✅ Interop L2->L1 message verification successful");
 
     Ok(())
 }
