@@ -67,6 +67,18 @@ In permissionless mode, the server uses `settleBatchesSharedBridge` on the `Perm
 
 The `PermissionlessValidator` contract is already deployed (its address is in the L1 state). We need to add it to the diamond proxy's validators mapping so it can call commit/prove/execute.
 
+> **Why `anvil_setStorageAt` instead of the real activation flow?**
+>
+> In production, priority mode is activated through a multi-step L1 process:
+> `makePermanentRollup()` → `permanentlyAllowPriorityMode()` → wait 4 days → `activatePriorityMode()`.
+> We skip this in the E2E test for several reasons:
+> 1. The diamond proxy admin key isn't in our test wallets (would need `anvil_impersonateAccount`)
+> 2. The flow has complex prerequisites (valid DA validator pair, a priority tx with timestamp)
+> 3. `activatePriorityMode()` reverts all non-executed batches, complicating test setup ordering
+> 4. We're testing the *server's* permissionless mode behavior, not the contract activation logic
+>
+> Direct storage manipulation is deterministic, fast, and isolates what we're actually testing.
+
 8. **Find the PermissionlessValidator address** from `contracts.yaml`:
    ```bash
    # For v31.0, it's at:
