@@ -2,14 +2,15 @@ use async_trait::async_trait;
 use std::collections::HashSet;
 use tokio::sync::{mpsc, watch};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_raft::{ConsensusRole, LeadershipSignal};
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand, RebuildCommand};
 use zksync_os_storage_api::{ReadReplay, ReadReplayExt, ReplayRecord};
 
-/// Command source for Main Node.
-/// Replays local WAL starting from `starting_block` and then produces new blocks.
+/// Command source for consensus-enabled main node.
+/// Replays local WAL starting from `starting_block` and then produces new blocks when leader.
 #[derive(Debug)]
-pub struct MainNodeCommandSource<Replay> {
+pub struct ConsensusNodeCommandSource<Replay> {
     /// Local block replays (aka `WAL`).
     pub block_replay_storage: Replay,
     /// Block number to start replaying from.
@@ -19,6 +20,8 @@ pub struct MainNodeCommandSource<Replay> {
     pub rebuild_options: Option<RebuildOptions>,
     /// Inbound channel of canonized blocks. Populated by `BlockCanonizer` with blocks that are canonized
     pub replays_to_execute: mpsc::Receiver<ReplayRecord>,
+    /// Current leadership status from consensus.
+    pub leadership: LeadershipSignal,
 }
 
 #[derive(Debug)]
@@ -36,11 +39,11 @@ pub struct ExternalNodeCommandSource {
 }
 
 #[async_trait]
-impl<Replay: ReadReplay> PipelineComponent for MainNodeCommandSource<Replay> {
+impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay> {
     type Input = ();
     type Output = BlockCommand;
 
-    const NAME: &'static str = "node_command_source";
+    const NAME: &'static str = "consensus_node_command_source";
     const OUTPUT_BUFFER_SIZE: usize = 1;
 
     async fn run(
@@ -94,23 +97,45 @@ impl<Replay: ReadReplay> PipelineComponent for MainNodeCommandSource<Replay> {
     }
 }
 
-impl<Replay: ReadReplay> MainNodeCommandSource<Replay> {
+impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
     /// This method kicks in after all local canonized Replayed Records (WAL) are replayed.
-    /// Produces `Produce` commands and errors if any replay records are received.
-    /// When consensus is integrated, this method will switch the mode from Replica to Leader.
+    /// Produces `Produce` commands only when the node is the leader.
     async fn run_loop(mut self, output: mpsc::Sender<BlockCommand>) -> anyhow::Result<()> {
+        let mut leadership = self.leadership.clone();
+        let mut role = leadership.current_role();
+        tracing::info!(?role, "Consensus role initialized");
+
         loop {
             tokio::select! {
+                res = leadership.wait_for_change() => {
+                    if res.is_err() {
+                        anyhow::bail!("leader watch channel closed");
+                    }
+                    let new_role = leadership.current_role();
+                    if new_role != role {
+                        tracing::info!(?role, ?new_role, "Consensus role changed");
+                        role = new_role;
+                    }
+                }
                 maybe_record = self.replays_to_execute.recv() => {
                     let Some(record) = maybe_record else {
                         anyhow::bail!("inbound replay channel closed");
                     };
-                    anyhow::bail!(
-                        "Leader node received block {} produced by someone else!",
-                        record.block_context.block_number,
+                    tracing::info!(
+                        block_number = record.block_context.block_number,
+                        role = ?role,
+                        "Received canonized block from consensus",
                     );
+                    if output
+                        .send(BlockCommand::Replay(Box::new(record)))
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!("Command output channel closed, stopping source");
+                        break;
+                    }
                 }
-                send_res = output.send(BlockCommand::Produce(ProduceCommand)) => {
+                send_res = output.send(BlockCommand::Produce(ProduceCommand)), if role == ConsensusRole::Leader => {
                     if send_res.is_err() {
                         tracing::warn!("Command output channel closed, stopping source");
                         break;
@@ -119,7 +144,7 @@ impl<Replay: ReadReplay> MainNodeCommandSource<Replay> {
             }
         }
 
-        anyhow::bail!("Execution loop in MainNodeCommandSource ended unexpectedly");
+        anyhow::bail!("Execution loop in ConsensusNodeCommandSource ended unexpectedly");
     }
 
     async fn send_block_rebuilds(

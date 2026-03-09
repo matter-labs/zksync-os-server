@@ -46,6 +46,7 @@ zksync_os_state.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_merkle_tree.workspace = true
 zksync_os_interop_fee_updater.workspace = true
+zksync_os_raft.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
