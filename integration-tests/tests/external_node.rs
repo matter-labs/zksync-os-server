@@ -204,8 +204,8 @@ async fn check_contract_present(en: &Tester, contract_address: Address) -> anyho
     })
     .retry(
         ConstantBuilder::default()
-            .with_delay(Duration::from_secs(1))
-            .with_max_times(10),
+            .with_delay(Duration::from_millis(200))
+            .with_max_times(50),
     )
     .await
 }
