@@ -42,9 +42,9 @@ const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(300);
 type TransactionReceiptFuture =
     BoxFuture<'static, Result<TransactionReceipt, PendingTransactionError>>;
 
-/// In settle mode, commit and prove L1Senders pass through without sending to L1.
+/// In permissionless mode, commit and prove L1Senders pass through without sending to L1.
 /// The prove passthrough additionally stores the SNARK proof in the batch envelope.
-async fn run_settle_passthrough<Input: SendToL1>(
+async fn run_permissionless_passthrough<Input: SendToL1>(
     mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
     outbound: Sender<SignedBatchEnvelope<FriProof>>,
 ) -> anyhow::Result<()> {
@@ -58,8 +58,8 @@ async fn run_settle_passthrough<Input: SendToL1>(
         for cmd in cmd_buffer.drain(..) {
             match cmd {
                 L1SenderCommand::SendToL1(mut command) => {
-                    tracing::info!(command_name, "settle passthrough (skipping L1 send)");
-                    command.prepare_settle_passthrough();
+                    tracing::info!(command_name, "permissionless passthrough (skipping L1 send)");
+                    command.prepare_permissionless_passthrough();
                     for mut envelope in command.into() {
                         envelope.set_stage(Input::MINED_STAGE);
                         outbound.send(envelope).await?;
@@ -107,8 +107,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
     config: L1SenderConfig<Input>,
     gateway: bool,
 ) -> anyhow::Result<()> {
-    if config.settle_mode && Input::SETTLE_PASSTHROUGH {
-        return run_settle_passthrough(inbound, outbound).await;
+    if config.permissionless_mode && Input::PERMISSIONLESS_PASSTHROUGH {
+        return run_permissionless_passthrough(inbound, outbound).await;
     }
 
     let latency_tracker =

@@ -30,7 +30,7 @@ impl SendToL1 for ProofCommand {
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1Passthrough;
-    const SETTLE_PASSTHROUGH: bool = true;
+    const PERMISSIONLESS_PASSTHROUGH: bool = true;
 
     fn solidity_call(&self, _gateway: bool) -> Bytes {
         proveBatchesSharedBridgeCall::new((
@@ -43,10 +43,10 @@ impl SendToL1 for ProofCommand {
         .into()
     }
 
-    fn prepare_settle_passthrough(&mut self) {
+    fn prepare_permissionless_passthrough(&mut self) {
         for batch in &mut self.batches {
             batch.batch.snark_proof = Some(self.proof.clone());
-            // Store the blob sidecar from commit stage for later use in settle call
+            // Store the blob sidecar from commit stage for later use in permissionless call
             batch.batch.commit_blob_sidecar = batch.batch.batch_info.blob_sidecar.clone();
         }
     }
@@ -131,7 +131,7 @@ fn snark_public_input(previous_batch: &StoredBatchInfo, batches: &[StoredBatchIn
 }
 
 /// Encode the prove calldata suffix for a set of batches and a SNARK proof.
-/// Reusable from both `ProofCommand::to_calldata_suffix()` and settle mode.
+/// Reusable from both `ProofCommand::to_calldata_suffix()` and permissionless mode.
 pub fn encode_prove_calldata_suffix(
     batches: &[SignedBatchEnvelope<FriProof>],
     proof: &SnarkProof,

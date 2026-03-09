@@ -1,12 +1,12 @@
-# Settle Mode E2E Test Guide
+# Permissionless Mode E2E Test Guide
 
-This document describes how to test the `settleBatchesSharedBridge` (settle mode) feature end-to-end using a local Anvil-based L1 chain.
+This document describes how to test the `settleBatchesSharedBridge` (permissionless mode) feature end-to-end using a local Anvil-based L1 chain.
 
 ## Overview
 
-In settle mode, the server uses `settleBatchesSharedBridge` on the `PermissionlessValidator` contract to atomically commit+prove+execute batches in a single L1 transaction, replacing the normal 3-transaction flow.
+In permissionless mode, the server uses `settleBatchesSharedBridge` on the `PermissionlessValidator` contract to atomically commit+prove+execute batches in a single L1 transaction, replacing the normal 3-transaction flow.
 
-**Pipeline in settle mode:**
+**Pipeline in permissionless mode:**
 - Commit L1Sender: passes through without sending to L1
 - Prove L1Sender: passes through without sending, stores SNARK proof in batch envelope
 - Execute L1Sender: sends `settleBatchesSharedBridge` (combines commit+prove+execute in one call)
@@ -104,23 +104,23 @@ The `PermissionlessValidator` contract is already deployed (its address is in th
     # Should return: 0x0000000000000000000000000000000000000000000000000000000000000001
     ```
 
-### Phase 3: Run in Settle Mode
+### Phase 3: Run in Permissionless Mode
 
-12. **Restart the server with settle mode enabled:**
+12. **Restart the server with permissionless mode enabled:**
     ```bash
-    l1_sender_settle_mode=true \
-    l1_sender_settle_contract_address=0x6e225a274BC2EB94f66086a1163d43D7B1Ae52D8 \
+    l1_sender_permissionless_mode=true \
+    l1_sender_permissionless_contract_address=0x6e225a274BC2EB94f66086a1163d43D7B1Ae52D8 \
     cargo run --release -- --config ./local-chains/v31.0/default/config.yaml > /tmp/server-phase2.log 2>&1 &
     ```
 
-13. **Monitor the logs for settle activity:**
+13. **Monitor the logs for permissionless mode activity:**
     ```bash
-    # Look for settle passthrough messages
-    grep -i "settle" /tmp/server-phase2.log
+    # Look for permissionless passthrough messages
+    grep -i "permissionless" /tmp/server-phase2.log
 
     # Should see:
-    # settle passthrough (skipping L1 send) command_name="commit"
-    # settle passthrough (skipping L1 send) command_name="prove"
+    # permissionless passthrough (skipping L1 send) command_name="commit"
+    # permissionless passthrough (skipping L1 send) command_name="prove"
 
     # Look for batch completion
     grep "Batch has been fully processed" /tmp/server-phase2.log
@@ -170,18 +170,18 @@ The `PermissionlessValidator` contract is already deployed (its address is in th
 
 ## Configuration
 
-Settle mode is controlled by two environment variables:
+Permissionless mode is controlled by two environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `l1_sender_settle_mode` | Enable settle mode | `false` |
-| `l1_sender_settle_contract_address` | PermissionlessValidator contract address | `0x0` |
+| `l1_sender_permissionless_mode` | Enable permissionless mode | `false` |
+| `l1_sender_permissionless_contract_address` | PermissionlessValidator contract address | `0x0` |
 
 These can also be set in `config.yaml` under the `l1_sender` section:
 ```yaml
 l1_sender:
-  settle_mode: true
-  settle_contract_address: '0x6e225a274BC2EB94f66086a1163d43D7B1Ae52D8'
+  permissionless_mode: true
+  permissionless_contract_address: '0x6e225a274BC2EB94f66086a1163d43D7B1Ae52D8'
 ```
 
 ## Storage Layout Notes
@@ -200,5 +200,5 @@ Note: Solidity packing may cause actual slot numbers to differ from source code 
 In our test run:
 - Phase 1: 67 batches committed/proved/executed in normal mode
 - Phase 2: PermissionlessValidator added as validator via `anvil_setStorageAt`
-- Phase 3: 12 additional batches (68-79) settled via `settleBatchesSharedBridge` with zero errors
+- Phase 3: 12 additional batches (68-79) settled via `settleBatchesSharedBridge` (permissionless mode) with zero errors
 - All three L1 counts (committed/proved/executed) stayed in sync, confirming atomic settlement

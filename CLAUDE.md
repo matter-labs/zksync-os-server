@@ -99,4 +99,4 @@ The batcher pipeline has recovery logic where components compare batch numbers a
 
 ### Config Validation
 - **Validate sentinel defaults at startup** - if a config field defaults to a sentinel value (e.g., `Address::ZERO`) and is required under certain conditions, add an explicit startup assertion with a clear error message. Don't let invalid config silently produce wrong behavior.
-- **Validate cross-field invariants** - when one config flag enables a feature that depends on another field, validate the dependency at startup (e.g., `settle_mode=true` requires `settle_contract_address != 0x0`).
+- **Validate cross-field invariants** - when one config flag enables a feature that depends on another field, validate the dependency at startup (e.g., `permissionless_mode=true` requires `permissionless_contract_address != 0x0`).

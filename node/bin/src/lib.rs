@@ -836,39 +836,39 @@ async fn run_main_node_pipeline(
     sidecar_sender: tokio::sync::mpsc::Sender<BlobTransactionSidecar>,
     committed_batch_provider: CommittedBatchProvider,
 ) {
-    // Validate settle mode configuration
-    if config.l1_sender_config.settle_mode {
+    // Validate permissionless mode configuration
+    if config.l1_sender_config.permissionless_mode {
         assert!(
-            config.l1_sender_config.settle_contract_address != alloy::primitives::Address::ZERO,
-            "settle_mode is enabled but settle_contract_address is not set (defaults to 0x0). \
-             Set l1_sender_settle_contract_address to the PermissionlessValidator contract address."
+            config.l1_sender_config.permissionless_contract_address != alloy::primitives::Address::ZERO,
+            "permissionless_mode is enabled but permissionless_contract_address is not set (defaults to 0x0). \
+             Set l1_sender_permissionless_contract_address to the PermissionlessValidator contract address."
         );
         let l1 = &node_state_on_startup.l1_state;
         assert!(
             l1.last_committed_batch == l1.last_executed_batch,
-            "settle_mode requires last_committed_batch == last_executed_batch on L1 \
+            "permissionless_mode requires last_committed_batch == last_executed_batch on L1 \
              (found committed={}, executed={}). \
              settleBatchesSharedBridge atomically commits+proves+executes, so it cannot process \
              batches that are already committed or proved but not yet executed. \
-             Run in normal mode first to execute the remaining batches, then switch to settle mode.",
+             Run in normal mode first to execute the remaining batches, then switch to permissionless mode.",
             l1.last_committed_batch,
             l1.last_executed_batch,
         );
         assert!(
             l1.last_proved_batch == l1.last_executed_batch,
-            "settle_mode requires last_proved_batch == last_executed_batch on L1 \
+            "permissionless_mode requires last_proved_batch == last_executed_batch on L1 \
              (found proved={}, executed={}). \
              settleBatchesSharedBridge atomically commits+proves+executes, so it cannot process \
              batches that are already committed or proved but not yet executed. \
-             Run in normal mode first to execute the remaining batches, then switch to settle mode.",
+             Run in normal mode first to execute the remaining batches, then switch to permissionless mode.",
             l1.last_proved_batch,
             l1.last_executed_batch,
         );
         assert!(
             config.prover_api_config.max_fris_per_snark == 1,
-            "settle_mode requires max_fris_per_snark == 1 (found {}). \
-             In settle mode, each batch is settled individually via settleBatchesSharedBridge. \
-             A SNARK proof covering multiple batches cannot be used in single-batch settle calls \
+            "permissionless_mode requires max_fris_per_snark == 1 (found {}). \
+             In permissionless mode, each batch is settled individually via settleBatchesSharedBridge. \
+             A SNARK proof covering multiple batches cannot be used in single-batch permissionless calls \
              because the proof's public input won't match the single batch's data. \
              Set prover_api_max_fris_per_snark=1.",
             config.prover_api_config.max_fris_per_snark,
@@ -878,7 +878,7 @@ async fn run_main_node_pipeline(
                 l1.batch_verification,
                 zksync_os_contract_interface::l1_discovery::BatchVerificationSL::Disabled
             ),
-            "settle_mode is incompatible with multisig batch verification. \
+            "permissionless_mode is incompatible with multisig batch verification. \
              settleBatchesSharedBridge builds commit calldata using commitBatchesSharedBridge \
              format (without signatures), which bypasses the multisig verification path. \
              Disable batch verification or run in normal mode."
@@ -1037,7 +1037,7 @@ async fn run_main_node_pipeline(
                 &priority_tree_db_path,
                 finality,
                 committed_batch_provider,
-                config.l1_sender_config.settle_mode,
+                config.l1_sender_config.permissionless_mode,
             )
             .await
             .unwrap(),
@@ -1045,8 +1045,8 @@ async fn run_main_node_pipeline(
         .pipe(L1Sender {
             provider: sl_provider,
             config: config.l1_sender_config.clone().into(),
-            to_address: if config.l1_sender_config.settle_mode {
-                config.l1_sender_config.settle_contract_address
+            to_address: if config.l1_sender_config.permissionless_mode {
+                config.l1_sender_config.permissionless_contract_address
             } else {
                 node_state_on_startup.l1_state.validator_timelock_sl
             },

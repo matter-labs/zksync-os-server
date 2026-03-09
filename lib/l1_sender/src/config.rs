@@ -28,7 +28,7 @@ pub struct L1SenderConfig<Input> {
     pub fusaka_upgrade_timestamp: u64,
 
     /// When enabled, use `settleBatchesSharedBridge` instead of separate commit/prove/execute.
-    pub settle_mode: bool,
+    pub permissionless_mode: bool,
 
     pub phantom_data: PhantomData<Input>,
 }

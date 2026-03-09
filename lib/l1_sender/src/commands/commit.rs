@@ -79,7 +79,7 @@ impl SendToL1 for CommitCommand {
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxMined;
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1Passthrough;
-    const SETTLE_PASSTHROUGH: bool = true;
+    const PERMISSIONLESS_PASSTHROUGH: bool = true;
 
     fn solidity_call(&self, _gateway: bool) -> Bytes {
         if let Some(signatures_set) = &self.signatures {
