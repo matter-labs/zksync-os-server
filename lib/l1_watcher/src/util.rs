@@ -398,7 +398,7 @@ pub async fn fetch_commit_calldata(
                 "commit tx {tx_hash} has no block number (still pending)"
             ))
         })?;
-        Ok(tx)
+        Ok::<_, L1WatcherError>(tx)
     })
     .retry(
         ConstantBuilder::default()
