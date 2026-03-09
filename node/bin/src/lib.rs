@@ -631,6 +631,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         token_price_receiver,
         config.l1_sender_config.pubdata_mode,
     );
+    let latest_l2_block = repositories
+        .get_block_by_number(repositories.get_latest_block())
+        .expect("Failed to load latest L2 block for mempool initialization")
+        .expect("Latest L2 block must exist before mempool initialization");
+    let latest_l2_tip = alloy::consensus::Sealed::new_unchecked(
+        latest_l2_block.clone_inner().header,
+        latest_l2_block.hash(),
+    );
 
     let pool = Pool::new(
         upgrade_subpool.clone(),
@@ -638,6 +646,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         interop_roots_subpool,
         l1_subpool,
         l2_subpool.clone(),
+        latest_l2_tip,
     );
     let block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,

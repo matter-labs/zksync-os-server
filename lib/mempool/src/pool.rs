@@ -10,6 +10,7 @@ use futures::{Stream, StreamExt};
 use reth_execution_types::ChangedAccount;
 use reth_primitives_traits::SealedBlock;
 use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
+use std::sync::Mutex;
 use tokio::time::Instant;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
@@ -27,6 +28,7 @@ pub struct Pool<T> {
     interop_roots_subpool: InteropRootsSubpool,
     l1_subpool: L1Subpool,
     l2_subpool: T,
+    latest_l2_tip: Mutex<Sealed<Header>>,
 }
 
 impl<T: L2Subpool> Pool<T> {
@@ -36,6 +38,7 @@ impl<T: L2Subpool> Pool<T> {
         interop_roots_subpool: InteropRootsSubpool,
         l1_subpool: L1Subpool,
         l2_subpool: T,
+        latest_l2_tip: Sealed<Header>,
     ) -> Self {
         Self {
             upgrade_subpool,
@@ -43,6 +46,7 @@ impl<T: L2Subpool> Pool<T> {
             interop_roots_subpool,
             l1_subpool,
             l2_subpool,
+            latest_l2_tip: Mutex::new(latest_l2_tip),
         }
     }
 
@@ -148,6 +152,21 @@ impl<T: L2Subpool> Pool<T> {
         self.l2_subpool.remove_transactions(tx_hashes);
     }
 
+    pub fn update_pending_block_fees(
+        &self,
+        pending_block_base_fee: u64,
+        pending_block_blob_fee: Option<u128>,
+    ) {
+        let latest_l2_tip = self.latest_l2_tip.lock().unwrap().clone();
+        self.update_l2_subpool_state(
+            latest_l2_tip,
+            pending_block_base_fee,
+            pending_block_blob_fee,
+            Vec::new(),
+            Vec::new(),
+        );
+    }
+
     pub async fn on_canonical_state_change(
         &self,
         header: Sealed<Header>,
@@ -195,10 +214,7 @@ impl<T: L2Subpool> Pool<T> {
             .on_canonical_state_change(l1_transactions)
             .await;
 
-        let (header, hash) = header.into_parts();
-        let body = BlockBody::<L2Envelope>::default();
-        let block = Block::new(header, body);
-        let sealed_block = SealedBlock::new_unchecked(block, hash);
+        let pending_block_base_fee = replay_record.block_context.eip1559_basefee.saturating_to();
         let changed_accounts = account_diffs
             .iter()
             .map(|diff| ChangedAccount {
@@ -206,21 +222,43 @@ impl<T: L2Subpool> Pool<T> {
                 nonce: diff.nonce,
                 balance: diff.balance,
             })
-            .collect();
-        self.l2_subpool
-            .on_canonical_state_change(CanonicalStateUpdate {
-                new_tip: &sealed_block,
-                pending_block_base_fee: 0,
-                pending_block_blob_fee: None,
-                changed_accounts,
-                mined_transactions: l2_transactions,
-                update_kind: PoolUpdateKind::Commit,
-            });
+            .collect::<Vec<_>>();
+        *self.latest_l2_tip.lock().unwrap() = header.clone();
+        self.update_l2_subpool_state(
+            header,
+            pending_block_base_fee,
+            None,
+            changed_accounts,
+            l2_transactions,
+        );
 
         StateChangeOutcome {
             last_interop_log_index,
             last_l1_priority_id,
         }
+    }
+
+    fn update_l2_subpool_state(
+        &self,
+        header: Sealed<Header>,
+        pending_block_base_fee: u64,
+        pending_block_blob_fee: Option<u128>,
+        changed_accounts: Vec<ChangedAccount>,
+        mined_transactions: Vec<TxHash>,
+    ) {
+        let (header, hash) = header.into_parts();
+        let body = BlockBody::<L2Envelope>::default();
+        let block = Block::new(header, body);
+        let sealed_block = SealedBlock::new_unchecked(block, hash);
+        self.l2_subpool
+            .on_canonical_state_change(CanonicalStateUpdate {
+                new_tip: &sealed_block,
+                pending_block_base_fee,
+                pending_block_blob_fee,
+                changed_accounts,
+                mined_transactions,
+                update_kind: PoolUpdateKind::Commit,
+            });
     }
 }
 

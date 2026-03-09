@@ -86,6 +86,10 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     ) -> anyhow::Result<PreparedBlockCommand<'_>> {
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
+                let fee_params = self.fee_provider.produce_fee_params().await?;
+                self.pool
+                    .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
+
                 // Create stream:
                 // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
                 // - L1 transactions first, then L2 transactions.
@@ -134,7 +138,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     eip1559_basefee,
                     native_price,
                     pubdata_price,
-                } = self.fee_provider.produce_fee_params().await?;
+                } = fee_params;
                 let block_context = BlockContext {
                     eip1559_basefee,
                     native_price,

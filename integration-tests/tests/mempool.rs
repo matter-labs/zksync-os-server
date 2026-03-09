@@ -182,8 +182,16 @@ async fn low_fee_tx_does_not_hang_block_executor() -> anyhow::Result<()> {
         .send_raw_transaction(&poison_encoded)
         .await?;
 
+    let block_before_wait = tester.l2_provider.get_block_number().await?;
+
     // Give the block executor time to pick up the low-fee tx
     tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let block_after_wait = tester.l2_provider.get_block_number().await?;
+    assert_eq!(
+        block_after_wait, block_before_wait,
+        "Low-fee tx alone should not progress block production"
+    );
 
     // Step 4: Send a legitimate follow-up from Bob (independent sender, no nonce dependency).
     let follow_up_tx = TransactionRequest::default()
