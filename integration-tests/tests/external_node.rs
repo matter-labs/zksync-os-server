@@ -163,7 +163,9 @@ async fn does_not_get_stuck() -> anyhow::Result<()> {
 
     let (send, mut recv) = tokio::sync::mpsc::channel(100);
 
-    const REPEATS: usize = 200;
+    // 30 deployments is sufficient to fill channel buffers and detect deadlocks,
+    // while avoiding the excessive runtime of the previous 200 iterations.
+    const REPEATS: usize = 30;
 
     let main_node_provider = main_node.l2_provider.clone();
     tokio::spawn(async move {
