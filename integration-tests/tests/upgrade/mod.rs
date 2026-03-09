@@ -4,7 +4,7 @@ use alloy::sol_types::SolCall;
 use std::collections::BTreeMap;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::contracts::SampleForceDeployment;
-use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV31, FacetCut, UpgradeTester};
+use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV32, FacetCut, UpgradeTester};
 use zksync_os_server::default_protocol_version::NEXT_PROTOCOL_VERSION;
 
 /// Executes the simplest patch protocol upgrade:
@@ -47,7 +47,7 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Performs V30->V31 protocol upgrade which also does a force deployment.
+/// Performs V31->V32 protocol upgrade which also does a force deployment.
 ///
 /// This test verifies the full upgrade flow including bytecodes supplier integration:
 /// the `DEPLOYED_BYTECODE` is published to the `BytecodesSupplier` contract on L1 so
@@ -56,7 +56,7 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
 /// ZKsync OS VM's native lookup key — so the VM can find it during upgrade tx execution
 /// and persist it with the correct key for subsequent EVM calls.
 #[test_log::test(tokio::test)]
-async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
+async fn upgrade_to_v32_with_deployments() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(0); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
@@ -94,7 +94,7 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
 
     // Deploy new CommitterFacet.
     let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
-    let committer_facet = CommitterFacetV31::deploy(
+    let committer_facet = CommitterFacetV32::deploy(
         upgrade_tester.tester.l1_provider().clone(),
         U256::from(l1_chain_id),
     )
@@ -106,7 +106,7 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
         action: Action::Replace,
         isFreezable: true,
         selectors: vec![FixedBytes(
-            CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR,
+            CommitterFacetV32::commitBatchesSharedBridgeCall::SELECTOR,
         )],
     };
 
