@@ -32,3 +32,6 @@ anyhow.workspace = true
 cargo_metadata = { workspace = true, default-features = false }
 reqwest = { workspace = true, features = ["blocking"] }
 url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
