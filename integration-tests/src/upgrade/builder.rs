@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use zksync_os_types::{L1TxType as _, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE};
 use zksync_os_types::{ProtocolSemanticVersion, UpgradeTxType};
 
+use blake2::{Blake2s256, Digest};
 use zk_os_api::helpers::set_properties_code;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
@@ -114,9 +115,13 @@ impl ProtocolUpgradeBuilder {
             let mut account_properties = AccountProperties::default();
             set_properties_code(&mut account_properties, &bytecode);
 
+            // Use blake2s256(raw_bytecode) as the bytecodeHash, matching the genesis
+            // convention (see genesis/src/lib.rs). The VM's force deployment mechanism
+            // doesn't set artifacts_len, so the preimage must be the raw bytecode
+            // keyed by blake2s256(raw), not blake2s256(padded+artifacts).
+            let raw_hash = B256::from_slice(Blake2s256::digest(&bytecode).as_slice());
             let deployed_bytecode_info = super::interfaces::ForceDeploymentBytecodeInfo {
-                bytecodeHash: B256::from_slice(account_properties.bytecode_hash.as_u8_ref()),
-                // Observable bytecode length (raw bytecode without padding/artifacts).
+                bytecodeHash: raw_hash,
                 bytecodeSize: account_properties.unpadded_code_len,
                 observableBytecodeHash: B256::from_slice(
                     account_properties.observable_bytecode_hash.as_u8_ref(),
@@ -128,9 +133,7 @@ impl ProtocolUpgradeBuilder {
                 newAddress: address,
             });
 
-            factory_deps.push(U256::from_be_slice(
-                deployed_bytecode_info.bytecodeHash.as_ref(),
-            ));
+            factory_deps.push(U256::from_be_slice(raw_hash.as_ref()));
         }
 
         let tx_type = if patch_only {

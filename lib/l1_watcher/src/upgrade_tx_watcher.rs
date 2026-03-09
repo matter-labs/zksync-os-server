@@ -9,8 +9,6 @@ use alloy::primitives::{Address, B256, BlockNumber, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
-use zk_os_api::helpers::set_properties_code;
-use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
 use zksync_os_contract_interface::ZkChain;
@@ -249,8 +247,13 @@ impl L1UpgradeTxWatcher {
             for log in logs {
                 let published = EVMBytecodePublished::decode_log(&log.inner)?.data;
                 let evm_hash = B256::from(published.bytecodeHash);
-                let zkos_hash = zkos_hash_from_bytecode(&published.bytecode);
                 let bytecode = published.bytecode.to_vec();
+                // Preimages are keyed by blake2s256(raw_bytecode) matching the genesis
+                // convention (see genesis/src/lib.rs). The VM's native lookup key for
+                // deployed contracts is blake2s256(bytecode + padding + artifacts), which
+                // differs for EVM contracts with non-trivial JUMPDEST bitmaps. Those must
+                // be pre-populated in persistent state via an L2 deploy before the upgrade.
+                let zkos_hash = blake2s_hash(&bytecode);
 
                 by_hash.insert(evm_hash, bytecode.clone());
                 by_hash.insert(zkos_hash, bytecode);
@@ -293,10 +296,11 @@ impl L1UpgradeTxWatcher {
     }
 }
 
-fn zkos_hash_from_bytecode(bytecode: &[u8]) -> B256 {
-    let mut account = AccountProperties::default();
-    set_properties_code(&mut account, bytecode);
-    B256::from_slice(account.bytecode_hash.as_u8_ref())
+/// Computes `blake2s256(raw_bytecode)` — the key used for force deploy preimages.
+/// Matches the genesis convention (see `genesis/src/lib.rs`).
+fn blake2s_hash(bytecode: &[u8]) -> B256 {
+    use blake2::{Blake2s256, Digest};
+    B256::from_slice(Blake2s256::digest(bytecode).as_slice())
 }
 
 #[async_trait::async_trait]
@@ -421,26 +425,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zkos_hash_matches_set_properties_code() {
+    fn blake2s_hash_matches_blake2s256() {
+        use blake2::{Blake2s256, Digest};
         let bytecode = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let mut account = AccountProperties::default();
-        set_properties_code(&mut account, &bytecode);
-        let expected = B256::from_slice(account.bytecode_hash.as_u8_ref());
-        assert_eq!(zkos_hash_from_bytecode(&bytecode), expected);
+        let expected = B256::from_slice(Blake2s256::digest(&bytecode).as_slice());
+        assert_eq!(blake2s_hash(&bytecode), expected);
     }
 
     #[test]
-    fn zkos_hash_is_deterministic() {
+    fn blake2s_hash_is_deterministic() {
         let bytecode = b"some evm bytecode here";
-        let hash1 = zkos_hash_from_bytecode(bytecode);
-        let hash2 = zkos_hash_from_bytecode(bytecode);
+        let hash1 = blake2s_hash(bytecode);
+        let hash2 = blake2s_hash(bytecode);
         assert_eq!(hash1, hash2);
     }
 
     #[test]
-    fn zkos_hash_differs_for_different_bytecodes() {
-        let a = zkos_hash_from_bytecode(b"bytecode_a");
-        let b = zkos_hash_from_bytecode(b"bytecode_b");
+    fn blake2s_hash_differs_for_different_bytecodes() {
+        let a = blake2s_hash(b"bytecode_a");
+        let b = blake2s_hash(b"bytecode_b");
         assert_ne!(a, b);
     }
 }

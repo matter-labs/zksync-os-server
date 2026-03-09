@@ -9,7 +9,15 @@ alloy::sol! {
         function owner() external view returns (address);
         function chainTypeManager(uint256 _chainId) external view returns (address);
         function getZKChain(uint256 _chainId) external view returns (address);
+        function chainAssetHandler() external view returns (address);
+    }
 
+    #[sol(rpc)]
+    contract ChainAssetHandler {
+        function owner() external view returns (address);
+        function migrationPaused() external view returns (bool);
+        function pauseMigration() external;
+        function unpauseMigration() external;
     }
 
     enum Action {
@@ -44,10 +52,12 @@ alloy::sol! {
             DiamondCutData calldata _cutData,
             uint256 _oldProtocolVersion,
             uint256 _oldProtocolVersionDeadline,
-            uint256 _newProtocolVersion
+            uint256 _newProtocolVersion,
+            address _verifier
         ) external;
 
         function getProtocolVersion(uint256 _chainId) external view returns (uint256);
+        function protocolVersionVerifier(uint256 _protocolVersion) external view returns (address);
     }
 
 

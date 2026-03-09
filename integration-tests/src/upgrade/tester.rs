@@ -49,6 +49,13 @@ pub struct UpgradeTester {
     pub diamond_proxy_admin: Address,
     // Bytecode supplier contract
     pub bytecode_supplier: interfaces::BytecodesSupplier::BytecodesSupplierInstance<EthDynProvider>,
+    // Chain asset handler contract (used for pausing migrations during upgrades)
+    pub chain_asset_handler:
+        interfaces::ChainAssetHandler::ChainAssetHandlerInstance<EthDynProvider>,
+    // Chain asset handler owner address
+    pub chain_asset_handler_owner: Address,
+    // Verifier address for the current protocol version
+    pub verifier: Address,
     // Current protocol version
     pub protocol_version: ProtocolSemanticVersion,
 }
@@ -73,9 +80,14 @@ impl UpgradeTester {
         facet_cuts: Vec<FacetCut>,
     ) -> anyhow::Result<()> {
         // Deploy the upgrade contract on L1.
-        let upgrade_contract =
-            DefaultUpgrade::deploy(self.tester.l1_provider(), protocol_upgrade).await?;
+        let upgrade_contract = DefaultUpgrade::deploy(self.tester.l1_provider(), protocol_upgrade)
+            .await
+            .context("DefaultUpgrade::deploy")?;
         tracing::info!("DefaultUpgrade contract deployed");
+
+        // Pause migrations on the chain asset handler (required by setNewVersionUpgrade).
+        self.pause_migrations().await.context("pause_migrations")?;
+        tracing::info!("Migrations paused on chain asset handler");
 
         // CTM upgrade, `setNewVersionUpgrade` call;
         let upgrade_data = upgrade_contract.diamond_cut_data(facet_cuts);
@@ -84,17 +96,33 @@ impl UpgradeTester {
             deadline,
             protocol_upgrade.newProtocolVersion,
         )
-        .await?;
+        .await
+        .context("set_new_version_on_ctm")?;
         tracing::info!("Upgrade is set on CTM");
 
         // Set timestamp for upgrade on a specific chain under stm, `setUpgradeTimestamp` call on L1ChainAdmin
         self.set_upgrade_timestamp(protocol_upgrade.newProtocolVersion, upgrade_timestamp)
-            .await?;
+            .await
+            .context("set_upgrade_timestamp")?;
         tracing::info!("Upgrade scheduled on L1");
 
         if patch_only {
-            // TODO: for patch upgrades, there is no L2 upgrade transaction, so we must be somewhat probabilistic.
-            // We will wait until the timestamp + some margin, then fetch the current l2 block and wait until it's finalized.
+            // For patch upgrades there is no L2 upgrade transaction. The L2 node bumps the
+            // protocol version as soon as the upgrade timestamp passes, so new batches carry
+            // the new version. The upgrade gatekeeper on the L1 sender side will:
+            //   - commit v31.0 batches while L1 reports v31.0 (OK)
+            //   - block v31.1 batches until L1 reports v31.1 (waits for diamond cut)
+            //   - error if L1 reports v31.1 but the next batch is still v31.0
+            //
+            // Therefore we must:
+            //   1. Record the current L2 block (guaranteed pre-upgrade, v31.0)
+            //   2. Wait for the upgrade timestamp
+            //   3. Wait for the pre-upgrade block to be finalized (all v31.0 batches committed)
+            //   4. Execute upgrade_chain (diamond cut) to bump L1 to v31.1
+            //   5. The gatekeeper then unblocks v31.1 batches
+            let pre_upgrade_block = self.tester.l2_zk_provider.get_block_number().await?;
+            tracing::info!(pre_upgrade_block, "Recorded pre-upgrade L2 block");
+
             let upgrade_timestamp_secs = u64::try_from(upgrade_timestamp).unwrap();
             let wait_duration = Duration::from_secs(upgrade_timestamp_secs).saturating_sub(
                 std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?,
@@ -104,28 +132,26 @@ impl UpgradeTester {
                 wait_duration
             );
             tokio::time::sleep(wait_duration).await;
-            let current_l2_block = self.tester.l2_zk_provider.get_block_number().await?;
+
+            // Wait for all pre-upgrade (v31.0) batches to be finalized before upgrading L1.
             self.tester
                 .l2_zk_provider
                 .wait_finalized_with_timeout(
-                    current_l2_block,
+                    pre_upgrade_block,
                     crate::assert_traits::DEFAULT_TIMEOUT,
                 )
-                .await?;
-            tracing::info!("Current L2 block is finalized, proceeding with patch upgrade");
-        } else {
-            // Wait until the block _before_ upgrade tx is finalized on L1.
-            self.wait_for_upgrade(upgrade_contract.upgrade_tx_l2_hash())
-                .await?;
-            tracing::info!("Block before upgrade tx is finalized on L1");
-        }
+                .await
+                .context("waiting for pre-upgrade block to be finalized")?;
+            tracing::info!(pre_upgrade_block, "Pre-upgrade block finalized on L1");
 
-        self.upgrade_chain(upgrade_data).await?;
-        tracing::info!("Upgrade tx is executed on L1");
+            // Upgrade the diamond proxy on L1 so the gatekeeper unblocks v31.1 batch commits.
+            self.upgrade_chain(upgrade_data)
+                .await
+                .context("upgrade_chain")?;
+            tracing::info!("Diamond proxy upgraded on L1 (patch path)");
 
-        if patch_only {
-            // For patch upgrades, we need to trigger a transaction finalization, since there is no upgrade tx.
-            // So we send a bogus tx and wait until it's finalized instead.
+            // Send a bogus L2 tx and wait for its block to be finalized, confirming that
+            // the L1 sender can commit/prove/execute batches with the new version.
             let tx = self
                 .tester
                 .l2_provider
@@ -145,6 +171,17 @@ impl UpgradeTester {
                 )
                 .await?;
         } else {
+            // Wait until the block _before_ upgrade tx is finalized on L1.
+            self.wait_for_upgrade(upgrade_contract.upgrade_tx_l2_hash())
+                .await
+                .context("wait_for_upgrade")?;
+            tracing::info!("Block before upgrade tx is finalized on L1");
+
+            self.upgrade_chain(upgrade_data)
+                .await
+                .context("upgrade_chain")?;
+            tracing::info!("Diamond proxy upgraded on L1 (minor path)");
+
             self.wait_for_upgrade_finalization(upgrade_contract.upgrade_tx_l2_hash())
                 .await?;
         }
@@ -173,6 +210,13 @@ impl UpgradeTester {
         let raw_protocol_version = ctm.getProtocolVersion(U256::from(chain_id)).call().await?;
         let protocol_version = ProtocolSemanticVersion::try_from(raw_protocol_version)
             .expect("invalid protocol version stored in CTM");
+
+        let chain_asset_handler_addr = bridgehub.chainAssetHandler().call().await?;
+        let chain_asset_handler = interfaces::ChainAssetHandler::new(
+            chain_asset_handler_addr,
+            tester.l1_provider().clone(),
+        );
+        let chain_asset_handler_owner = chain_asset_handler.owner().call().await?;
 
         let diamond_proxy = bridgehub.getZKChain(U256::from(chain_id)).call().await?;
         let diamond_proxy = interfaces::ZkChain::new(diamond_proxy, tester.l1_provider().clone());
@@ -205,6 +249,12 @@ impl UpgradeTester {
             tester.l1_provider().clone(),
         );
 
+        // Read the verifier address for the current protocol version from the CTM.
+        let verifier: Address = ctm
+            .protocolVersionVerifier(raw_protocol_version)
+            .call()
+            .await?;
+
         Ok(Self {
             tester,
             bridgehub,
@@ -216,21 +266,23 @@ impl UpgradeTester {
             l1_chain_admin,
             l1_chain_admin_owner,
             bytecode_supplier,
+            chain_asset_handler,
+            chain_asset_handler_owner,
+            verifier,
             protocol_version,
         })
     }
 
     /// Enables impersonation and adds funds to all the wallets participating in the upgrade.
     async fn enable_impersonation(&self) -> anyhow::Result<()> {
-        // Enable impersonation and fund all governance accounts.
-        // Use anvil_setBalance instead of ETH transfers because some governance
-        // addresses are contracts that may forward received ETH elsewhere.
-        let fund_amount = U256::from(100u64) * U256::from(10).pow(U256::from(18u64)); // 100 ETH
+        // Enable impersonation and fund all governance accounts
+        let balance = U256::from(10).pow(U256::from(18u64)) * U256::from(100); // 100 ETH
         for addr in [
             self.bridgehub_owner,
             self.ctm_owner,
             self.diamond_proxy_admin,
             self.l1_chain_admin_owner,
+            self.chain_asset_handler_owner,
         ] {
             self.tester
                 .l1_provider()
@@ -238,7 +290,7 @@ impl UpgradeTester {
                 .await?;
             self.tester
                 .l1_provider()
-                .anvil_set_balance(addr, fund_amount)
+                .anvil_set_balance(addr, balance)
                 .await?;
         }
         Ok(())
@@ -417,21 +469,34 @@ impl UpgradeTester {
         Ok(())
     }
 
+    pub async fn pause_migrations(&self) -> anyhow::Result<()> {
+        let tx = self
+            .chain_asset_handler
+            .pauseMigration()
+            .into_transaction_request()
+            .with_from(self.chain_asset_handler_owner);
+        self.send_impersonated_transaction(tx).await?;
+        Ok(())
+    }
+
     pub async fn set_new_version_on_ctm(
         &self,
         upgrade_data: interfaces::DiamondCutData,
         deadline: U256,
         new_version: U256,
     ) -> anyhow::Result<()> {
+        let old_version_packed = self
+            .protocol_version
+            .packed()
+            .expect("incorrect protocol version");
         let tx = self
             .ctm
             .setNewVersionUpgrade(
                 upgrade_data,
-                self.protocol_version
-                    .packed()
-                    .expect("incorrect protocol version"),
+                old_version_packed,
                 deadline,
                 new_version,
+                self.verifier,
             )
             .into_transaction_request()
             .with_from(self.ctm_owner);
@@ -475,10 +540,30 @@ impl UpgradeTester {
     /// Expects the transaction to succeed.
     async fn send_impersonated_transaction(
         &self,
-        tx: TransactionRequest,
+        mut tx: TransactionRequest,
     ) -> anyhow::Result<TransactionReceipt> {
-        // `anvil_send_impersonated_transaction` allows sending transaction receipt without signatures, unlike
-        // `send_transaction`, and doesn't require setting bogus signature and encoding unlike `send_raw_transaction`.
+        // Anvil's gas estimation for impersonated transactions can fail with misleading
+        // "Insufficient funds" errors when the underlying call would revert. We set
+        // explicit gas parameters to bypass estimation and get the real revert reason
+        // from the receipt instead.
+        if tx.gas.is_none() {
+            tx = tx.with_gas_limit(30_000_000);
+        }
+        if tx.max_fee_per_gas.is_none() {
+            let base_fee = self
+                .tester
+                .l1_provider()
+                .get_block_by_number(alloy::eips::BlockNumberOrTag::Latest)
+                .await?
+                .expect("latest block must exist")
+                .header
+                .base_fee_per_gas
+                .unwrap_or(1_000_000_000);
+            let max_fee = (base_fee as u128) * 2 + 1_000_000_000;
+            tx = tx.with_max_fee_per_gas(max_fee);
+            tx = tx.with_max_priority_fee_per_gas(1_000_000_000);
+        }
+        // `anvil_send_impersonated_transaction` allows sending transactions without signatures.
         let hash = self
             .tester
             .l1_provider()

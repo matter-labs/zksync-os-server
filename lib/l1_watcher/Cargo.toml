@@ -16,9 +16,8 @@ zksync_os_types.workspace = true
 zksync_os_batch_types.workspace = true
 zksync_os_mempool.workspace = true
 
-# Needed to recalculate the bytecode hashes during upgrade tx processing
-zk_os_api.workspace = true
-zk_os_basic_system.workspace = true
+# Needed to compute blake2s256 hashes for force deploy preimage keys
+blake2.workspace = true
 
 async-trait.workspace = true
 alloy = { workspace = true, default-features = false, features = ["reqwest", "rpc-types", "providers"] }

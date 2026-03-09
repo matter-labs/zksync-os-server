@@ -187,7 +187,8 @@ impl BatchInfo {
                 )
                     .abi_encode_packed(),
             )),
-            31 => B256::from(keccak256(
+            // v31+ uses the same packed layout with number_of_layer2_txs and sl_chain_id.
+            31.. => B256::from(keccak256(
                 (
                     U256::from(commit_info.chain_id),
                     commit_info.first_block_timestamp,
