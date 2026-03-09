@@ -77,10 +77,6 @@ impl UpgradeTester {
             DefaultUpgrade::deploy(self.tester.l1_provider(), protocol_upgrade).await?;
         tracing::info!("DefaultUpgrade contract deployed");
 
-        // Send pause migration to Bridgehub
-        self.pause_bridgehub_migrations().await?;
-        tracing::info!("Bridgehub migrations are paused");
-
         // CTM upgrade, `setNewVersionUpgrade` call;
         let upgrade_data = upgrade_contract.diamond_cut_data(facet_cuts);
         self.set_new_version_on_ctm(
@@ -226,7 +222,10 @@ impl UpgradeTester {
 
     /// Enables impersonation and adds funds to all the wallets participating in the upgrade.
     async fn enable_impersonation(&self) -> anyhow::Result<()> {
-        // Enable impersonation and fund all governance accounts
+        // Enable impersonation and fund all governance accounts.
+        // Use anvil_setBalance instead of ETH transfers because some governance
+        // addresses are contracts that may forward received ETH elsewhere.
+        let fund_amount = U256::from(100u64) * U256::from(10).pow(U256::from(18u64)); // 100 ETH
         for addr in [
             self.bridgehub_owner,
             self.ctm_owner,
@@ -239,13 +238,7 @@ impl UpgradeTester {
                 .await?;
             self.tester
                 .l1_provider()
-                .send_transaction(
-                    TransactionRequest::default()
-                        .with_to(addr)
-                        .with_value(U256::from(100u64) * U256::from(10).pow(U256::from(18u64))), // 100 ETH
-                )
-                .await?
-                .expect_successful_receipt()
+                .anvil_set_balance(addr, fund_amount)
                 .await?;
         }
         Ok(())
@@ -386,17 +379,6 @@ impl UpgradeTester {
             )
             .await
             .context("Block before upgrade transaction was not finalized")?;
-        Ok(())
-    }
-
-    pub async fn pause_bridgehub_migrations(&self) -> anyhow::Result<()> {
-        let pause_migration_tx = self
-            .bridgehub
-            .pauseMigration()
-            .into_transaction_request()
-            .with_from(self.bridgehub_owner);
-        self.send_impersonated_transaction(pause_migration_tx)
-            .await?;
         Ok(())
     }
 

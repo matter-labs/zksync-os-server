@@ -10,8 +10,6 @@ alloy::sol! {
         function chainTypeManager(uint256 _chainId) external view returns (address);
         function getZKChain(uint256 _chainId) external view returns (address);
 
-        // Upgrade functionality
-        function pauseMigration() external;
     }
 
     enum Action {
