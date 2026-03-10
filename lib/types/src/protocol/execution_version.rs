@@ -22,10 +22,10 @@ pub enum ExecutionVersion {
     V6 = 6,
 }
 
-impl TryFrom<ProtocolSemanticVersion> for ExecutionVersion {
+impl TryFrom<&ProtocolSemanticVersion> for ExecutionVersion {
     type Error = ExecutionVersionError;
 
-    fn try_from(version: ProtocolSemanticVersion) -> Result<Self, Self::Error> {
+    fn try_from(version: &ProtocolSemanticVersion) -> Result<Self, Self::Error> {
         // Prior to v30 release, updates happened without proper protocol upgrades, so it's
         // impossible to determine an early version by the protocol version alone. However,
         // the precise execution version is stored in the block context, so it can be loaded
@@ -38,7 +38,7 @@ impl TryFrom<ProtocolSemanticVersion> for ExecutionVersion {
             30 => Ok(ExecutionVersion::V5),
             31 => Ok(ExecutionVersion::V6),
             32 => Ok(ExecutionVersion::V6),
-            _ => Err(ExecutionVersionError::UnsupportedVersion(version)),
+            _ => Err(ExecutionVersionError::UnsupportedVersion(version.clone())),
         }
     }
 }
@@ -71,7 +71,7 @@ mod tests {
 
         for ((major, minor, patch), expected) in test_vector.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
-            let exec_version = ExecutionVersion::try_from(version.clone())
+            let exec_version = ExecutionVersion::try_from(&version)
                 .unwrap_or_else(|e| panic!("Failed to convert version {version:?}: {e}"));
             assert_eq!(&exec_version, expected);
         }
@@ -80,7 +80,7 @@ mod tests {
 
         for (major, minor, patch) in unknown_versions.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
-            let exec_version = ExecutionVersion::try_from(version);
+            let exec_version = ExecutionVersion::try_from(&version);
             assert!(matches!(
                 exec_version,
                 Err(ExecutionVersionError::UnsupportedVersion(_))
