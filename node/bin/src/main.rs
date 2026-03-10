@@ -8,7 +8,6 @@ use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_object_store::ObjectStoreMode;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
-use zksync_os_operator_signer::OperatorSignerConfig;
 use zksync_os_server::config::{
     BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
     ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
@@ -161,7 +160,7 @@ pub async fn main() {
         }
     }
 
-    let mut config = build_external_config(config_repo);
+    let mut config = build_external_config(config_repo).await;
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
     // =========== init interruption channel ===========
@@ -247,7 +246,7 @@ async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
     }
 }
 
-fn build_external_config(repo: ConfigRepository<'_>) -> Config {
+async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     let general_config = repo
         .single::<GeneralConfig>()
         .expect("Failed to load general config")
@@ -362,29 +361,29 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse fee config");
 
-    // Validate that operator signers are different (only relevant on the Main Node where they are set).
-    // NOTE: This check compares config values (key bytes for Local, resource names for KMS).
-    // It cannot detect cross-variant duplicates (e.g. a Local key and a KMS key that resolve
-    // to the same Ethereum address) without an async KMS call. Such conflicts will be caught
-    // at runtime when the wallet rejects duplicate signer addresses.
-    {
-        let commit = OperatorSignerConfig::resolve(
-            &l1_sender_config.operator_commit_sk,
-            &l1_sender_config.operator_commit_kms_resource,
-        );
-        let prove = OperatorSignerConfig::resolve(
-            &l1_sender_config.operator_prove_sk,
-            &l1_sender_config.operator_prove_kms_resource,
-        );
-        let execute = OperatorSignerConfig::resolve(
-            &l1_sender_config.operator_execute_sk,
-            &l1_sender_config.operator_execute_kms_resource,
-        );
-        if let (Some(c), Some(p), Some(e)) = (&commit, &prove, &execute)
-            && (c == p || p == e || e == c)
-        {
-            // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
-            panic!("Operator signer configs for commit, prove and execute must be different");
+    // Validate that operator signers resolve to different Ethereum addresses (Main Node only).
+    // Resolving the address for GCP KMS keys requires a network call, but is necessary to catch
+    // duplicates across different backends (e.g. a local key and a KMS key for the same address).
+    if let (Some(commit), Some(prove), Some(execute)) = (
+        &l1_sender_config.operator_commit_sk,
+        &l1_sender_config.operator_prove_sk,
+        &l1_sender_config.operator_execute_sk,
+    ) {
+        let commit_addr = commit
+            .address()
+            .await
+            .expect("failed to resolve commit operator address");
+        let prove_addr = prove
+            .address()
+            .await
+            .expect("failed to resolve prove operator address");
+        let execute_addr = execute
+            .address()
+            .await
+            .expect("failed to resolve execute operator address");
+        if commit_addr == prove_addr || prove_addr == execute_addr || execute_addr == commit_addr {
+            // important: don't use assert_ne here — it would expose private key addresses in logs
+            panic!("Operator addresses for commit, prove and execute must be different");
         }
     }
 

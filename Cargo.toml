@@ -279,8 +279,6 @@ zksync_os_base_token_adjuster = { version = "=0.16.0", path = "lib/base_token_ad
 zksync_os_reth_compat = { version = "=0.16.0", path = "lib/reth_compat" }
 zksync_os_operator_signer = { version = "=0.16.0", path = "lib/operator_signer" }
 
-gcp_auth = "0.12"
-
 zksync_os_server = { version = "=0.16.0", path = "node/bin" }
 
 #[patch.crates-io]

@@ -45,16 +45,18 @@ then the component will also periodically update "ETH:token" price ratio on L1. 
 still work without it but there will be a warning in logs and ratio on L1 won't change meaning that price
 for L1->L2 txs can eventually get outdated.
 
-You can use either a local private key or a GCP KMS key:
+You can use either a local private key or a GCP KMS key via the `token_multiplier_setter_sk` field:
 
 ```yaml
-# Option 1: Local private key
+# Option 1: Local private key (plain hex string)
 base_token_price_updater:
   token_multiplier_setter_sk: "<private_key_in_hex>"
 
-# Option 2: GCP KMS key (takes priority if both are set)
+# Option 2: GCP KMS key (structured object)
 base_token_price_updater:
-  token_multiplier_setter_kms_resource: "projects/{project}/locations/{location}/keyRings/{ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}"
+  token_multiplier_setter_sk:
+    type: gcp_kms
+    resource: "projects/{project}/locations/{location}/keyRings/{ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}"
 ```
 
 ## Mainnet recommendation
