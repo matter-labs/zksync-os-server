@@ -18,6 +18,8 @@ use backon::ConstantBuilder;
 use backon::Retryable;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
+#[cfg(feature = "prover-tests")]
+use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
