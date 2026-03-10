@@ -48,18 +48,24 @@ pub struct L2ToL1LogProof {
     pub root: B256,
 }
 
-/// Selects which merkle path format to use for L2->L1 log proofs.
+/// Selects the root that the returned merkle proof anchors to.
+///
+/// If omitted from the RPC call, [`LogProofTarget::L1BatchRoot`] is used.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum MerklePathType {
-    /// Proof corresponding to `set_batch_chain_merkle_path`: batch is proven against the
-    /// SL L1 batch aggregated root (via the full gateway batch range and local root extension).
+pub enum LogProofTarget {
+    /// Proof anchored to the SL L1 batch aggregated root.
+    ///
+    /// Corresponds to `set_batch_chain_merkle_path`. The proof covers the full gateway batch
+    /// range and includes the local-root extension, making it suitable for L1 verification.
     #[default]
-    Regular,
-    /// Proof corresponding to `set_batch_chain_merkle_path_until_msg_root`: batch is proven
-    /// against the SL block-level message root (no local root extension; uses the specific
-    /// execution block number).
-    UntilMsgRoot,
+    L1BatchRoot,
+    /// Proof anchored to the SL block-level message root.
+    ///
+    /// Corresponds to `set_batch_chain_merkle_path_until_msg_root`. The proof targets the
+    /// specific execution block (no local-root extension), making it suitable for
+    /// cross-chain interop message verification.
+    MessageRoot,
 }
 
 /// ZKsync-specific block metadata struct.

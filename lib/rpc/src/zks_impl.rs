@@ -12,10 +12,10 @@ use std::sync::Arc;
 use zksync_os_genesis::{GenesisInput, GenesisInputSource};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_rpc_api::{
-    types::{BlockMetadata, L2ToL1LogProof, MerklePathType},
+    types::{BlockMetadata, L2ToL1LogProof, LogProofTarget},
     zks::ZksApiServer,
 };
-use zksync_os_storage_api::{PersistedBatch, RepositoryError, StateError, read_aggregated_root};
+use zksync_os_storage_api::{PersistedBatch, RepositoryError, StateError, read_multichain_root};
 use zksync_os_types::L2_TO_L1_TREE_SIZE;
 
 const LOG_PROOF_SUPPORTED_METADATA_VERSION: u8 = 1;
@@ -54,7 +54,7 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         &self,
         tx_hash: TxHash,
         index: Index,
-        merkle_path_type: MerklePathType,
+        proof_target: LogProofTarget,
     ) -> ZksResult<Option<L2ToL1LogProof>> {
         let Some(tx_meta) = self.storage.repository().get_transaction_meta(tx_hash)? else {
             return Ok(None);
@@ -126,8 +126,8 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
                     .execute_sl_block_number
                     .ok_or(ZksError::BatchNotAvailableYet)?;
 
-                match merkle_path_type {
-                    MerklePathType::Regular => {
+                match proof_target {
+                    LogProofTarget::L1BatchRoot => {
                         let gateway_batch: PersistedBatch = gateway_provider
                             .raw_request(
                                 "unstable_getBatchByBlockNumber".into(),
@@ -158,14 +158,20 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
                             gw_local_root_future,
                             gw_chain_id_future,
                         )
-                        .map_ok(|(mut chain_log_proof, gw_local_root, gw_chain_id)| {
-                            // Chain tree is the right subtree of the aggregated tree.
-                            // We append root of the left subtree to form full proof.
-                            chain_log_proof.chain_id_leaf_proof_mask |=
-                                U256::from(1u64 << chain_log_proof.chain_id_leaf_proof.len());
-                            chain_log_proof.chain_id_leaf_proof.push(gw_local_root);
-                            chain_proof_vector(gateway_batch_number, chain_log_proof, gw_chain_id)
-                        });
+                        .map_ok(
+                            |(mut chain_log_proof, gw_local_root, gw_chain_id)| {
+                                // Chain tree is the right subtree of the aggregated tree.
+                                // We append root of the left subtree to form full proof.
+                                chain_log_proof.chain_id_leaf_proof_mask |=
+                                    U256::from(1u64 << chain_log_proof.chain_id_leaf_proof.len());
+                                chain_log_proof.chain_id_leaf_proof.push(gw_local_root);
+                                chain_proof_vector(
+                                    gateway_batch_number,
+                                    chain_log_proof,
+                                    gw_chain_id,
+                                )
+                            },
+                        );
 
                         let batch_tree_proof_future = batch_tree_proof(
                             gateway_batch.block_range.clone(),
@@ -186,7 +192,7 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
 
                         (batch_proof_len, batch_chain_proof, false)
                     }
-                    MerklePathType::UntilMsgRoot => {
+                    LogProofTarget::MessageRoot => {
                         // For the "until msg root" format the chain proof is taken at the specific
                         // SL block where this chain batch was executed (not at the end of the SL
                         // L1 batch). The proof goes from the batch leaf directly to the block-level
@@ -298,9 +304,9 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
         &self,
         tx_hash: TxHash,
         index: Index,
-        merkle_path_type: Option<MerklePathType>,
+        proof_target: Option<LogProofTarget>,
     ) -> RpcResult<Option<L2ToL1LogProof>> {
-        self.get_l2_to_l1_log_proof_impl(tx_hash, index, merkle_path_type.unwrap_or_default())
+        self.get_l2_to_l1_log_proof_impl(tx_hash, index, proof_target.unwrap_or_default())
             .await
             .to_rpc_result()
     }
