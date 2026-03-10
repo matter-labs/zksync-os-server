@@ -69,7 +69,15 @@ impl BatchInfo {
 
                         if let Some(roots) = envelope.interop_roots() {
                             for root in roots {
-                                dependency_roots_rolling_hash = keccak256((dependency_roots_rolling_hash, root.chainId, root.blockOrBatchNumber, root.sides).abi_encode_packed());
+                                dependency_roots_rolling_hash = keccak256(
+                                    (
+                                        dependency_roots_rolling_hash,
+                                        root.chainId,
+                                        root.blockOrBatchNumber,
+                                        root.sides,
+                                    )
+                                        .abi_encode_packed(),
+                                );
                             }
                         }
                     }

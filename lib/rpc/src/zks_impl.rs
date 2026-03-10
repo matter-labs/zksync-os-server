@@ -125,6 +125,7 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
                 let execute_sl_block_number = batch
                     .execute_sl_block_number
                     .ok_or(ZksError::BatchNotAvailableYet)?;
+
                 match proof_target {
                     LogProofTarget::L1BatchRoot => {
                         let gateway_batch: PersistedBatch = gateway_provider

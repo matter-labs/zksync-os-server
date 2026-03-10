@@ -100,10 +100,12 @@ impl ProcessRawEvents for InteropWatcher {
             sides: event.sides.clone(),
         };
 
-        self.interop_roots_subpool.add_root(IndexedInteropRoot {
-            log_index: event_log_index,
-            root: interop_root,
-        }).await;
+        self.interop_roots_subpool
+            .add_root(IndexedInteropRoot {
+                log_index: event_log_index,
+                root: interop_root,
+            })
+            .await;
         Ok(())
     }
 }
