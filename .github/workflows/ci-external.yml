@@ -3,16 +3,14 @@ name: CI (External Contributors)
 # This workflow uses `pull_request_target` so it runs automatically for
 # external contributors without requiring maintainer approval.
 #
-# SECURITY: Only safe, non-compiling checks belong here.
-#   - `cargo fmt` only parses source files; it does NOT execute build scripts,
-#     proc macros, or any user-controlled code.
-#   - We deliberately use GitHub-hosted runners (ubuntu-latest) to avoid
-#     exposing self-hosted runner infrastructure to untrusted code.
+# SECURITY NOTES:
+#   - Runs on GitHub-hosted runners (ubuntu-latest) only, to avoid exposing
+#     self-hosted runner infrastructure to untrusted code.
 #   - No repository secrets are passed to any step.
-#
-# Checks that require compilation (clippy, tests) MUST stay in ci.yml
-# because `cargo build`/`cargo clippy`/`cargo test` execute build.rs and
-# proc macros, which means arbitrary code from the PR runs on the runner.
+#   - Compilation jobs (clippy, tests) DO execute build.rs / proc macros from
+#     the PR, but the blast radius is limited to an ephemeral GitHub-hosted VM
+#     with only a read-only GITHUB_TOKEN.
+#   - persist-credentials: false on checkout to prevent token leakage.
 
 on:
   pull_request_target:
@@ -20,6 +18,11 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  ZKSYNC_USE_CUDA_STUBS: true
 
 permissions:
   contents: read
@@ -52,3 +55,88 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all --check
+
+  ############################
+  #         Clippy           #
+  ############################
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+        with:
+          enable_cache: 'true'
+          save_cache: 'true'
+          cache_shared_key: 'external-clippy'
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features --workspace -- -D warnings
+
+  ############################
+  #       Unit tests         #
+  ############################
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+        with:
+          enable_cache: 'true'
+          save_cache: 'true'
+          cache_shared_key: 'external-tests'
+
+      - name: Run unit tests
+        run: cargo nextest run --release --workspace --exclude zksync_os_integration_tests
+
+  ############################
+  #    Integration tests     #
+  ############################
+  integration-tests:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+        with:
+          enable_cache: 'true'
+          save_cache: 'true'
+          cache_shared_key: 'external-tests'
+
+      - name: Run integration tests
+        run: cargo nextest run --release -p zksync_os_integration_tests
+
+  ###############################
+  #  Mandatory CI status check  #
+  ###############################
+  ci-external-success:
+    name: External CI Status Check
+    runs-on: ubuntu-latest
+    if: always() && !cancelled()
+    needs: [format, clippy, unit-tests, integration-tests]
+    steps:
+      - name: Status
+        run: |
+          if [[ ${{ contains(join(needs.*.result, ','), 'failure') }} == "true" ]]; then
+            echo "Intentionally failing to block PR from merging"
+            exit 1
+          fi
