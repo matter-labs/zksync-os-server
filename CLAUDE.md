@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Format**: `cargo fmt --all -- --check`
 - **Lint**: `cargo clippy --all-targets --all-features --workspace --exclude zksync_os_integration_tests -- -D warnings`
 - **Unit tests**: `cargo nextest run --workspace --exclude zksync_os_integration_tests`
-- **Integration tests**: `cargo nextest run --profile ci -p zksync_os_integration_tests`
+- **Integration tests**: `cargo nextest run -p zksync_os_integration_tests` (no live anvil needed — each test manages its own L1/node)
 
 ### Local Development Setup
 1. Run script: `./run_local.sh ./local-chains/v30.2/default`
@@ -29,6 +29,47 @@ sequencer_prometheus_port=3313 \
 rpc_address=0.0.0.0:3051 \
 cargo run --release
 ```
+
+## Before Submitting a PR
+
+**Run all of the following checks before EVERY push to the branch — not just the first one.** Skipping any of these is not acceptable; every push must pass all checks.
+
+1. **Format**: `cargo fmt --all --check`
+2. **Lint**: `cargo clippy --all-targets --all-features --workspace -- -D warnings`
+3. **Unit tests**: `cargo nextest run --release --workspace --exclude zksync_os_integration_tests`
+4. **Integration tests**: `cargo nextest run -p zksync_os_integration_tests` (no live anvil needed — each test manages its own L1/node)
+
+Running every single one of these checks is critically important. CI will catch failures, but catching them locally before pushing saves everyone time and keeps the branch green.
+
+### Tests
+
+Judge whether the change warrants new tests:
+
+- **Bug fix or new logic** — add a unit test covering the case.
+- **New subsystem interaction or cross-component flow** — add an integration test in `zksync_os_integration_tests`.
+- **Pure refactor, doc change, or config tweak** — tests may not be needed.
+
+**Any bigger change to the server logic must have corresponding integration tests. Adding those integration tests is part of the scope of the PR — do not consider the PR complete until they are included.**
+
+If no tests were added, include one sentence in the PR description explaining why (e.g. _"No tests added — this is a documentation-only change."_ or _"No tests added — the behaviour is already covered by existing integration tests."_).
+
+### PR title
+
+PR titles must follow the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification:
+
+```
+<type>(<scope>): <short description>
+```
+
+Examples: `feat(eth_sender): Support new transaction type`, `fix(state_keeper): Correctly handle edge case`, `ci: Add new workflow for linting`
+
+### Breaking changes
+
+If the PR title uses the breaking-change marker (`feat!: ...`, `fix!: ...`), you **must** uncomment and fill in the **Breaking Changes** and **Rollout Instructions** sections in the PR description (see `.github/pull_request_template.md`).
+
+### Wire format immutability
+
+Do **not** modify existing versioned wire format files under `lib/network/src/wire/replays/v*.rs`. Add a new versioned file instead.
 
 ## Architecture Overview
 
