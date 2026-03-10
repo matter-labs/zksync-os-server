@@ -1,4 +1,4 @@
-use crate::types::{BlockMetadata, L2ToL1LogProof};
+use crate::types::{BlockMetadata, L2ToL1LogProof, LogProofTarget};
 use alloy::primitives::{Address, TxHash};
 use alloy::rpc::types::Index;
 use jsonrpsee::core::RpcResult;
@@ -14,11 +14,16 @@ pub trait ZksApi {
     #[method(name = "getBytecodeSupplierContract")]
     async fn get_bytecode_supplier_contract(&self) -> RpcResult<Address>;
 
+    /// Returns the merkle proof for an L2->L1 log emitted in a given transaction.
+    ///
+    /// `proof_target` selects which root the proof anchors to (see [`LogProofTarget`]).
+    /// If omitted, [`LogProofTarget::L1BatchRoot`] is used.
     #[method(name = "getL2ToL1LogProof")]
     async fn get_l2_to_l1_log_proof(
         &self,
         tx_hash: TxHash,
         index: Index,
+        proof_target: Option<LogProofTarget>,
     ) -> RpcResult<Option<L2ToL1LogProof>>;
 
     #[method(name = "getGenesis")]
