@@ -96,6 +96,9 @@ pub struct PreparedBlockCommand<'a> {
     pub force_preimages: Vec<(B256, Vec<u8>)>,
     pub starting_interop_event_index: InteropRootsLogIndex,
     pub interop_roots_per_block: u64,
+    /// Whether canonical state transition should strictly consume executed txs from live subpools.
+    /// `true` for produced blocks, `false` for replay/rebuild.
+    pub strict_subpool_cleanup: bool,
 }
 
 /// Behaviour when VM returns an InvalidTransaction error.

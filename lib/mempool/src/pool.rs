@@ -1,3 +1,4 @@
+use crate::subpools::interop_fee::InteropFeeSubpool;
 use crate::subpools::interop_roots::InteropRootsSubpool;
 use crate::subpools::l1::L1Subpool;
 use crate::subpools::l2::{L2Subpool, L2TransactionsStreamMarker};
@@ -24,6 +25,7 @@ use zksync_os_types::{
 pub struct Pool<T> {
     upgrade_subpool: UpgradeSubpool,
     sl_chain_id_subpool: SlChainIdSubpool,
+    interop_fee_subpool: InteropFeeSubpool,
     interop_roots_subpool: InteropRootsSubpool,
     l1_subpool: L1Subpool,
     l2_subpool: T,
@@ -33,6 +35,7 @@ impl<T: L2Subpool> Pool<T> {
     pub fn new(
         upgrade_subpool: UpgradeSubpool,
         sl_chain_id_subpool: SlChainIdSubpool,
+        interop_fee_subpool: InteropFeeSubpool,
         interop_roots_subpool: InteropRootsSubpool,
         l1_subpool: L1Subpool,
         l2_subpool: T,
@@ -40,6 +43,7 @@ impl<T: L2Subpool> Pool<T> {
         Self {
             upgrade_subpool,
             sl_chain_id_subpool,
+            interop_fee_subpool,
             interop_roots_subpool,
             l1_subpool,
             l2_subpool,
@@ -67,6 +71,9 @@ impl<T: L2Subpool> Pool<T> {
 
         let mut sl_chain_id_stream = tokio_stream::StreamExt::peekable(
             self.sl_chain_id_subpool.best_transactions_stream().await,
+        );
+        let mut interop_fee_stream = tokio_stream::StreamExt::peekable(
+            self.interop_fee_subpool.best_transactions_stream().await,
         );
 
         let l1_stream = self.l1_subpool.best_transactions_stream().await;
@@ -124,6 +131,12 @@ impl<T: L2Subpool> Pool<T> {
                         stream: MarkingTxStream::unmarkable(sl_chain_id_stream),
                     });
                 }
+                Some(_) = interop_fee_stream.peek() => {
+                    return Some(StreamOutcome {
+                        upgrade_metadata,
+                        stream: MarkingTxStream::unmarkable(interop_fee_stream),
+                    });
+                }
                 Some(_) = interop_stream.peek() => {
                     return Some(StreamOutcome {
                         upgrade_metadata,
@@ -164,9 +177,11 @@ impl<T: L2Subpool> Pool<T> {
         header: Sealed<Header>,
         account_diffs: &[AccountDiff],
         replay_record: &ReplayRecord,
+        strict_subpool_cleanup: bool,
     ) -> StateChangeOutcome {
         let mut upgrade_txs = Vec::new();
         let mut interop_txs = Vec::new();
+        let mut interop_fee_txs = Vec::new();
         let mut sl_chain_id_txs = Vec::new();
         let mut l1_transactions = Vec::new();
         let mut l2_transactions = Vec::new();
@@ -175,6 +190,9 @@ impl<T: L2Subpool> Pool<T> {
                 ZkEnvelope::System(system_tx) => match system_tx.system_subtype() {
                     SystemTxType::ImportInteropRoots(_) => {
                         interop_txs.push(system_tx);
+                    }
+                    SystemTxType::SetInteropFee => {
+                        interop_fee_txs.push(system_tx);
                     }
                     SystemTxType::SetSLChainId => {
                         sl_chain_id_txs.push(system_tx);
@@ -197,6 +215,9 @@ impl<T: L2Subpool> Pool<T> {
         let last_interop_log_index = self
             .interop_roots_subpool
             .on_canonical_state_change(interop_txs)
+            .await;
+        self.interop_fee_subpool
+            .on_canonical_state_change(interop_fee_txs, strict_subpool_cleanup)
             .await;
         self.sl_chain_id_subpool
             .on_canonical_state_change(sl_chain_id_txs)

@@ -41,6 +41,7 @@ zksync_os_network.workspace = true
 zksync_os_metadata.workspace = true
 zksync_os_base_token_adjuster.workspace = true
 zksync_os_external_price_api.workspace = true
+zksync_os_interop_fee_updater.workspace = true
 zksync_os_reth_compat.workspace = true
 
 zk_os_forward_system.workspace = true

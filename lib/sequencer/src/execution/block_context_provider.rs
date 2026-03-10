@@ -171,6 +171,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     force_preimages,
                     starting_interop_event_index: self.next_interop_event_index.clone(),
                     interop_roots_per_block: self.interop_roots_per_block,
+                    strict_subpool_cleanup: true,
                 }
             }
             BlockCommand::Replay(record) => {
@@ -203,6 +204,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     force_preimages: record.force_preimages,
                     starting_interop_event_index: record.starting_interop_event_index.clone(),
                     interop_roots_per_block: self.interop_roots_per_block,
+                    strict_subpool_cleanup: false,
                 }
             }
             BlockCommand::Rebuild(rebuild) => {
@@ -284,6 +286,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     force_preimages: rebuild.replay_record.force_preimages,
                     starting_interop_event_index: self.next_interop_event_index.clone(),
                     interop_roots_per_block: self.interop_roots_per_block,
+                    strict_subpool_cleanup: false,
                 }
             }
         };
@@ -299,6 +302,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         &mut self,
         block_output: &BlockOutput,
         replay_record: &ReplayRecord,
+        strict_subpool_cleanup: bool,
     ) {
         let outcome = self
             .pool
@@ -306,6 +310,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 block_output.header.clone(),
                 &block_output.account_diffs,
                 replay_record,
+                strict_subpool_cleanup,
             )
             .await;
         if let Some(last_l1_priority_id) = outcome.last_l1_priority_id {

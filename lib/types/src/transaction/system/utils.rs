@@ -4,14 +4,16 @@ use alloy::{
 };
 use serde::{Deserialize, Serialize};
 use zksync_os_contract_interface::{
-    IMessageRoot::addInteropRootsInBatchCall, ISystemContext::setSettlementLayerChainIdCall,
-    InteropRoot,
+    IInteropCenter::setInteropFeeCall, IMessageRoot::addInteropRootsInBatchCall,
+    ISystemContext::setSettlementLayerChainIdCall, InteropRoot,
 };
 
 pub const BOOTLOADER_FORMAL_ADDRESS: Address =
     address!("0x0000000000000000000000000000000000008001");
 pub const L2_INTEROP_ROOT_STORAGE_ADDRESS: Address =
     address!("0x0000000000000000000000000000000000010008");
+pub const L2_INTEROP_CENTER_ADDRESS: Address =
+    address!("0x000000000000000000000000000000000001000d");
 pub const SYSTEM_CONTEXT_ADDRESS: Address = address!("0x000000000000000000000000000000000000800b");
 
 pub const SYSTEM_TX_TYPE_ID: u8 = 125;
@@ -23,12 +25,15 @@ pub enum SystemTxType {
     ImportInteropRoots(u64),
     /// Transaction subtype for setting the settlement layer chain id
     SetSLChainId,
+    /// Transaction subtype for setting the interop fee.
+    SetInteropFee,
 }
 
 /// Helper type to encode/decode system transaction input and determine it's subtype
 pub(crate) enum SystemTxInput {
     ImportInteropRoots(Vec<InteropRoot>),
     SetSLChainId(ChainId),
+    SetInteropFee(U256),
 }
 
 impl SystemTxInput {
@@ -42,6 +47,10 @@ impl SystemTxInput {
                 _newSettlementLayerChainId: U256::from(*chain_id),
             }
             .abi_encode(),
+            Self::SetInteropFee(interop_fee) => setInteropFeeCall {
+                _interopFee: *interop_fee,
+            }
+            .abi_encode(),
         }
     }
 
@@ -49,6 +58,7 @@ impl SystemTxInput {
         match self {
             Self::ImportInteropRoots(_) => L2_INTEROP_ROOT_STORAGE_ADDRESS,
             Self::SetSLChainId(_) => SYSTEM_CONTEXT_ADDRESS,
+            Self::SetInteropFee(_) => L2_INTEROP_CENTER_ADDRESS,
         }
     }
 
@@ -68,6 +78,11 @@ impl SystemTxInput {
                 let call = setSettlementLayerChainIdCall::abi_decode(data)
                     .expect("failed to decode SL chain id system transaction");
                 Self::SetSLChainId(call._newSettlementLayerChainId.try_into().unwrap())
+            }
+            setInteropFeeCall::SELECTOR => {
+                let call = setInteropFeeCall::abi_decode(data)
+                    .expect("failed to decode interop fee system transaction");
+                Self::SetInteropFee(call._interopFee)
             }
             _ => panic!(
                 "unknown system transaction selector: {}",

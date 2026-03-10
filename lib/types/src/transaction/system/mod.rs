@@ -46,6 +46,11 @@ impl SystemTxEnvelope {
         Self::create_from_input(SystemTxInput::SetSLChainId(chain_id))
     }
 
+    /// A constructor for system transaction that sets the interop fee.
+    pub fn set_interop_fee(interop_fee: U256) -> Self {
+        Self::create_from_input(SystemTxInput::SetInteropFee(interop_fee))
+    }
+
     fn create_from_input(tx_input: SystemTxInput) -> Self {
         let calldata = tx_input.abi_encode();
 
@@ -71,6 +76,7 @@ impl SystemTxEnvelope {
                     SystemTxType::ImportInteropRoots(roots.len() as u64)
                 }
                 SystemTxInput::SetSLChainId(_) => SystemTxType::SetSLChainId,
+                SystemTxInput::SetInteropFee(_) => SystemTxType::SetInteropFee,
             }
         })
     }
@@ -315,7 +321,7 @@ impl Transaction for SystemTxEnvelope {
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::{B256, Uint};
+    use alloy::primitives::{B256, U256, Uint};
     use zksync_os_contract_interface::InteropRoot;
 
     use crate::SystemTxEnvelope;
@@ -366,6 +372,30 @@ mod tests {
   "nonce": "0x0",
   "value": "0x0",
   "input": "0x040203e60000000000000000000000000000000000000000000000000000000000000001",
+  "v": "0x0",
+  "r": "0x0",
+  "s": "0x0",
+  "yParity": "0x0"
+}"#
+        );
+    }
+
+    #[test]
+    fn set_interop_fee_tx_serialization() {
+        let tx = SystemTxEnvelope::set_interop_fee(U256::from(42));
+
+        assert_eq!(
+            serde_json::to_string_pretty(&tx).unwrap(),
+            r#"{
+  "hash": "0xfe3a6e7202556c5e309bc15e409e335bf132997ee6a090492e0be120e9bce7ff",
+  "initiator": "0x0000000000000000000000000000000000008001",
+  "to": "0x000000000000000000000000000000000001000d",
+  "gas": "0x0",
+  "maxFeePerGas": "0x0",
+  "maxPriorityFeePerGas": "0x0",
+  "nonce": "0x0",
+  "value": "0x0",
+  "input": "0x08273d8a000000000000000000000000000000000000000000000000000000000000002a",
   "v": "0x0",
   "r": "0x0",
   "s": "0x0",

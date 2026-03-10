@@ -31,6 +31,7 @@ members = [
     "lib/batch_verification",
     "lib/batch_types",
     "lib/internal_config",
+    "lib/interop_fee_updater",
     "lib/network",
     "lib/metadata",
     "lib/external_price_api",
@@ -271,6 +272,7 @@ zksync_os_gas_adjuster = { version = "=0.16.0", path = "lib/gas_adjuster" }
 zksync_os_batch_verification = { version = "=0.16.0", path = "lib/batch_verification" }
 zksync_os_batch_types = { version = "=0.16.0", path = "lib/batch_types" }
 zksync_os_internal_config = { version = "=0.16.0", path = "lib/internal_config" }
+zksync_os_interop_fee_updater = { version = "=0.16.0", path = "lib/interop_fee_updater" }
 zksync_os_network = { version = "=0.16.0", path = "lib/network" }
 zksync_os_metadata = { version = "=0.16.0", path = "lib/metadata" }
 zksync_os_external_price_api = { version = "=0.16.0", path = "lib/external_price_api" }

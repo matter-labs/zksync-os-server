@@ -1,0 +1,22 @@
+[package]
+name = "zksync_os_interop_fee_updater"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+alloy = { workspace = true, default-features = false, features = ["eips", "rpc-types", "network", "sol-types"] }
+anyhow.workspace = true
+num.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+tracing.workspace = true
+
+zksync_os_contract_interface.workspace = true
+zksync_os_mempool.workspace = true
+zksync_os_rpc.workspace = true
+zksync_os_types.workspace = true

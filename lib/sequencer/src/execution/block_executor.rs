@@ -27,7 +27,15 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     mut command: PreparedBlockCommand<'_>,
     state: R,
     latency_tracker: &ComponentStateHandle<SequencerState>,
-) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
+) -> Result<
+    (
+        BlockOutput,
+        ReplayRecord,
+        Vec<(TxHash, InvalidTransaction)>,
+        bool,
+    ),
+    BlockDump,
+> {
     tracing::debug!(command = ?command, block_number=command.block_context.block_number, "Executing command");
     latency_tracker.enter_state(SequencerState::InitializingVm);
     let ctx = command.block_context;
@@ -375,6 +383,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             command.starting_interop_event_index,
         ),
         purged_txs,
+        command.strict_subpool_cleanup,
     ))
 }
 

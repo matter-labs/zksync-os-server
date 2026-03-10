@@ -13997,6 +13997,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_interop_fee_updater"
+version = "0.16.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "num",
+ "tokio",
+ "tracing",
+ "zksync_os_contract_interface",
+ "zksync_os_mempool",
+ "zksync_os_rpc",
+ "zksync_os_types",
+]
+
+[[package]]
 name = "zksync_os_l1_sender"
 version = "0.16.0"
 dependencies = [
@@ -14514,6 +14529,7 @@ dependencies = [
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_internal_config",
+ "zksync_os_interop_fee_updater",
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",

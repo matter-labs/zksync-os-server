@@ -60,6 +60,9 @@ use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
 use zksync_os_internal_config::InternalConfigManager;
+use zksync_os_interop_fee_updater::{
+    InteropFeeUpdater, InteropFeeUpdaterConfig as LibInteropFeeUpdaterConfig,
+};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
@@ -70,6 +73,7 @@ use zksync_os_l1_watcher::{
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
+use zksync_os_mempool::subpools::interop_fee::InteropFeeSubpool;
 use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
 use zksync_os_mempool::subpools::l1::L1Subpool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
@@ -84,7 +88,7 @@ use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
-use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
+use zksync_os_rpc::{EthCallHandler, RpcStorage, run_jsonrpsee_server};
 use zksync_os_rpc_api::eth::EthApiClient;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::{FeeParams, FeeProvider, Sequencer};
@@ -464,6 +468,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
+    let interop_fee_subpool = InteropFeeSubpool::default();
     let interop_roots_subpool = InteropRootsSubpool::new(
         // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
         1,
@@ -603,6 +608,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
 
     let (token_price_sender, token_price_receiver) = watch::channel(None);
+    let interop_fee_token_price_receiver = token_price_receiver.clone();
     let previous_block_fee_params = if starting_block == 1 {
         None
     } else {
@@ -635,6 +641,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let pool = Pool::new(
         upgrade_subpool.clone(),
         sl_chain_id_subpool,
+        interop_fee_subpool.clone(),
         interop_roots_subpool,
         l1_subpool,
         l2_subpool.clone(),
@@ -678,6 +685,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let persistent_batch_storage =
         ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
+    let rpc_storage = RpcStorage::new(
+        repositories.clone(),
+        block_replay_storage.clone(),
+        finality_storage.clone(),
+        persistent_batch_storage.clone(),
+        state.clone(),
+    );
     tasks.spawn(
         L1PersistBatchWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
@@ -725,6 +739,37 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             base_token_price_updater
                 .run(stop_receiver_)
                 .map(|_| tracing::warn!("base_token_price_updater.run() unexpectedly exited"))
+                .await;
+        });
+    }
+
+    if node_role.is_main()
+        && config.general_config.gateway_rpc_url.is_some()
+        && current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
+    {
+        let eth_call_handler = EthCallHandler::new(
+            config.rpc_config.clone().into(),
+            rpc_storage.clone(),
+            chain_id,
+            last_constructed_block_ctx_receiver.clone(),
+        );
+        let mut interop_fee_updater = InteropFeeUpdater::new(
+            eth_call_handler,
+            sl_provider.clone().erased(),
+            interop_fee_subpool,
+            interop_fee_token_price_receiver,
+            LibInteropFeeUpdaterConfig {
+                polling_interval: config.interop_fee_updater_config.polling_interval,
+                update_deviation_percentage: config
+                    .interop_fee_updater_config
+                    .update_deviation_percentage,
+            },
+        );
+        let stop_receiver_ = stop_receiver.clone();
+        tasks.spawn(async move {
+            interop_fee_updater
+                .run(stop_receiver_)
+                .map(|_| tracing::warn!("interop_fee_updater.run() unexpectedly exited"))
                 .await;
         });
     }
@@ -784,13 +829,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // =========== Start JSON RPC ========
 
-    let rpc_storage = RpcStorage::new(
-        repositories,
-        block_replay_storage,
-        finality_storage,
-        persistent_batch_storage,
-        state,
-    );
     tasks.spawn(
         run_jsonrpsee_server(
             config.rpc_config.into(),
