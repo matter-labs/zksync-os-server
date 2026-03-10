@@ -56,15 +56,14 @@ pub struct L2ToL1LogProof {
 pub enum LogProofTarget {
     /// Proof anchored to the SL L1 batch aggregated root.
     ///
-    /// Corresponds to `set_batch_chain_merkle_path`. The proof covers the full gateway batch
-    /// range and includes the local-root extension, making it suitable for L1 verification.
+    /// The proof covers the full gateway batch range and includes the local-root extension,
+    /// making it suitable for L1 verification.
     #[default]
     L1BatchRoot,
     /// Proof anchored to the SL block-level message root.
     ///
-    /// Corresponds to `set_batch_chain_merkle_path_until_msg_root`. The proof targets the
-    /// specific execution block (no local-root extension), making it suitable for
-    /// cross-chain interop message verification.
+    /// The proof targets the specific execution block (no local-root extension),
+    /// making it suitable for cross-chain interop message verification.
     MessageRoot,
 }
 
