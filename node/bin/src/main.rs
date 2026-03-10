@@ -89,18 +89,6 @@ fn load_config_defaults(config_sources: &mut ConfigSources, config_paths: Option
 
 #[tokio::main]
 pub async fn main() {
-    // Explicitly select the `ring` TLS crypto provider for rustls.
-    //
-    // Our dependency tree pulls in both `ring` and `aws-lc-rs` as rustls crypto backends
-    // (via reqwest, gcp_auth, and other crates). When both are present, rustls cannot
-    // auto-detect which one to use and panics on the first TLS connection with:
-    //   "no process-level CryptoProvider is set"
-    //
-    // This must be called before any TLS connection is made (e.g. GCP KMS signing via HTTPS).
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("failed to install rustls ring crypto provider");
-
     let opt = Cli::parse();
 
     // =========== load configs ===========
