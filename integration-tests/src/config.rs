@@ -1,4 +1,6 @@
+use flate2::read::GzDecoder;
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use zksync_os_server::config::{Config, GenesisConfig};
@@ -66,17 +68,27 @@ impl<'a> ChainLayout<'a> {
         }
     }
 
-    /// Read the pre-decompressed L1 state JSON.
-    /// The file is produced by `build.rs` from `l1-state.json.gz`.
+    /// Read the pre-decompressed L1 state JSON (produced by `build.rs`).
+    /// Falls back to runtime decompression when the pre-built file is absent
+    /// (e.g. CI environments where WORKSPACE_DIR differs from the build tree).
     pub(crate) fn l1_state(self) -> Vec<u8> {
-        let json_path = self.protocol_dir().join("l1-state.json");
-        std::fs::read(&json_path).unwrap_or_else(|e| {
-            panic!(
-                "failed to read decompressed L1 state at {}: {e}\n\
-                 hint: the build script should have produced this file from l1-state.json.gz",
-                json_path.display()
-            )
-        })
+        let protocol_dir = self.protocol_dir();
+        let json_path = protocol_dir.join("l1-state.json");
+
+        if let Ok(data) = std::fs::read(&json_path) {
+            return data;
+        }
+
+        // Fallback: decompress at runtime.
+        let gz_path = protocol_dir.join("l1-state.json.gz");
+        let compressed =
+            std::fs::read(&gz_path).expect("failed to read compressed L1 state (.json.gz)");
+        let mut decoder = GzDecoder::new(compressed.as_slice());
+        let mut decoded = Vec::new();
+        decoder
+            .read_to_end(&mut decoded)
+            .expect("failed to decompress L1 state");
+        decoded
     }
 
     /// Genesis input is always taken from `<version>/default/genesis.json`
