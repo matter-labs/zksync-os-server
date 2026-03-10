@@ -5,8 +5,8 @@ use alloy::providers::DynProvider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::sol_types::SolCall;
 use anyhow::Context as _;
-use num::rational::Ratio;
 use num::BigUint;
+use num::rational::Ratio;
 use tokio::sync::watch;
 use zksync_os_contract_interface::{IGWAssetTracker, IInteropCenter::interopProtocolFeeCall};
 use zksync_os_mempool::subpools::interop_fee::InteropFeeSubpool;
@@ -19,10 +19,8 @@ pub struct InteropFeeUpdaterConfig {
     pub update_deviation_percentage: u32,
 }
 
-const GW_ASSET_TRACKER_ADDRESS: Address =
-    address!("0x0000000000000000000000000000000000010010");
-const L2_INTEROP_CENTER_ADDRESS: Address =
-    address!("0x000000000000000000000000000000000001000d");
+const GW_ASSET_TRACKER_ADDRESS: Address = address!("0x0000000000000000000000000000000000010010");
+const L2_INTEROP_CENTER_ADDRESS: Address = address!("0x000000000000000000000000000000000001000d");
 
 pub struct InteropFeeUpdater<RpcStorage> {
     eth_call_handler: EthCallHandler<RpcStorage>,
@@ -92,8 +90,9 @@ impl<RpcStorage: ReadRpcStorage> InteropFeeUpdater<RpcStorage> {
         }
 
         let gateway_settlement_fee = self.gateway_settlement_fee().await?;
-        let target_interop_fee = calculate_target_interop_fee(gateway_settlement_fee, &token_prices)
-            .context("failed to calculate target interop fee")?;
+        let target_interop_fee =
+            calculate_target_interop_fee(gateway_settlement_fee, &token_prices)
+                .context("failed to calculate target interop fee")?;
 
         if !should_update_fee(
             current_interop_fee,
