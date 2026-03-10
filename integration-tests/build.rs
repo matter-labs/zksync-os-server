@@ -11,20 +11,22 @@ use std::str::from_utf8;
 /// A `.sha256` sidecar file stores the hash of the `.gz` input; the
 /// decompressed output is only regenerated when the hash changes.
 fn decompress_l1_states() {
-    // build.rs working directory is the package root (integration-tests/),
-    // but the .gz files are in the workspace root's local-chains/ directory.
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let workspace_root = Path::new(&manifest_dir).parent().unwrap();
-    let gz_files = [
-        "local-chains/v30.2/l1-state.json.gz",
-        "local-chains/v31.0/l1-state.json.gz",
-    ];
+    let local_chains = workspace_root.join("local-chains");
 
-    for gz_rel in &gz_files {
-        let gz_path = workspace_root.join(gz_rel);
+    // Re-run when a version directory is added/removed or any .gz file changes.
+    println!("cargo::rerun-if-changed={}", local_chains.display());
+
+    let Ok(entries) = std::fs::read_dir(&local_chains) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let gz_path = entry.path().join("l1-state.json.gz");
         println!("cargo::rerun-if-changed={}", gz_path.display());
 
-        if !gz_path.exists() {
+        if !gz_path.is_file() {
             continue;
         }
 
