@@ -21,8 +21,6 @@ zksync_os_state_full_diffs.workspace = true
 zksync_os_multivm.workspace = true
 zksync_os_network.workspace = true
 
-zksync_os_prover_service = { workspace = true, optional = true }
-
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 fs2.workspace = true
@@ -48,5 +46,5 @@ test-log = { workspace = true, default-features = false, features = ["trace", "c
 regex.workspace = true
 
 [features]
-prover-tests = ["dep:zksync_os_prover_service"]
-gpu-prover-tests = ["prover-tests", "zksync_os_prover_service/gpu"]
+prover-tests = []
+gpu-prover-tests = ["prover-tests"]

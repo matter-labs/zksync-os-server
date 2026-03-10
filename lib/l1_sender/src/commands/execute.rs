@@ -104,7 +104,7 @@ impl ExecuteCommand {
             31 | 32 => {
                 let mut logs = Vec::new();
                 let mut messages = Vec::new();
-                let mut multichain_batch_roots = Vec::new();
+                let mut multichain_roots = Vec::new();
                 if gateway {
                     logs = self
                         .batches
@@ -124,10 +124,10 @@ impl ExecuteCommand {
                         .iter()
                         .map(|batch| batch.batch.messages.clone())
                         .collect::<Vec<_>>();
-                    multichain_batch_roots = self
+                    multichain_roots = self
                         .batches
                         .iter()
-                        .map(|batch| batch.batch.multichain_batch_root)
+                        .map(|batch| batch.batch.multichain_root)
                         .collect::<Vec<_>>();
                 }
                 (
@@ -136,7 +136,7 @@ impl ExecuteCommand {
                     interop_roots,
                     logs,
                     messages,
-                    multichain_batch_roots,
+                    multichain_roots,
                 )
                     .abi_encode_params()
             }

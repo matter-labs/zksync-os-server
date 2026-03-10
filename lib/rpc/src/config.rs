@@ -34,6 +34,9 @@ pub struct RpcConfig {
     /// Default timeout for `eth_sendRawTransactionSync`
     pub send_raw_transaction_sync_timeout: Duration,
 
+    /// Factor applied to the pending block base fee returned by `eth_gasPrice`.
+    pub gas_price_scale_factor: f64,
+
     /// Factor for pubdata price used during gas limit estimation (`eth_estimateGas`).
     /// Needed to account for pubdata price market fluctuations. Setting this to `1.0` can lead to
     /// users submitting unexecutable transactions (fail with `OutOfNativeResourcesDuringValidation`)

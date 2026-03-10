@@ -73,7 +73,7 @@ pub trait ReadReplay: Debug + Send + Sync + Unpin + 'static {
 pub trait ReadReplayExt: ReadReplay {
     /// Streams replay records with block_number in range [`start`, `end`], in ascending block order. Finishes
     /// after reaching the record for block `end`. Used to replay blocks when recovering state.
-    fn stream(&self, start: u64, end: u64) -> BoxStream<ReplayRecord> {
+    fn stream(&self, start: u64, end: u64) -> BoxStream<'_, ReplayRecord> {
         let latest = self.latest_record();
         assert!(
             latest >= end,

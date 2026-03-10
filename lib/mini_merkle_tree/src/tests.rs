@@ -151,7 +151,7 @@ fn verify_merkle_proof(
 
     let mut hash = KeccakHasher.hash_bytes(item);
     for path_item in merkle_path {
-        let (lhs, rhs) = if index % 2 == 0 {
+        let (lhs, rhs) = if index.is_multiple_of(2) {
             (&hash, path_item)
         } else {
             (path_item, &hash)
@@ -175,15 +175,15 @@ fn verify_range_merkle_proof(
     let mut hashes: VecDeque<_> = items.iter().map(|item| hasher.hash_bytes(item)).collect();
 
     for (start_item, end_item) in start_path.iter().zip(end_path.iter()) {
-        if start_index % 2 == 1 {
-            hashes.push_front(start_item.unwrap());
-        } else {
+        if start_index.is_multiple_of(2) {
             assert_eq!(start_item, &None);
-        }
-        if hashes.len() % 2 == 1 {
-            hashes.push_back(end_item.unwrap());
         } else {
+            hashes.push_front(start_item.unwrap());
+        }
+        if hashes.len().is_multiple_of(2) {
             assert_eq!(end_item, &None);
+        } else {
+            hashes.push_back(end_item.unwrap());
         }
 
         let next_level_len = hashes.len() / 2;

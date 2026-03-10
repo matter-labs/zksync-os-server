@@ -35,6 +35,7 @@ use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
 use zksync_os_types::{L2Envelope, TransactionAcceptanceState, ZkReceiptEnvelope};
 
 pub struct EthNamespace<RpcStorage, Mempool> {
+    config: RpcConfig,
     tx_handler: TxHandler<RpcStorage, Mempool>,
     eth_call_handler: EthCallHandler<RpcStorage>,
 
@@ -57,7 +58,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         tx_forwarder: Option<DynProvider>,
     ) -> Self {
         let tx_handler = TxHandler::new(
-            config,
+            config.clone(),
             storage.clone(),
             mempool.clone(),
             acceptance_state,
@@ -65,6 +66,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         );
 
         Self {
+            config,
             tx_handler,
             eth_call_handler,
             storage,
@@ -323,7 +325,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
     fn gas_price_impl(&self) -> EthResult<U256> {
         // Only base fee is taken into account, suggested priority fee is zero.
         if let Some(c) = self.eth_call_handler.last_constructed_block_context() {
-            Ok(c.eip1559_basefee)
+            Ok(scale_gas_price(
+                c.eip1559_basefee,
+                self.config.gas_price_scale_factor,
+            ))
         } else {
             let latest_block_id = BlockId::Number(BlockNumberOrTag::Latest);
             let Some(resolved_block_number) = self.storage.resolve_block_number(latest_block_id)?
@@ -333,7 +338,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
             self.storage
                 .replay_storage()
                 .get_context(resolved_block_number)
-                .map(|c| c.eip1559_basefee)
+                .map(|c| scale_gas_price(c.eip1559_basefee, self.config.gas_price_scale_factor))
                 .ok_or(EthError::BlockNotFound(latest_block_id))
         }
     }
@@ -434,6 +439,40 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
             base,
             pubdata_price_per_byte: Some(pubdata_price_per_byte),
         })
+    }
+}
+
+fn scale_gas_price(base_fee: U256, factor: f64) -> U256 {
+    if !factor.is_finite() || factor <= 0.0 {
+        tracing::warn!(
+            gas_price_scale_factor = factor,
+            "invalid gas price scale factor"
+        );
+        return base_fee;
+    }
+
+    let scaled = (base_fee.saturating_to::<u128>() as f64) * factor;
+    if scaled >= u128::MAX as f64 {
+        U256::from(u128::MAX)
+    } else {
+        U256::from(scaled.ceil() as u128)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scale_gas_price;
+    use alloy::primitives::U256;
+
+    #[test]
+    fn gas_price_scale_default_factor() {
+        assert_eq!(scale_gas_price(U256::from(100u64), 1.5), U256::from(150u64));
+        assert_eq!(scale_gas_price(U256::from(101u64), 1.5), U256::from(152u64));
+    }
+
+    #[test]
+    fn gas_price_scale_custom_factor() {
+        assert_eq!(scale_gas_price(U256::from(100u64), 2.0), U256::from(200u64));
     }
 }
 

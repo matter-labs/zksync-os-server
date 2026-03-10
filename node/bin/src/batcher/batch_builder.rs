@@ -6,7 +6,7 @@ use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
 };
-use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_aggregated_root};
+use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_multichain_root};
 use zksync_os_types::{ProvingVersion, PubdataMode};
 
 /// Takes a vector of blocks and produces a batch envelope.
@@ -32,7 +32,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
 
     let state_view = read_state.state_view_at(block_number_to)?;
-    let multichain_batch_root = read_aggregated_root(state_view);
+    let multichain_root = read_multichain_root(state_view);
     let batch_info = BatchInfo::new(
         blocks
             .iter()
@@ -50,7 +50,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         batch_number,
         pubdata_mode,
         sl_chain_id,
-        multichain_batch_root,
+        multichain_root,
         &protocol_version,
     );
 
@@ -137,7 +137,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             ),
             logs,
             messages,
-            multichain_batch_root,
+            multichain_root,
         },
         batch_prover_input,
     )

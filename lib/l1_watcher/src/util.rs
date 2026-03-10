@@ -6,8 +6,10 @@ use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
+use backon::{ConstantBuilder, Retryable};
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Duration;
 use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
@@ -376,18 +378,35 @@ impl CommittedBatch {
     }
 }
 
-/// Fetches and decodes batch commit transaction. Fails if transaction does not exist or is not
-/// a valid commit transaction.
+/// Fetches and decodes batch commit transaction. Retries if the transaction is pending
+/// (exists but has no block number yet) or not yet visible.
 pub async fn fetch_commit_calldata(
     zk_chain: &ZkChain<DynProvider>,
     tx_hash: TxHash,
 ) -> Result<CommittedBatch, L1WatcherError> {
-    // todo: retry-backoff logic in case tx is missing
-    let tx = zk_chain
-        .provider()
-        .get_transaction_by_hash(tx_hash)
-        .await?
-        .expect("tx not found");
+    let tx = (|| async {
+        let tx = zk_chain
+            .provider()
+            .get_transaction_by_hash(tx_hash)
+            .await
+            .map_err(|e| L1WatcherError::Other(e.into()))?
+            .ok_or_else(|| {
+                L1WatcherError::Other(anyhow::anyhow!("commit tx {tx_hash} not found"))
+            })?;
+        tx.block_number.ok_or_else(|| {
+            L1WatcherError::Other(anyhow::anyhow!(
+                "commit tx {tx_hash} has no block number (still pending)"
+            ))
+        })?;
+        Ok::<_, L1WatcherError>(tx)
+    })
+    .retry(
+        ConstantBuilder::default()
+            .with_delay(Duration::from_millis(200))
+            .with_max_times(50),
+    )
+    .await?;
+
     let CommitCalldata {
         commit_batch_info, ..
     } = CommitCalldata::decode(tx.input()).map_err(L1WatcherError::Other)?;

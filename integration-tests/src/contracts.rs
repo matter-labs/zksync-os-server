@@ -8,6 +8,7 @@ use alloy::network::ReceiptResponse;
 use alloy::primitives::{Address, B256, U256, address};
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::TransactionReceipt;
+use tokio::time::{Duration, Instant};
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
 use zksync_os_types::L2_INTEROP_ROOT_STORAGE_ADDRESS;
@@ -193,14 +194,49 @@ impl<P1: Provider, P2: Provider<Zksync>> L1Nullifier<P1, P2> {
             .enumerate()
             .find(|(_, log)| log.sender == L1_MESSENGER_ADDRESS)
             .expect("no L2->L1 logs found in withdrawal receipt");
-        let proof = self
-            .l2_provider
-            .get_l2_to_l1_log_proof(
-                withdrawal_l2_receipt.transaction_hash(),
-                l2_to_l1_log_index as u64,
+        let proof_retry_timeout = Duration::from_secs(60);
+        let proof_retry_delay = Duration::from_secs(1);
+        let proof_retry_started_at = Instant::now();
+        let proof = loop {
+            let elapsed = proof_retry_started_at.elapsed();
+            if elapsed >= proof_retry_timeout {
+                anyhow::bail!(
+                    "node failed to provide proof for withdrawal log within {:?}",
+                    proof_retry_timeout
+                );
+            }
+            let remaining = proof_retry_timeout - elapsed;
+
+            match tokio::time::timeout(
+                remaining,
+                self.l2_provider.get_l2_to_l1_log_proof(
+                    withdrawal_l2_receipt.transaction_hash(),
+                    l2_to_l1_log_index as u64,
+                ),
             )
-            .await?
-            .expect("node failed to provide proof for withdrawal log");
+            .await
+            {
+                Ok(Ok(Some(proof))) => break proof,
+                Ok(Ok(None)) | Ok(Err(_)) => {
+                    let elapsed = proof_retry_started_at.elapsed();
+                    if elapsed >= proof_retry_timeout {
+                        anyhow::bail!(
+                            "node failed to provide proof for withdrawal log within {:?}",
+                            proof_retry_timeout
+                        );
+                    }
+                    let remaining = proof_retry_timeout - elapsed;
+                    let sleep_for = proof_retry_delay.min(remaining);
+                    tokio::time::sleep(sleep_for).await;
+                }
+                Err(_) => {
+                    anyhow::bail!(
+                        "node failed to provide proof for withdrawal log within {:?}",
+                        proof_retry_timeout
+                    );
+                }
+            }
+        };
         let sender = Address::from_slice(&l2_to_l1_log.key[12..]);
         self.instance
             .finalizeDeposit(IL1Nullifier::FinalizeL1DepositParams {

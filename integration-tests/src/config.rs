@@ -1,8 +1,9 @@
 use flate2::read::GzDecoder;
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 use zksync_os_server::config::{Config, GenesisConfig};
 use zksync_os_types::ConfigFormat;
 
@@ -63,13 +64,27 @@ impl<'a> ChainLayout<'a> {
     }
 
     pub(crate) fn l1_state(self) -> Vec<u8> {
+        /// Cache decompressed L1 state to avoid re-decompressing ~70MB per test.
+        static L1_STATE_CACHE: LazyLock<Mutex<HashMap<PathBuf, Vec<u8>>>> =
+            LazyLock::new(|| Mutex::new(HashMap::new()));
+
         let compressed_path = self.protocol_dir().join("l1-state.json.gz");
+
+        let cache = L1_STATE_CACHE.lock().unwrap();
+        if let Some(cached) = cache.get(&compressed_path) {
+            return cached.clone();
+        }
+        drop(cache);
+
         let data = std::fs::read(&compressed_path).expect("failed to read compressed L1 state");
         let mut decoder = GzDecoder::new(data.as_slice());
         let mut decoded_data = Vec::new();
         decoder
             .read_to_end(decoded_data.as_mut())
             .expect("failed to decompress L1 state");
+
+        let mut cache = L1_STATE_CACHE.lock().unwrap();
+        cache.insert(compressed_path, decoded_data.clone());
         decoded_data
     }
 

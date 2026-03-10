@@ -1,10 +1,10 @@
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::provider::ZksyncApi;
+use alloy::eips::BlockNumberOrTag;
 use alloy::primitives::{U256, keccak256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
-use backon::{ConstantBuilder, Retryable};
 use std::time::Duration;
 use zksync_os_contract_interface::l1_discovery::L1State;
 
@@ -45,12 +45,23 @@ impl ProverTester {
         )
         .await?;
         let diamond_proxy_address = l1_state.diamond_proxy_address_sl();
+        tracing::info!(
+            batch_number,
+            %diamond_proxy_address,
+            "checking batch #{batch_number} status on L1 state: {l1_state:?}"
+        );
 
         let blocks_verification_signature = keccak256(b"BlocksVerification(uint256,uint256)");
         let filter = Filter::new()
             .event_signature(blocks_verification_signature)
-            .address(diamond_proxy_address);
+            .address(diamond_proxy_address)
+            .from_block(0)
+            .to_block(BlockNumberOrTag::Latest);
         let logs = self.l1_provider.get_logs(&filter).await?;
+        if logs.is_empty() {
+            tracing::info!("no `BlocksVerification` events discovered on L1");
+            return Ok(false);
+        }
         for log in logs {
             if log.topics().len() >= 3 {
                 // Parse previousLastVerifiedBatch (topic[1]) and currentLastVerifiedBatch (topic[2])
@@ -61,8 +72,24 @@ impl ProverTester {
 
                 // Check if our batch_number is within the verified range
                 if batch_u256 > previous_verified && batch_u256 <= current_verified {
+                    tracing::info!(
+                        batch_number,
+                        "batch #{batch_number} was proved by log `BlocksVerification({}, {})`",
+                        previous_verified,
+                        current_verified
+                    );
                     return Ok(true);
+                } else {
+                    tracing::info!(
+                        "discovered unrelated log `BlocksVerification({}, {})`",
+                        previous_verified,
+                        current_verified
+                    );
                 }
+            } else {
+                tracing::warn!(
+                    "discovered `BlocksVerification` log that does not follow correct format: {log:?}",
+                );
             }
         }
         Ok(false)
@@ -70,22 +97,17 @@ impl ProverTester {
 
     /// Resolves when the requested batch gets reported as proven by prover API.
     pub async fn wait_for_batch_proven(&self, batch_number: u64) -> anyhow::Result<()> {
-        (|| async {
+        let mut retries = 40;
+        while retries > 0 {
             let status = self.check_batch_status(batch_number).await?;
             if status {
-                Ok(())
+                return Ok(());
             } else {
-                Err(anyhow::anyhow!("batch is not ready yet"))
+                tracing::info!("proof not ready yet, retrying");
+                retries -= 1;
+                tokio::time::sleep(Duration::from_secs(30)).await;
             }
-        })
-        .retry(
-            ConstantBuilder::default()
-                .with_delay(Duration::from_secs(30))
-                .with_max_times(40),
-        )
-        .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(?err, ?dur, "proof not ready yet, retrying");
-        })
-        .await
+        }
+        Err(anyhow::anyhow!("proof was not submitted to L1 in time"))
     }
 }

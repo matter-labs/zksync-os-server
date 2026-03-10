@@ -44,7 +44,7 @@ impl FullDiffsState {
                 })
                 .collect();
 
-            let force_deploy_preimages = genesis.genesis_upgrade_tx().await.force_deploy_preimages;
+            let force_deploy_preimages = &genesis.genesis_upgrade_tx().await.force_deploy_preimages;
             let preimages = genesis
                 .state()
                 .await
