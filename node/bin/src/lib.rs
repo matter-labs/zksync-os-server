@@ -457,9 +457,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         });
 
     let current_protocol_version = if let Some(record) = &first_replay_record {
-        record.protocol_version.clone()
+        &record.protocol_version
     } else {
-        genesis.genesis_upgrade_tx().await.protocol_version
+        &genesis.genesis_upgrade_tx().await.protocol_version
     };
 
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
@@ -473,17 +473,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     if starting_block == 1 {
         let genesis_upgrade = genesis.genesis_upgrade_tx().await;
         let upgrade_tx = UpgradeInfo {
-            tx: Some(genesis_upgrade.tx),
+            tx: Some(genesis_upgrade.tx.clone()),
             metadata: UpgradeMetadata {
-                protocol_version: genesis_upgrade.protocol_version,
+                protocol_version: genesis_upgrade.protocol_version.clone(),
                 timestamp: 0, // No restrictions on timestamp.
-                force_preimages: genesis_upgrade.force_deploy_preimages,
+                force_preimages: genesis_upgrade.force_deploy_preimages.clone(),
             },
         };
         upgrade_subpool.insert(upgrade_tx).await;
     }
 
-    if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
+    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
         tasks.spawn(
             InteropWatcher::create_watcher(
                 node_startup_state.l1_state.bridgehub_sl.clone(), // TODO: what bridgehub to use here?
@@ -498,7 +498,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0)
+    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
         && config.l1_watcher_config.enable_gw_migration_watcher
     {
         // todo: add proper handling of gateway migration watcher/differentiating between gateway and l1
@@ -665,7 +665,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_l1.clone(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             bytecode_supplier_address,
-            current_protocol_version,
+            current_protocol_version.clone(),
             upgrade_subpool,
         )
         .await

@@ -124,9 +124,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     Vec::new()
                 };
 
-                let execution_version: ExecutionVersion = self
-                    .protocol_version
-                    .clone()
+                let execution_version: ExecutionVersion = (&self.protocol_version)
                     .try_into()
                     .context("Cannot instantiate a block for unsupported execution version")?;
 
