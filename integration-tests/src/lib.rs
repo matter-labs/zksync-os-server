@@ -415,6 +415,7 @@ pub struct TesterBuilder {
     block_time: Option<Duration>,
     batch_verification_threshold: Option<u64>,
     fee_config: Option<FeeConfig>,
+    gas_price_scale_factor: Option<f64>,
     estimate_gas_pubdata_price_factor: Option<f64>,
 }
 
@@ -440,6 +441,11 @@ impl TesterBuilder {
         self
     }
 
+    pub fn gas_price_scale_factor(mut self, factor: f64) -> Self {
+        self.gas_price_scale_factor = Some(factor);
+        self
+    }
+
     pub fn estimate_gas_pubdata_price_factor(mut self, factor: f64) -> Self {
         self.estimate_gas_pubdata_price_factor = Some(factor);
         self
@@ -461,6 +467,9 @@ impl TesterBuilder {
             }
             if let Some(fee_config) = self.fee_config.clone() {
                 config.fee_config = fee_config;
+            }
+            if let Some(factor) = self.gas_price_scale_factor {
+                config.rpc_config.gas_price_scale_factor = factor;
             }
             if let Some(factor) = self.estimate_gas_pubdata_price_factor {
                 config.rpc_config.estimate_gas_pubdata_price_factor = factor;

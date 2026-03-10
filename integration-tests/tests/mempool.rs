@@ -85,6 +85,7 @@ async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
                 .with_to(Address::random())
                 .with_value(value)
                 .with_gas_price(gas_price)
+                .with_gas_limit(gas_limit)
                 .with_nonce(0),
         )
         .await?

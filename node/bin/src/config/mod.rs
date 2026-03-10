@@ -426,6 +426,11 @@ pub struct RpcConfig {
     #[config(default_t = 2 * TimeUnit::Seconds)]
     pub send_raw_transaction_sync_timeout: Duration,
 
+    /// Factor applied to the pending block base fee returned by `eth_gasPrice`.
+    /// Some tools, e.g. Metamask, submit transactions with `maxFeePerGas=eth_gasPrice`, so it's important for multiplier to be `> 1`.
+    #[config(default_t = 1.5)]
+    pub gas_price_scale_factor: f64,
+
     /// Factor for pubdata price used during gas limit estimation (`eth_estimateGas`).
     /// Needed to account for pubdata price market fluctuations.
     /// Pubdata price can increase for up to 50% between consecutive blocks, native price can decrease for up to 12.5% ->
@@ -936,6 +941,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             l2_signer_blacklist: c.l2_signer_blacklist,
             stale_filter_ttl: c.stale_filter_ttl,
             send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
+            gas_price_scale_factor: c.gas_price_scale_factor,
             estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
         }
     }
