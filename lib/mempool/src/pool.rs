@@ -10,7 +10,6 @@ use futures::{Stream, StreamExt};
 use reth_execution_types::ChangedAccount;
 use reth_primitives_traits::SealedBlock;
 use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
-use std::sync::Mutex;
 use tokio::time::Instant;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
@@ -28,7 +27,6 @@ pub struct Pool<T> {
     interop_roots_subpool: InteropRootsSubpool,
     l1_subpool: L1Subpool,
     l2_subpool: T,
-    latest_l2_tip: Mutex<Sealed<Header>>,
 }
 
 impl<T: L2Subpool> Pool<T> {
@@ -38,7 +36,6 @@ impl<T: L2Subpool> Pool<T> {
         interop_roots_subpool: InteropRootsSubpool,
         l1_subpool: L1Subpool,
         l2_subpool: T,
-        latest_l2_tip: Sealed<Header>,
     ) -> Self {
         Self {
             upgrade_subpool,
@@ -46,7 +43,6 @@ impl<T: L2Subpool> Pool<T> {
             interop_roots_subpool,
             l1_subpool,
             l2_subpool,
-            latest_l2_tip: Mutex::new(latest_l2_tip),
         }
     }
 
@@ -157,14 +153,10 @@ impl<T: L2Subpool> Pool<T> {
         pending_block_base_fee: u64,
         pending_block_blob_fee: Option<u128>,
     ) {
-        let latest_l2_tip = self.latest_l2_tip.lock().unwrap().clone();
-        self.update_l2_subpool_state(
-            latest_l2_tip,
-            pending_block_base_fee,
-            pending_block_blob_fee,
-            Vec::new(),
-            Vec::new(),
-        );
+        let mut block_info = self.l2_subpool.block_info();
+        block_info.pending_basefee = pending_block_base_fee;
+        block_info.pending_blob_fee = pending_block_blob_fee;
+        self.l2_subpool.set_block_info(block_info);
     }
 
     pub async fn on_canonical_state_change(
@@ -223,7 +215,6 @@ impl<T: L2Subpool> Pool<T> {
                 balance: diff.balance,
             })
             .collect::<Vec<_>>();
-        *self.latest_l2_tip.lock().unwrap() = header.clone();
         self.update_l2_subpool_state(
             header,
             pending_block_base_fee,
