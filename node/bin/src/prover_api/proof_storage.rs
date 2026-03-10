@@ -137,10 +137,10 @@ struct BoundedFileStorage {
     current_size: u64,
     /// A queue of keys and their metadata, ordered by removal priority (oldest at the front).
     /// Logically, the keys must be unique. However, outdated entries may be present.
-    /// They should be identified using `skip_cnt` and skipped.
+    /// They should be identified using `outdated_count` and skipped.
     remove_queue: VecDeque<(String, Metadata)>,
-    /// The first `skip_cnt` entries for this key in `remove_queue` are outdated.
-    skip_cnt: HashMap<String, u64>,
+    /// The first `outdated_count` entries for this key in `remove_queue` are outdated.
+    outdated_count: HashMap<String, u64>,
 }
 
 impl BoundedFileStorage {
@@ -170,7 +170,7 @@ impl BoundedFileStorage {
             capacity_bytes,
             current_size,
             remove_queue: files.into_iter().collect(),
-            skip_cnt: HashMap::new(),
+            outdated_count: HashMap::new(),
         };
 
         if current_size > capacity_bytes {
@@ -226,7 +226,7 @@ impl BoundedFileStorage {
             && !self.remove_queue.is_empty()
         {
             let (key, meta) = self.remove_queue.pop_front().unwrap();
-            if let Some(outdated) = self.skip_cnt.get_mut(&key)
+            if let Some(outdated) = self.outdated_count.get_mut(&key)
                 && *outdated > 0
             {
                 *outdated -= 1;
@@ -260,7 +260,7 @@ impl BoundedFileStorage {
             let new_key = &format!("{key}.overwritten_{now}");
             let new_path = self.base_dir.join(new_key);
             // Mark corresponding entry as outdated
-            *self.skip_cnt.entry(key.to_string()).or_insert(0) += 1;
+            *self.outdated_count.entry(key.to_string()).or_insert(0) += 1;
             // Rename and add to the back of the queue
             fs::rename(path, new_path.clone()).await?;
             let meta = fs::metadata(&new_path).await?;
