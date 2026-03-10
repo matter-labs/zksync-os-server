@@ -162,15 +162,18 @@ impl FilterSuite for PendingTxSuite<true> {
     }
 
     async fn prepare_expected(&self, tester: &Tester) -> anyhow::Result<Self::Expected> {
+        let fees = tester.l2_provider.estimate_eip1559_fees().await?;
+        let from = tester.l2_wallet.default_signer().address();
+        let nonce = tester.l2_provider.get_transaction_count(from).await?;
         // Build and sign transaction without L2 provider. This way we can reuse the envelope for
         // the expected RPC type below.
         let tx_envelope = TransactionRequest::default()
             .with_to(Address::random())
             .with_value(U256::from(100))
-            .with_nonce(0)
+            .with_nonce(nonce)
             .with_gas_limit(100_000)
-            .with_max_fee_per_gas(1000)
-            .with_max_priority_fee_per_gas(0)
+            .with_max_fee_per_gas(fees.max_fee_per_gas)
+            .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
             .with_chain_id(tester.l2_provider.get_chain_id().await?)
             .build(&tester.l2_wallet)
             .await?;
