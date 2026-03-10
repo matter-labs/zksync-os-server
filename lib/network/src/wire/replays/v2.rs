@@ -4,6 +4,9 @@
 //! Do not change this file under any circumstances. Copy it instead. May be deleted when obsolete.
 //! todo: enforce in CI
 
+// Difference from v1:
+// - Added `starting_migration_number` field to `ReplayRecord`.
+
 use crate::wire::{BlockHashes, ForcedPreimage};
 use alloy::primitives::{Address, B256, U256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
