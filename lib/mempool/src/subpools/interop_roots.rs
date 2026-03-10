@@ -38,7 +38,7 @@ impl InteropRootsSubpool {
     pub async fn interop_transactions_with_delay(
         &self,
         next_tx_allowed_after: Instant,
-    ) -> BoxStream<ZkTransaction> {
+    ) -> BoxStream<'_, ZkTransaction> {
         Box::pin(futures::stream::unfold(
             (
                 self.inner.clone(),

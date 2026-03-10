@@ -148,6 +148,17 @@ impl<T: L2Subpool> Pool<T> {
         self.l2_subpool.remove_transactions(tx_hashes);
     }
 
+    pub fn update_pending_block_fees(
+        &self,
+        pending_block_base_fee: u64,
+        pending_block_blob_fee: Option<u128>,
+    ) {
+        let mut block_info = self.l2_subpool.block_info();
+        block_info.pending_basefee = pending_block_base_fee;
+        block_info.pending_blob_fee = pending_block_blob_fee;
+        self.l2_subpool.set_block_info(block_info);
+    }
+
     pub async fn on_canonical_state_change(
         &self,
         header: Sealed<Header>,
@@ -210,6 +221,7 @@ impl<T: L2Subpool> Pool<T> {
         self.l2_subpool
             .on_canonical_state_change(CanonicalStateUpdate {
                 new_tip: &sealed_block,
+                // pending block fees will be set later in `update_pending_block_fees`
                 pending_block_base_fee: 0,
                 pending_block_blob_fee: None,
                 changed_accounts,

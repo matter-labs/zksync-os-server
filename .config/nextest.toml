@@ -16,6 +16,21 @@ path = "test-results.xml"
 filter = 'binary(prover)'
 slow-timeout = { period = "15m", terminate-after = 3 }
 
+[[profile.default.overrides]]
+# Interop tests spin up 3 nodes (2 L2 + 1 L1) and need significant resources.
+filter = 'test(~interop)'
+threads-required = 4
+
+[[profile.default.overrides]]
+# External node and batch verification tests spin up 2-3 nodes.
+filter = 'test(~external_node) | test(~batch_verification) | test(~upgrade)'
+threads-required = 2
+
+# Fast profile for local development — excludes the slowest integration tests.
+# Usage: cargo nextest run -p zksync_os_integration_tests --profile fast
+[profile.fast]
+default-filter = 'not test(~interop) & not test(does_not_get_stuck) & not test(batch_verification_without_enough_ens) & not test(batch_verification_with_2_ens)'
+
 # Skip slow external node tests in coverage profile
 # TODO: investigate why this test gets stuck in coverage runs
 # by producing 550s proving computations in coverage mode

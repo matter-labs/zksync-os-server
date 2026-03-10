@@ -104,9 +104,9 @@ impl BlockReplayStorage {
                 transactions: vec![],
                 previous_block_timestamp: 0,
                 node_version: NODE_SEMVER_VERSION.clone(),
-                protocol_version: genesis_tx.protocol_version,
+                protocol_version: genesis_tx.protocol_version.clone(),
                 block_output_hash: B256::ZERO,
-                force_preimages: genesis_tx.force_deploy_preimages,
+                force_preimages: genesis_tx.force_deploy_preimages.clone(),
                 starting_interop_event_index: InteropRootsLogIndex::default(),
             };
             this.write_replay_unchecked(Sealed::new_unchecked(genesis_record, genesis_hash), true);

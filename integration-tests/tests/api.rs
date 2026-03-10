@@ -121,6 +121,29 @@ async fn get_client_version() -> anyhow::Result<()> {
 }
 
 #[test_log::test(tokio::test)]
+async fn get_gas_price_uses_configured_scale_factor() -> anyhow::Result<()> {
+    let known_base_fee: u128 = 100_000_000;
+    let fee_config = FeeConfig {
+        native_price_usd: 3e-9,
+        base_fee_override: Some(U128::from(known_base_fee)),
+        native_per_gas: 100,
+        pubdata_price_override: Some(U128::from(1_000_000u64)),
+        native_price_override: Some(U128::from(1_000_000u64)),
+        pubdata_price_cap: None,
+    };
+    let tester = Tester::builder()
+        .fee_config(fee_config)
+        .gas_price_scale_factor(2.0)
+        .build()
+        .await?;
+
+    let gas_price = tester.l2_provider.get_gas_price().await?;
+    assert_eq!(gas_price, 200_000_000);
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
 async fn send_raw_transaction_sync() -> anyhow::Result<()> {
     // Test that the node supports `eth_sendRawTransactionSync`
     let tester = Tester::builder().build().await?;

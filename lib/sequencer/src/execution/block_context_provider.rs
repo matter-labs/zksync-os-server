@@ -83,9 +83,13 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     pub async fn prepare_command(
         &mut self,
         block_command: BlockCommand,
-    ) -> anyhow::Result<PreparedBlockCommand> {
+    ) -> anyhow::Result<PreparedBlockCommand<'_>> {
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
+                let fee_params = self.fee_provider.produce_fee_params().await?;
+                self.pool
+                    .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
+
                 // Create stream:
                 // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
                 // - L1 transactions first, then L2 transactions.
@@ -124,9 +128,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     Vec::new()
                 };
 
-                let execution_version: ExecutionVersion = self
-                    .protocol_version
-                    .clone()
+                let execution_version: ExecutionVersion = (&self.protocol_version)
                     .try_into()
                     .context("Cannot instantiate a block for unsupported execution version")?;
 
@@ -134,7 +136,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     eip1559_basefee,
                     native_price,
                     pubdata_price,
-                } = self.fee_provider.produce_fee_params().await?;
+                } = fee_params;
                 let block_context = BlockContext {
                     eip1559_basefee,
                     native_price,
@@ -149,8 +151,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                     execution_version: execution_version as u32,
-                    blob_fee: U256::ZERO,
-                    code_size_limit: None,
+                    blob_fee: U256::ONE,
                 };
                 self.last_constructed_block_ctx_sender
                     .send_replace(Some(block_context));
@@ -239,7 +240,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                     execution_version,
-                    code_size_limit: None,
                 };
                 let txs = if rebuild.make_empty {
                     Vec::new()

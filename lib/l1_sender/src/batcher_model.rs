@@ -46,7 +46,7 @@ pub struct BatchMetadata {
     #[serde(default)]
     pub messages: Vec<Vec<u8>>,
     #[serde(default)]
-    pub multichain_batch_root: B256,
+    pub multichain_root: B256,
 }
 
 impl BatchMetadata {

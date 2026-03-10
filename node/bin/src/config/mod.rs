@@ -1,5 +1,5 @@
 pub use self::cli::ConfigArgs;
-use self::util::SigningKeyDeserializer;
+use self::util::{SecretKeyDeserializer, SigningKeyDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use alloy::signers::k256::ecdsa::SigningKey;
@@ -246,7 +246,7 @@ pub struct NetworkConfig {
     /// The node's secret key (256-bit ECDSA), from which the node's identity is derived. Used during
     /// initial RLPx handshake.
     #[config(secret)]
-    #[config(default, with = Serde![str])]
+    #[config(default, with = SecretKeyDeserializer)]
     pub secret_key: Option<SecretKey>,
     /// IPv4 address to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
     #[config(default_t = Ipv4Addr::UNSPECIFIED, with = Serde![str])]
@@ -430,6 +430,11 @@ pub struct RpcConfig {
     #[config(default_t = 2 * TimeUnit::Seconds)]
     pub send_raw_transaction_sync_timeout: Duration,
 
+    /// Factor applied to the pending block base fee returned by `eth_gasPrice`.
+    /// Some tools, e.g. Metamask, submit transactions with `maxFeePerGas=eth_gasPrice`, so it's important for multiplier to be `> 1`.
+    #[config(default_t = 1.5)]
+    pub gas_price_scale_factor: f64,
+
     /// Factor for pubdata price used during gas limit estimation (`eth_estimateGas`).
     /// Needed to account for pubdata price market fluctuations.
     /// Pubdata price can increase for up to 50% between consecutive blocks, native price can decrease for up to 12.5% ->
@@ -441,23 +446,27 @@ pub struct RpcConfig {
     pub estimate_gas_pubdata_price_factor: f64,
 }
 
-/// Only used on the Main Node.
+/// L1 sender configuration. The signing key fields are only required on the Main Node;
+/// External Nodes do not send L1 transactions and may omit them.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 pub struct L1SenderConfig {
     /// Signing key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
+    /// Not required for External Nodes, which do not send L1 transactions.
     #[config(alias = "operator_commit_pk", with = SigningKeyDeserializer)]
-    pub operator_commit_sk: SigningKey,
+    pub operator_commit_sk: Option<SigningKey>,
 
     /// Signing key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
+    /// Not required for External Nodes, which do not send L1 transactions.
     #[config(alias = "operator_prove_pk", with = SigningKeyDeserializer)]
-    pub operator_prove_sk: SigningKey,
+    pub operator_prove_sk: Option<SigningKey>,
 
     /// Signing key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
+    /// Not required for External Nodes, which do not send L1 transactions.
     #[config(alias = "operator_execute_pk", with = SigningKeyDeserializer)]
-    pub operator_execute_sk: SigningKey,
+    pub operator_execute_sk: Option<SigningKey>,
 
     /// Max fee per gas we are willing to spend.
     #[config(default_t = 200 * EtherUnit::Gwei)]
@@ -936,6 +945,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             l2_signer_blacklist: c.l2_signer_blacklist,
             stale_filter_ttl: c.stale_filter_ttl,
             send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
+            gas_price_scale_factor: c.gas_price_scale_factor,
             estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
         }
     }
@@ -975,20 +985,29 @@ impl L1SenderConfig {
 }
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<CommitCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let sk = c.operator_commit_sk.clone();
+        let sk = c
+            .operator_commit_sk
+            .clone()
+            .expect("operator_commit_sk must be set on the Main Node");
         c.into_lib_l1_sender_config(sk)
     }
 }
 
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ProofCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let sk = c.operator_prove_sk.clone();
+        let sk = c
+            .operator_prove_sk
+            .clone()
+            .expect("operator_prove_sk must be set on the Main Node");
         c.into_lib_l1_sender_config(sk)
     }
 }
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let sk = c.operator_execute_sk.clone();
+        let sk = c
+            .operator_execute_sk
+            .clone()
+            .expect("operator_execute_sk must be set on the Main Node");
         c.into_lib_l1_sender_config(sk)
     }
 }

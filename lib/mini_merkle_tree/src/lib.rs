@@ -332,14 +332,14 @@ where
         for level in 0..depth {
             // If the first untrimmed leaf is a right sibling,
             // add it's left sibling to `hashes` from cache for convenient iteration later.
-            if absolute_start_index % 2 == 1 {
+            if !absolute_start_index.is_multiple_of(2) {
                 hashes.push_front(self.cache[level].expect("cache is invalid"));
                 index += 1;
             }
             // At this point `hashes` always starts from the left sibling node.
             // If it ends on the left sibling node, add the right sibling node to `hashes`
             // for convenient iteration later.
-            if hashes.len() % 2 == 1 {
+            if !hashes.len().is_multiple_of(2) {
                 hashes.push_back(
                     compute_empty_tree_hashes(
                         self.empty_leaf_hash
@@ -350,8 +350,8 @@ where
 
             if let Some(path) = path.as_deref_mut() {
                 let hash = match side {
-                    Some(Side::Left) if index % 2 == 0 => None,
-                    Some(Side::Right) if index % 2 == 1 => None,
+                    Some(Side::Left) if index.is_multiple_of(2) => None,
+                    Some(Side::Right) if !index.is_multiple_of(2) => None,
                     _ => hashes.get(index ^ 1).copied(),
                 };
                 path.push(hash);

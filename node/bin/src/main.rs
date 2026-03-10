@@ -353,10 +353,12 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse fee config");
 
-    // Validate that operator keys are different
-    if l1_sender_config.operator_commit_sk == l1_sender_config.operator_prove_sk
-        || l1_sender_config.operator_prove_sk == l1_sender_config.operator_execute_sk
-        || l1_sender_config.operator_execute_sk == l1_sender_config.operator_commit_sk
+    // Validate that operator keys are different (only relevant on the Main Node where they are set)
+    if let (Some(commit_sk), Some(prove_sk), Some(execute_sk)) = (
+        &l1_sender_config.operator_commit_sk,
+        &l1_sender_config.operator_prove_sk,
+        &l1_sender_config.operator_execute_sk,
+    ) && (commit_sk == prove_sk || prove_sk == execute_sk || execute_sk == commit_sk)
     {
         // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
         panic!("Operator addresses for commit, prove and execute must be different");

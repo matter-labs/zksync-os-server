@@ -53,7 +53,7 @@ fn calculate_batch_tree_proof(
 
     // Build the proof from leaf to root.
     for i in 0..levels {
-        let is_left = current_index % 2 == 0;
+        let is_left = current_index.is_multiple_of(2);
         if is_left {
             proof.push(node_hash_calculator.node_hash(i, current_index + 1));
         } else {
@@ -333,7 +333,7 @@ mod tests {
                     let mut current_index: u64 =
                         tree_with_prefilled._nextLeafIndex.to::<u64>() + i as u64;
                     for sibling_hash in proof.iter() {
-                        let is_left = current_index % 2 == 0;
+                        let is_left = current_index.is_multiple_of(2);
                         current_hash = if is_left {
                             keccak256([current_hash.0, sibling_hash.0].concat())
                         } else {
