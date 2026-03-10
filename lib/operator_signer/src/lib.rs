@@ -70,10 +70,12 @@ impl OperatorSignerConfig {
             Self::GcpKms {
                 resource_name,
                 cached_signer,
-            } => cached_signer
-                .get_or_try_init(|| gcp::create_gcp_signer(resource_name))
-                .await,
-            Self::Local(_) => unreachable!("get_gcp_signer called on Local variant"),
+            } => {
+                cached_signer
+                    .get_or_try_init(|| gcp::create_gcp_signer(resource_name))
+                    .await
+            }
+            Self::Local(_) => anyhow::bail!("get_gcp_signer called on Local variant"),
         }
     }
 
