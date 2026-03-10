@@ -14244,6 +14244,7 @@ version = "0.16.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "tokio",
  "tracing",
 ]
 

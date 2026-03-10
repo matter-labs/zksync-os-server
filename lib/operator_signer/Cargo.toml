@@ -17,5 +17,6 @@ alloy = { workspace = true, default-features = false, features = [
     "network",
     "consensus",
 ] }
+tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 anyhow.workspace = true

@@ -382,8 +382,10 @@ async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
             .await
             .expect("failed to resolve execute operator address");
         if commit_addr == prove_addr || prove_addr == execute_addr || execute_addr == commit_addr {
-            // important: don't use assert_ne here — it would expose private key addresses in logs
-            panic!("Operator addresses for commit, prove and execute must be different");
+            panic!(
+                "Operator addresses for commit, prove and execute must be different, \
+                 got commit={commit_addr}, prove={prove_addr}, execute={execute_addr}"
+            );
         }
     }
 

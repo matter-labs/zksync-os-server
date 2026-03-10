@@ -50,9 +50,7 @@ impl DeserializeParam<OperatorSignerConfig> for OperatorSignerConfigDeserializer
                                         "missing 'resource' field in gcp_kms signer config",
                                     )
                                 })?;
-                        Ok(OperatorSignerConfig::GcpKms {
-                            resource_name: resource.to_string(),
-                        })
+                        Ok(OperatorSignerConfig::gcp_kms(resource.to_string()))
                     }
                     other => Err(ErrorWithOrigin::custom(format!(
                         "unknown signer type '{other}', expected 'gcp_kms'"
@@ -67,10 +65,7 @@ impl DeserializeParam<OperatorSignerConfig> for OperatorSignerConfigDeserializer
 
     fn serialize_param(&self, param: &OperatorSignerConfig) -> Value {
         match param {
-            OperatorSignerConfig::Local(sk) => {
-                let bytes = B256::from_slice(sk.to_bytes().as_slice());
-                serde_json::to_value(bytes).expect("failed serializing to JSON")
-            }
+            OperatorSignerConfig::Local(_) => Value::String("[REDACTED]".to_string()),
             OperatorSignerConfig::GcpKms { resource_name, .. } => {
                 serde_json::json!({"type": "gcp_kms", "resource": resource_name})
             }
