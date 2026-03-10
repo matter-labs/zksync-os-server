@@ -130,23 +130,40 @@ impl StoredBatch {
 /// Storage for data blobs that
 /// automatically removes old files to keep disk usage within capacity_bytes
 /// Keys are expected to be file names.
+/// In case of overwrite old value will be preserved under a different name (see handle_duplicate)
+/// Expected use case for this data is debugging.
+/// The only way to access overwritten entries is directly from disk.
+/// Currently, the key is batch number. Overwrites could happen in these 2 cases:
+/// * server restart -- we do not store block ranges for the batches, so they could change
+/// * batch revert
 #[derive(Clone, Debug)]
 struct BoundedFileStorage {
     base_dir: PathBuf,
     capacity_bytes: u64,
     current_size: u64,
-    /// A queue of keys and their metadata, ordered by removal priority (oldest at the front).
-    /// Logically, the keys must be unique. However, outdated entries may be present.
-    /// They should be identified using `outdated_count` and skipped.
+    /// Files ordered by eviction priority (oldest first). New files are pushed to the back;
+    /// eviction pops from the front.
+    ///
+    /// A key may appear more than once when a file has been overwritten: the original queue
+    /// entry becomes outdated (the file was renamed away) while the renamed file and the new
+    /// file each add their own entry. Outdated entries must be skipped during eviction — see
+    /// `outdated_count`.
     remove_queue: VecDeque<(String, Metadata)>,
-    /// The first `outdated_count` entries for this key in `remove_queue` are outdated.
+    /// Counts outdated entries in `remove_queue` for each key.
+    ///
+    /// Each time a key is overwritten, `handle_duplicate` renames the existing file and
+    /// increments this counter. The original queue entry (still carrying the old key) becomes
+    /// outdated: the file it pointed to no longer exists under that name. During eviction,
+    /// `enforce_capacity` decrements the counter and skips the entry instead of trying to
+    /// delete it, preventing accidental deletion of the current version of the file.
     outdated_count: HashMap<String, u64>,
 }
 
 impl BoundedFileStorage {
     async fn new(base_dir: PathBuf, capacity_bytes: u64) -> anyhow::Result<Self> {
-        // List all files sorted by timestamp (descending)
+        // Create the directory if it doesn't exist already
         fs::create_dir_all(&base_dir).await?;
+        // List all files sorted by timestamp (descending)
         let mut entries = fs::read_dir(&base_dir).await?;
         let mut files = Vec::new();
         while let Some(entry) = entries.next_entry().await? {
@@ -194,8 +211,9 @@ impl BoundedFileStorage {
 
         let data = serde_json::to_vec(value)?;
         let count = data.len() as u64;
-        self.enforce_capacity(count).await?;
         self.handle_duplicate(key).await?;
+        // This could still remove the duplicate if there is not enough space for it
+        self.enforce_capacity(count).await?;
         if count <= self.capacity_bytes {
             self.write_file(key, data).await?;
         } else {
@@ -226,6 +244,9 @@ impl BoundedFileStorage {
             && !self.remove_queue.is_empty()
         {
             let (key, meta) = self.remove_queue.pop_front().unwrap();
+            // This queue entry is outdated: the file was renamed away by a later overwrite.
+            // Skip it without touching the filesystem and decrement the counter.
+            // The renamed file is tracked separately under its new name.
             if let Some(outdated) = self.outdated_count.get_mut(&key)
                 && *outdated > 0
             {
@@ -246,8 +267,8 @@ impl BoundedFileStorage {
 
         Ok(())
     }
-
-    /// If present, file at this path is renamed and moved to the end of the queue.
+    /// If a file named `key` already exists, renames it to `key.overwritten_{timestamp}`
+    /// and appends the renamed entry to the back of the queue so it is eventually evicted.
     async fn handle_duplicate(&mut self, key: &str) -> anyhow::Result<()> {
         let path = self.base_dir.join(key);
         if path.is_file() {
@@ -259,7 +280,10 @@ impl BoundedFileStorage {
                 .as_secs();
             let new_key = &format!("{key}.overwritten_{now}");
             let new_path = self.base_dir.join(new_key);
-            // Mark corresponding entry as outdated
+            // The original queue entry for `key` becomes outdated: the file it pointed to
+            // no longer exists under that name. Increment the counter so that
+            // `enforce_capacity` knows to skip that entry rather than deleting the
+            // newly-written file.
             *self.outdated_count.entry(key.to_string()).or_insert(0) += 1;
             // Rename and add to the back of the queue
             fs::rename(path, new_path.clone()).await?;
@@ -269,7 +293,7 @@ impl BoundedFileStorage {
         Ok(())
     }
 
-    /// Write file to disk and add it to erase_queue
+    /// Write file to disk and add an entry to remove_queue
     async fn write_file(&mut self, key: &str, data: Vec<u8>) -> anyhow::Result<()> {
         let path = self.base_dir.join(key);
         let len = data.len() as u64;
