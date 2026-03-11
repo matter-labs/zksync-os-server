@@ -168,7 +168,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                         }
 
                         // If the only transaction provided is an SL chain id update transaction, we need to seal the block.
-                        if let Some(SystemTxType::SetSLChainId) = executed_txs.last().unwrap().as_system_tx_type() {
+                        if let Some(SystemTxType::SetSLChainId(_)) = executed_txs.last().unwrap().as_system_tx_type() {
                             match &command.seal_policy {
                                 SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
                                     tracing::debug!(block_number = ctx.block_number, "sealing block as chain id update tx was executed");
@@ -373,6 +373,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             block_hash_output,
             command.force_preimages,
             command.starting_interop_event_index,
+            command.starting_migration_number,
         ),
         purged_txs,
     ))

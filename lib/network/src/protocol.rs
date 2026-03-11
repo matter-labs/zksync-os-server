@@ -28,20 +28,39 @@ use zksync_os_types::NodeRole;
 #[derive(Debug, Clone)]
 pub struct ZksProtocolHandler<P: AnyZksProtocolVersion, Replay: Clone> {
     /// Storage to serve block replay records from.
-    pub replay: Replay,
+    replay: Replay,
     /// Node's role in the network.
-    pub node_role: NodeRole,
+    node_role: NodeRole,
     /// Block number to start streaming from.
-    pub starting_block: Arc<RwLock<BlockNumber>>,
+    starting_block: Arc<RwLock<BlockNumber>>,
     /// All overrides to pass through when requesting records.
-    pub record_overrides: Vec<RecordOverride>,
+    record_overrides: Vec<RecordOverride>,
     /// Current state of the protocol.
-    pub state: ProtocolState,
-    pub replay_sender: mpsc::Sender<ReplayRecord>,
-    pub _phantom: PhantomData<P>,
+    state: ProtocolState,
+    replay_sender: mpsc::Sender<ReplayRecord>,
+    _phantom: PhantomData<P>,
 }
 
 impl<P: AnyZksProtocolVersion, Replay: Clone> ZksProtocolHandler<P, Replay> {
+    pub fn new(
+        replay: Replay,
+        node_role: NodeRole,
+        starting_block: Arc<RwLock<BlockNumber>>,
+        record_overrides: Vec<RecordOverride>,
+        state: ProtocolState,
+        replay_sender: mpsc::Sender<ReplayRecord>,
+    ) -> Self {
+        Self {
+            replay,
+            node_role,
+            starting_block,
+            record_overrides,
+            state,
+            replay_sender,
+            _phantom: Default::default(),
+        }
+    }
+
     fn establish_connection(
         &self,
         permit: OwnedSemaphorePermit,

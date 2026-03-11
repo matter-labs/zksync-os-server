@@ -7,9 +7,12 @@ use alloy::eips::{Decodable2718, Encodable2718, Typed2718};
 use alloy::primitives::ChainId;
 use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
 use alloy::rpc::types::{AccessList, SignedAuthorization};
+use alloy::sol_types::SolCall;
 use alloy_rlp::{BufMut, Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+use zksync_os_contract_interface::IMessageRoot::addInteropRootsInBatchCall;
+use zksync_os_contract_interface::ISystemContext::setSettlementLayerChainIdCall;
 use zksync_os_contract_interface::InteropRoot;
 
 pub mod tx;
@@ -42,17 +45,17 @@ impl SystemTxEnvelope {
     }
 
     /// A constructor for system transaction that sets the settlement layer chain id
-    pub fn set_sl_chain_id(chain_id: ChainId) -> Self {
-        Self::create_from_input(SystemTxInput::SetSLChainId(chain_id))
+    pub fn set_sl_chain_id(chain_id: ChainId, migration_number: u64) -> Self {
+        Self::create_from_input(SystemTxInput::SetSLChainId(chain_id, migration_number))
     }
 
     fn create_from_input(tx_input: SystemTxInput) -> Self {
-        let calldata = tx_input.abi_encode();
+        let (calldata, salt) = tx_input.encode_data();
 
         let transaction = SystemTx {
             to: tx_input.to_address(),
             input: Bytes::from(calldata),
-            salt: 0,
+            salt,
         };
 
         Self {
@@ -62,15 +65,46 @@ impl SystemTxEnvelope {
         }
     }
 
+    fn decoded_input(&self) -> SystemTxInput {
+        let data = self.inner.input();
+
+        let selector_bytes: [u8; 4] = data
+            .slice(..4)
+            .to_vec()
+            .try_into()
+            .expect("Failed to get selector bytes from system transaction data");
+        match selector_bytes {
+            addInteropRootsInBatchCall::SELECTOR => {
+                let call = addInteropRootsInBatchCall::abi_decode(data)
+                    .expect("failed to decode interop roots system transaction");
+                SystemTxInput::ImportInteropRoots(call.interopRootsInput)
+            }
+            setSettlementLayerChainIdCall::SELECTOR => {
+                let call = setSettlementLayerChainIdCall::abi_decode(data)
+                    .expect("failed to decode SL chain id system transaction");
+                SystemTxInput::SetSLChainId(
+                    call._newSettlementLayerChainId.try_into().unwrap(),
+                    self.inner.salt,
+                )
+            }
+            _ => panic!(
+                "unknown system transaction selector: {}",
+                alloy::hex::encode(selector_bytes)
+            ),
+        }
+    }
+
     pub fn system_subtype(&self) -> &SystemTxType {
         self.subtype.get_or_init(|| {
-            let input = SystemTxInput::abi_decode(self.inner.input());
+            let input = self.decoded_input();
             assert_eq!(self.to(), Some(input.to_address()));
             match input {
                 SystemTxInput::ImportInteropRoots(roots) => {
                     SystemTxType::ImportInteropRoots(roots.len() as u64)
                 }
-                SystemTxInput::SetSLChainId(_) => SystemTxType::SetSLChainId,
+                SystemTxInput::SetSLChainId(_, migration_number) => {
+                    SystemTxType::SetSLChainId(migration_number)
+                }
             }
         })
     }
@@ -120,7 +154,7 @@ mod tx_serde {
     // Serialize: inject defaults for (r,s,v,yParity)
     impl From<SystemTxEnvelope> for TransactionSerdeHelper {
         fn from(tx: SystemTxEnvelope) -> Self {
-            let tx_input = SystemTxInput::abi_decode(tx.inner.input());
+            let tx_input = tx.decoded_input();
             Self {
                 hash: *tx.hash(),
                 initiator: BOOTLOADER_FORMAL_ADDRESS,
@@ -352,7 +386,7 @@ mod tests {
 
     #[test]
     fn set_sl_chain_id_tx_serialization() {
-        let tx = SystemTxEnvelope::set_sl_chain_id(1);
+        let tx = SystemTxEnvelope::set_sl_chain_id(1, 0);
 
         assert_eq!(
             serde_json::to_string_pretty(&tx).unwrap(),

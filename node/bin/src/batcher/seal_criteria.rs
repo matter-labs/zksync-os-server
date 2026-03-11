@@ -74,7 +74,7 @@ impl BatchInfoAccumulator {
         if replay_record
             .transactions
             .iter()
-            .any(|tx| tx.as_system_tx_type() == Some(&SystemTxType::SetSLChainId))
+            .any(|tx| matches!(tx.as_system_tx_type(), Some(SystemTxType::SetSLChainId(_))))
             && self.block_count > 1
         {
             self.should_seal_for_gateway_migration = true;
