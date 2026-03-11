@@ -79,7 +79,6 @@ use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_network::RecordOverride;
 use zksync_os_network::service::{NetworkService, ZksProtocolConfig};
-use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_reth_compat::provider::ZkProviderFactory;
