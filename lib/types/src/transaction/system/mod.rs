@@ -18,6 +18,7 @@ use zksync_os_contract_interface::InteropRoot;
 pub mod tx;
 pub mod utils;
 pub use utils::{L2_INTEROP_ROOT_STORAGE_ADDRESS, SYSTEM_TX_TYPE_ID, SystemTxType};
+use zksync_os_contract_interface::IInteropCenter::setInteropFeeCall;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(into = "tx_serde::TransactionSerdeHelper")]
@@ -91,6 +92,11 @@ impl SystemTxEnvelope {
                     call._newSettlementLayerChainId.try_into().unwrap(),
                     self.inner.salt,
                 )
+            }
+            setInteropFeeCall::SELECTOR => {
+                let call = setInteropFeeCall::abi_decode(data)
+                    .expect("failed to decode interop fee system transaction");
+                SystemTxInput::SetInteropFee(call._interopFee)
             }
             _ => panic!(
                 "unknown system transaction selector: {}",
