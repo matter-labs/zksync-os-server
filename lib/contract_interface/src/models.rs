@@ -66,6 +66,8 @@ pub struct StoredBatchInfo {
     pub dependency_roots_rolling_hash: B256,
     pub l2_to_l1_logs_root_hash: B256,
     pub commitment: B256,
+    // Unused, to remove in the next breaking version.
+    pub last_block_timestamp: Option<u64>,
 }
 
 impl StoredBatchInfo {
@@ -110,6 +112,8 @@ impl From<IExecutor::StoredBatchInfo> for StoredBatchInfo {
             dependency_roots_rolling_hash: value.dependencyRootsRollingHash,
             l2_to_l1_logs_root_hash: value.l2LogsTreeRoot,
             commitment: value.commitment,
+            // unused
+            last_block_timestamp: Some(0),
         }
     }
 }

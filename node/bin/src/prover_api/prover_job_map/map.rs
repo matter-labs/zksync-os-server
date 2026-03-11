@@ -483,6 +483,8 @@ mod tests {
                 dependency_roots_rolling_hash: B256::ZERO,
                 l2_to_l1_logs_root_hash: B256::ZERO,
                 commitment: B256::ZERO,
+                // unused
+                last_block_timestamp: Some(0),
             },
             batch_info: BatchInfo {
                 commit_info: CommitBatchInfo {
