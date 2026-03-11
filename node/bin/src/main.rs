@@ -89,6 +89,18 @@ fn load_config_defaults(config_sources: &mut ConfigSources, config_paths: Option
 
 #[tokio::main]
 pub async fn main() {
+    // Explicitly select the `ring` TLS crypto provider for rustls.
+    //
+    // Our dependency tree pulls in both `ring` and `aws-lc-rs` as rustls crypto backends
+    // (via reqwest, gcp_auth, and other crates). When both are present, rustls cannot
+    // auto-detect which one to use and panics on the first TLS connection with:
+    //   "no process-level CryptoProvider is set"
+    //
+    // This must be called before any TLS connection is made (e.g. GCP KMS signing via HTTPS).
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls ring crypto provider");
+
     let opt = Cli::parse();
 
     // =========== load configs ===========
@@ -148,7 +160,7 @@ pub async fn main() {
         }
     }
 
-    let mut config = build_external_config(config_repo);
+    let mut config = build_external_config(config_repo).await;
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
     // =========== init interruption channel ===========
@@ -237,7 +249,7 @@ async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
     }
 }
 
-fn build_external_config(repo: ConfigRepository<'_>) -> Config {
+async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     let general_config = repo
         .single::<GeneralConfig>()
         .expect("Failed to load general config")
@@ -352,15 +364,32 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse fee config");
 
-    // Validate that operator keys are different (only relevant on the Main Node where they are set)
-    if let (Some(commit_sk), Some(prove_sk), Some(execute_sk)) = (
+    // Validate that operator signers resolve to different Ethereum addresses (Main Node only).
+    // Resolving the address for GCP KMS keys requires a network call, but is necessary to catch
+    // duplicates across different backends (e.g. a local key and a KMS key for the same address).
+    if let (Some(commit), Some(prove), Some(execute)) = (
         &l1_sender_config.operator_commit_sk,
         &l1_sender_config.operator_prove_sk,
         &l1_sender_config.operator_execute_sk,
-    ) && (commit_sk == prove_sk || prove_sk == execute_sk || execute_sk == commit_sk)
-    {
-        // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
-        panic!("Operator addresses for commit, prove and execute must be different");
+    ) {
+        let commit_addr = commit
+            .address()
+            .await
+            .expect("failed to resolve commit operator address");
+        let prove_addr = prove
+            .address()
+            .await
+            .expect("failed to resolve prove operator address");
+        let execute_addr = execute
+            .address()
+            .await
+            .expect("failed to resolve execute operator address");
+        if commit_addr == prove_addr || prove_addr == execute_addr || execute_addr == commit_addr {
+            panic!(
+                "Operator addresses for commit, prove and execute must be different, \
+                 got commit={commit_addr}, prove={prove_addr}, execute={execute_addr}"
+            );
+        }
     }
 
     Config {

@@ -7,8 +7,6 @@ use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{DynProvider, Provider, WalletProvider};
 use alloy::rpc::types::TransactionReceipt;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
-use alloy::signers::k256::ecdsa::SigningKey;
-use alloy::signers::local::PrivateKeySigner;
 use anyhow::Context;
 use num::rational::Ratio;
 use num::{BigUint, ToPrimitive};
@@ -25,6 +23,7 @@ use zksync_os_external_price_api::forced_price_client::ForcedPriceClient;
 use zksync_os_external_price_api::{
     APIToken, ExternalPriceApiClientConfig, PriceApiClient, ZK_L1_ADDRESS,
 };
+use zksync_os_operator_signer::SignerConfig;
 use zksync_os_types::{TokenApiRatio, TokenPricesForFees};
 
 mod metrics;
@@ -44,10 +43,11 @@ pub struct BaseTokenPriceUpdaterConfig {
     pub base_token_decimals_override: Option<u8>,
     /// Override for address of the gateway base token address used to calculate ETH<->GatewayBaseToken ratio on gateway using chains.
     pub gateway_base_token_addr_override: Option<Address>,
-    /// Signing key to update base token price on L1.
+    /// Signer configuration to update base token price on L1.
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
-    pub token_multiplier_setter_sk: Option<SigningKey>,
+    /// Supports both local private keys and GCP KMS keys.
+    pub token_multiplier_setter_signer: Option<SignerConfig>,
     /// Max fee per gas we are willing to spend (in wei).
     pub max_fee_per_gas_wei: u128,
     /// Max priority fee per gas we are willing to spend (in wei).
@@ -92,11 +92,11 @@ pub struct BaseTokenPriceUpdater<
 
 async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>>(
     provider: &mut P,
-    signing_key: SigningKey,
+    signer_config: SignerConfig,
 ) -> anyhow::Result<Address> {
-    let signer = PrivateKeySigner::from_signing_key(signing_key);
-    let address = signer.address();
-    provider.wallet_mut().register_signer(signer);
+    let address = signer_config
+        .register_with_wallet(provider.wallet_mut())
+        .await?;
 
     let balance = provider.get_balance(address).await?;
     METRICS
@@ -123,11 +123,12 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
     ) -> anyhow::Result<Self> {
         let base_token_address = zk_chain_l1.get_base_token_address().await?;
 
-        let token_multiplier_setter_address = if let Some(sk) = base_token_adjuster_config
-            .token_multiplier_setter_sk
-            .clone()
+        let token_multiplier_setter_address = if let Some(signer_config) =
+            base_token_adjuster_config
+                .token_multiplier_setter_signer
+                .clone()
         {
-            Some(register_operator(&mut l1_provider, sk).await?)
+            Some(register_operator(&mut l1_provider, signer_config).await?)
         } else {
             None
         };
@@ -161,7 +162,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
 
         if base_token != APIToken::ETH && token_multiplier_setter_address.is_none() {
             tracing::warn!(
-                "`token_multiplier_setter_sk` is not set in the config, but base token is not ETH. \
+                "Token multiplier setter signer is not configured, but base token is not ETH. \
                  Base token price updater will not be able to update the base token price on L1."
             );
         }

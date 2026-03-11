@@ -1,8 +1,7 @@
 pub use self::cli::ConfigArgs;
-use self::util::{SecretKeyDeserializer, SigningKeyDeserializer};
+use self::util::{SecretKeyDeserializer, SignerConfigDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
-use alloy::signers::k256::ecdsa::SigningKey;
 use num::{BigInt, BigUint, rational::Ratio};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::{SizeUnit, TimeUnit};
@@ -22,6 +21,7 @@ use zksync_os_mempool::SubPoolLimit;
 use zksync_os_network::{NodeRecord, SecretKey};
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
+use zksync_os_operator_signer::SignerConfig;
 use zksync_os_types::{NodeRole, PubdataMode};
 
 mod cli;
@@ -447,25 +447,28 @@ pub struct RpcConfig {
 
 /// L1 sender configuration. The signing key fields are only required on the Main Node;
 /// External Nodes do not send L1 transactions and may omit them.
+///
+/// Each operator accepts either a hex private key string (backward-compatible) or a GCP KMS
+/// resource object: `{"type": "gcp_kms", "resource": "projects/.../cryptoKeyVersions/N"}`.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 pub struct L1SenderConfig {
-    /// Signing key to commit batches to L1
+    /// Signer to commit batches to L1.
     /// Must be consistent with the operator key set on the contract (permissioned!)
     /// Not required for External Nodes, which do not send L1 transactions.
-    #[config(alias = "operator_commit_pk", with = SigningKeyDeserializer)]
-    pub operator_commit_sk: Option<SigningKey>,
+    #[config(secret, alias = "operator_commit_pk", with = SignerConfigDeserializer)]
+    pub operator_commit_sk: Option<SignerConfig>,
 
-    /// Signing key to use to submit proofs to L1
+    /// Signer to submit proofs to L1.
     /// Can be arbitrary funded address - proof submission is permissionless.
     /// Not required for External Nodes, which do not send L1 transactions.
-    #[config(alias = "operator_prove_pk", with = SigningKeyDeserializer)]
-    pub operator_prove_sk: Option<SigningKey>,
+    #[config(secret, alias = "operator_prove_pk", with = SignerConfigDeserializer)]
+    pub operator_prove_sk: Option<SignerConfig>,
 
-    /// Signing key to use to execute batches on L1
+    /// Signer to execute batches on L1.
     /// Can be arbitrary funded address - execute submission is permissionless.
     /// Not required for External Nodes, which do not send L1 transactions.
-    #[config(alias = "operator_execute_pk", with = SigningKeyDeserializer)]
-    pub operator_execute_sk: Option<SigningKey>,
+    #[config(secret, alias = "operator_execute_pk", with = SignerConfigDeserializer)]
+    pub operator_execute_sk: Option<SignerConfig>,
 
     /// Max fee per gas we are willing to spend.
     #[config(default_t = 200 * EtherUnit::Gwei)]
@@ -847,11 +850,12 @@ pub struct BaseTokenPriceUpdaterConfig {
     pub base_token_decimals_override: Option<u8>,
     /// Override for address of the gateway base token address used to calculate ETH<->GatewayBaseToken ratio on gateway using chains.
     pub gateway_base_token_addr_override: Option<Address>,
-    #[config(alias = "token_multiplier_setter_pk", with = SigningKeyDeserializer)]
-    /// Signing key to update base token price on L1.
+    /// Signer to update base token price on L1.
     /// Must be consistent with the key set on the chain admin contract.
-    /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
-    pub token_multiplier_setter_sk: Option<SigningKey>,
+    /// Not used for chains with ETH as base token; expected to be set for all other chains.
+    /// Accepts either a hex private key string or a GCP KMS resource object.
+    #[config(secret, alias = "token_multiplier_setter_pk", with = SignerConfigDeserializer)]
+    pub token_multiplier_setter_sk: Option<SignerConfig>,
     /// Predefined fallback prices for tokens in case external API fetching fails on startup.
     #[config(default, with = Serde![*])]
     pub fallback_prices: HashMap<Address, f64>,
@@ -983,10 +987,10 @@ impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
 impl L1SenderConfig {
     fn into_lib_l1_sender_config<Input>(
         self,
-        operator_sk: SigningKey,
+        operator_signer: SignerConfig,
     ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
         zksync_os_l1_sender::config::L1SenderConfig {
-            operator_sk,
+            operator_signer,
             max_fee_per_gas_wei: self.max_fee_per_gas.0,
             max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
             max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
@@ -997,32 +1001,34 @@ impl L1SenderConfig {
         }
     }
 }
+
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<CommitCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let sk = c
+        let signer = c
             .operator_commit_sk
             .clone()
             .expect("operator_commit_sk must be set on the Main Node");
-        c.into_lib_l1_sender_config(sk)
+        c.into_lib_l1_sender_config(signer)
     }
 }
 
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ProofCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let sk = c
+        let signer = c
             .operator_prove_sk
             .clone()
             .expect("operator_prove_sk must be set on the Main Node");
-        c.into_lib_l1_sender_config(sk)
+        c.into_lib_l1_sender_config(signer)
     }
 }
+
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let sk = c
+        let signer = c
             .operator_execute_sk
             .clone()
             .expect("operator_execute_sk must be set on the Main Node");
-        c.into_lib_l1_sender_config(sk)
+        c.into_lib_l1_sender_config(signer)
     }
 }
 
@@ -1099,6 +1105,8 @@ pub fn base_token_price_updater_config(
     c: &BaseTokenPriceUpdaterConfig,
     l1_sender_config: &L1SenderConfig,
 ) -> zksync_os_base_token_adjuster::BaseTokenPriceUpdaterConfig {
+    let token_multiplier_setter_signer = c.token_multiplier_setter_sk.clone();
+
     zksync_os_base_token_adjuster::BaseTokenPriceUpdaterConfig {
         price_polling_interval: c.price_polling_interval,
         l1_update_deviation_percentage: c.l1_update_deviation_percentage,
@@ -1106,7 +1114,7 @@ pub fn base_token_price_updater_config(
         base_token_addr_override: c.base_token_addr_override,
         base_token_decimals_override: c.base_token_decimals_override,
         gateway_base_token_addr_override: c.gateway_base_token_addr_override,
-        token_multiplier_setter_sk: c.token_multiplier_setter_sk.clone(),
+        token_multiplier_setter_signer,
         max_fee_per_gas_wei: l1_sender_config.max_fee_per_gas.0,
         max_priority_fee_per_gas_wei: l1_sender_config.max_priority_fee_per_gas.0,
         fallback_prices: c.fallback_prices.clone(),

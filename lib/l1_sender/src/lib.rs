@@ -21,14 +21,13 @@ use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{PendingTransactionError, Provider, WalletProvider};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
-use alloy::signers::k256::ecdsa::SigningKey;
-use alloy::signers::local::PrivateKeySigner;
 use anyhow::Context;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
+use zksync_os_operator_signer::SignerConfig;
 use zksync_os_pipeline::PeekableReceiver;
 
 /// Maximum time to wait for a transaction to be included on L1.
@@ -78,7 +77,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
     let command_name = Input::NAME;
 
-    let operator_address = register_operator::<_, Input>(&mut provider, config.operator_sk).await?;
+    let operator_address =
+        register_operator::<_, Input>(&mut provider, config.operator_signer).await?;
     let mut cmd_buffer = Vec::with_capacity(config.command_limit);
 
     // Process all potential passthrough commands first
@@ -326,11 +326,11 @@ async fn register_operator<
     Input: SendToL1,
 >(
     provider: &mut P,
-    signing_key: SigningKey,
+    signer_config: SignerConfig,
 ) -> anyhow::Result<Address> {
-    let signer = PrivateKeySigner::from_signing_key(signing_key);
-    let address = signer.address();
-    provider.wallet_mut().register_signer(signer);
+    let address = signer_config
+        .register_with_wallet(provider.wallet_mut())
+        .await?;
 
     let balance = provider.get_balance(address).await?;
     L1_SENDER_METRICS.balance[&Input::NAME].set(format_ether(balance).parse()?);

@@ -40,6 +40,7 @@ zksync_os_network.workspace = true
 zksync_os_metadata.workspace = true
 zksync_os_base_token_adjuster.workspace = true
 zksync_os_external_price_api.workspace = true
+zksync_os_operator_signer.workspace = true
 zksync_os_reth_compat.workspace = true
 
 zk_os_forward_system.workspace = true
@@ -88,6 +89,7 @@ jsonrpsee = { workspace = true, default-features = false, features = [
 ] }
 rand.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
+rustls = { workspace = true }
 num.workspace = true
 
 sentry.workspace = true
