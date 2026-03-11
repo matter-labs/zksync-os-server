@@ -849,14 +849,9 @@ async fn run_main_node_pipeline(
     committed_batch_provider: CommittedBatchProvider,
 ) {
     tracing::info!("Initializing ProofStorage");
-    // todo: this is used purely for prover API
-    //       decide what to do with it - might still be useful to debug failed proofs
-    let proof_storage = ProofStorage::new(
-        ObjectStoreFactory::new(config.prover_api_config.object_store.clone())
-            .create_store()
-            .await
-            .unwrap(),
-    );
+    let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
+        .await
+        .expect("Failed to initialize ProofStorage");
 
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         proof_storage.clone(),
