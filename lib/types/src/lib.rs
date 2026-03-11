@@ -32,10 +32,7 @@ mod node;
 pub use node::NodeRole;
 
 mod protocol;
-pub use protocol::{
-    ExecutionVersion, ExecutionVersionError, ProtocolSemanticVersion, ProtocolSemanticVersionError,
-    ProvingVersion, ProvingVersionError,
-};
+pub use protocol::{ProtocolSemanticVersion, ProtocolSemanticVersionError};
 
 mod token_price;
 pub use token_price::{TokenApiRatio, TokenPricesForFees};

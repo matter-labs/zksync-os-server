@@ -12,7 +12,6 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
-use zksync_os_types::ProvingVersion;
 
 /// Job manager for SNARK proving.
 ///
@@ -97,7 +96,7 @@ impl SnarkJobManager {
         &self,
         batch_from: u64,
         batch_to: u64,
-        proving_version: ProvingVersion,
+        prover_vk_hash: &str,
         payload: Vec<u8>,
         prover_id: String,
     ) -> anyhow::Result<()> {
@@ -126,10 +125,9 @@ impl SnarkJobManager {
             .batch
             .verification_key_hash()
             .expect("verification key hash must be present as it was set by server");
-        let prover_vk = proving_version.vk_hash();
         anyhow::ensure!(
-            server_vk == prover_vk,
-            "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
+            server_vk == prover_vk_hash,
+            "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk_hash}"
         );
 
         let consumed_batches_proven: Vec<_> = consumed_batches_proven
@@ -137,11 +135,12 @@ impl SnarkJobManager {
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
 
+        // The `proving_execution_version` field is kept for serialization backward compatibility.
         self.send_downstream(ProofCommand::new(
             consumed_batches_proven,
             SnarkProof::Real(RealSnarkProof::V2 {
                 proof: payload,
-                proving_execution_version: proving_version as u32,
+                proving_execution_version: 0,
             }),
         ))
         .await?;

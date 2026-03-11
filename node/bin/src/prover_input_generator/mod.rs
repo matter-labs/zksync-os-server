@@ -17,7 +17,7 @@ use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_by
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
+use zksync_os_types::{PubdataMode, ZksyncOsEncode};
 
 /// This component generates prover input from batch replay data
 pub struct ProverInputGenerator<ReadState> {
@@ -140,53 +140,47 @@ fn compute_prover_input(
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
-    let proving_version = ProvingVersion::try_from(replay_record.protocol_version.clone())
-        .expect("invalid protocol version");
-    let prover_input = match proving_version {
-        ProvingVersion::V1
-        | ProvingVersion::V2
-        | ProvingVersion::V3
-        | ProvingVersion::V4
-        | ProvingVersion::V5 => {
-            panic!("computing prover input for batch with prover version v1-v5 is not supported");
-        }
-        ProvingVersion::V6 => {
-            use zk_ee::{
-                common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
-            };
-            use zk_os_forward_system::run::{
-                StorageCommitment, convert::FromInterface, generate_proof_input,
-            };
 
-            let initial_storage_commitment = StorageCommitment {
-                root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
-                next_free_slot: leaf_count,
-            };
+    // Validate that the protocol version is supported for proving.
+    let _ = replay_record
+        .protocol_version
+        .vk_hash()
+        .expect("unsupported protocol version for proving");
 
-            let list_source = TxListSource { transactions };
+    let prover_input = {
+        use zk_ee::{
+            common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
+        };
+        use zk_os_forward_system::run::{
+            StorageCommitment, convert::FromInterface, generate_proof_input,
+        };
 
-            let bin_path = if enable_logging {
-                zksync_os_multivm::apps::v6::singleblock_batch_logging_enabled_path(
-                    &app_bin_base_path,
-                )
-            } else {
-                zksync_os_multivm::apps::v6::singleblock_batch_path(&app_bin_base_path)
-            };
+        let initial_storage_commitment = StorageCommitment {
+            root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
+            next_free_slot: leaf_count,
+        };
 
-            generate_proof_input(
-                bin_path,
-                BlockMetadataFromOracle::from_interface(replay_record.block_context),
-                ProofData {
-                    state_root_view: initial_storage_commitment,
-                    last_block_timestamp: replay_record.previous_block_timestamp,
-                },
-                da_commitment_scheme,
-                tree_view,
-                state_view,
-                list_source,
-            )
-            .expect("proof gen failed")
-        }
+        let list_source = TxListSource { transactions };
+
+        let bin_path = if enable_logging {
+            zksync_os_multivm::apps::v6::singleblock_batch_logging_enabled_path(&app_bin_base_path)
+        } else {
+            zksync_os_multivm::apps::v6::singleblock_batch_path(&app_bin_base_path)
+        };
+
+        generate_proof_input(
+            bin_path,
+            BlockMetadataFromOracle::from_interface(replay_record.block_context),
+            ProofData {
+                state_root_view: initial_storage_commitment,
+                last_block_timestamp: replay_record.previous_block_timestamp,
+            },
+            da_commitment_scheme,
+            tree_view,
+            state_view,
+            list_source,
+        )
+        .expect("proof gen failed")
     };
     let latency = prover_input_generation_latency.observe();
 

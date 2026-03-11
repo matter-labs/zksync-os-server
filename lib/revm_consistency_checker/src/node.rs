@@ -11,7 +11,6 @@ use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_revm::{DefaultZk, ZkBuilder};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::ExecutionVersion;
 
 use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
 use crate::revm_state_provider::RevmStateProvider;
@@ -105,10 +104,7 @@ where
                 anyhow::bail!("inbound channel closed");
             };
             let raw_exec_ver = replay_record.block_context.execution_version;
-            let zk_spec = match ExecutionVersion::try_from(raw_exec_ver)
-                .ok()
-                .and_then(zk_spec_version)
-            {
+            let zk_spec = match zk_spec_version(raw_exec_ver) {
                 Some(spec) => Some(spec),
                 None => {
                     // Warn once per execution_version. Afterwards log at info level.

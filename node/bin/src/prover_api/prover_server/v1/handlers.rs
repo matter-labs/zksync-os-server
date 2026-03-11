@@ -8,7 +8,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose};
 use http::StatusCode;
 use zksync_os_l1_sender::batcher_model::FriProof;
-use zksync_os_types::ProvingVersion;
+use zksync_os_types::ProtocolSemanticVersion;
 
 use crate::prover_api::fri_job_manager::SubmitError;
 use crate::prover_api::{
@@ -73,27 +73,27 @@ pub(super) async fn submit_fri_proof(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
 
     let prover_id = query.id;
-    let proving_version = ProvingVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
-        (
+    if !ProtocolSemanticVersion::is_known_vk_hash(&payload.vk_hash) {
+        return Err((
             StatusCode::BAD_REQUEST,
-            format!("no Proving Version matches the provided Verification Key: {e}"),
-        )
-    })?;
+            format!(
+                "no known protocol version matches the provided verification key: {}",
+                payload.vk_hash
+            ),
+        ));
+    }
     let result = match state
         .fri_job_manager
-        .submit_proof(payload.batch_number, proof_bytes.into(), proving_version, &prover_id)
+        .submit_proof(payload.batch_number, proof_bytes.into(), &payload.vk_hash, &prover_id)
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
-        Err(SubmitError::ProvingVersionMismatch(server_execution_version, prover_execution_version)) => {
+        Err(SubmitError::VkHashMismatch { server_vk_hash, prover_vk_hash }) => {
             Err((
             StatusCode::BAD_REQUEST,
             format!(
-                "execution error mismatch: server has {server_execution_version:?} (vk = {}), prover used {prover_execution_version:?} (vk = {})",
-                server_execution_version.vk_hash(),
-                prover_execution_version.vk_hash()
-            )
-            .to_string(),
+                "VK hash mismatch: server expects {server_vk_hash}, prover used {prover_vk_hash}"
+            ),
         ))}
         Err(SubmitError::FriProofVerificationError {
             expected_hash_u32s,
@@ -197,18 +197,21 @@ pub(super) async fn submit_snark_proof(
     let proof_bytes = general_purpose::STANDARD
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
-    let proving_version = ProvingVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
-        (
+    if !ProtocolSemanticVersion::is_known_vk_hash(&payload.vk_hash) {
+        return Err((
             StatusCode::BAD_REQUEST,
-            format!("no Proving Version matches the provided verification key: {e}"),
-        )
-    })?;
+            format!(
+                "no known protocol version matches the provided verification key: {}",
+                payload.vk_hash
+            ),
+        ));
+    }
     let result = match state
         .snark_job_manager
         .submit_proof(
             payload.from_batch_number,
             payload.to_batch_number,
-            proving_version,
+            &payload.vk_hash,
             proof_bytes,
             query.id,
         )

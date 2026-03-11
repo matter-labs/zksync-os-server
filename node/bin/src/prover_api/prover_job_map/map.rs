@@ -181,7 +181,7 @@ impl<T: Clone> ProverJobMap<T> {
                 (
                     FriJob {
                         batch_number: metadata.batch_number,
-                        vk_hash: metadata.proving_version.vk_hash().to_string(),
+                        vk_hash: metadata.vk_hash.clone(),
                     },
                     entry.batch_envelope.data.clone(),
                 )
@@ -224,12 +224,12 @@ impl<T: Clone> ProverJobMap<T> {
             return false;
         }
 
-        // No gaps in batch numbers and all have the same proving version
+        // No gaps in batch numbers and all have the same VK hash
         match already_selected_jobs.last() {
             None => true,
             Some(last) => {
                 last.batch_number + 1 == next_job_entry.metadata.batch_number
-                    && next_job_entry.metadata.proving_version == last.proving_version
+                    && next_job_entry.metadata.vk_hash == last.vk_hash
             }
         }
     }
@@ -421,7 +421,7 @@ impl<T: Clone> ProverJobMap<T> {
             .map(|(batch_number, entry)| JobState {
                 fri_job: FriJob {
                     batch_number: *batch_number,
-                    vk_hash: entry.metadata.proving_version.vk_hash().to_string(),
+                    vk_hash: entry.metadata.vk_hash.clone(),
                 },
                 assigned_seconds_ago: entry
                     .metadata

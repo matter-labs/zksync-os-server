@@ -4,12 +4,6 @@ use alloy_rlp::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 use std::{fmt, ops::Deref, str::FromStr};
 
-mod execution_version;
-mod proving_version;
-
-pub use self::execution_version::{ExecutionVersion, ExecutionVersionError};
-pub use self::proving_version::{ProvingVersion, ProvingVersionError};
-
 const PACKED_SEMVER_PATCH_MASK: u32 = 0xFFFFFFFF;
 const PACKED_SEMVER_MINOR_OFFSET: u32 = 32;
 const PACKED_SEMVER_MINOR_MASK: u32 = 0xFFFFFFFF;
@@ -71,6 +65,63 @@ impl ProtocolSemanticVersion {
         Self::new(0, 29, 1)
     }
 
+    /// Returns the VM version number for this protocol version.
+    /// Used to select which VM implementation to run blocks with.
+    /// The VM version only depends on the minor version of the protocol.
+    pub fn vm_version(&self) -> Result<u32, ProtocolSemanticVersionError> {
+        match self.minor {
+            29 => Ok(4),
+            30 => Ok(5),
+            31 => Ok(6),
+            // The next anticipated version routes to the current latest, so that
+            // upgrade logic can be tested.
+            32 => Ok(6),
+            _ => Err(ProtocolSemanticVersionError::UnsupportedVersion(
+                self.clone(),
+            )),
+        }
+    }
+
+    /// Returns the verification key hash for this protocol version.
+    /// The VK hash depends on both the minor and patch version.
+    pub fn vk_hash(&self) -> Result<&'static str, ProtocolSemanticVersionError> {
+        match (self.minor, self.patch) {
+            (29, 0) | (29, 1) => Ok(Self::VK_HASH_V29),
+            (30, 0) => Ok(Self::VK_HASH_V30_0),
+            (30, 1) => Ok(Self::VK_HASH_V30_1),
+            (30, 2) => Ok(Self::VK_HASH_V30_1),
+            (31, 0) => Ok(Self::VK_HASH_V30_1),
+            (31, 1) => Ok(Self::VK_HASH_V30_1),
+            (32, 0) => Ok(Self::VK_HASH_V30_1),
+            _ => Err(ProtocolSemanticVersionError::UnsupportedVersion(
+                self.clone(),
+            )),
+        }
+    }
+
+    /// Checks whether a given VK hash corresponds to any known protocol version.
+    pub fn is_known_vk_hash(vk_hash: &str) -> bool {
+        matches!(
+            vk_hash,
+            Self::VK_HASH_V29 | Self::VK_HASH_V30_0 | Self::VK_HASH_V30_1
+        )
+    }
+
+    /// verification key hash for protocol 0.29.x
+    /// generated from zksync-os v0.1.0, zksync-airbender v0.5.1 and zkos-wrapper v0.5.3
+    const VK_HASH_V29: &'static str =
+        "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5";
+
+    /// verification key hash for protocol 0.30.0
+    /// generated from zksync-os v0.2.4, zksync-airbender v0.5.1 and zkos-wrapper v0.5.3
+    const VK_HASH_V30_0: &'static str =
+        "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581";
+
+    /// verification key hash for protocol 0.30.1+
+    /// generated from zksync-os v0.2.5, zksync-airbender v0.5.2 and zkos-wrapper v0.5.4
+    const VK_HASH_V30_1: &'static str =
+        "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337";
+
     /// Packs the semantic version into a `U256` according to the protocol encoding.
     /// Can return an error in case the stored version cannot be represented in the
     /// format expected by the protocol.
@@ -90,7 +141,7 @@ impl ProtocolSemanticVersion {
     }
 }
 
-#[derive(thiserror::Error, Debug, Clone, Copy)]
+#[derive(thiserror::Error, Debug, Clone)]
 pub enum ProtocolSemanticVersionError {
     #[error("Minor version overflow")]
     MinorOverflow,
@@ -98,6 +149,8 @@ pub enum ProtocolSemanticVersionError {
     PatchOverflow,
     #[error("Major version must be 0")]
     MajorNonZero,
+    #[error("Protocol version does not have a known VM version or VK hash: {0}")]
+    UnsupportedVersion(ProtocolSemanticVersion),
 }
 
 impl fmt::Display for ProtocolSemanticVersion {
@@ -218,6 +271,73 @@ mod tests {
 
         let deserialized: ProtocolSemanticVersion = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, version);
+    }
+
+    #[test]
+    fn test_vm_version_mapping() {
+        let test_vector = [
+            ((0, 29, 0), 4u32),
+            ((0, 29, 1), 4),
+            ((0, 30, 0), 5),
+            ((0, 30, 1), 5),
+            ((0, 31, 0), 6),
+            ((0, 31, 1), 6),
+            ((0, 32, 0), 6),
+            ((0, 32, 1), 6),
+        ];
+        for ((major, minor, patch), expected) in test_vector.iter() {
+            let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
+            let vm_ver = version
+                .vm_version()
+                .unwrap_or_else(|e| panic!("Failed for {version}: {e}"));
+            assert_eq!(vm_ver, *expected, "mismatch for {version}");
+        }
+        // Unknown versions
+        for (major, minor, patch) in [(0, 27, 10), (0, 28, 5), (0, 33, 0)] {
+            let version = ProtocolSemanticVersion::new(major, minor, patch);
+            assert!(version.vm_version().is_err());
+        }
+    }
+
+    #[test]
+    fn test_vk_hash_mapping() {
+        let test_vector = [
+            ((0, 29, 0), ProtocolSemanticVersion::VK_HASH_V29),
+            ((0, 29, 1), ProtocolSemanticVersion::VK_HASH_V29),
+            ((0, 30, 0), ProtocolSemanticVersion::VK_HASH_V30_0),
+            ((0, 30, 1), ProtocolSemanticVersion::VK_HASH_V30_1),
+            ((0, 31, 0), ProtocolSemanticVersion::VK_HASH_V30_1),
+            ((0, 31, 1), ProtocolSemanticVersion::VK_HASH_V30_1),
+            ((0, 32, 0), ProtocolSemanticVersion::VK_HASH_V30_1),
+        ];
+        for ((major, minor, patch), expected) in test_vector.iter() {
+            let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
+            let hash = version
+                .vk_hash()
+                .unwrap_or_else(|e| panic!("Failed for {version}: {e}"));
+            assert_eq!(hash, *expected, "mismatch for {version}");
+        }
+        // Unknown versions
+        for (major, minor, patch) in [(0, 27, 10), (0, 28, 5), (0, 30, 3), (0, 33, 0)] {
+            let version = ProtocolSemanticVersion::new(major, minor, patch);
+            assert!(version.vk_hash().is_err());
+        }
+    }
+
+    #[test]
+    fn test_is_known_vk_hash() {
+        assert!(ProtocolSemanticVersion::is_known_vk_hash(
+            ProtocolSemanticVersion::VK_HASH_V29
+        ));
+        assert!(ProtocolSemanticVersion::is_known_vk_hash(
+            ProtocolSemanticVersion::VK_HASH_V30_0
+        ));
+        assert!(ProtocolSemanticVersion::is_known_vk_hash(
+            ProtocolSemanticVersion::VK_HASH_V30_1
+        ));
+        assert!(!ProtocolSemanticVersion::is_known_vk_hash(
+            "0xdeadbeefdeadbeef"
+        ));
     }
 
     #[test]

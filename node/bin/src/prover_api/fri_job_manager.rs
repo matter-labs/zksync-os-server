@@ -32,7 +32,6 @@ use zksync_os_l1_sender::batcher_model::{
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
-use zksync_os_types::ProvingVersion;
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
@@ -45,9 +44,13 @@ pub enum SubmitError {
     UnknownJob(u64),
     #[error("deserialization failed: {0:?}")]
     DeserializationFailed(bincode::error::DecodeError),
-    // server execution version, prover execution version
-    #[error("execution error mismatch - server expects {0:?}, but got {1:?} from prover")]
-    ProvingVersionMismatch(ProvingVersion, ProvingVersion),
+    #[error(
+        "VK hash mismatch - server expects {server_vk_hash}, but got {prover_vk_hash} from prover"
+    )]
+    VkHashMismatch {
+        server_vk_hash: String,
+        prover_vk_hash: String,
+    },
     #[error("internal error: {0}")]
     Other(String),
 }
@@ -155,7 +158,7 @@ impl FriJobManager {
         &self,
         batch_number: u64,
         proof_bytes: Bytes,
-        proving_version: ProvingVersion,
+        prover_vk_hash: &str,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
         // Snapshot the assigned job entry (if any).
@@ -166,19 +169,15 @@ impl FriJobManager {
 
         // Prover should generate the proof with VK received from server. These must always match.
         // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
-        //
-        // This should never happen, but we double-check to guarantee it's the case.
-        //
-        // NOTE: We don't check the actual values, but the value that server believes the prover should use.
-        let server_proving_version = batch_metadata
-            .proving_version()
-            .expect("Must be valid execution as set by the server");
+        let server_vk_hash = batch_metadata
+            .verification_key_hash()
+            .expect("Must be valid VK hash as set by the server");
 
-        if server_proving_version != proving_version {
-            return Err(SubmitError::ProvingVersionMismatch(
-                server_proving_version,
-                proving_version,
-            ));
+        if server_vk_hash != prover_vk_hash {
+            return Err(SubmitError::VkHashMismatch {
+                server_vk_hash: server_vk_hash.to_string(),
+                prover_vk_hash: prover_vk_hash.to_string(),
+            });
         }
 
         self.verify_proof(&batch_metadata, &proof_bytes, batch_number, prover_id)
@@ -204,9 +203,10 @@ impl FriJobManager {
         };
 
         // Prepare the envelope and send it downstream.
+        // The `proving_execution_version` field is kept for serialization backward compatibility.
         let proof = RealFriProof::V2 {
             proof: proof_bytes,
-            proving_execution_version: proving_version as u32,
+            proving_execution_version: batch_metadata.protocol_version.minor as u32,
         };
         let envelope = removed_job
             .with_data(FriProof::Real(proof))
@@ -226,39 +226,23 @@ impl FriJobManager {
         batch_number: u64,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
-        // TODO: This match is needed for the transition period.
-        // v0.5.2 airbender cannot verify proofs generated with v0.5.1.
-        // Once all networks are protocol upgraded, the code below can be removed.
-        let proving_version = batch_metadata
-            .proving_version()
-            // should be safe to unwrap, as it's been checked before this call
-            .expect("invalid proving version");
-        let result = match proving_version {
-            ProvingVersion::V1
-            | ProvingVersion::V2
-            | ProvingVersion::V3
-            | ProvingVersion::V4
-            | ProvingVersion::V5 => {
-                panic!("proof verification for v1-v5 is not supported")
-            }
-            ProvingVersion::V6 => {
-                tracing::debug!("Using 0.5.2 proof verifier for batch {}", batch_number);
-                let program_proof =
-                    bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
-                        .map_err(|err| {
-                            tracing::warn!(batch_number, ?err, "Failed to deserialize proof");
-                            SubmitError::DeserializationFailed(err)
-                        })?
-                        .0;
-                fri_proof_verifier::verify_fri_proof(
-                    batch_metadata.previous_stored_batch_info.state_commitment,
-                    batch_metadata
-                        .batch_info
-                        .clone()
-                        .into_stored(&batch_metadata.protocol_version),
-                    program_proof,
-                )
-            }
+        let result = {
+            tracing::debug!("Verifying proof for batch {}", batch_number);
+            let program_proof =
+                bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
+                    .map_err(|err| {
+                        tracing::warn!(batch_number, ?err, "Failed to deserialize proof");
+                        SubmitError::DeserializationFailed(err)
+                    })?
+                    .0;
+            fri_proof_verifier::verify_fri_proof(
+                batch_metadata.previous_stored_batch_info.state_commitment,
+                batch_metadata
+                    .batch_info
+                    .clone()
+                    .into_stored(&batch_metadata.protocol_version),
+                program_proof,
+            )
         };
 
         if let Err(SubmitError::FriProofVerificationError {

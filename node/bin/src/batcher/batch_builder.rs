@@ -7,7 +7,7 @@ use zksync_os_l1_sender::batcher_model::{
     BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
 };
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_multichain_root};
-use zksync_os_types::{ProvingVersion, PubdataMode};
+use zksync_os_types::PubdataMode;
 
 /// Takes a vector of blocks and produces a batch envelope.
 #[allow(clippy::too_many_arguments)]
@@ -76,34 +76,29 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
 
     use zk_os_forward_system::run::generate_batch_proof_input;
 
-    let proving_version =
-        ProvingVersion::try_from(blocks.first().unwrap().1.protocol_version.clone())?;
-    // execution version should be the same for all the blocks, it is ensured by the seal criteria
-    let batch_prover_input: ProverInput = match proving_version {
-        ProvingVersion::V1
-        | ProvingVersion::V2
-        | ProvingVersion::V3
-        | ProvingVersion::V4
-        | ProvingVersion::V5 => {
-            panic!("sealing batch with prover version v1-v5 is not supported");
-        }
-        ProvingVersion::V6 => {
-            // TODO: in the long-term we should generate proof input per batch
-            generate_batch_proof_input(
-                blocks
-                    .iter()
-                    .map(|(_, _, _, prover_input)| prover_input.as_slice())
-                    .collect(),
-                (pubdata_mode.da_commitment_scheme() as u8)
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
-                blocks
-                    .iter()
-                    .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
-                    .collect(),
-            )
-        }
-    };
+    // Validate that the protocol version has a known VK hash (i.e. proving is supported).
+    let _ = blocks
+        .first()
+        .unwrap()
+        .1
+        .protocol_version
+        .vk_hash()
+        .map_err(|e| anyhow::anyhow!("unsupported protocol version for proving: {e}"))?;
+
+    // TODO: in the long-term we should generate proof input per batch
+    let batch_prover_input: ProverInput = generate_batch_proof_input(
+        blocks
+            .iter()
+            .map(|(_, _, _, prover_input)| prover_input.as_slice())
+            .collect(),
+        (pubdata_mode.da_commitment_scheme() as u8)
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
+        blocks
+            .iter()
+            .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
+            .collect(),
+    );
 
     // Sanity check: all blocks in the batch should have the same protocol version
     for (_, replay_record, _, _) in blocks.iter().skip(1) {

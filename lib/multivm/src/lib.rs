@@ -1,6 +1,5 @@
 //! This module provides a unified interface for running blocks and simulating transactions.
-//! When adding new ZKsync OS execution version, make sure it is handled in `run_block` and `simulate_tx` methods.
-//! Also, update the `LATEST_EXECUTION_VERSION` constant accordingly.
+//! When adding a new VM version, make sure it is handled in `run_block` and `simulate_tx` methods.
 
 use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV5Running;
 use zk_os_forward_system_0_0_28::run::RunBlockForward as RunBlockForwardV3;
@@ -19,7 +18,13 @@ mod adapter;
 pub mod apps;
 
 pub use adapter::AbiTxSource;
-use zksync_os_types::ExecutionVersion;
+
+/// VM version constants. These correspond to the `execution_version` field in `BlockContext`,
+/// derived from the protocol version's minor number via `ProtocolSemanticVersion::vm_version()`.
+const VM_V3: u32 = 3;
+const VM_V4: u32 = 4;
+const VM_V5: u32 = 5;
+const VM_V6: u32 = 6;
 
 pub fn run_block<
     Storage: ReadStorage,
@@ -35,12 +40,8 @@ pub fn run_block<
     tx_result_callback: TrCallback,
     tracer: &mut Tracer,
 ) -> Result<BlockOutput, anyhow::Error> {
-    let execution_version: ExecutionVersion = block_context
-        .execution_version
-        .try_into()
-        .expect("Unsupported ZKsync OS execution version");
-    match execution_version {
-        ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
+    match block_context.execution_version {
+        1..=VM_V3 => {
             let object = RunBlockForwardV3 {};
             object
                 .run_block(
@@ -55,7 +56,7 @@ pub fn run_block<
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        ExecutionVersion::V4 => {
+        VM_V4 => {
             let object = RunBlockForwardV4 {};
             object
                 .run_block(
@@ -70,7 +71,7 @@ pub fn run_block<
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        ExecutionVersion::V5 => {
+        VM_V5 => {
             // We use two different versions of zksync-os for execution and simulation:
             // * v0.2.5 is used to forward-run and prove blocks
             // * v0.2.6-simulation-only is used for simulation
@@ -91,7 +92,7 @@ pub fn run_block<
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        ExecutionVersion::V6 => {
+        VM_V6 => {
             let object = RunBlockForwardV6 {};
             object
                 .run_block(
@@ -106,6 +107,7 @@ pub fn run_block<
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
+        other => panic!("Unsupported VM version: {other}"),
     }
 }
 
@@ -116,12 +118,8 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
     preimage_source: PreimgSrc,
     tracer: &mut Tracer,
 ) -> Result<Result<TxOutput, InvalidTransaction>, anyhow::Error> {
-    let execution_version: ExecutionVersion = block_context
-        .execution_version
-        .try_into()
-        .expect("Unsupported ZKsync OS execution version");
-    match execution_version {
-        ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
+    match block_context.execution_version {
+        1..=VM_V3 => {
             let object = RunBlockForwardV3 {};
             object
                 .simulate_tx(
@@ -135,7 +133,7 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        ExecutionVersion::V4 => {
+        VM_V4 => {
             let object = RunBlockForwardV4 {};
             object
                 .simulate_tx(
@@ -149,7 +147,7 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        ExecutionVersion::V5 => {
+        VM_V5 => {
             // We use two different versions of zksync-os for execution and simulation:
             // * v0.2.5 is used to forward-run and prove blocks
             // * v0.2.6-simulation-only is used for simulation
@@ -169,7 +167,7 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        ExecutionVersion::V6 => {
+        VM_V6 => {
             let object = RunBlockForwardV6 {};
             object
                 .simulate_tx(
@@ -183,5 +181,6 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
+        other => panic!("Unsupported VM version for simulation: {other}"),
     }
 }
