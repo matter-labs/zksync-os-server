@@ -2,7 +2,6 @@
 //! stable unique ID for a type, so instead we define it in this separate file.
 //!
 //! Do not change this file under any circumstances. Copy it instead. May be deleted when obsolete.
-//! todo: enforce in CI
 
 // Difference from v1:
 // - Added `starting_migration_number` field to `ReplayRecord`.
