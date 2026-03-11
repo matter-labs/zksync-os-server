@@ -1,5 +1,8 @@
 use std::time::Duration;
-use vise::{Buckets, EncodeLabelValue, Gauge, Histogram, LabeledFamily, Metrics, Unit};
+use vise::{
+    Buckets, EncodeLabelSet, EncodeLabelValue, Family, Gauge, Histogram, LabeledFamily, Metrics,
+    Unit,
+};
 
 const PROVER_JOB_LABELS: [&str; 3] = ["stage", "type", "id"];
 pub type ProverJobLabels = (ProverStage, ProverType, String);
@@ -95,8 +98,29 @@ pub enum JobMapMethod {
     Status,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue, EncodeLabelSet)]
+#[metrics(rename_all = "snake_case", label = "proof_storage_method")]
+pub enum ProofStorageMethod {
+    SaveBatchWithProof,
+    GetBatchWithProof,
+    SaveFailed,
+    GetFailed,
+}
+#[derive(Metrics)]
+#[metrics(prefix = "proof_storage")]
+pub struct ProofStorageMetrics {
+    /// Latency of operations by instance and type.
+    #[metrics(unit = Unit::Seconds, buckets = Buckets::LATENCIES)]
+    pub latency: Family<ProofStorageMethod, Histogram<Duration>>,
+    #[metrics(unit = Unit::Bytes)]
+    pub disk_usage: Family<ProofStorageMethod, Gauge<u64>>,
+}
+
 #[vise::register]
 pub(crate) static PROVER_METRICS: vise::Global<ProverMetrics> = vise::Global::new();
 
 #[vise::register]
 pub(crate) static PROVER_API_METRICS: vise::Global<ProverApiMetrics> = vise::Global::new();
+
+#[vise::register]
+pub(crate) static PROOF_STORAGE_METRICS: vise::Global<ProofStorageMetrics> = vise::Global::new();

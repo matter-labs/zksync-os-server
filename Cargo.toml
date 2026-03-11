@@ -22,7 +22,6 @@ members = [
     "integration-tests",
     "tools/generate-deposit",
     "lib/observability",
-    "lib/object_store",
     "lib/state_full_diffs",
     "lib/status",
     "lib/multivm",
@@ -181,20 +180,10 @@ tower-http = "0.6.6"
 hyper = "1.6.0"
 hyper-util = "0.1.19"
 semver = { version = "1", features = ["serde"] }
-async-stream = "0.3.6"
 num_cpus = "1.17.0"
 rocksdb = "0.24.0"
 thread_local = "1.1.9"
 pin-project = "1.1.10"
-aws-config = { version = "1.8.6", default-features = false, features = [
-    "behavior-version-latest",
-] }
-aws-runtime = { version = "1.5.10" }
-aws-sdk-s3 = { version = "1.106.0", default-features = false, features = [
-    "behavior-version-latest",
-    "rt-tokio",
-    "default-https-client",
-] }
 assert_matches = "1.5"
 serde_yaml = "0.9"
 secrecy = "0.10.3"
@@ -262,7 +251,6 @@ zksync_os_storage = { version = "=0.16.0", path = "lib/storage" }
 zksync_os_storage_api = { version = "=0.16.0", path = "lib/storage_api" }
 zksync_os_types = { version = "=0.16.0", path = "lib/types" }
 zksync_os_genesis = { version = "=0.16.0", path = "lib/genesis" }
-zksync_os_object_store = { version = "=0.16.0", path = "lib/object_store" }
 zksync_os_status_server = { version = "=0.16.0", path = "lib/status" }
 zksync_os_multivm = { version = "=0.16.0", path = "lib/multivm" }
 zksync_os_pipeline = { version = "=0.16.0", path = "lib/pipeline" }

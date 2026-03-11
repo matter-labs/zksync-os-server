@@ -15,7 +15,7 @@
 
 use crate::prover_api::fri_proof_verifier;
 use crate::prover_api::metrics::{ProverStage, ProverType};
-use crate::prover_api::proof_storage::{ProofStorage, StoredFailedProof};
+use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_job_map::ProverJobMap;
 use alloy::primitives::Bytes;
 use jsonrpsee::core::Serialize;
@@ -286,11 +286,7 @@ impl FriJobManager {
                 proof_bytes: proof_bytes.clone(),
             };
 
-            if let Err(save_err) = self
-                .proof_storage
-                .save_failed_proof(&StoredFailedProof { failed_proof })
-                .await
-            {
+            if let Err(save_err) = self.proof_storage.save_failed_proof(&failed_proof).await {
                 tracing::error!(
                     batch_number,
                     ?save_err,
