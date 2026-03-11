@@ -464,6 +464,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let next_migration_number = first_replay_record
         .as_ref()
         .map_or(0, |record| record.starting_migration_number);
+    let next_interop_fee_number = first_replay_record
+        .as_ref()
+        .map_or(0, |record| record.starting_interop_fee_number);
 
     let current_protocol_version = if let Some(record) = &first_replay_record {
         &record.protocol_version
@@ -473,7 +476,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
-    let interop_fee_subpool = InteropFeeSubpool::default();
+    let interop_fee_subpool = InteropFeeSubpool::new(next_interop_fee_number);
     let interop_roots_subpool = InteropRootsSubpool::new(
         // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
         1,
@@ -662,6 +665,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         next_l1_priority_id,
         next_interop_event_index,
         next_migration_number,
+        next_interop_fee_number,
         pool,
         block_hashes_for_next_block,
         previous_block_timestamp,

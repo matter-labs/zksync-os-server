@@ -192,7 +192,7 @@ impl<T: L2Subpool> Pool<T> {
                     SystemTxType::ImportInteropRoots(_) => {
                         interop_txs.push(system_tx);
                     }
-                    SystemTxType::SetInteropFee => {
+                    SystemTxType::SetInteropFee(_) => {
                         interop_fee_txs.push(system_tx);
                     }
                     SystemTxType::SetSLChainId(_) => {
@@ -217,7 +217,8 @@ impl<T: L2Subpool> Pool<T> {
             .interop_roots_subpool
             .on_canonical_state_change(interop_txs)
             .await;
-        self.interop_fee_subpool
+        let last_interop_fee_number = self
+            .interop_fee_subpool
             .on_canonical_state_change(interop_fee_txs, strict_subpool_cleanup)
             .await;
         let last_migration_number = self
@@ -256,6 +257,7 @@ impl<T: L2Subpool> Pool<T> {
             last_interop_log_index,
             last_l1_priority_id,
             last_migration_number,
+            last_interop_fee_number,
         }
     }
 }
@@ -277,6 +279,8 @@ pub struct StateChangeOutcome {
     pub last_l1_priority_id: Option<L1TxSerialId>,
     /// Last migration number that was executed after canonical state change.
     pub last_migration_number: Option<u64>,
+    /// Last interop fee update number that was executed after canonical state change.
+    pub last_interop_fee_number: Option<u64>,
 }
 
 /// Transaction stream that is capable of marking last L2 transaction as invalid.

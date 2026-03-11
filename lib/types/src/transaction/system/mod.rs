@@ -51,8 +51,11 @@ impl SystemTxEnvelope {
     }
 
     /// A constructor for system transaction that sets the interop fee.
-    pub fn set_interop_fee(interop_fee: U256) -> Self {
-        Self::create_from_input(SystemTxInput::SetInteropFee(interop_fee))
+    pub fn set_interop_fee(interop_fee: U256, interop_fee_number: u64) -> Self {
+        Self::create_from_input(SystemTxInput::SetInteropFee(
+            interop_fee,
+            interop_fee_number,
+        ))
     }
 
     fn create_from_input(tx_input: SystemTxInput) -> Self {
@@ -96,7 +99,7 @@ impl SystemTxEnvelope {
             setInteropFeeCall::SELECTOR => {
                 let call = setInteropFeeCall::abi_decode(data)
                     .expect("failed to decode interop fee system transaction");
-                SystemTxInput::SetInteropFee(call._interopFee)
+                SystemTxInput::SetInteropFee(call._interopFee, self.inner.salt)
             }
             _ => panic!(
                 "unknown system transaction selector: {}",
@@ -116,7 +119,9 @@ impl SystemTxEnvelope {
                 SystemTxInput::SetSLChainId(_, migration_number) => {
                     SystemTxType::SetSLChainId(migration_number)
                 }
-                SystemTxInput::SetInteropFee(_) => SystemTxType::SetInteropFee,
+                SystemTxInput::SetInteropFee(_, interop_fee_number) => {
+                    SystemTxType::SetInteropFee(interop_fee_number)
+                }
             }
         })
     }
@@ -431,7 +436,7 @@ mod tests {
 
     #[test]
     fn set_interop_fee_tx_serialization() {
-        let tx = SystemTxEnvelope::set_interop_fee(U256::from(42));
+        let tx = SystemTxEnvelope::set_interop_fee(U256::from(42), 0);
 
         assert_eq!(
             serde_json::to_string_pretty(&tx).unwrap(),

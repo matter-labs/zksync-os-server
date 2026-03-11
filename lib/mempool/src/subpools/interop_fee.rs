@@ -1,3 +1,4 @@
+use alloy::primitives::U256;
 use futures::{Stream, StreamExt};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -13,59 +14,63 @@ pub struct InteropFeeSubpool {
 }
 
 struct Inner {
-    sender: Option<mpsc::Sender<SystemTxEnvelope>>,
-    pending_tx: Option<SystemTxEnvelope>,
+    sender: Option<mpsc::Sender<U256>>,
+    pending_fee: Option<U256>,
+    next_interop_fee_number: u64,
 }
 
-impl Default for InteropFeeSubpool {
-    fn default() -> Self {
+impl InteropFeeSubpool {
+    pub fn new(next_interop_fee_number: u64) -> Self {
         Self {
             notify: Arc::new(Notify::new()),
             inner: Arc::new(RwLock::new(Inner {
                 sender: None,
-                pending_tx: None,
+                pending_fee: None,
+                next_interop_fee_number,
             })),
         }
     }
-}
 
-impl InteropFeeSubpool {
     pub async fn best_transactions_stream(&self) -> InteropFeeTransactionsStream {
         let (sender, receiver) = mpsc::channel(1);
         let mut inner = self.inner.write().await;
+        let next_interop_fee_number = inner.next_interop_fee_number;
         inner.sender = Some(sender);
-        let state = if let Some(pending_tx) = inner.pending_tx.clone() {
-            StreamState::Pending(pending_tx)
+        let state = if let Some(pending_fee) = inner.pending_fee {
+            StreamState::Pending(SystemTxEnvelope::set_interop_fee(
+                pending_fee,
+                next_interop_fee_number,
+            ))
         } else {
-            StreamState::Empty(ReceiverStream::new(receiver))
+            StreamState::Empty(ReceiverStream::new(receiver), next_interop_fee_number)
         };
         InteropFeeTransactionsStream { state }
     }
 
-    pub async fn insert(&self, tx: SystemTxEnvelope) {
-        assert_eq!(
-            tx.system_subtype(),
-            &SystemTxType::SetInteropFee,
-            "tried to insert unrelated system tx ({:?}) into `InteropFeeSubpool`",
-            tx.system_subtype()
-        );
+    pub async fn insert(&self, interop_fee: U256) {
         let mut inner = self.inner.write().await;
         if let Some(sender) = &inner.sender
-            && sender.send(tx.clone()).await.is_err()
+            && sender.send(interop_fee).await.is_err()
         {
             inner.sender.take();
         }
-        inner.pending_tx = Some(tx);
+        inner.pending_fee = Some(interop_fee);
         self.notify.notify_waiters();
     }
 
-    async fn pop_wait(&self) -> SystemTxEnvelope {
+    async fn consume_expected_tx(&self, tx: &SystemTxEnvelope) -> u64 {
         loop {
             let notified = self.notify.notified();
             {
                 let mut inner = self.inner.write().await;
-                if let Some(pending_tx) = inner.pending_tx.take() {
-                    return pending_tx;
+                if let Some(pending_fee) = inner.pending_fee {
+                    let expected_number = inner.next_interop_fee_number;
+                    let expected_tx =
+                        SystemTxEnvelope::set_interop_fee(pending_fee, expected_number);
+                    assert_eq!(tx, &expected_tx);
+                    inner.pending_fee.take();
+                    inner.next_interop_fee_number += 1;
+                    return expected_number;
                 }
             }
             notified.await;
@@ -76,15 +81,29 @@ impl InteropFeeSubpool {
         &self,
         txs: Vec<&SystemTxEnvelope>,
         strict_subpool_cleanup: bool,
-    ) {
+    ) -> Option<u64> {
         if !strict_subpool_cleanup {
-            return;
+            let last_interop_fee_number = txs.into_iter().map(|tx| match tx.system_subtype() {
+                SystemTxType::SetInteropFee(interop_fee_number) => *interop_fee_number,
+                other => panic!(
+                    "tried to process unrelated system tx ({other:?}) in `InteropFeeSubpool`"
+                ),
+            });
+            let last_interop_fee_number = last_interop_fee_number.last();
+            if let Some(last_interop_fee_number) = last_interop_fee_number {
+                let mut inner = self.inner.write().await;
+                inner.next_interop_fee_number = inner
+                    .next_interop_fee_number
+                    .max(last_interop_fee_number + 1);
+            }
+            return last_interop_fee_number;
         }
 
+        let mut last_interop_fee_number = None;
         for tx in txs {
-            let pending_tx = self.pop_wait().await;
-            assert_eq!(tx, &pending_tx);
+            last_interop_fee_number = Some(self.consume_expected_tx(tx).await);
         }
+        last_interop_fee_number
     }
 }
 
@@ -93,7 +112,7 @@ pub struct InteropFeeTransactionsStream {
 }
 
 enum StreamState {
-    Empty(ReceiverStream<SystemTxEnvelope>),
+    Empty(ReceiverStream<U256>, u64),
     Pending(SystemTxEnvelope),
     Closed,
 }
@@ -104,14 +123,17 @@ impl Stream for InteropFeeTransactionsStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
         match &mut this.state {
-            StreamState::Empty(receiver) => {
-                let Some(tx) = ready!(receiver.poll_next_unpin(cx)) else {
+            StreamState::Empty(receiver, next_interop_fee_number) => {
+                let Some(interop_fee) = ready!(receiver.poll_next_unpin(cx)) else {
                     tracing::debug!("interop fee updater stream is closed");
                     this.state = StreamState::Closed;
                     return Poll::Ready(None);
                 };
+                let next_interop_fee_number = *next_interop_fee_number;
                 this.state = StreamState::Closed;
-                Poll::Ready(Some(tx.into()))
+                Poll::Ready(Some(
+                    SystemTxEnvelope::set_interop_fee(interop_fee, next_interop_fee_number).into(),
+                ))
             }
             StreamState::Pending(tx) => {
                 let tx = tx.clone();

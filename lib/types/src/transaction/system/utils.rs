@@ -25,15 +25,15 @@ pub enum SystemTxType {
     ImportInteropRoots(u64),
     /// Transaction subtype for setting the settlement layer chain id, contains migration number
     SetSLChainId(u64),
-    /// Transaction subtype for setting the interop fee.
-    SetInteropFee,
+    /// Transaction subtype for setting the interop fee, contains interop fee update number.
+    SetInteropFee(u64),
 }
 
 /// Helper type to encode/decode system transaction input and determine it's subtype
 pub(crate) enum SystemTxInput {
     ImportInteropRoots(Vec<InteropRoot>),
     SetSLChainId(ChainId, u64),
-    SetInteropFee(U256),
+    SetInteropFee(U256, u64),
 }
 
 impl SystemTxInput {
@@ -53,12 +53,12 @@ impl SystemTxInput {
                 .abi_encode(),
                 *salt,
             ),
-            Self::SetInteropFee(interop_fee) => (
+            Self::SetInteropFee(interop_fee, salt) => (
                 setInteropFeeCall {
                     _interopFee: *interop_fee,
                 }
                 .abi_encode(),
-                0,
+                *salt,
             ),
         }
     }
@@ -67,7 +67,7 @@ impl SystemTxInput {
         match self {
             Self::ImportInteropRoots(_) => L2_INTEROP_ROOT_STORAGE_ADDRESS,
             Self::SetSLChainId(_, _) => SYSTEM_CONTEXT_ADDRESS,
-            Self::SetInteropFee(_) => L2_INTEROP_CENTER_ADDRESS,
+            Self::SetInteropFee(_, _) => L2_INTEROP_CENTER_ADDRESS,
         }
     }
 }

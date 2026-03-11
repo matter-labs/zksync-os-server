@@ -11,7 +11,7 @@ use tokio::sync::watch;
 use zksync_os_contract_interface::{IGWAssetTracker, IInteropCenter::interopProtocolFeeCall};
 use zksync_os_mempool::subpools::interop_fee::InteropFeeSubpool;
 use zksync_os_rpc::{EthCallHandler, ReadRpcStorage};
-use zksync_os_types::{SystemTxEnvelope, TokenPricesForFees};
+use zksync_os_types::TokenPricesForFees;
 
 #[derive(Debug, Clone)]
 pub struct InteropFeeUpdaterConfig {
@@ -114,9 +114,7 @@ impl<RpcStorage: ReadRpcStorage> InteropFeeUpdater<RpcStorage> {
             %gateway_settlement_fee,
             "enqueueing interop fee system transaction",
         );
-        self.interop_fee_subpool
-            .insert(SystemTxEnvelope::set_interop_fee(target_interop_fee))
-            .await;
+        self.interop_fee_subpool.insert(target_interop_fee).await;
         self.last_enqueued_fee = Some(target_interop_fee);
 
         Ok(())

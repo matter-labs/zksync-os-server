@@ -5,6 +5,7 @@
 
 // Difference from v1:
 // - Added `starting_migration_number` field to `ReplayRecord`.
+// - Added `starting_interop_fee_number` field to `ReplayRecord`.
 
 use crate::wire::{BlockHashes, ForcedPreimage};
 use alloy::primitives::{Address, B256, U256};
@@ -22,6 +23,7 @@ pub struct ReplayRecord {
     pub force_preimages: Vec<ForcedPreimage>,
     pub starting_interop_event_index: InteropRootsLogIndex,
     pub starting_migration_number: u64,
+    pub starting_interop_fee_number: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable)]
