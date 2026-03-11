@@ -173,14 +173,14 @@ pub async fn find_l1_commit_block_by_batch_number(
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<BlockNumber> {
-    if batch_number == 0 {
-        // For genesis (no batches committed yet) return 0: the watcher will scan forward from there.
-        return Ok(0);
-    }
-
     if zk_chain.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
         // Binary search may error on Anvil with `--load-state` - as it doesn't support `eth_call`
         // for historical blocks. We run linear search as a fallback.
+        if batch_number == 0 {
+            // For genesis we must return L1 block where `zk_chain` got deployed. For Anvil it's okay
+            // to return 0 here as the chain should not be long anyway.
+            return Ok(0);
+        }
         return find_last_matching_event::<ReportCommittedBatchRangeZKsyncOS>(
             *zk_chain.address(),
             zk_chain.provider(),
@@ -266,9 +266,6 @@ pub async fn find_l1_execute_block_by_batch_number(
     zk_chain: ZkChain<DynProvider>,
     batch_number: u64,
 ) -> anyhow::Result<BlockNumber> {
-    if batch_number == 0 {
-        return Ok(0);
-    }
     // Execution cannot be reverted, so unlike in `find_l1_commit_block_by_batch_number`, we do not need
     // to take L1 reverts into account here.
     find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| async move {
