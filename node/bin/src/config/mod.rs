@@ -5,11 +5,11 @@ use alloy::primitives::{Address, Bytes, U128};
 use alloy::signers::k256::ecdsa::SigningKey;
 use num::{BigInt, BigUint, rational::Ratio};
 use serde::{Deserialize, Serialize};
-use smart_config::metadata::TimeUnit;
+use smart_config::metadata::{SizeUnit, TimeUnit};
 use smart_config::value::SecretString;
 use smart_config::{
-    ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig, EtherAmount,
-    ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
+    ByteSize, ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig,
+    EtherAmount, ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
@@ -20,7 +20,6 @@ use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_mempool::SubPoolLimit;
 use zksync_os_network::{NodeRecord, SecretKey};
-use zksync_os_object_store::ObjectStoreConfig;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 use zksync_os_types::{NodeRole, PubdataMode};
@@ -635,9 +634,9 @@ pub struct ProverApiConfig {
     #[config(default_t = 10)]
     pub max_fris_per_snark: usize,
 
-    /// Default: backed by files under `./db/shared` folder.
+    /// Default: store files in ./db/fri_proofs/ with 1GiB disk usage cap
     #[config(nest, default)]
-    pub object_store: ObjectStoreConfig,
+    pub proof_storage: ProofStorageConfig,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -679,6 +678,21 @@ pub struct FakeSnarkProversConfig {
     /// Only pick up jobs that are this time old.
     #[config(default_t = Duration::from_secs(10))]
     pub max_batch_age: Duration,
+}
+
+#[derive(Debug, Clone, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct ProofStorageConfig {
+    #[config(default_t = "./db/fri_proofs/".into())]
+    pub path: PathBuf,
+    /// The disk usage in bytes for batches with proofs,
+    /// old entries are removed to keep usage capped
+    #[config(default_t = 1 * SizeUnit::GiB)]
+    pub batch_with_proof_capacity: ByteSize,
+    /// The disk usage in bytes for failed proofs,
+    /// old entries are removed to keep usage capped
+    #[config(default_t = 1 * SizeUnit::GiB)]
+    pub failed_capacity: ByteSize,
 }
 
 /// Set of options related to the observability stack,
