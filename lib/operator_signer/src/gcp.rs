@@ -25,14 +25,12 @@ pub(crate) async fn create_gcp_signer(resource_name: &str) -> anyhow::Result<Gcp
     .await
     .context("failed to create GCP KMS client")?;
 
-    GcpSigner::new(client, specifier, None)
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "failed to initialize GCP KMS signer for '{resource_name}': {e}. \
+    GcpSigner::new(client, specifier, None).await.map_err(|e| {
+        anyhow::anyhow!(
+            "failed to initialize GCP KMS signer for '{resource_name}': {e}. \
                  Ensure the key uses EC_SIGN_SECP256K1_SHA256 algorithm"
-            )
-        })
+        )
+    })
 }
 
 /// Parsed components of a KMS resource name.
