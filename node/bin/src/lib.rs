@@ -77,7 +77,7 @@ use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
-use zksync_os_network::service::NetworkService;
+use zksync_os_network::service::{NetworkService, ZksProtocolConfig};
 use zksync_os_network::wire::replays::RecordOverride;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
@@ -380,21 +380,23 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
         let network_service = NetworkService::new(
             config.network_config.clone().into(),
-            node_role,
+            ZksProtocolConfig {
+                node_role,
+                starting_block,
+                // This will be gone once we migrate away from record overrides
+                record_overrides: config
+                    .sequencer_config
+                    .en_replay_record_overrides
+                    .iter()
+                    .map(|(block_number, db_key)| RecordOverride {
+                        block_number: *block_number,
+                        db_key: db_key.clone(),
+                    })
+                    .collect(),
+                replay_sender,
+            },
             block_replay_storage.clone(),
-            starting_block,
-            // This will be gone once we migrate away from record overrides
-            config
-                .sequencer_config
-                .en_replay_record_overrides
-                .iter()
-                .map(|(block_number, db_key)| RecordOverride {
-                    block_number: *block_number,
-                    db_key: db_key.clone(),
-                })
-                .collect(),
             zk_provider_factory,
-            replay_sender,
         )
         .await
         .expect("failed to create network service");
