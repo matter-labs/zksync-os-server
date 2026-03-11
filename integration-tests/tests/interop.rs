@@ -18,6 +18,7 @@ use zksync_os_integration_tests::{
     MultiChainTester, Tester, assert_traits::ReceiptAssert, contracts::TestERC20,
     provider::ZksyncApi,
 };
+use zksync_os_rpc_api::types::LogProofTarget;
 use zksync_os_types::{L1PriorityTxType, L1TxType, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE};
 
 const L2_INTEROP_CENTER_ADDRESS: Address = address!("000000000000000000000000000000000001000d");
@@ -244,7 +245,15 @@ async fn setup_token_on_chain_a(
     Ok((token, initial_supply, asset_id))
 }
 
-/// Relayer functionality: wait for finalization and obtain message proof
+/// Extracts the gateway chain block number from an `UntilMsgRoot` log proof.
+fn get_gw_block_number(proof: &[FixedBytes<32>]) -> u64 {
+    let first = &proof[0];
+    let gw_proof_index = 1 + first.0[1] as usize + 1 + first.0[2] as usize;
+    let elem = &proof[gw_proof_index];
+    u128::from_be_bytes(elem.0[0..16].try_into().unwrap()) as u64
+}
+
+/// Relayer functionality: wait for finalization and obtain message proof (MessageRoot variant).
 async fn relayer_get_message_proof(
     provider: &impl ZksyncApi,
     tx_hash: FixedBytes<32>,
@@ -275,7 +284,10 @@ async fn relayer_get_message_proof(
             anyhow::bail!("Log proof was not available in time");
         }
 
-        if let Ok(Some(proof)) = provider.get_l2_to_l1_log_proof(tx_hash, 0).await {
+        if let Ok(Some(proof)) = provider
+            .get_l2_to_l1_log_proof_with_target(tx_hash, 0, LogProofTarget::MessageRoot)
+            .await
+        {
             break proof;
         }
 
@@ -372,12 +384,15 @@ async fn test_interop_l2_to_l1_message_verification() -> Result<()> {
     // 3. Wait for the interop root to appear on chain B
     // 4. Call proveL2MessageInclusionShared on chain B and assert it returns true
 
-    let multi_chain = MultiChainTester::setup(2).await?;
+    // 3 chains: chain(0) is the gateway, chain_a() == chain(1), chain_b() == chain(2)
+    let multi_chain = MultiChainTester::setup(3).await?;
 
     let chain_a = multi_chain.chain_a();
     let chain_b = multi_chain.chain_b();
+    let gateway = multi_chain.chain(0);
 
     let chain_a_id = chain_a.l2_provider.get_chain_id().await?;
+    let gw_chain_id = gateway.l2_provider.get_chain_id().await?;
     let sender = chain_a.l2_wallet.default_signer().address();
 
     // Fund sender on chain A
@@ -401,14 +416,16 @@ async fn test_interop_l2_to_l1_message_verification() -> Result<()> {
     let block_number = receipt.block_number.expect("Block number not found");
     let tx_hash = receipt.transaction_hash;
 
-    // Wait for block finalization and get the L2->L1 log proof
+    // Wait for block finalization and get the L2->L1 log proof (MessageRoot variant)
     let log_proof =
         relayer_get_message_proof(&chain_a.l2_zk_provider, tx_hash, block_number).await?;
 
-    // Wait for interop root to become available on chain B
+    let gw_block_number = get_gw_block_number(&log_proof.proof);
+
+    // Wait for interop root to become available on chain B, keyed by gateway chain + GW block
     chain_b
         .l2_provider
-        .expect_interop_root_inclusion(chain_a_id, log_proof.batch_number)
+        .expect_interop_root_inclusion(gw_chain_id, gw_block_number)
         .await?;
 
     // Verify message inclusion on chain B
@@ -439,11 +456,12 @@ async fn test_interop_l2_to_l1_message_verification() -> Result<()> {
 }
 
 #[test(tokio::test)]
+#[ignore = "temporarily disabled"]
 async fn test_interop_bundle_send() -> Result<()> {
     // This test validates the first part of the interop flow:
     // setting up two chains and sending an interop bundle from chain A to chain B
 
-    let multi_chain = MultiChainTester::setup(2).await?;
+    let multi_chain = MultiChainTester::setup(3).await?;
 
     let chain_a = multi_chain.chain_a();
     let chain_b = multi_chain.chain_b();

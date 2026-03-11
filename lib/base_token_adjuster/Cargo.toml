@@ -26,3 +26,4 @@ num.workspace = true
 zksync_os_external_price_api = { workspace = true }
 zksync_os_contract_interface.workspace = true
 zksync_os_types.workspace = true
+zksync_os_operator_signer.workspace = true

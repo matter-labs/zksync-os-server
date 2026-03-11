@@ -6,7 +6,7 @@ use alloy::primitives::{Address, TxHash};
 use alloy::providers::Provider;
 use alloy::transports::TransportResult;
 use anyhow::Context as _;
-use zksync_os_rpc_api::types::L2ToL1LogProof;
+use zksync_os_rpc_api::types::{L2ToL1LogProof, LogProofTarget};
 
 /// RPC interface that gives access to methods specific to ZKsync OS.
 #[allow(async_fn_in_trait)]
@@ -22,6 +22,17 @@ pub trait ZksyncApi: Provider<Zksync> {
     ) -> TransportResult<Option<L2ToL1LogProof>> {
         self.client()
             .request("zks_getL2ToL1LogProof", (tx_hash, index))
+            .await
+    }
+
+    async fn get_l2_to_l1_log_proof_with_target(
+        &self,
+        tx_hash: TxHash,
+        index: u64,
+        target: LogProofTarget,
+    ) -> TransportResult<Option<L2ToL1LogProof>> {
+        self.client()
+            .request("zks_getL2ToL1LogProof", (tx_hash, index, target))
             .await
     }
 }

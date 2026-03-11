@@ -81,9 +81,8 @@ use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
-use zksync_os_network::service::NetworkService;
-use zksync_os_network::wire::replays::RecordOverride;
-use zksync_os_object_store::ObjectStoreFactory;
+use zksync_os_network::RecordOverride;
+use zksync_os_network::service::{NetworkService, ZksProtocolConfig};
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_reth_compat::provider::ZkProviderFactory;
@@ -384,21 +383,23 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
         let network_service = NetworkService::new(
             config.network_config.clone().into(),
-            node_role,
+            ZksProtocolConfig {
+                node_role,
+                starting_block,
+                // This will be gone once we migrate away from record overrides
+                record_overrides: config
+                    .sequencer_config
+                    .en_replay_record_overrides
+                    .iter()
+                    .map(|(block_number, db_key)| RecordOverride {
+                        block_number: *block_number,
+                        db_key: db_key.clone(),
+                    })
+                    .collect(),
+                replay_sender,
+            },
             block_replay_storage.clone(),
-            starting_block,
-            // This will be gone once we migrate away from record overrides
-            config
-                .sequencer_config
-                .en_replay_record_overrides
-                .iter()
-                .map(|(block_number, db_key)| RecordOverride {
-                    block_number: *block_number,
-                    db_key: db_key.clone(),
-                })
-                .collect(),
             zk_provider_factory,
-            replay_sender,
         )
         .await
         .expect("failed to create network service");
@@ -460,6 +461,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             record.starting_interop_event_index.clone()
         });
 
+    let next_migration_number = first_replay_record
+        .as_ref()
+        .map_or(0, |record| record.starting_migration_number);
+
     let current_protocol_version = if let Some(record) = &first_replay_record {
         &record.protocol_version
     } else {
@@ -488,7 +493,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         upgrade_subpool.insert(upgrade_tx).await;
     }
 
-    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
+    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
+        && config.general_config.gateway_rpc_url.is_some()
+    {
         tasks.spawn(
             InteropWatcher::create_watcher(
                 node_startup_state.l1_state.bridgehub_sl.clone(), // TODO: what bridgehub to use here?
@@ -506,12 +513,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
         && config.l1_watcher_config.enable_gw_migration_watcher
     {
-        // todo: add proper handling of gateway migration watcher/differentiating between gateway and l1
-        let is_gateway = false;
-        if is_gateway {
+        // in case l1 chain id is not equal to sl chain id(which indicates we are currently settling on GW), we watch for migration events of type GW -> L1, and L1 -> GW otherwise.
+        if node_startup_state.l1_state.l1_chain_id != node_startup_state.l1_state.sl_chain_id {
             tasks.spawn(
                 GatewayMigrationWatcher::<Gateway>::create_watcher(
-                    node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                    node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                    node_startup_state.l1_state.bridgehub_sl.clone(),
+                    chain_id,
+                    next_migration_number,
                     config.l1_watcher_config.clone().into(),
                     sl_chain_id_subpool.clone(),
                 )
@@ -523,7 +532,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         } else {
             tasks.spawn(
                 GatewayMigrationWatcher::<L1>::create_watcher(
-                    node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                    node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                    node_startup_state.l1_state.bridgehub_sl.clone(),
+                    chain_id,
+                    next_migration_number,
                     config.l1_watcher_config.clone().into(),
                     sl_chain_id_subpool.clone(),
                 )
@@ -649,6 +661,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
         next_interop_event_index,
+        next_migration_number,
         pool,
         block_hashes_for_next_block,
         previous_block_timestamp,
@@ -875,14 +888,9 @@ async fn run_main_node_pipeline(
     committed_batch_provider: CommittedBatchProvider,
 ) {
     tracing::info!("Initializing ProofStorage");
-    // todo: this is used purely for prover API
-    //       decide what to do with it - might still be useful to debug failed proofs
-    let proof_storage = ProofStorage::new(
-        ObjectStoreFactory::new(config.prover_api_config.object_store.clone())
-            .create_store()
-            .await
-            .unwrap(),
-    );
+    let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
+        .await
+        .expect("Failed to initialize ProofStorage");
 
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         proof_storage.clone(),

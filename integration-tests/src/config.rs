@@ -23,7 +23,13 @@ impl<'a> ChainLayout<'a> {
     fn chain_id(self) -> Option<u64> {
         match self {
             ChainLayout::Default { .. } => None,
-            ChainLayout::MultiChain { chain_index, .. } => Some(6565u64 + chain_index as u64),
+            ChainLayout::MultiChain { chain_index, .. } => {
+                if chain_index == 0 {
+                    Some(506u64)
+                } else {
+                    Some(6565u64 - 1 + chain_index as u64)
+                }
+            }
         }
     }
 
@@ -150,7 +156,7 @@ fn load_config_from_path(config_path: &Path) -> Config {
     Config {
         genesis_config,
         l1_sender_config: config_repo.single().unwrap().parse().unwrap(),
-        general_config: Default::default(),
+        general_config: config_repo.single().unwrap().parse().unwrap(),
         network_config: Default::default(),
         rpc_config: Default::default(),
         mempool_config: Default::default(),

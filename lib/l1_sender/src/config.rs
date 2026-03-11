@@ -1,13 +1,14 @@
-use alloy::signers::k256::ecdsa::SigningKey;
 use std::marker::PhantomData;
 use std::time::Duration;
+use zksync_os_operator_signer::SignerConfig;
 
 /// Configuration of L1 sender.
 #[derive(Clone, Debug)]
 pub struct L1SenderConfig<Input> {
-    /// Signing key to operate from.
+    /// Operator signer configuration.
     /// Depending on the mode, this can be a commit/prove/execute operator.
-    pub operator_sk: SigningKey,
+    /// Supports both local private keys and GCP KMS keys.
+    pub operator_signer: SignerConfig,
 
     /// Max fee per gas we are willing to spend (in wei).
     pub max_fee_per_gas_wei: u128,

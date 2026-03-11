@@ -224,6 +224,10 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessRawEvents
         (*self.zk_chain.address()).into()
     }
 
+    fn filter_events(&self, logs: Vec<Log>) -> Vec<Log> {
+        logs
+    }
+
     async fn process_raw_event(&mut self, log: Log) -> Result<(), L1WatcherError> {
         let event_signature = log.topics()[0];
         match event_signature {
@@ -248,6 +252,11 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessRawEvents
                                 log.block_number.expect("Missing block number in log"),
                             ),
                         });
+                    } else if self.last_processed_commit_batch == self.last_persisted_batch_on_start
+                    {
+                        // No `ReportCommittedBatchRangeZKsyncOS` event was processed yet, it is very likely that the batch is legacy
+                        // i.e. block range was not reported for it. Skip this batch.
+                        tracing::info!("assuming batch #{batch_number} is legacy and skipping it");
                     } else {
                         return Err(L1WatcherError::Other(anyhow::anyhow!(
                             "discovered executed batch #{batch_number} was not previously discovered as committed"

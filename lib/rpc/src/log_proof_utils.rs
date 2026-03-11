@@ -242,12 +242,12 @@ pub async fn batch_tree_proof(
 
     let message_root = IMessageRoot::new(L2_MESSAGE_ROOT_ADDRESS, gw_provider.clone());
     let tree_call_builder = message_root
-        .chainTree(U256::from(l2_chain_id))
+        .getChainTree(U256::from(l2_chain_id))
         .block((gw_block_range.start() - 1).into());
     let tree_future = tree_call_builder
         .call()
         .into_future()
-        .map_err(|e| anyhow::Error::from(e).context("chainTree"));
+        .map_err(|e| anyhow::Error::from(e).context("getChainTree"));
 
     let filter = Filter::new()
         .from_block(*gw_block_range.start())

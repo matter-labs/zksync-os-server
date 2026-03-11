@@ -1,19 +1,20 @@
 use clap::{Parser, Subcommand};
 use smart_config::{ConfigRepository, ConfigSources, Environment, Json, Yaml};
+use std::process::Command;
 use std::{fs, future, path::Path, time::Duration};
 use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
-use zksync_os_object_store::ObjectStoreMode;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
     ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
     InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, NetworkConfig,
-    ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
-    RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+    ObservabilityConfig, ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig,
+    RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
+    TxValidatorConfig,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -89,6 +90,18 @@ fn load_config_defaults(config_sources: &mut ConfigSources, config_paths: Option
 
 #[tokio::main]
 pub async fn main() {
+    // Explicitly select the `ring` TLS crypto provider for rustls.
+    //
+    // Our dependency tree pulls in both `ring` and `aws-lc-rs` as rustls crypto backends
+    // (via reqwest, gcp_auth, and other crates). When both are present, rustls cannot
+    // auto-detect which one to use and panics on the first TLS connection with:
+    //   "no process-level CryptoProvider is set"
+    //
+    // This must be called before any TLS connection is made (e.g. GCP KMS signing via HTTPS).
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls ring crypto provider");
+
     let opt = Cli::parse();
 
     // =========== load configs ===========
@@ -148,7 +161,7 @@ pub async fn main() {
         }
     }
 
-    let mut config = build_external_config(config_repo);
+    let mut config = build_external_config(config_repo).await;
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
     // =========== init interruption channel ===========
@@ -158,6 +171,9 @@ pub async fn main() {
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
     let ephemeral_enabled = config.general_config.ephemeral;
+    if !ephemeral_enabled && config.general_config.ephemeral_state.is_some() {
+        panic!("`ephemeral_state` requires `ephemeral` mode to be enabled");
+    }
     let _ephemeral_guard = ephemeral_enabled.then(|| enable_ephemeral_mode(&mut config));
     let prometheus_port = config.observability_config.prometheus.port;
 
@@ -234,7 +250,7 @@ async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
     }
 }
 
-fn build_external_config(repo: ConfigRepository<'_>) -> Config {
+async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     let general_config = repo
         .single::<GeneralConfig>()
         .expect("Failed to load general config")
@@ -355,15 +371,32 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse fee config");
 
-    // Validate that operator keys are different (only relevant on the Main Node where they are set)
-    if let (Some(commit_sk), Some(prove_sk), Some(execute_sk)) = (
+    // Validate that operator signers resolve to different Ethereum addresses (Main Node only).
+    // Resolving the address for GCP KMS keys requires a network call, but is necessary to catch
+    // duplicates across different backends (e.g. a local key and a KMS key for the same address).
+    if let (Some(commit), Some(prove), Some(execute)) = (
         &l1_sender_config.operator_commit_sk,
         &l1_sender_config.operator_prove_sk,
         &l1_sender_config.operator_execute_sk,
-    ) && (commit_sk == prove_sk || prove_sk == execute_sk || execute_sk == commit_sk)
-    {
-        // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
-        panic!("Operator addresses for commit, prove and execute must be different");
+    ) {
+        let commit_addr = commit
+            .address()
+            .await
+            .expect("failed to resolve commit operator address");
+        let prove_addr = prove
+            .address()
+            .await
+            .expect("failed to resolve prove operator address");
+        let execute_addr = execute
+            .address()
+            .await
+            .expect("failed to resolve execute operator address");
+        if commit_addr == prove_addr || prove_addr == execute_addr || execute_addr == commit_addr {
+            panic!(
+                "Operator addresses for commit, prove and execute must be different, \
+                 got commit={commit_addr}, prove={prove_addr}, execute={execute_addr}"
+            );
+        }
     }
 
     Config {
@@ -404,13 +437,14 @@ fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
     let tempdir_path = tempdir.path();
     tracing::info!(
         path = %tempdir_path.display(),
-        "Ephemeral mode enabled. Using temporary directory for RocksDB and shared object store"
+        "Ephemeral mode enabled. Using temporary directory for RocksDB and proof storage"
     );
 
     // Update config to use temporary directory
     config.general_config.rocks_db_path = tempdir_path.join("node");
-    config.prover_api_config.object_store.mode = ObjectStoreMode::FileBacked {
-        file_backed_base_path: tempdir_path.join("shared"),
+    config.prover_api_config.proof_storage = ProofStorageConfig {
+        path: tempdir_path.join("fri_proofs"),
+        ..ProofStorageConfig::default()
     };
 
     // Disable services that are not needed in ephemeral mode
@@ -418,6 +452,32 @@ fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
     config.status_server_config.enabled = false;
     // todo: consider force-disabling
     // config.network_config.enabled = false;
+
+    if let Some(ephemeral_state) = &config.general_config.ephemeral_state {
+        tracing::info!("Loading ephemeral state from {}", ephemeral_state.display());
+        #[cfg(target_os = "macos")]
+        let tar = "gtar";
+        #[cfg(not(target_os = "macos"))]
+        let tar = "tar";
+        let status = Command::new(tar)
+            .args([
+                "-xvf",
+                ephemeral_state.to_string_lossy().as_ref(),
+                &format!(
+                    "--one-top-level={}",
+                    config.general_config.rocks_db_path.to_string_lossy()
+                ),
+            ])
+            .status()
+            .expect("failed to call `tar` command; ensure it is present on your machine");
+        if !status.success() {
+            panic!(
+                "`tar` command failed to decompress ephemeral state from `{}` to `{}`",
+                ephemeral_state.display(),
+                config.general_config.rocks_db_path.display(),
+            );
+        }
+    }
 
     Some(tempdir)
 }

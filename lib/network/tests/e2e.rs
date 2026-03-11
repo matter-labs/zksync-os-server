@@ -6,11 +6,14 @@ use reth_provider::test_utils::MockEthProvider;
 use reth_provider::{BlockReader, HeaderProvider};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use test_casing::test_casing;
 use tokio::sync::mpsc;
 use zksync_os_interface::types::BlockContext;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_network::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
-use zksync_os_network::version::{AnyZksProtocolVersion, ZksProtocolV0, ZksProtocolV1};
+use zksync_os_network::version::{
+    AnyZksProtocolVersion, ZksProtocolV0, ZksProtocolV1, ZksProtocolV2, ZksVersion,
+};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::{InteropRootsLogIndex, NodeRole, ProtocolSemanticVersion};
 
@@ -35,8 +38,10 @@ impl ReadReplay for InMemReplay {
     }
 }
 
-fn dummy_record(block_number: BlockNumber) -> ReplayRecord {
-    ReplayRecord::new(
+fn dummy_record<P: AnyZksProtocolVersion>(block_number: BlockNumber) -> ReplayRecord {
+    // Do full round conversion ReplayRecord->P::Record->ReplayRecord to get rid of unsupported
+    // fields for each protocol version (e.g. `starting_migration_number` will be zeroed out for v1).
+    let record = ReplayRecord::new(
         BlockContext {
             block_number,
             ..Default::default()
@@ -51,7 +56,12 @@ fn dummy_record(block_number: BlockNumber) -> ReplayRecord {
         B256::random(),
         vec![],
         InteropRootsLogIndex::default(),
-    )
+        123,
+    );
+    let zks_record: P::Record = record.into();
+    zks_record
+        .try_into()
+        .expect("failed to do full round conversion")
 }
 
 trait PeerExt {
@@ -83,105 +93,121 @@ where
     ) {
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
         let (replay_tx, replay_rx) = mpsc::channel(8);
-        let handler = ZksProtocolHandler::<P, _> {
-            replay: InMemReplay(HashMap::from_iter(replays)),
+        let handler = ZksProtocolHandler::<P, _>::new(
+            InMemReplay(HashMap::from_iter(replays)),
             node_role,
-            starting_block: Arc::new(RwLock::new(starting_block)),
-            record_overrides: vec![],
-            state: ProtocolState::new(protocol_tx, max_active_connections),
-            replay_sender: replay_tx,
-            _phantom: Default::default(),
-        };
+            Arc::new(RwLock::new(starting_block)),
+            vec![],
+            ProtocolState::new(protocol_tx, max_active_connections),
+            replay_tx,
+        );
         self.add_rlpx_sub_protocol(handler);
         (protocol_rx, replay_rx)
     }
 }
 
+#[test_casing(2, [ZksVersion::Zks1, ZksVersion::Zks2])]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn send_replay_record_matching_version() {
-    // Run two peers that both communicate on zks protocol v1 and successfully transfer one replay
-    // record from peer0 to peer1.
-    let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
-    let record1 = dummy_record(1);
+async fn send_replay_record_matching_version(version: ZksVersion) {
+    // Run two peers that both communicate on exactly one matching zks protocol and successfully
+    // transfer one replay record from peer0 to peer1.
+    async fn test_inner<P: AnyZksProtocolVersion>() {
+        let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
+        let record1 = dummy_record::<P>(1);
 
-    let (mut from_peer0, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV1>(
-        NodeRole::MainNode,
-        0,
-        [(1, record1.clone())],
-        100,
-    );
-    let (mut from_peer1, mut replay_rx_peer1) = net.peers_mut()[1]
-        .add_zks_sub_protocol::<ZksProtocolV1>(
+        let (mut from_peer0, _) = net.peers_mut()[0].add_zks_sub_protocol::<P>(
+            NodeRole::MainNode,
+            0,
+            [(1, record1.clone())],
+            100,
+        );
+        let (mut from_peer1, mut replay_rx_peer1) = net.peers_mut()[1].add_zks_sub_protocol::<P>(
             NodeRole::ExternalNode,
             1,
             [(1, record1.clone())],
             100,
         );
 
-    // Spawn and connect all the peers
-    let handle = net.spawn();
-    handle.connect_peers().await;
+        // Spawn and connect all the peers
+        let handle = net.spawn();
+        handle.connect_peers().await;
 
-    assert_matches!(from_peer0.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
-        assert_eq!(peer_id, *handle.peers()[1].peer_id());
-    });
-    assert_matches!(from_peer1.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
-        assert_eq!(peer_id, *handle.peers()[0].peer_id());
-    });
+        assert_matches!(from_peer0.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
+            assert_eq!(peer_id, *handle.peers()[1].peer_id());
+        });
+        assert_matches!(from_peer1.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
+            assert_eq!(peer_id, *handle.peers()[0].peer_id());
+        });
 
-    let received_replay_record = replay_rx_peer1.recv().await.unwrap();
-    assert_eq!(received_replay_record, record1);
+        let received_replay_record = replay_rx_peer1.recv().await.unwrap();
+        assert_eq!(received_replay_record, record1);
+    }
+
+    match version {
+        ZksVersion::Zks0 => unreachable!(),
+        ZksVersion::Zks1 => test_inner::<ZksProtocolV1>().await,
+        ZksVersion::Zks2 => test_inner::<ZksProtocolV2>().await,
+    }
 }
 
+#[test_casing(2, [ZksVersion::Zks1, ZksVersion::Zks2])]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn send_replay_record_different_versions() {
+async fn send_replay_record_different_versions(version: ZksVersion) {
     // Run two peers where peer0 can communicate on zks protocol v0 AND v1, while peer1 can only
     // communicate on v0. Test expects that they agree to communicate using v0 and manage to transfer
     // one replay record where all fields except block number are stripped (v0 only keeps block number
     // in tact).
-    let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
-    let record1 = dummy_record(1);
-    let (_, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV1>(
-        NodeRole::MainNode,
-        0,
-        [(1, record1.clone())],
-        100,
-    );
-    let (mut from_peer0, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV0>(
-        NodeRole::MainNode,
-        0,
-        [(1, record1.clone())],
-        100,
-    );
-
-    let (mut from_peer1, mut replay_rx_peer1) = net.peers_mut()[1]
-        .add_zks_sub_protocol::<ZksProtocolV0>(
-            NodeRole::ExternalNode,
-            1,
+    async fn test_inner<P: AnyZksProtocolVersion>() {
+        let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
+        let record1 = dummy_record::<P>(1);
+        let (_, _) = net.peers_mut()[0].add_zks_sub_protocol::<P>(
+            NodeRole::MainNode,
+            0,
+            [(1, record1.clone())],
+            100,
+        );
+        let (mut from_peer0, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV0>(
+            NodeRole::MainNode,
+            0,
             [(1, record1.clone())],
             100,
         );
 
-    // Spawn and connect all the peers
-    let handle = net.spawn();
-    handle.connect_peers().await;
+        let (mut from_peer1, mut replay_rx_peer1) = net.peers_mut()[1]
+            .add_zks_sub_protocol::<ZksProtocolV0>(
+                NodeRole::ExternalNode,
+                1,
+                [(1, record1.clone())],
+                100,
+            );
 
-    assert_matches!(from_peer0.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
-        assert_eq!(peer_id, *handle.peers()[1].peer_id());
-    });
-    assert_matches!(from_peer1.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
-        assert_eq!(peer_id, *handle.peers()[0].peer_id());
-    });
+        // Spawn and connect all the peers
+        let handle = net.spawn();
+        handle.connect_peers().await;
 
-    let received_replay_record = replay_rx_peer1.recv().await.unwrap();
-    // Received record MUST NOT match what peer0 has in storage. This is expected because v0 loses
-    // all record information except block number.
-    assert_ne!(received_replay_record, record1);
-    // This is the only field that is expected to match for v0.
-    assert_eq!(
-        received_replay_record.block_context.block_number,
-        record1.block_context.block_number
-    );
+        assert_matches!(from_peer0.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
+            assert_eq!(peer_id, *handle.peers()[1].peer_id());
+        });
+        assert_matches!(from_peer1.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
+            assert_eq!(peer_id, *handle.peers()[0].peer_id());
+        });
+
+        let received_replay_record = replay_rx_peer1.recv().await.unwrap();
+        // Received record MUST NOT match what peer0 has in storage. This is expected because v0 loses
+        // all record information except block number.
+        assert_ne!(received_replay_record, record1);
+        // This is the only field that is expected to match for v0.
+        assert_eq!(
+            received_replay_record.block_context.block_number,
+            record1.block_context.block_number
+        );
+    }
+
+    match version {
+        ZksVersion::Zks0 => unreachable!(),
+        ZksVersion::Zks1 => test_inner::<ZksProtocolV1>().await,
+        ZksVersion::Zks2 => test_inner::<ZksProtocolV2>().await,
+    }
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]

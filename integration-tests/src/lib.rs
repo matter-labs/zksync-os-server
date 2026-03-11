@@ -17,9 +17,9 @@ use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::Path;
 #[cfg(feature = "prover-tests")]
-use std::path::{Path, PathBuf};
-#[cfg(feature = "prover-tests")]
+use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
@@ -28,11 +28,10 @@ use tempfile::TempDir;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use zksync_os_network::NodeRecord;
-use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_server::config::{
     BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, FeeConfig,
-    GeneralConfig, NetworkConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
-    SequencerConfig, StatusServerConfig,
+    GeneralConfig, NetworkConfig, ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig,
+    RpcConfig, SequencerConfig, StatusServerConfig,
 };
 use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use zksync_os_state_full_diffs::FullDiffsState;
@@ -86,7 +85,6 @@ pub struct Tester {
 
     #[allow(dead_code)]
     tempdir: Arc<tempfile::TempDir>,
-    main_node_tempdir: Arc<tempfile::TempDir>,
 
     // Needed to be able to connect external nodes
     node_record: NodeRecord,
@@ -149,7 +147,6 @@ impl Tester {
             self.l1.clone(),
             false,
             Some(overrides_fun),
-            Some(self.main_node_tempdir.clone()),
             PROTOCOL_VERSION,
         )
         .await
@@ -159,7 +156,6 @@ impl Tester {
         l1: AnvilL1,
         enable_prover: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
-        main_node_tempdir: Option<Arc<tempfile::TempDir>>,
         protocol_version: &str,
     ) -> anyhow::Result<Self> {
         // Initialize and **hold** locked ports for the duration of node initialization.
@@ -178,11 +174,8 @@ impl Tester {
 
         let tempdir = tempfile::tempdir()?;
         let rocks_db_path = tempdir.path().join("rocksdb");
-        let object_store_path = main_node_tempdir
-            .as_ref()
-            .map(|t| t.path())
-            .unwrap_or(tempdir.path())
-            .join("object_store");
+        // ENs will not use this dir
+        let proof_storage_path = tempdir.path().join("proof_storage_path");
         let (stop_sender, stop_receiver) = watch::channel(false);
 
         // Create a handle to run the sequencer in the background
@@ -211,12 +204,9 @@ impl Tester {
                 ..Default::default()
             },
             address: prover_api_address,
-            object_store: ObjectStoreConfig {
-                mode: ObjectStoreMode::FileBacked {
-                    file_backed_base_path: object_store_path.clone(),
-                },
-                max_retries: 1,
-                local_mirror_path: None,
+            proof_storage: ProofStorageConfig {
+                path: proof_storage_path.clone(),
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -405,7 +395,6 @@ impl Tester {
             batch_verification_url,
             node_record,
             tempdir: tempdir.clone(),
-            main_node_tempdir: main_node_tempdir.unwrap_or(tempdir),
         })
     }
 }
@@ -481,7 +470,6 @@ impl TesterBuilder {
             l1,
             self.enable_prover,
             Some(overrides_fun),
-            None,
             PROTOCOL_VERSION,
         )
         .await
@@ -519,12 +507,12 @@ impl MultiChainTester {
 
     /// Get chain A (first chain)
     pub fn chain_a(&self) -> &Tester {
-        self.chain(0)
+        self.chain(1)
     }
 
     /// Get chain B (second chain)
     pub fn chain_b(&self) -> &Tester {
-        self.chain(1)
+        self.chain(2)
     }
 }
 
@@ -552,55 +540,89 @@ impl MultiChainTesterBuilder {
         })
         .await?;
 
-        // Launch L2 chains concurrently for faster setup
-        let mut futures = Vec::new();
+        // Launch L2 chains using chain configurations from config files
+        let mut chains: Vec<Tester> = Vec::new();
         for i in 0..num_chains {
-            let l1 = l1.clone();
-            futures.push(async move {
-                // Load the chain config to get the chain ID, operator keys, and contract addresses
-                let chain_config = load_chain_config(ChainLayout::MultiChain {
-                    protocol_version: NEXT_PROTOCOL_VERSION,
-                    chain_index: i,
-                });
-                let chain_id = chain_config
-                    .genesis_config
-                    .chain_id
-                    .expect("Chain ID must be set in chain config");
-                let l1_sender_config = chain_config.l1_sender_config.clone();
-                let bridgehub_address = chain_config.genesis_config.bridgehub_address;
-                let bytecode_supplier_address =
-                    chain_config.genesis_config.bytecode_supplier_address;
-
-                let chain_override = move |config: &mut Config| {
-                    config.genesis_config.chain_id = Some(chain_id);
-                    config.genesis_config.bridgehub_address = bridgehub_address;
-                    config.genesis_config.bytecode_supplier_address = bytecode_supplier_address;
-                    config.l1_sender_config = l1_sender_config.clone();
-                    // Use short block time for faster tests
-                    config.sequencer_config.block_time = Duration::from_millis(500);
-                };
-
-                let tester = Tester::launch_node(
-                    l1,
-                    false, // disable prover for faster tests
-                    Some(chain_override),
-                    None,
-                    NEXT_PROTOCOL_VERSION,
-                )
-                .await?;
-
-                tracing::info!(
-                    "L2 chain {} started with chain_id {} on {}",
-                    i,
-                    chain_id,
-                    tester.l2_rpc_address
-                );
-
-                anyhow::Ok(tester)
+            // Load the chain config to get the chain ID, operator keys, and contract addresses
+            let chain_config = load_chain_config(ChainLayout::MultiChain {
+                protocol_version: NEXT_PROTOCOL_VERSION,
+                chain_index: i,
             });
-        }
+            let chain_id = chain_config
+                .genesis_config
+                .chain_id
+                .expect("Chain ID must be set in chain config");
+            let gateway_rpc_url = chain_config
+                .general_config
+                .gateway_rpc_url
+                .map(|_| chains[0].l2_rpc_address.clone());
+            let ephemeral_state = chain_config.general_config.ephemeral_state;
+            let l1_sender_config = chain_config.l1_sender_config.clone();
+            let bridgehub_address = chain_config.genesis_config.bridgehub_address;
+            let bytecode_supplier_address = chain_config.genesis_config.bytecode_supplier_address;
 
-        let chains = futures::future::try_join_all(futures).await?;
+            let chain_override = move |config: &mut Config| {
+                if gateway_rpc_url.is_some() {
+                    config.general_config.gateway_rpc_url = gateway_rpc_url;
+                }
+                config.genesis_config.chain_id = Some(chain_id);
+                config.genesis_config.bridgehub_address = bridgehub_address;
+                config.genesis_config.bytecode_supplier_address = bytecode_supplier_address;
+                config.l1_sender_config = l1_sender_config.clone();
+                // Use short block time for faster tests
+                config.sequencer_config.block_time = Duration::from_millis(500);
+
+                if let Some(ephemeral_state) = &ephemeral_state {
+                    let ephemeral_state = Path::new("..").join(ephemeral_state);
+                    tracing::info!("Loading ephemeral state from {}", ephemeral_state.display());
+                    #[cfg(target_os = "macos")]
+                    let tar = "gtar";
+                    #[cfg(not(target_os = "macos"))]
+                    let tar = "tar";
+                    let status = Command::new(tar)
+                        .args([
+                            "-xvf",
+                            ephemeral_state.to_string_lossy().as_ref(),
+                            &format!(
+                                "--one-top-level={}",
+                                config.general_config.rocks_db_path.to_string_lossy()
+                            ),
+                        ])
+                        .status()
+                        .expect(
+                            "failed to call `tar` command; ensure it is present on your machine",
+                        );
+                    if !status.success() {
+                        panic!(
+                            "`tar` command failed to decompress ephemeral state from `{}` to `{}`",
+                            ephemeral_state.display(),
+                            config.general_config.rocks_db_path.display(),
+                        );
+                    }
+                }
+            };
+
+            let tester = Tester::launch_node(
+                l1.clone(),
+                false, // disable prover for faster tests
+                Some(chain_override),
+                NEXT_PROTOCOL_VERSION,
+            )
+            .await?;
+
+            tracing::info!(
+                "L2 chain {} started with chain_id {} on {}",
+                i,
+                chain_id,
+                tester.l2_rpc_address
+            );
+
+            chains.push(tester);
+
+            if i + 1 < num_chains {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
 
         Ok(MultiChainTester { l1, chains })
     }

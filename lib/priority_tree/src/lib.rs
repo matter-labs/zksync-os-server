@@ -177,24 +177,34 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
             };
             latency_tracker.enter_state(GenericComponentState::Processing);
             let mut priority_ops = Vec::new();
+            let mut interop_roots = Vec::new();
             let mut merkle_tree = self.merkle_tree.lock().await;
             for (batch_number, block_range) in batch_ranges.clone() {
                 let mut first_priority_op_id_in_batch = None;
                 let mut priority_op_count = 0;
+                let mut batch_interop_roots = Vec::new();
                 let last_block_number = *block_range.end();
                 for block_number in block_range {
                     // Block is not guaranteed to be present in the replay storage for EN, so we use `wait_for_replay_record`.
                     let replay =
                         Self::wait_for_replay_record(&self.replay_storage, block_number).await;
                     for tx in replay.transactions {
-                        if let ZkEnvelope::L1(l1_tx) = tx.into_envelope() {
-                            first_priority_op_id_in_batch
-                                .get_or_insert(l1_tx.priority_id() as usize);
-                            priority_op_count += 1;
-                            merkle_tree.push_hash(l1_tx.hash().0.into());
+                        match tx.into_envelope() {
+                            ZkEnvelope::L1(l1_tx) => {
+                                first_priority_op_id_in_batch
+                                    .get_or_insert(l1_tx.priority_id() as usize);
+                                priority_op_count += 1;
+                                merkle_tree.push_hash(l1_tx.hash().0.into());
+                            }
+                            ZkEnvelope::System(system_tx) => {
+                                batch_interop_roots
+                                    .extend(system_tx.interop_roots().unwrap_or_default());
+                            }
+                            _ => {}
                         }
                     }
                 }
+                interop_roots.push(batch_interop_roots);
                 tracing::debug!(
                     batch_number,
                     last_block_number,
@@ -254,6 +264,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                 s.send(L1SenderCommand::SendToL1(ExecuteCommand::new(
                     batch_envelopes.unwrap(),
                     priority_ops,
+                    interop_roots,
                 )))
                 .await?;
             }
