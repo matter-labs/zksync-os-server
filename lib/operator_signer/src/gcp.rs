@@ -5,6 +5,7 @@ use alloy::signers::gcp::{
         google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient,
     },
 };
+use anyhow::Context;
 
 /// Creates a GCP KMS signer from a resource name.
 ///
@@ -22,14 +23,16 @@ pub(crate) async fn create_gcp_signer(resource_name: &str) -> anyhow::Result<Gcp
         None,
     )
     .await
-    .map_err(|e| anyhow::anyhow!("failed to create GCP KMS client: {e}"))?;
+    .context("failed to create GCP KMS client")?;
 
-    GcpSigner::new(client, specifier, None).await.map_err(|e| {
-        anyhow::anyhow!(
-            "failed to initialize GCP KMS signer for '{resource_name}': {e}. \
-             Ensure the key uses EC_SIGN_SECP256K1_SHA256 algorithm"
-        )
-    })
+    GcpSigner::new(client, specifier, None)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "failed to initialize GCP KMS signer for '{resource_name}': {e}. \
+                 Ensure the key uses EC_SIGN_SECP256K1_SHA256 algorithm"
+            )
+        })
 }
 
 /// Parsed components of a KMS resource name.
@@ -47,19 +50,17 @@ struct KmsResourceParts {
 /// `projects/{project}/locations/{location}/keyRings/{ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}`
 fn parse_kms_resource_name(resource_name: &str) -> anyhow::Result<KmsResourceParts> {
     let parts: Vec<&str> = resource_name.split('/').collect();
-    if parts.len() != 10
-        || parts[0] != "projects"
-        || parts[2] != "locations"
-        || parts[4] != "keyRings"
-        || parts[6] != "cryptoKeys"
-        || parts[8] != "cryptoKeyVersions"
-    {
-        anyhow::bail!(
-            "invalid KMS resource name format: expected \
-             'projects/{{project}}/locations/{{location}}/keyRings/{{ring}}/cryptoKeys/{{key}}/cryptoKeyVersions/{{version}}', \
-             got '{resource_name}'"
-        );
-    }
+    anyhow::ensure!(
+        parts.len() == 10
+            && parts[0] == "projects"
+            && parts[2] == "locations"
+            && parts[4] == "keyRings"
+            && parts[6] == "cryptoKeys"
+            && parts[8] == "cryptoKeyVersions",
+        "invalid KMS resource name format: expected \
+         'projects/{{project}}/locations/{{location}}/keyRings/{{ring}}/cryptoKeys/{{key}}/cryptoKeyVersions/{{version}}', \
+         got '{resource_name}'"
+    );
 
     let version: u64 = parts[9]
         .parse()

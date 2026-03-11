@@ -4,18 +4,20 @@ use alloy::signers::Signer;
 use alloy::signers::gcp::GcpSigner;
 use alloy::signers::k256::ecdsa::SigningKey;
 use alloy::signers::local::PrivateKeySigner;
+use alloy::signers::utils::secret_key_to_address;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
 mod gcp;
 
-/// Configuration for how an operator signing key is provided.
+/// Configuration for how a signing key is provided.
 ///
 /// For GCP KMS keys, the signer (and its underlying API client) is created lazily
 /// on first use and cached for subsequent calls. Cloned configs share the same cache
 /// via `Arc`, so multiple calls to [`address`](Self::address) and
 /// [`register_with_wallet`](Self::register_with_wallet) only create one GCP client.
-pub enum OperatorSignerConfig {
+#[derive(Debug)]
+pub enum SignerConfig {
     /// Use a local private key for signing.
     Local(SigningKey),
     /// Use a Google Cloud KMS key for signing.
@@ -28,7 +30,7 @@ pub enum OperatorSignerConfig {
     },
 }
 
-impl Clone for OperatorSignerConfig {
+impl Clone for SignerConfig {
     fn clone(&self) -> Self {
         match self {
             Self::Local(sk) => Self::Local(sk.clone()),
@@ -43,19 +45,7 @@ impl Clone for OperatorSignerConfig {
     }
 }
 
-impl std::fmt::Debug for OperatorSignerConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Local(_) => f.debug_tuple("Local").field(&"[REDACTED]").finish(),
-            Self::GcpKms { resource_name, .. } => f
-                .debug_struct("GcpKms")
-                .field("resource_name", resource_name)
-                .finish(),
-        }
-    }
-}
-
-impl OperatorSignerConfig {
+impl SignerConfig {
     /// Creates a GCP KMS config with an empty signer cache.
     pub fn gcp_kms(resource_name: String) -> Self {
         Self::GcpKms {
@@ -86,7 +76,7 @@ impl OperatorSignerConfig {
     /// return the cached address.
     pub async fn address(&self) -> anyhow::Result<Address> {
         match self {
-            Self::Local(sk) => Ok(PrivateKeySigner::from_signing_key(sk.clone()).address()),
+            Self::Local(sk) => Ok(secret_key_to_address(sk)),
             Self::GcpKms { .. } => {
                 let signer = self.get_gcp_signer().await?;
                 Ok(signer.address())

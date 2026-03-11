@@ -27,7 +27,7 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
-use zksync_os_operator_signer::OperatorSignerConfig;
+use zksync_os_operator_signer::SignerConfig;
 use zksync_os_pipeline::PeekableReceiver;
 
 /// Maximum time to wait for a transaction to be included on L1.
@@ -326,7 +326,7 @@ async fn register_operator<
     Input: SendToL1,
 >(
     provider: &mut P,
-    signer_config: OperatorSignerConfig,
+    signer_config: SignerConfig,
 ) -> anyhow::Result<Address> {
     let address = signer_config
         .register_with_wallet(provider.wallet_mut())

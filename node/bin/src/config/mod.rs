@@ -1,5 +1,5 @@
 pub use self::cli::ConfigArgs;
-use self::util::{OperatorSignerConfigDeserializer, SecretKeyDeserializer};
+use self::util::{SecretKeyDeserializer, SignerConfigDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use num::{BigInt, BigUint, rational::Ratio};
@@ -22,7 +22,7 @@ use zksync_os_network::{NodeRecord, SecretKey};
 use zksync_os_object_store::ObjectStoreConfig;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
-use zksync_os_operator_signer::OperatorSignerConfig;
+use zksync_os_operator_signer::SignerConfig;
 use zksync_os_types::{NodeRole, PubdataMode};
 
 mod cli;
@@ -447,20 +447,20 @@ pub struct L1SenderConfig {
     /// Signer to commit batches to L1.
     /// Must be consistent with the operator key set on the contract (permissioned!)
     /// Not required for External Nodes, which do not send L1 transactions.
-    #[config(alias = "operator_commit_pk", with = OperatorSignerConfigDeserializer)]
-    pub operator_commit_sk: Option<OperatorSignerConfig>,
+    #[config(secret, alias = "operator_commit_pk", with = SignerConfigDeserializer)]
+    pub operator_commit_sk: Option<SignerConfig>,
 
     /// Signer to submit proofs to L1.
     /// Can be arbitrary funded address - proof submission is permissionless.
     /// Not required for External Nodes, which do not send L1 transactions.
-    #[config(alias = "operator_prove_pk", with = OperatorSignerConfigDeserializer)]
-    pub operator_prove_sk: Option<OperatorSignerConfig>,
+    #[config(secret, alias = "operator_prove_pk", with = SignerConfigDeserializer)]
+    pub operator_prove_sk: Option<SignerConfig>,
 
     /// Signer to execute batches on L1.
     /// Can be arbitrary funded address - execute submission is permissionless.
     /// Not required for External Nodes, which do not send L1 transactions.
-    #[config(alias = "operator_execute_pk", with = OperatorSignerConfigDeserializer)]
-    pub operator_execute_sk: Option<OperatorSignerConfig>,
+    #[config(secret, alias = "operator_execute_pk", with = SignerConfigDeserializer)]
+    pub operator_execute_sk: Option<SignerConfig>,
 
     /// Max fee per gas we are willing to spend.
     #[config(default_t = 200 * EtherUnit::Gwei)]
@@ -831,8 +831,8 @@ pub struct BaseTokenPriceUpdaterConfig {
     /// Must be consistent with the key set on the chain admin contract.
     /// Not used for chains with ETH as base token; expected to be set for all other chains.
     /// Accepts either a hex private key string or a GCP KMS resource object.
-    #[config(alias = "token_multiplier_setter_pk", with = OperatorSignerConfigDeserializer)]
-    pub token_multiplier_setter_sk: Option<OperatorSignerConfig>,
+    #[config(secret, alias = "token_multiplier_setter_pk", with = SignerConfigDeserializer)]
+    pub token_multiplier_setter_sk: Option<SignerConfig>,
     /// Predefined fallback prices for tokens in case external API fetching fails on startup.
     #[config(default, with = Serde![*])]
     pub fallback_prices: HashMap<Address, f64>,
@@ -963,7 +963,7 @@ impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
 impl L1SenderConfig {
     fn into_lib_l1_sender_config<Input>(
         self,
-        operator_signer: OperatorSignerConfig,
+        operator_signer: SignerConfig,
     ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
         zksync_os_l1_sender::config::L1SenderConfig {
             operator_signer,

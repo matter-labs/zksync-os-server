@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 use std::time::Duration;
-use zksync_os_operator_signer::OperatorSignerConfig;
+use zksync_os_operator_signer::SignerConfig;
 
 /// Configuration of L1 sender.
 #[derive(Clone, Debug)]
@@ -8,7 +8,7 @@ pub struct L1SenderConfig<Input> {
     /// Operator signer configuration.
     /// Depending on the mode, this can be a commit/prove/execute operator.
     /// Supports both local private keys and GCP KMS keys.
-    pub operator_signer: OperatorSignerConfig,
+    pub operator_signer: SignerConfig,
 
     /// Max fee per gas we are willing to spend (in wei).
     pub max_fee_per_gas_wei: u128,

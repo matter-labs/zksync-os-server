@@ -6,24 +6,24 @@ use smart_config::ErrorWithOrigin;
 use smart_config::de::{DeserializeContext, DeserializeParam};
 use smart_config::metadata::{BasicTypes, ParamMetadata};
 use zksync_os_network::SecretKey;
-use zksync_os_operator_signer::OperatorSignerConfig;
+use zksync_os_operator_signer::SignerConfig;
 
-/// Custom deserializer for [`OperatorSignerConfig`].
+/// Custom deserializer for [`SignerConfig`].
 ///
 /// Accepts either:
 /// - A hex string (with or without `0x` prefix): parsed as a local private key (backward-compatible)
 /// - An object `{"type": "gcp_kms", "resource": "projects/..."}`: a GCP KMS key
 #[derive(Debug)]
-pub struct OperatorSignerConfigDeserializer;
+pub struct SignerConfigDeserializer;
 
-impl DeserializeParam<OperatorSignerConfig> for OperatorSignerConfigDeserializer {
+impl DeserializeParam<SignerConfig> for SignerConfigDeserializer {
     const EXPECTING: BasicTypes = BasicTypes::STRING.or(BasicTypes::OBJECT);
 
     fn deserialize_param(
         &self,
         ctx: DeserializeContext<'_>,
         param: &'static ParamMetadata,
-    ) -> Result<OperatorSignerConfig, ErrorWithOrigin> {
+    ) -> Result<SignerConfig, ErrorWithOrigin> {
         let deserializer = ctx.current_value_deserializer(param.name)?;
         let value = Value::deserialize(deserializer)?;
 
@@ -34,7 +34,7 @@ impl DeserializeParam<OperatorSignerConfig> for OperatorSignerConfigDeserializer
                     serde_json::from_value(Value::String(s)).map_err(ErrorWithOrigin::custom)?;
                 let sk =
                     SigningKey::from_slice(b256.as_slice()).map_err(ErrorWithOrigin::custom)?;
-                Ok(OperatorSignerConfig::Local(sk))
+                Ok(SignerConfig::Local(sk))
             }
             Value::Object(obj) => {
                 let type_str = obj.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
@@ -50,7 +50,7 @@ impl DeserializeParam<OperatorSignerConfig> for OperatorSignerConfigDeserializer
                                         "missing 'resource' field in gcp_kms signer config",
                                     )
                                 })?;
-                        Ok(OperatorSignerConfig::gcp_kms(resource.to_string()))
+                        Ok(SignerConfig::gcp_kms(resource.to_string()))
                     }
                     other => Err(ErrorWithOrigin::custom(format!(
                         "unknown signer type '{other}', expected 'gcp_kms'"
@@ -63,10 +63,13 @@ impl DeserializeParam<OperatorSignerConfig> for OperatorSignerConfigDeserializer
         }
     }
 
-    fn serialize_param(&self, param: &OperatorSignerConfig) -> Value {
+    fn serialize_param(&self, param: &SignerConfig) -> Value {
         match param {
-            OperatorSignerConfig::Local(_) => Value::String("[REDACTED]".to_string()),
-            OperatorSignerConfig::GcpKms { resource_name, .. } => {
+            SignerConfig::Local(sk) => {
+                let bytes = B256::from_slice(sk.to_bytes().as_slice());
+                serde_json::to_value(bytes).expect("failed serializing to JSON")
+            }
+            SignerConfig::GcpKms { resource_name, .. } => {
                 serde_json::json!({"type": "gcp_kms", "resource": resource_name})
             }
         }

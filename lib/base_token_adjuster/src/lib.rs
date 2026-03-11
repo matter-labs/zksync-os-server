@@ -23,7 +23,7 @@ use zksync_os_external_price_api::forced_price_client::ForcedPriceClient;
 use zksync_os_external_price_api::{
     APIToken, ExternalPriceApiClientConfig, PriceApiClient, ZK_L1_ADDRESS,
 };
-use zksync_os_operator_signer::OperatorSignerConfig;
+use zksync_os_operator_signer::SignerConfig;
 use zksync_os_types::{TokenApiRatio, TokenPricesForFees};
 
 mod metrics;
@@ -47,7 +47,7 @@ pub struct BaseTokenPriceUpdaterConfig {
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
     /// Supports both local private keys and GCP KMS keys.
-    pub token_multiplier_setter_signer: Option<OperatorSignerConfig>,
+    pub token_multiplier_setter_signer: Option<SignerConfig>,
     /// Max fee per gas we are willing to spend (in wei).
     pub max_fee_per_gas_wei: u128,
     /// Max priority fee per gas we are willing to spend (in wei).
@@ -92,7 +92,7 @@ pub struct BaseTokenPriceUpdater<
 
 async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>>(
     provider: &mut P,
-    signer_config: OperatorSignerConfig,
+    signer_config: SignerConfig,
 ) -> anyhow::Result<Address> {
     let address = signer_config
         .register_with_wallet(provider.wallet_mut())
