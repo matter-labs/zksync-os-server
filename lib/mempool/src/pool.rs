@@ -63,7 +63,7 @@ impl<T: L2Subpool> Pool<T> {
     ) -> Option<StreamOutcome<'a>> {
         let mut upgrade_info_stream = self.upgrade_subpool.upgrade_info_stream().await;
 
-        let mut interop_stream = tokio_stream::StreamExt::peekable(
+        let interop_root_stream = tokio_stream::StreamExt::peekable(
             self.interop_roots_subpool
                 .interop_transactions_with_delay(next_interop_tx_allowed_after)
                 .await,
@@ -72,7 +72,7 @@ impl<T: L2Subpool> Pool<T> {
         let mut sl_chain_id_stream = tokio_stream::StreamExt::peekable(
             self.sl_chain_id_subpool.best_transactions_stream().await,
         );
-        let mut interop_fee_stream = tokio_stream::StreamExt::peekable(
+        let interop_fee_stream = tokio_stream::StreamExt::peekable(
             self.interop_fee_subpool.best_transactions_stream().await,
         );
 
@@ -84,6 +84,13 @@ impl<T: L2Subpool> Pool<T> {
         }
         let l1_l2_stream = futures::stream::select_with_strategy(l1_stream, l2_stream, prio_left);
         let mut l1_l2_stream = tokio_stream::StreamExt::peekable(l1_l2_stream);
+
+        let interop_related_stream = futures::stream::select_with_strategy(
+            interop_fee_stream,
+            interop_root_stream,
+            prio_left,
+        );
+        let mut interop_related_stream = tokio_stream::StreamExt::peekable(interop_related_stream);
 
         let mut upgrade_metadata = None;
         loop {
@@ -131,16 +138,10 @@ impl<T: L2Subpool> Pool<T> {
                         stream: MarkingTxStream::unmarkable(sl_chain_id_stream),
                     });
                 }
-                Some(_) = interop_fee_stream.peek() => {
+                Some(_) = interop_related_stream.peek() => {
                     return Some(StreamOutcome {
                         upgrade_metadata,
-                        stream: MarkingTxStream::unmarkable(interop_fee_stream),
-                    });
-                }
-                Some(_) = interop_stream.peek() => {
-                    return Some(StreamOutcome {
-                        upgrade_metadata,
-                        stream: MarkingTxStream::unmarkable(interop_stream),
+                        stream: MarkingTxStream::unmarkable(interop_related_stream),
                     });
                 }
                 Some(_) = l1_l2_stream.peek() => {
