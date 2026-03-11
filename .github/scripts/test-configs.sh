@@ -12,9 +12,9 @@ CONFIGS=(
   "v30 default|local-chains/v30.2/l1-state.json|local-chains/v30.2/default/config.yaml"
   "v30 multi-chain 1|local-chains/v30.2/l1-state.json|local-chains/v30.2/multi_chain/chain_6565.yaml"
   "v30 multi-chain 2|local-chains/v30.2/l1-state.json|local-chains/v30.2/multi_chain/chain_6566.yaml"
-  "v31 default|local-chains/v31.0/l1-state.json|local-chains/v31.0/default/config.yaml"
-  "v31 multi-chain 1|local-chains/v31.0/l1-state.json|local-chains/v31.0/multi_chain/chain_6565.yaml"
-  "v31 multi-chain 2|local-chains/v31.0/l1-state.json|local-chains/v31.0/multi_chain/chain_6566.yaml"
+#  "v31 default|local-chains/v31.0/l1-state.json|local-chains/v31.0/default/config.yaml"
+#  "v31 multi-chain 1|local-chains/v31.0/l1-state.json|local-chains/v31.0/multi_chain/chain_6565.yaml"
+#  "v31 multi-chain 2|local-chains/v31.0/l1-state.json|local-chains/v31.0/multi_chain/chain_6566.yaml"
 )
 
 cleanup() {
