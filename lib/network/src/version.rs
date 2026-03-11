@@ -1,7 +1,7 @@
 //! Support for representing the version of the `zks` protocol
 
 use crate::wire::message::ZksMessageId;
-use crate::wire::replays::{WireReplayRecord, v0, v1};
+use crate::wire::replays::{WireReplayRecord, v0, v1, v2};
 use alloy::primitives::bytes::BufMut;
 use alloy::rlp::{Decodable, Encodable, Error as RlpError};
 use std::fmt::Debug;
@@ -36,6 +36,17 @@ impl AnyZksProtocolVersion for ZksProtocolV1 {
     const VERSION: ZksVersion = ZksVersion::Zks1;
 }
 
+/// Protocol version 1 is the initial implementation that supports `GetBlockReplays` and `BlockReplays`
+/// message types.
+#[derive(Debug, Clone)]
+pub struct ZksProtocolV2;
+
+impl AnyZksProtocolVersion for ZksProtocolV2 {
+    type Record = v2::ReplayRecord;
+
+    const VERSION: ZksVersion = ZksVersion::Zks2;
+}
+
 /// Error thrown when failed to parse a valid [`ZksVersion`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("Unknown zks protocol version: {0}")]
@@ -49,6 +60,8 @@ pub enum ZksVersion {
     Zks0 = 0,
     /// The `zks` protocol version 1.
     Zks1 = 1,
+    /// The `zks` protocol version 2.
+    Zks2 = 2,
 }
 
 impl ZksVersion {
@@ -63,6 +76,7 @@ impl ZksVersion {
         match self {
             ZksVersion::Zks0 => ZksMessageId::BlockReplays as u8,
             ZksVersion::Zks1 => ZksMessageId::BlockReplays as u8,
+            ZksVersion::Zks2 => ZksMessageId::BlockReplays as u8,
         }
     }
 
@@ -109,6 +123,7 @@ impl TryFrom<u8> for ZksVersion {
         match u {
             0 => Ok(Self::Zks0),
             1 => Ok(Self::Zks1),
+            2 => Ok(Self::Zks2),
             _ => Err(ParseVersionError(u.to_string())),
         }
     }
@@ -127,6 +142,7 @@ impl From<ZksVersion> for &'static str {
         match v {
             ZksVersion::Zks0 => "0",
             ZksVersion::Zks1 => "1",
+            ZksVersion::Zks2 => "2",
         }
     }
 }
@@ -140,7 +156,7 @@ mod tests {
     #[test]
     fn test_zks_version_rlp_encode() {
         // Version 0 is purposefully left out as it encodes to 0x80 (prefix for 0-length string)
-        let versions = [ZksVersion::Zks1];
+        let versions = [ZksVersion::Zks1, ZksVersion::Zks2];
 
         for version in versions {
             let mut encoded = BytesMut::new();
@@ -156,7 +172,8 @@ mod tests {
         let test_cases = [
             (0_u8, Ok(ZksVersion::Zks0)),
             (1_u8, Ok(ZksVersion::Zks1)),
-            (2_u8, Err(RlpError::Custom("invalid zks version"))),
+            (2_u8, Ok(ZksVersion::Zks2)),
+            (3_u8, Err(RlpError::Custom("invalid zks version"))),
         ];
 
         for (input, expected) in test_cases {

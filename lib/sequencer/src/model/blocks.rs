@@ -95,6 +95,7 @@ pub struct PreparedBlockCommand<'a> {
     /// Can be non-empty e.g. when processing upgrade transactions.
     pub force_preimages: Vec<(B256, Vec<u8>)>,
     pub starting_interop_event_index: InteropRootsLogIndex,
+    pub starting_migration_number: u64,
     pub interop_roots_per_block: u64,
 }
 
