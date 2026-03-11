@@ -488,7 +488,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         upgrade_subpool.insert(upgrade_tx).await;
     }
 
-    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
+    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
+        && config.general_config.gateway_rpc_url.is_some()
+    {
         tasks.spawn(
             InteropWatcher::create_watcher(
                 node_startup_state.l1_state.bridgehub_sl.clone(), // TODO: what bridgehub to use here?

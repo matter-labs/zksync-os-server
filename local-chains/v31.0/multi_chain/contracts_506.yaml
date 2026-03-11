@@ -35,11 +35,11 @@ bridges:
   l1_nullifier_addr: 0x7580bef11b262017f1b22e8c6288fd96f91709fd
 l1:
   default_upgrade_addr: 0x7706c2d7c5ed4be12f40588b5308668f28b0d46f
-  diamond_proxy_addr: 0x144833a56aa5d7b70499066da0d235d9521c1367
-  governance_addr: 0xe978a7cb824112eda297be4f5a98cf691258706b
-  chain_admin_addr: 0x228e53f879812d1cb8ace87fbb786c053463a959
+  diamond_proxy_addr: 0x7bf0b864cbe5bfdfd236b3ab1ae217a0de2d9176
+  governance_addr: 0x91e68ed09c0d63a07c183a0fe64239fb4a433cca
+  chain_admin_addr: 0x95213fa20d5536fe65f7b67de7ab49d7154ab62f
   access_control_restriction_addr: '0x0000000000000000000000000000000000000000'
-  chain_proxy_admin_addr: 0xe9fd23605e5249bd7c056ec2919ebbd8e2dc7f56
+  chain_proxy_admin_addr: 0xf1d76cb31462e79ca49a61b31e0ba85f9a03c6f0
   multicall3_addr: 0x962bd50403f6c3fe555f4585114296753c84c651
   verifier_addr: 0x47621ff570be9c6e8bc0b297cd75f169dfec57b6
   validator_timelock_addr: 0x8e525769175a8748f90541e29a01a23f9086a65b
@@ -51,7 +51,8 @@ l1:
   no_da_validium_l1_validator_addr: 0xd58fcbfe780248fe8d7bcb20e1d423cd4153e32f
 l2:
   testnet_paymaster_addr: '0x0000000000000000000000000000000000000000'
-  default_l2_upgrader: '0x0000000000000000000000000000000000000000'
-  consensus_registry: null
-  multicall3: null
-  timestamp_asserter_addr: null
+  default_l2_upgrader: 0xf4287308541722dfaa7c8f96f826577bfa3916fb
+  l2_native_token_vault_proxy_addr: '0x0000000000000000000000000000000000010004'
+  consensus_registry: 0xa31deb84cbbbd67f910aa0f57a568adbd94bcb36
+  multicall3: 0x8bbbda78b09d97ae5e161d1c9544859e4ac2d5c3
+  timestamp_asserter_addr: 0x5d11b2c8ba6d711734d2c8ee5ebcafbd5d7df0b5

@@ -17,9 +17,9 @@ use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::Path;
 #[cfg(feature = "prover-tests")]
-use std::path::{Path, PathBuf};
-#[cfg(feature = "prover-tests")]
+use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
@@ -506,12 +506,12 @@ impl MultiChainTester {
 
     /// Get chain A (first chain)
     pub fn chain_a(&self) -> &Tester {
-        self.chain(0)
+        self.chain(1)
     }
 
     /// Get chain B (second chain)
     pub fn chain_b(&self) -> &Tester {
-        self.chain(1)
+        self.chain(2)
     }
 }
 
@@ -539,54 +539,89 @@ impl MultiChainTesterBuilder {
         })
         .await?;
 
-        // Launch L2 chains concurrently for faster setup
-        let mut futures = Vec::new();
+        // Launch L2 chains using chain configurations from config files
+        let mut chains: Vec<Tester> = Vec::new();
         for i in 0..num_chains {
-            let l1 = l1.clone();
-            futures.push(async move {
-                // Load the chain config to get the chain ID, operator keys, and contract addresses
-                let chain_config = load_chain_config(ChainLayout::MultiChain {
-                    protocol_version: NEXT_PROTOCOL_VERSION,
-                    chain_index: i,
-                });
-                let chain_id = chain_config
-                    .genesis_config
-                    .chain_id
-                    .expect("Chain ID must be set in chain config");
-                let l1_sender_config = chain_config.l1_sender_config.clone();
-                let bridgehub_address = chain_config.genesis_config.bridgehub_address;
-                let bytecode_supplier_address =
-                    chain_config.genesis_config.bytecode_supplier_address;
-
-                let chain_override = move |config: &mut Config| {
-                    config.genesis_config.chain_id = Some(chain_id);
-                    config.genesis_config.bridgehub_address = bridgehub_address;
-                    config.genesis_config.bytecode_supplier_address = bytecode_supplier_address;
-                    config.l1_sender_config = l1_sender_config.clone();
-                    // Use short block time for faster tests
-                    config.sequencer_config.block_time = Duration::from_millis(500);
-                };
-
-                let tester = Tester::launch_node(
-                    l1,
-                    false, // disable prover for faster tests
-                    Some(chain_override),
-                    NEXT_PROTOCOL_VERSION,
-                )
-                .await?;
-
-                tracing::info!(
-                    "L2 chain {} started with chain_id {} on {}",
-                    i,
-                    chain_id,
-                    tester.l2_rpc_address
-                );
-
-                anyhow::Ok(tester)
+            // Load the chain config to get the chain ID, operator keys, and contract addresses
+            let chain_config = load_chain_config(ChainLayout::MultiChain {
+                protocol_version: NEXT_PROTOCOL_VERSION,
+                chain_index: i,
             });
-        }
+            let chain_id = chain_config
+                .genesis_config
+                .chain_id
+                .expect("Chain ID must be set in chain config");
+            let gateway_rpc_url = chain_config
+                .general_config
+                .gateway_rpc_url
+                .map(|_| chains[0].l2_rpc_address.clone());
+            let ephemeral_state = chain_config.general_config.ephemeral_state;
+            let l1_sender_config = chain_config.l1_sender_config.clone();
+            let bridgehub_address = chain_config.genesis_config.bridgehub_address;
+            let bytecode_supplier_address = chain_config.genesis_config.bytecode_supplier_address;
 
-        let chains = futures::future::try_join_all(futures).await?;
+            let chain_override = move |config: &mut Config| {
+                if gateway_rpc_url.is_some() {
+                    config.general_config.gateway_rpc_url = gateway_rpc_url;
+                }
+                config.genesis_config.chain_id = Some(chain_id);
+                config.genesis_config.bridgehub_address = bridgehub_address;
+                config.genesis_config.bytecode_supplier_address = bytecode_supplier_address;
+                config.l1_sender_config = l1_sender_config.clone();
+                // Use short block time for faster tests
+                config.sequencer_config.block_time = Duration::from_millis(500);
+
+                if let Some(ephemeral_state) = &ephemeral_state {
+                    let ephemeral_state = Path::new("..").join(ephemeral_state);
+                    tracing::info!("Loading ephemeral state from {}", ephemeral_state.display());
+                    #[cfg(target_os = "macos")]
+                    let tar = "gtar";
+                    #[cfg(not(target_os = "macos"))]
+                    let tar = "tar";
+                    let status = Command::new(tar)
+                        .args([
+                            "-xvf",
+                            ephemeral_state.to_string_lossy().as_ref(),
+                            &format!(
+                                "--one-top-level={}",
+                                config.general_config.rocks_db_path.to_string_lossy()
+                            ),
+                        ])
+                        .status()
+                        .expect(
+                            "failed to call `tar` command; ensure it is present on your machine",
+                        );
+                    if !status.success() {
+                        panic!(
+                            "`tar` command failed to decompress ephemeral state from `{}` to `{}`",
+                            ephemeral_state.display(),
+                            config.general_config.rocks_db_path.display(),
+                        );
+                    }
+                }
+            };
+
+            let tester = Tester::launch_node(
+                l1.clone(),
+                false, // disable prover for faster tests
+                Some(chain_override),
+                NEXT_PROTOCOL_VERSION,
+            )
+            .await?;
+
+            tracing::info!(
+                "L2 chain {} started with chain_id {} on {}",
+                i,
+                chain_id,
+                tester.l2_rpc_address
+            );
+
+            chains.push(tester);
+
+            if i + 1 < num_chains {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
 
         Ok(MultiChainTester { l1, chains })
     }

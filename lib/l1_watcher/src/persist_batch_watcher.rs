@@ -224,6 +224,10 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessRawEvents
         (*self.zk_chain.address()).into()
     }
 
+    fn filter_events(&self, logs: Vec<Log>) -> Vec<Log> {
+        logs
+    }
+
     async fn process_raw_event(&mut self, log: Log) -> Result<(), L1WatcherError> {
         let event_signature = log.topics()[0];
         match event_signature {

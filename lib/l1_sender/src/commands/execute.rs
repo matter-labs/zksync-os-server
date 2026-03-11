@@ -11,17 +11,20 @@ use zksync_os_contract_interface::{IExecutor, InteropRoot};
 pub struct ExecuteCommand {
     batches: Vec<SignedBatchEnvelope<FriProof>>,
     priority_ops: Vec<PriorityOpsBatchInfo>,
+    interop_roots: Vec<Vec<InteropRoot>>,
 }
 
 impl ExecuteCommand {
     pub fn new(
         batches: Vec<SignedBatchEnvelope<FriProof>>,
         priority_ops: Vec<PriorityOpsBatchInfo>,
+        interop_roots: Vec<Vec<InteropRoot>>,
     ) -> Self {
         assert_eq!(batches.len(), priority_ops.len());
         Self {
             batches,
             priority_ops,
+            interop_roots,
         }
     }
 }
@@ -95,8 +98,7 @@ impl ExecuteCommand {
             .cloned()
             .map(IExecutor::PriorityOpsBatchInfo::from)
             .collect::<Vec<_>>();
-        // For now interop roots are empty.
-        let interop_roots: Vec<Vec<InteropRoot>> = vec![vec![]; self.batches.len()];
+        let interop_roots = self.interop_roots.clone();
 
         let encoded_data: Vec<u8> = match self.batches.first().unwrap().batch.protocol_version.minor
         {

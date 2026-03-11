@@ -230,6 +230,10 @@ pub struct GeneralConfig {
     /// Disables all HTTP APIs except JSON RPC.
     #[config(default_t = false, alias = "sandbox")]
     pub ephemeral: bool,
+
+    /// Path to ephemeral state to load at startup.
+    #[config(default_t = None)]
+    pub ephemeral_state: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

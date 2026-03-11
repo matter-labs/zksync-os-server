@@ -27,6 +27,8 @@ pub trait ProcessRawEvents: Send + Sync + 'static {
     /// See [`alloy::rpc::types::Filter`] documentation for more details.
     fn contract_addresses(&self) -> ValueOrArray<Address>;
 
+    fn filter_events(&self, logs: Vec<Log>) -> Vec<Log>;
+
     /// Invoked each time a new log matching the filter is found.
     async fn process_raw_event(&mut self, event: Log) -> Result<(), L1WatcherError>;
 }
@@ -49,6 +51,10 @@ where
     fn contract_addresses(&self) -> ValueOrArray<Address> {
         // A single contract per processor.
         self.contract_address().into()
+    }
+
+    fn filter_events(&self, logs: Vec<Log>) -> Vec<Log> {
+        logs
     }
 
     async fn process_raw_event(&mut self, log: Log) -> Result<(), L1WatcherError> {

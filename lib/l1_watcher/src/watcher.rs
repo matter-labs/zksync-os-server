@@ -54,6 +54,9 @@ impl L1Watcher {
             let events = self
                 .extract_logs_from_l1_blocks(from_block, to_block)
                 .await?;
+
+            let events = self.processor.filter_events(events);
+
             METRICS.events_loaded[&self.processor.name()].inc_by(events.len() as u64);
             METRICS.most_recently_scanned_l1_block[&self.processor.name()].set(to_block);
 

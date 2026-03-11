@@ -317,7 +317,7 @@ async fn build_genesis(
         pubdata_limit: 100_000_000,
         mix_hash: U256::ZERO,
         execution_version: execution_version as u32,
-        blob_fee: U256::ZERO,
+        blob_fee: U256::ONE,
     };
 
     Ok(GenesisState {
