@@ -10,6 +10,38 @@ inputs:
     description: 'The context of the workflow run'
     required: false
     default: 'general failure'
+  title:
+    description: 'Slack message title'
+    required: false
+    default: ''
+  workflow:
+    description: 'Workflow name to display'
+    required: false
+    default: ''
+  branch:
+    description: 'Branch name to display'
+    required: false
+    default: ''
+  actor:
+    description: 'Actor to display'
+    required: false
+    default: ''
+  failed_jobs:
+    description: 'Failed jobs summary'
+    required: false
+    default: ''
+  reason:
+    description: 'Analysis or summary line'
+    required: false
+    default: ''
+  attempt:
+    description: 'Workflow attempt number'
+    required: false
+    default: ''
+  run_url:
+    description: 'URL for the workflow run'
+    required: false
+    default: ''
 
 
 runs:
@@ -26,21 +58,25 @@ runs:
             - type: "section"
               text:
                 type: "mrkdwn"
-                text: "*🚨 GitHub Workflow Failed: ${{ inputs.context }}!*"
+                text: "*${{ inputs.title != '' && inputs.title || format('🚨 GitHub Workflow Failed: {0}!', inputs.context) }}*"
             - type: "section"
               fields:
                 - type: "mrkdwn"
                   text: "*Repository:*\n`${{ github.repository }}`"
                 - type: "mrkdwn"
-                  text: "*Workflow:*\n`${{ github.workflow }}`"
+                  text: "*Workflow:*\n`${{ inputs.workflow != '' && inputs.workflow || github.workflow }}`"
                 - type: "mrkdwn"
-                  text: "*Branch:*\n`${{ github.ref_name }}`"
+                  text: "*Branch:*\n`${{ inputs.branch != '' && inputs.branch || github.ref_name }}`"
                 - type: "mrkdwn"
-                  text: "*Triggered By:*\n`${{ github.actor }}`"
+                  text: "*Triggered By:*\n`${{ inputs.actor != '' && inputs.actor || github.actor }}`"
+                - type: "mrkdwn"
+                  text: "*Attempt:*\n${{ inputs.attempt != '' && inputs.attempt || github.run_attempt }}"
+                - type: "mrkdwn"
+                  text: "*Failed Jobs:*\n`${{ inputs.failed_jobs != '' && inputs.failed_jobs || inputs.context }}`"
             - type: "section"
               text:
                 type: "mrkdwn"
-                text: "You can view the detailed logs and troubleshoot the issue by visiting the link below:"
+                text: "${{ inputs.reason != '' && format('*Analysis:* {0}', inputs.reason) || 'You can view the detailed logs and troubleshoot the issue by visiting the link below:' }}"
             - type: "actions"
               elements:
                 - type: "button"
@@ -48,5 +84,5 @@ runs:
                     type: "plain_text"
                     text: "View Workflow Logs"
                     emoji: true
-                  url: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  url: "${{ inputs.run_url != '' && inputs.run_url || format('https://github.com/{0}/actions/runs/{1}', github.repository, github.run_id) }}"
                   style: "danger"
