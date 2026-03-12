@@ -1,0 +1,26 @@
+[package]
+name = "zksync_os_verify_storage_proof"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_rpc_api = { path = "../../lib/rpc_api" }
+zksync_os_merkle_tree_api = { path = "../../lib/merkle_tree_api" }
+
+alloy = { workspace = true, default-features = false, features = [
+    "reqwest-rustls-tls",
+    "json-rpc",
+    "rpc-types",
+    "providers",
+    "sol-types",
+    "eips",
+] }
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

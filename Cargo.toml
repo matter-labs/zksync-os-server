@@ -21,6 +21,7 @@ members = [
     "node/bin",
     "integration-tests",
     "tools/generate-deposit",
+    "tools/verify-storage-proof",
     "lib/observability",
     "lib/state_full_diffs",
     "lib/status",
