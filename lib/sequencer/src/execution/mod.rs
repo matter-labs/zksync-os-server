@@ -116,7 +116,7 @@ where
                 "Prepared command. Executing..",
             );
 
-            let (block_output, replay_record, purged_txs) =
+            let (block_output, replay_record, purged_txs, strict_subpool_cleanup) =
                 execute_block(prepared_command, self.state.clone(), &latency_tracker)
                     .await
                     .map_err(|dump| {
@@ -176,7 +176,7 @@ where
 
             // TODO: would updating mempool in parallel with state make sense?
             self.block_context_provider
-                .on_canonical_state_change(&block_output, &replay_record)
+                .on_canonical_state_change(&block_output, &replay_record, strict_subpool_cleanup)
                 .await;
             let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
             self.block_context_provider

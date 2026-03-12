@@ -49,6 +49,7 @@ pub struct Config {
     pub gas_adjuster_config: GasAdjusterConfig,
     pub batch_verification_config: BatchVerificationConfig,
     pub base_token_price_updater_config: BaseTokenPriceUpdaterConfig,
+    pub interop_fee_updater_config: InteropFeeUpdaterConfig,
     pub external_price_api_client_config: ExternalPriceApiClientConfig,
     pub fee_config: FeeConfig,
 }
@@ -113,6 +114,9 @@ impl Config {
                 "base_token_price_updater",
             )
             .expect("Failed to insert base token price updater config");
+        schema
+            .insert(&InteropFeeUpdaterConfig::DESCRIPTION, "interop_fee_updater")
+            .expect("Failed to insert interop fee updater config");
         schema
             .insert(
                 &ExternalPriceApiClientConfig::DESCRIPTION,
@@ -859,6 +863,18 @@ pub struct BaseTokenPriceUpdaterConfig {
     /// Predefined fallback prices for tokens in case external API fetching fails on startup.
     #[config(default, with = Serde![*])]
     pub fallback_prices: HashMap<Address, f64>,
+}
+
+/// Config for the interop fee updater.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct InteropFeeUpdaterConfig {
+    /// How often to check whether interop fee should be updated.
+    #[config(default_t = Duration::from_secs(30))]
+    pub polling_interval: Duration,
+    /// Minimum percent deviation required to enqueue a new interop fee transaction.
+    #[config(default_t = 10)]
+    pub update_deviation_percentage: u32,
 }
 
 /// Config to force configured token prices in USD.

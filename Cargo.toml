@@ -30,6 +30,7 @@ members = [
     "lib/batch_verification",
     "lib/batch_types",
     "lib/internal_config",
+    "lib/interop_fee_updater",
     "lib/network",
     "lib/metadata",
     "lib/external_price_api",
@@ -137,7 +138,7 @@ full_statement_verifier = { git = "https://github.com/matter-labs/zksync-airbend
 #
 # Can be updated at any time and changing it does not count as a breaking change.
 
-zk_os_forward_system_dev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260227", features = [
+zk_os_forward_system_dev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260311", features = [
     "production",
     "no_print",
 ], default-features = false }
@@ -264,6 +265,7 @@ zksync_os_gas_adjuster = { version = "=0.16.0", path = "lib/gas_adjuster" }
 zksync_os_batch_verification = { version = "=0.16.0", path = "lib/batch_verification" }
 zksync_os_batch_types = { version = "=0.16.0", path = "lib/batch_types" }
 zksync_os_internal_config = { version = "=0.16.0", path = "lib/internal_config" }
+zksync_os_interop_fee_updater = { version = "=0.16.0", path = "lib/interop_fee_updater" }
 zksync_os_network = { version = "=0.16.0", path = "lib/network" }
 zksync_os_metadata = { version = "=0.16.0", path = "lib/metadata" }
 zksync_os_external_price_api = { version = "=0.16.0", path = "lib/external_price_api" }

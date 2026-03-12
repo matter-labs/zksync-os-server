@@ -10,9 +10,10 @@ use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
     ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
-    L1SenderConfig, L1WatcherConfig, MempoolConfig, NetworkConfig, ObservabilityConfig,
-    ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
-    RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+    InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, NetworkConfig,
+    ObservabilityConfig, ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig,
+    RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
+    TxValidatorConfig,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -351,6 +352,12 @@ async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse base token price updater config");
 
+    let interop_fee_updater_config = repo
+        .single::<InteropFeeUpdaterConfig>()
+        .expect("Failed to load interop fee updater config")
+        .parse()
+        .expect("Failed to parse interop fee updater config");
+
     let external_price_api_client_config = repo
         .single::<ExternalPriceApiClientConfig>()
         .expect("Failed to load external price API client config")
@@ -409,6 +416,7 @@ async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         gas_adjuster_config,
         batch_verification_config,
         base_token_price_updater_config,
+        interop_fee_updater_config,
         external_price_api_client_config,
         fee_config,
     }

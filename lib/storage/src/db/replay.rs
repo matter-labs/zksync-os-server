@@ -45,6 +45,7 @@ pub enum BlockReplayColumnFamily {
     BlockOutputHash,
     StartingInteropEventIndex,
     StartingMigrationNumber,
+    StartingInteropFeeNumber,
     /// Mapping from block_number to block hash.
     CanonicalHash,
     /// Stores the latest appended block number under a fixed key.
@@ -63,6 +64,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
         BlockReplayColumnFamily::ForcePreimages,
         BlockReplayColumnFamily::StartingInteropEventIndex,
         BlockReplayColumnFamily::StartingMigrationNumber,
+        BlockReplayColumnFamily::StartingInteropFeeNumber,
         BlockReplayColumnFamily::CanonicalHash,
         BlockReplayColumnFamily::Latest,
     ];
@@ -78,6 +80,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
             BlockReplayColumnFamily::ForcePreimages => "force_preimages",
             BlockReplayColumnFamily::StartingInteropEventIndex => "starting_interop_event_index",
             BlockReplayColumnFamily::StartingMigrationNumber => "starting_migration_number",
+            BlockReplayColumnFamily::StartingInteropFeeNumber => "starting_interop_fee_number",
             BlockReplayColumnFamily::CanonicalHash => "canonical_hash",
             BlockReplayColumnFamily::Latest => "latest",
         }
@@ -112,6 +115,7 @@ impl BlockReplayStorage {
                 force_preimages: genesis_tx.force_deploy_preimages.clone(),
                 starting_interop_event_index: InteropRootsLogIndex::default(),
                 starting_migration_number: 0,
+                starting_interop_fee_number: 0,
             };
             this.write_replay_unchecked(Sealed::new_unchecked(genesis_record, genesis_hash), true);
         }
@@ -209,6 +213,17 @@ impl BlockReplayStorage {
             BlockReplayColumnFamily::StartingMigrationNumber,
             &db_key,
             &starting_migration_number_value,
+        );
+
+        let starting_interop_fee_number_value = bincode::serde::encode_to_vec(
+            record.starting_interop_fee_number,
+            bincode::config::standard(),
+        )
+        .expect("Failed to serialize record.starting_interop_fee_number");
+        batch.put_cf(
+            BlockReplayColumnFamily::StartingInteropFeeNumber,
+            &db_key,
+            &starting_interop_fee_number_value,
         );
 
         self.db
@@ -399,6 +414,22 @@ impl ReadReplay for BlockReplayStorage {
             0
         };
 
+        let starting_interop_fee_number = if let Some(starting_interop_fee_number) = self
+            .db
+            .get_cf(BlockReplayColumnFamily::StartingInteropFeeNumber, &key)
+            .expect("Failed to read from StartingInteropFeeNumber CF")
+        {
+            let stored: u64 = bincode::serde::decode_from_slice(
+                &starting_interop_fee_number,
+                bincode::config::standard(),
+            )
+            .expect("Failed to deserialize starting interop fee number")
+            .0;
+            stored
+        } else {
+            0
+        };
+
         Some(ReplayRecord {
             block_context: bincode::serde::decode_from_slice(
                 &block_context,
@@ -425,6 +456,7 @@ impl ReadReplay for BlockReplayStorage {
             force_preimages,
             starting_interop_event_index,
             starting_migration_number,
+            starting_interop_fee_number,
         })
     }
 

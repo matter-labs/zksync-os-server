@@ -56,6 +56,9 @@ pub struct ReplayRecord {
     pub starting_interop_event_index: InteropRootsLogIndex,
     /// Migration number at the beginning of the block. If there is no migration event in the block, equals to the previous block's value
     pub starting_migration_number: u64,
+    /// Interop fee update number at the beginning of the block. If there is no interop fee update
+    /// in the block, equals to the previous block's value.
+    pub starting_interop_fee_number: u64,
 }
 
 impl PartialEq for ReplayRecord {
@@ -70,6 +73,8 @@ impl PartialEq for ReplayRecord {
             && self.block_output_hash == other.block_output_hash
             && self.force_preimages == other.force_preimages
             && self.starting_interop_event_index == other.starting_interop_event_index
+            && self.starting_migration_number == other.starting_migration_number
+            && self.starting_interop_fee_number == other.starting_interop_fee_number
     }
 }
 
@@ -86,6 +91,7 @@ impl ReplayRecord {
         force_preimages: Vec<(B256, Vec<u8>)>,
         starting_interop_event_index: InteropRootsLogIndex,
         starting_migration_number: u64,
+        starting_interop_fee_number: u64,
     ) -> Self {
         let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
             ZkEnvelope::L1(l1_tx) => Some(l1_tx.priority_id()),
@@ -109,6 +115,7 @@ impl ReplayRecord {
             force_preimages,
             starting_interop_event_index,
             starting_migration_number,
+            starting_interop_fee_number,
         }
     }
 }

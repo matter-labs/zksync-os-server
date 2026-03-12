@@ -256,6 +256,7 @@ impl Tester {
             gas_adjuster_config: Default::default(),
             batch_verification_config,
             base_token_price_updater_config: default_config.base_token_price_updater_config.clone(),
+            interop_fee_updater_config: default_config.interop_fee_updater_config.clone(),
             external_price_api_client_config: default_config
                 .external_price_api_client_config
                 .clone(),
