@@ -446,7 +446,10 @@ fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
 
     if let Some(ephemeral_state) = &config.general_config.ephemeral_state {
         tracing::info!("Loading ephemeral state from {}", ephemeral_state.display());
-        zksync_os_server::util::unpack_ephemeral_state(ephemeral_state, &config.general_config.rocks_db_path);
+        zksync_os_server::util::unpack_ephemeral_state(
+            ephemeral_state,
+            &config.general_config.rocks_db_path,
+        );
     }
 
     Some(tempdir)
