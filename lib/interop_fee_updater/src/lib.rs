@@ -11,7 +11,7 @@ use tokio::sync::watch;
 use zksync_os_contract_interface::{IGWAssetTracker, IInteropCenter::interopProtocolFeeCall};
 use zksync_os_mempool::subpools::interop_fee::InteropFeeSubpool;
 use zksync_os_rpc::{EthCallHandler, ReadRpcStorage};
-use zksync_os_types::TokenPricesForFees;
+use zksync_os_types::{L2_INTEROP_CENTER_ADDRESS, TokenPricesForFees};
 
 #[derive(Debug, Clone)]
 pub struct InteropFeeUpdaterConfig {
@@ -20,7 +20,6 @@ pub struct InteropFeeUpdaterConfig {
 }
 
 const GW_ASSET_TRACKER_ADDRESS: Address = address!("0x0000000000000000000000000000000000010010");
-const L2_INTEROP_CENTER_ADDRESS: Address = address!("0x000000000000000000000000000000000001000d");
 
 pub struct InteropFeeUpdater<RpcStorage> {
     eth_call_handler: EthCallHandler<RpcStorage>,

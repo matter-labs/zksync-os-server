@@ -19,9 +19,10 @@ use zksync_os_integration_tests::{
     provider::ZksyncApi,
 };
 use zksync_os_rpc_api::types::LogProofTarget;
-use zksync_os_types::{L1PriorityTxType, L1TxType, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE};
+use zksync_os_types::{
+    L1PriorityTxType, L1TxType, L2_INTEROP_CENTER_ADDRESS, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+};
 
-const L2_INTEROP_CENTER_ADDRESS: Address = address!("000000000000000000000000000000000001000d");
 const L2_INTEROP_HANDLER_ADDRESS: Address = address!("000000000000000000000000000000000001000e");
 const L2_NATIVE_TOKEN_VAULT_ADDRESS: Address = address!("0000000000000000000000000000000000010004");
 const L2_ASSET_ROUTER_ADDRESS: Address = address!("0000000000000000000000000000000000010003");
