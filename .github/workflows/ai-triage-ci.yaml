@@ -26,7 +26,6 @@ jobs:
         id: analyze
         uses: anthropics/claude-code-action@v1
         with:
-          track_progress: true
           claude_code_oauth_token: ${{ secrets.CLAUDE_ACCESS_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
