@@ -74,7 +74,9 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         }
     }
 
-    use zk_os_forward_system::run::generate_batch_proof_input;
+    use zksync_os_plugin_api::ProvingPlugin;
+    static PROVING_PLUGIN: zksync_os_plugin_v6_proving::PluginV6Proving =
+        zksync_os_plugin_v6_proving::PluginV6Proving;
 
     let proving_version =
         ProvingVersion::try_from(blocks.first().unwrap().1.protocol_version.clone())?;
@@ -89,19 +91,17 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         }
         ProvingVersion::V6 => {
             // TODO: in the long-term we should generate proof input per batch
-            generate_batch_proof_input(
+            PROVING_PLUGIN.generate_batch_proof_input(
                 blocks
                     .iter()
                     .map(|(_, _, _, prover_input)| prover_input.as_slice())
                     .collect(),
-                (pubdata_mode.da_commitment_scheme() as u8)
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
+                pubdata_mode.da_commitment_scheme() as u8,
                 blocks
                     .iter()
                     .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
                     .collect(),
-            )
+            )?
         }
     };
 

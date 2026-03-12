@@ -8,12 +8,10 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
-use zk_ee::common_structs::DACommitmentScheme;
 use zksync_os_batch_types::BlockMerkleTreeData;
-use zksync_os_interface::traits::TxListSource;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
-use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
+use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
@@ -84,10 +82,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 // we need to adapt pubdata mode depending on protocol version, to ensure automatic DA mode change during v30 upgrade
                 let da_commitment_scheme = pubdata_mode
                     .adapt_for_protocol_version(&replay_record.protocol_version)
-                    .da_commitment_scheme();
-                let da_commitment_scheme = (da_commitment_scheme as u8)
-                    .try_into()
-                    .expect("Failed to convert DA commitment scheme");
+                    .da_commitment_scheme() as u8;
 
                 tokio::task::spawn_blocking(move || {
                     let prover_input = compute_prover_input(
@@ -125,7 +120,7 @@ fn compute_prover_input(
     replay_record: &ReplayRecord,
     state_handle: impl ReadStateHistory,
     tree_view: MerkleTreeVersion<RocksDBWrapper>,
-    da_commitment_scheme: DACommitmentScheme,
+    da_commitment_scheme: u8,
     app_bin_base_path: PathBuf,
     enable_logging: bool,
 ) -> Vec<u32> {
@@ -151,20 +146,6 @@ fn compute_prover_input(
             panic!("computing prover input for batch with prover version v1-v5 is not supported");
         }
         ProvingVersion::V6 => {
-            use zk_ee::{
-                common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
-            };
-            use zk_os_forward_system::run::{
-                StorageCommitment, convert::FromInterface, generate_proof_input,
-            };
-
-            let initial_storage_commitment = StorageCommitment {
-                root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
-                next_free_slot: leaf_count,
-            };
-
-            let list_source = TxListSource { transactions };
-
             let bin_path = if enable_logging {
                 zksync_os_multivm::apps::v6::singleblock_batch_logging_enabled_path(
                     &app_bin_base_path,
@@ -173,17 +154,16 @@ fn compute_prover_input(
                 zksync_os_multivm::apps::v6::singleblock_batch_path(&app_bin_base_path)
             };
 
-            generate_proof_input(
+            zksync_os_plugin_v6_proving::generate_proof_input(
                 bin_path,
-                BlockMetadataFromOracle::from_interface(replay_record.block_context),
-                ProofData {
-                    state_root_view: initial_storage_commitment,
-                    last_block_timestamp: replay_record.previous_block_timestamp,
-                },
+                replay_record.block_context,
+                replay_record.previous_block_timestamp,
+                root_hash,
+                leaf_count,
                 da_commitment_scheme,
                 tree_view,
                 state_view,
-                list_source,
+                transactions,
             )
             .expect("proof gen failed")
         }

@@ -1,9 +1,10 @@
-//! Stable trait definitions for multivm execution plugins.
+//! Stable trait definitions for multivm execution and proving plugins.
 //!
 //! Each execution version of zksync-os implements [`ExecutionPlugin`] to provide
-//! block execution and transaction simulation capabilities. This crate deliberately
-//! has no dependency on any `forward_system` version — it only depends on the
-//! version-stable `zksync_os_interface`.
+//! block execution and transaction simulation capabilities. Each proving version
+//! implements [`ProvingPlugin`] for batch proof input generation. These crates
+//! deliberately have no dependency on any `forward_system` version — they only
+//! depend on the version-stable `zksync_os_interface`.
 
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::AnyTracer;
@@ -46,4 +47,19 @@ pub trait ExecutionPlugin {
         S: ReadStorage,
         P: PreimageSource,
         Tr: AnyTracer;
+}
+
+/// Trait for batch-level proof input generation.
+///
+/// Block-level proof input generation is version-specific and uses concrete types
+/// (e.g. `MerkleTreeVersion`) that cannot be abstracted without pulling in
+/// `forward_system` types. It is therefore exposed as a standalone function on each
+/// proving plugin crate rather than through this trait.
+pub trait ProvingPlugin {
+    fn generate_batch_proof_input(
+        &self,
+        block_proof_inputs: Vec<&[u32]>,
+        da_commitment_scheme: u8,
+        pubdata: Vec<&[u8]>,
+    ) -> Result<Vec<u32>, anyhow::Error>;
 }

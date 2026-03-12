@@ -43,7 +43,8 @@ zksync_os_external_price_api.workspace = true
 zksync_os_operator_signer.workspace = true
 zksync_os_reth_compat.workspace = true
 
-zk_os_forward_system.workspace = true
+zksync_os_plugin_api.workspace = true
+zksync_os_plugin_v6_proving.workspace = true
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
 zksync_os_interface.workspace = true
