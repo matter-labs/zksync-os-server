@@ -61,9 +61,7 @@ use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
 use zksync_os_internal_config::InternalConfigManager;
-use zksync_os_interop_fee_updater::{
-    InteropFeeUpdater, InteropFeeUpdaterConfig as LibInteropFeeUpdaterConfig,
-};
+use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
@@ -776,7 +774,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             sl_provider.clone().erased(),
             interop_fee_subpool,
             interop_fee_token_price_receiver,
-            LibInteropFeeUpdaterConfig {
+            InteropFeeUpdaterConfig {
                 polling_interval: config.interop_fee_updater_config.polling_interval,
                 update_deviation_percentage: config
                     .interop_fee_updater_config
