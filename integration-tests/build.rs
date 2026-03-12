@@ -28,11 +28,7 @@ fn decompress_l1_states() {
         }
 
         let gz_path = entry.path().join("l1-state.json.gz");
-        assert!(
-            gz_path.is_file(),
-            "expected {} to exist",
-            gz_path.display()
-        );
+        assert!(gz_path.is_file(), "expected {} to exist", gz_path.display());
 
         let compressed = std::fs::read(&gz_path)
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", gz_path.display()));
