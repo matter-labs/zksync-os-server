@@ -5,7 +5,6 @@ on:
     workflows:
       - "Eth spec tests"
     types: [completed]
-    branches: [main]
 
 permissions:
   actions: write
@@ -27,7 +26,8 @@ jobs:
         id: analyze
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY_CI_MAINTENANCE }}
+          track_progress: true
+          claude_code_oauth_token: ${{ secrets.CLAUDE_ACCESS_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           additional_permissions: |
             actions: read
