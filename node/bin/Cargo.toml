@@ -42,6 +42,9 @@ zksync_os_base_token_adjuster.workspace = true
 zksync_os_external_price_api.workspace = true
 zksync_os_operator_signer.workspace = true
 zksync_os_reth_compat.workspace = true
+zksync_os_state.workspace = true
+zksync_os_state_full_diffs.workspace = true
+zksync_os_merkle_tree.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
@@ -73,14 +76,9 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml.workspace = true
 semver = { workspace = true, features = ["serde"] }
-
 bincode.workspace = true
 smart-config = { workspace = true, features = ["primitive-types", "alloy"] }
 smart-config-commands.workspace = true
-
-zksync_os_state.workspace = true
-zksync_os_state_full_diffs.workspace = true
-zksync_os_merkle_tree.workspace = true
 axum.workspace = true
 http.workspace = true
 async-trait.workspace = true
@@ -91,6 +89,7 @@ rand.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
 rustls = { workspace = true }
 num.workspace = true
-
 sentry.workspace = true
 tempfile.workspace = true
+flate2.workspace = true
+tar.workspace = true

@@ -7,20 +7,11 @@ use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
-#[cfg(feature = "prover-tests")]
-use alloy::transports::http::reqwest::{
-    self, StatusCode,
-    blocking::Client,
-    header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT},
-};
 use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
-#[cfg(feature = "prover-tests")]
-use std::path::PathBuf;
-use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -574,30 +565,10 @@ impl MultiChainTesterBuilder {
                 if let Some(ephemeral_state) = &ephemeral_state {
                     let ephemeral_state = Path::new("..").join(ephemeral_state);
                     tracing::info!("Loading ephemeral state from {}", ephemeral_state.display());
-                    #[cfg(target_os = "macos")]
-                    let tar = "gtar";
-                    #[cfg(not(target_os = "macos"))]
-                    let tar = "tar";
-                    let status = Command::new(tar)
-                        .args([
-                            "-xvf",
-                            ephemeral_state.to_string_lossy().as_ref(),
-                            &format!(
-                                "--one-top-level={}",
-                                config.general_config.rocks_db_path.to_string_lossy()
-                            ),
-                        ])
-                        .status()
-                        .expect(
-                            "failed to call `tar` command; ensure it is present on your machine",
-                        );
-                    if !status.success() {
-                        panic!(
-                            "`tar` command failed to decompress ephemeral state from `{}` to `{}`",
-                            ephemeral_state.display(),
-                            config.general_config.rocks_db_path.display(),
-                        );
-                    }
+                    zksync_os_server::util::unpack_ephemeral_state(
+                        &ephemeral_state,
+                        &config.general_config.rocks_db_path,
+                    );
                 }
             };
 
@@ -734,8 +705,14 @@ async fn download_prover_and_unpack(gpu: bool) -> String {
             "downloading prover service archive from {url} to {}",
             archive_path.display()
         );
-        let resp = download_prover_binary(&url).expect("failed to download");
-        let body = resp.bytes().expect("failed to read response body").to_vec();
+        let resp = download_prover_binary(&url)
+            .await
+            .expect("failed to download");
+        let body = resp
+            .bytes()
+            .await
+            .expect("failed to read response body")
+            .to_vec();
         std::fs::write(archive_path.as_path(), body).expect("failed to write archive");
     }
 
@@ -745,19 +722,21 @@ async fn download_prover_and_unpack(gpu: bool) -> String {
             .expect("failed to clear previous extraction dir");
     }
     std::fs::create_dir_all(extract_dir.as_path()).expect("failed to create extraction dir");
-    let status = Command::new("tar")
-        .arg("-xzf")
-        .arg(archive_path.as_path())
-        .arg("-C")
-        .arg(extract_dir.as_path())
-        .status()
-        .expect("failed to execute `tar` to unpack prover archive");
-    if !status.success() {
-        panic!(
-            "failed to unpack prover archive {} with status {status}",
-            archive_path.display()
-        );
-    }
+    let (archive_path_clone, extract_dir_clone) = (archive_path.clone(), extract_dir.clone());
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::open(&archive_path_clone)
+            .expect("prover archive exists and is readable");
+        tar::Archive::new(flate2::read::GzDecoder::new(file))
+            .unpack(&extract_dir_clone)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "failed to unpack prover archive {}: {e}",
+                    archive_path_clone.display()
+                )
+            });
+    })
+    .await
+    .expect("extraction task did not panic");
 
     let extracted_binary_path =
         find_first_prover_binary(extract_dir.as_path()).unwrap_or_else(|| {
@@ -789,7 +768,7 @@ async fn download_prover_and_unpack(gpu: bool) -> String {
 }
 
 #[cfg(feature = "prover-tests")]
-fn find_first_prover_binary(dir: &Path) -> Option<PathBuf> {
+fn find_first_prover_binary(dir: &Path) -> Option<std::path::PathBuf> {
     for entry in std::fs::read_dir(dir).ok()? {
         let path = entry.ok()?.path();
         if path.is_dir() {
@@ -810,7 +789,12 @@ fn find_first_prover_binary(dir: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(feature = "prover-tests")]
-fn download_prover_binary(url: &str) -> anyhow::Result<reqwest::blocking::Response> {
+async fn download_prover_binary(url: &str) -> anyhow::Result<reqwest::Response> {
+    use reqwest::{
+        Client, StatusCode,
+        header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT},
+    };
+
     const DOWNLOAD_MAX_ATTEMPTS: usize = 5;
     const DOWNLOAD_TIMEOUT_SECS: u64 = 60;
     const DOWNLOAD_BASE_BACKOFF_MS: u64 = 500;
@@ -840,11 +824,10 @@ fn download_prover_binary(url: &str) -> anyhow::Result<reqwest::blocking::Respon
     let client = Client::builder()
         .default_headers(headers)
         .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
-        .build()
-        .unwrap();
+        .build()?;
 
     for attempt in 1..=DOWNLOAD_MAX_ATTEMPTS {
-        let response = client.get(url).send();
+        let response = client.get(url).send().await;
         match response {
             Ok(response) => {
                 let status = response.status();

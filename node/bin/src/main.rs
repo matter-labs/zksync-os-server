@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use smart_config::{ConfigRepository, ConfigSources, Environment, Json, Yaml};
-use std::process::Command;
 use std::{fs, future, path::Path, time::Duration};
 use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
@@ -447,28 +446,10 @@ fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
 
     if let Some(ephemeral_state) = &config.general_config.ephemeral_state {
         tracing::info!("Loading ephemeral state from {}", ephemeral_state.display());
-        #[cfg(target_os = "macos")]
-        let tar = "gtar";
-        #[cfg(not(target_os = "macos"))]
-        let tar = "tar";
-        let status = Command::new(tar)
-            .args([
-                "-xvf",
-                ephemeral_state.to_string_lossy().as_ref(),
-                &format!(
-                    "--one-top-level={}",
-                    config.general_config.rocks_db_path.to_string_lossy()
-                ),
-            ])
-            .status()
-            .expect("failed to call `tar` command; ensure it is present on your machine");
-        if !status.success() {
-            panic!(
-                "`tar` command failed to decompress ephemeral state from `{}` to `{}`",
-                ephemeral_state.display(),
-                config.general_config.rocks_db_path.display(),
-            );
-        }
+        zksync_os_server::util::unpack_ephemeral_state(
+            ephemeral_state,
+            &config.general_config.rocks_db_path,
+        );
     }
 
     Some(tempdir)
