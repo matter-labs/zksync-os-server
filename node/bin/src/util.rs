@@ -9,6 +9,8 @@ use std::path::Path;
 /// We detect gzip compression via magic bytes rather than file extension so that the
 /// caller never has to worry about naming conventions.
 pub fn unpack_ephemeral_state(archive_path: &Path, dest: &Path) {
+    std::fs::create_dir_all(dest)
+        .expect("failed to create destination directory for ephemeral state");
     let file =
         std::fs::File::open(archive_path).expect("ephemeral state archive exists and is readable");
     let mut probe = BufReader::new(file);
