@@ -14136,6 +14136,7 @@ dependencies = [
  "fs2",
  "futures",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
