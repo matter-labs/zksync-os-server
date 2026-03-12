@@ -23,12 +23,16 @@ fn decompress_l1_states() {
     };
 
     for entry in entries.flatten() {
-        let gz_path = entry.path().join("l1-state.json.gz");
-        println!("cargo::rerun-if-changed={}", gz_path.display());
-
-        if !gz_path.is_file() {
+        if !entry.path().is_dir() {
             continue;
         }
+
+        let gz_path = entry.path().join("l1-state.json.gz");
+        assert!(
+            gz_path.is_file(),
+            "expected {} to exist",
+            gz_path.display()
+        );
 
         let compressed = std::fs::read(&gz_path)
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", gz_path.display()));
@@ -36,12 +40,13 @@ fn decompress_l1_states() {
         let hash = Sha256::digest(&compressed);
         let hex_hash = format!("{hash:x}");
 
-        // The decompressed JSON lives next to the .gz file.
-        let json_path = gz_path.with_extension(""); // strips .gz
+        // l1-state.json.gz → l1-state.json (with_extension strips last extension)
+        let json_path = gz_path.with_extension("");
         let hash_path = json_path.with_extension("json.sha256");
 
-        // Skip decompression if the hash file matches.
-        if let Ok(existing_hash) = std::fs::read_to_string(&hash_path)
+        // Skip decompression if the output exists and the hash file matches.
+        if json_path.is_file()
+            && let Ok(existing_hash) = std::fs::read_to_string(&hash_path)
             && existing_hash.trim() == hex_hash
         {
             continue;
@@ -57,12 +62,6 @@ fn decompress_l1_states() {
             .unwrap_or_else(|e| panic!("failed to write {}: {e}", json_path.display()));
         std::fs::write(&hash_path, &hex_hash)
             .unwrap_or_else(|e| panic!("failed to write {}: {e}", hash_path.display()));
-
-        println!(
-            "cargo::warning=decompressed {} ({} bytes)",
-            gz_path.display(),
-            decoded.len()
-        );
     }
 }
 
