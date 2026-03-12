@@ -2,7 +2,47 @@ use cargo_metadata::{MetadataCommand, PackageId};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
+use serde::Deserialize;
+use std::collections::HashMap;
 use url::Url;
+
+/// A single proving version entry from `versions.toml`.
+#[derive(Deserialize)]
+struct ProvingEntry {
+    /// The forward_system git tag that identifies this proving version.
+    forward_system_tag: String,
+    /// The release tag from which app.bin files are downloaded.
+    app_bin_tag: String,
+}
+
+/// Top-level structure of `versions.toml`.
+#[derive(Deserialize)]
+struct VersionsManifest {
+    proving: HashMap<String, ProvingEntry>,
+}
+
+fn load_versions_manifest() -> anyhow::Result<VersionsManifest> {
+    // versions.toml lives at the workspace root, two levels up from lib/multivm/
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")?;
+    let workspace_root = std::path::Path::new(&manifest_dir)
+        .parent()
+        .and_then(|p| p.parent())
+        .ok_or_else(|| anyhow::anyhow!("cannot determine workspace root from {manifest_dir}"))?;
+    let path = workspace_root.join("versions.toml");
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", path.display()))?;
+    println!("cargo:rerun-if-changed={}", path.display());
+    toml::from_str(&content).map_err(|e| anyhow::anyhow!("failed to parse versions.toml: {e}"))
+}
+
+/// Look up the proving version for a given forward_system git tag.
+fn proving_version_from_tag(manifest: &VersionsManifest, tag: &str) -> Option<String> {
+    manifest
+        .proving
+        .iter()
+        .find(|(_, entry)| entry.forward_system_tag == tag)
+        .map(|(version, _)| version.clone())
+}
 
 fn parse_git_tag(package_id: &PackageId) -> anyhow::Result<String> {
     let url = Url::parse(&package_id.to_string())?;
@@ -11,13 +51,6 @@ fn parse_git_tag(package_id: &PackageId) -> anyhow::Result<String> {
         .find(|(key, _)| key == "tag")
         .ok_or_else(|| anyhow::anyhow!("missing tag in git url `{url}`"))?;
     Ok(tag.to_string())
-}
-
-fn proving_version_from_tag(tag: &str) -> Option<String> {
-    match tag {
-        "v0.2.8-interface-v0.0.14" => Some(String::from("V6")),
-        _ => None,
-    }
 }
 
 const DOWNLOAD_MAX_ATTEMPTS: usize = 5;
@@ -97,6 +130,7 @@ fn main() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let metadata = MetadataCommand::new().exec().unwrap();
     let client = new_http_client().expect("failed to create HTTP client");
+    let versions = load_versions_manifest().expect("failed to load versions.toml");
 
     // Find forward_system crate and expose its path to the directory containing `app*.bin` files.
     for package in &metadata.packages {
@@ -111,18 +145,11 @@ fn main() {
             }
         };
 
-        if let Some(proving_version) = proving_version_from_tag(&tag) {
-            // TEMPORARY HACK for V6!!!
-            // We've updated interface and rust toolchain for corresponding zksync-os version and it caused a change in binaries.
-            // We need to use original V6 binaries from zksync-os v0.2.5.
-            // Should be removed as soon as we can get rig of proving V6.
-            let tag = if proving_version == "V6" {
-                "v0.2.5".to_owned()
-            } else {
-                tag
-            };
+        if let Some(proving_version) = proving_version_from_tag(&versions, &tag) {
+            let entry = &versions.proving[&proving_version];
+            let download_tag = &entry.app_bin_tag;
 
-            let dir = format!("{manifest_dir}/apps/{tag}");
+            let dir = format!("{manifest_dir}/apps/{download_tag}");
             std::fs::create_dir_all(&dir).expect("failed to create directory");
             for variant in [
                 "multiblock_batch",
@@ -130,7 +157,7 @@ fn main() {
                 "singleblock_batch_logging_enabled",
             ] {
                 let url = format!(
-                    "https://github.com/matter-labs/zksync-os/releases/download/{tag}/{variant}.bin"
+                    "https://github.com/matter-labs/zksync-os/releases/download/{download_tag}/{variant}.bin"
                 );
                 let path = format!("{dir}/{variant}.bin");
                 if std::fs::exists(&path).expect("failed to check file existence") {

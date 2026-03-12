@@ -1,0 +1,20 @@
+# Version artifact registry for zksync-os-server.
+#
+# Single source of truth for mapping forward_system git tags to proving versions
+# and the app.bin release tags used at build time. The multivm build script reads
+# this file to know which binaries to download for each proving version.
+#
+# When adding a new proving version:
+#   1. Add a [proving.<VERSION>] section below.
+#   2. Set `forward_system_tag` to the git tag that identifies this version.
+#   3. Set `app_bin_tag` to the release tag from which app.bin files are downloaded.
+#      This is usually the same as forward_system_tag, but may differ if a toolchain
+#      change altered the binary output (see V6 below).
+
+[proving.V6]
+# forward_system tag v0.2.8-interface-v0.0.14 maps to proving version V6.
+forward_system_tag = "v0.2.8-interface-v0.0.14"
+# App binaries are downloaded from the v0.2.5 release, not v0.2.8, because a Rust
+# toolchain update changed the binary output. The on-chain proofs were generated with
+# v0.2.5 binaries and we must continue using them for verification to pass.
+app_bin_tag = "v0.2.5"
