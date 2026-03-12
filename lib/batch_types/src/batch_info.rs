@@ -239,6 +239,8 @@ impl BatchInfo {
             dependency_roots_rolling_hash: commit_info.dependency_roots_rolling_hash,
             l2_to_l1_logs_root_hash: commit_info.l2_to_l1_logs_root_hash,
             commitment,
+            // unused
+            last_block_timestamp: Some(0),
         }
     }
 }
