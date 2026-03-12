@@ -14,6 +14,7 @@ mod prover_input_generator;
 mod provider;
 mod state_initializer;
 pub mod tree_manager;
+pub mod util;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};

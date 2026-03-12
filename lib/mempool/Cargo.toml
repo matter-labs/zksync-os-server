@@ -17,8 +17,11 @@ zksync_os_reth_compat.workspace = true
 zksync_os_interface = { workspace = true }
 
 reth-transaction-pool = { workspace = true }
+reth-primitives = { workspace = true }
 reth-primitives-traits = { workspace = true }
 reth-execution-types = { workspace = true }
+reth-evm-ethereum = { workspace = true }
+reth-chainspec = { workspace = true }
 
 alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips"] }
 auto_impl.workspace = true

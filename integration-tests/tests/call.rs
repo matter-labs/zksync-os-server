@@ -1,4 +1,4 @@
-use alloy::consensus::BlobTransactionSidecar;
+use alloy::consensus::{BlobTransactionSidecar, BlobTransactionSidecarVariant};
 use alloy::eips::BlockId;
 use alloy::primitives::{U256, b256};
 use alloy::providers::Provider;
@@ -42,11 +42,13 @@ async fn call_fail() -> anyhow::Result<()> {
     tester
         .l2_provider
         .call(TransactionRequest {
-            sidecar: Some(BlobTransactionSidecar {
-                blobs: vec![],
-                commitments: vec![],
-                proofs: vec![],
-            }),
+            sidecar: Some(BlobTransactionSidecarVariant::Eip4844(
+                BlobTransactionSidecar {
+                    blobs: vec![],
+                    commitments: vec![],
+                    proofs: vec![],
+                },
+            )),
             ..Default::default()
         })
         .expect_to_fail("EIP-4844 transactions are not supported")
