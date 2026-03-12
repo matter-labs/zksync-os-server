@@ -3,19 +3,19 @@ use crate::subpools::l1::L1Subpool;
 use crate::subpools::l2::{L2Subpool, L2TransactionsStreamMarker};
 use crate::subpools::sl_chain_id::SlChainIdSubpool;
 use crate::subpools::upgrade::{UpgradeSubpool, UpgradeTransactionsStream};
-use alloy::consensus::{Block, BlockBody, Header, Sealed};
+use alloy::consensus::{Header, Sealed};
 use alloy::primitives::TxHash;
 use futures::stream::{BoxStream, PollNext};
 use futures::{Stream, StreamExt};
 use reth_execution_types::ChangedAccount;
+use reth_primitives::{Block, BlockBody};
 use reth_primitives_traits::SealedBlock;
 use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
 use tokio::time::Instant;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    InteropRootsLogIndex, L1TxSerialId, L2Envelope, SystemTxType, UpgradeMetadata, ZkEnvelope,
-    ZkTransaction,
+    InteropRootsLogIndex, L1TxSerialId, SystemTxType, UpgradeMetadata, ZkEnvelope, ZkTransaction,
 };
 
 /// General pool that provides unified access to all transaction sources in the system.
@@ -208,7 +208,7 @@ impl<T: L2Subpool> Pool<T> {
             .await;
 
         let (header, hash) = header.into_parts();
-        let body = BlockBody::<L2Envelope>::default();
+        let body = BlockBody::default();
         let block = Block::new(header, body);
         let sealed_block = SealedBlock::new_unchecked(block, hash);
         let changed_accounts = account_diffs
