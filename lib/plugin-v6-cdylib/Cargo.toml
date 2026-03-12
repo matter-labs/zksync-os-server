@@ -1,0 +1,20 @@
+[package]
+name = "zksync_os_plugin_v6_cdylib"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+zksync_os_sys.workspace = true
+zksync_os_interface.workspace = true
+zk_os_forward_system_dev.workspace = true
+alloy = { workspace = true, default-features = false }
+bincode.workspace = true
