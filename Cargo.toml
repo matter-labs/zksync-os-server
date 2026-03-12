@@ -36,6 +36,8 @@ members = [
     "lib/base_token_adjuster",
     "lib/reth_compat",
     "lib/operator_signer",
+    "lib/plugin-api",
+    "lib/plugin-v6",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -267,6 +269,8 @@ zksync_os_external_price_api = { version = "=0.16.0", path = "lib/external_price
 zksync_os_base_token_adjuster = { version = "=0.16.0", path = "lib/base_token_adjuster" }
 zksync_os_reth_compat = { version = "=0.16.0", path = "lib/reth_compat" }
 zksync_os_operator_signer = { version = "=0.16.0", path = "lib/operator_signer" }
+zksync_os_plugin_api = { version = "=0.16.0", path = "lib/plugin-api" }
+zksync_os_plugin_v6 = { version = "=0.16.0", path = "lib/plugin-v6" }
 
 zksync_os_server = { version = "=0.16.0", path = "node/bin" }
 
