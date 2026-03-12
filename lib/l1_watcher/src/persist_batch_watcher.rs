@@ -5,7 +5,6 @@ use alloy::primitives::Address;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Log, Topic, ValueOrArray};
 use alloy::sol_types::SolEvent;
-use anyhow::Context;
 use std::collections::HashMap;
 use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
@@ -37,24 +36,7 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality>
         finality: Finality,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
-        let last_persisted_batch = {
-            let last_persisted_batch_number = batch_storage.latest_batch();
-            if last_persisted_batch_number == 0 {
-                last_persisted_batch_number
-            } else {
-                // `execute_sl_block_number` was added recently and in order for it to be present in all persisted batches,
-                // we check if it is set for the last persisted batch. If not, it means that migration wasn't complete and
-                // pretend as if we don't have any persisted batches so they get overwritten.
-                let last_persisted_batch = batch_storage
-                    .get_batch_by_number(last_persisted_batch_number)?
-                    .context("Failed to get last persisted batch from storage")?;
-                if last_persisted_batch.execute_sl_block_number.is_some() {
-                    last_persisted_batch_number
-                } else {
-                    0
-                }
-            }
-        };
+        let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(
             current_l1_block,
             last_persisted_batch,
