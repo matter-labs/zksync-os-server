@@ -234,10 +234,10 @@ jobs:
 
       - name: Decompress L1 state fixtures
         run: |
-          for gz in local-chains/*/l1-state.json.gz; do
-            json="${gz%.gz}"
+          for gz_file in local-chains/*/l1-state.json.gz; do
+            json="${gz_file%.gz}"
             if [ ! -f "$json" ]; then
-              gunzip -k "$gz"
+              gunzip -k "$gz_file"
             fi
           done
 
