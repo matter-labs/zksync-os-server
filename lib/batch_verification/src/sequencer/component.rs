@@ -218,6 +218,13 @@ impl BatchVerifier {
         response_channels: ResponseChannelsMapArc,
         server: Arc<BatchVerificationServer>,
     ) -> Self {
+        BATCH_VERIFICATION_SEQUENCER_METRICS
+            .threshold
+            .set(component.threshold);
+        BATCH_VERIFICATION_SEQUENCER_METRICS
+            .validators_count
+            .set(component.validators.len());
+
         Self {
             config: component.config.clone(),
             accepted_signers: component.validators.clone(),
@@ -445,6 +452,7 @@ impl BatchVerifier {
                 result: BatchVerificationResult::Refused(reason),
                 ..
             } => {
+                BATCH_VERIFICATION_SEQUENCER_METRICS.failed_responses[&"refused"].inc();
                 tracing::info!(
                     batch_number = batch_envelope.batch_number(),
                     request_id = request_id,
@@ -462,6 +470,7 @@ impl BatchVerifier {
             self.multisig_committer,
             &batch_envelope.batch.protocol_version,
         ) else {
+            BATCH_VERIFICATION_SEQUENCER_METRICS.failed_responses[&"invalid_signature"].inc();
             tracing::warn!(
                 batch_number = batch_envelope.batch_number(),
                 request_id = request_id,
@@ -471,6 +480,7 @@ impl BatchVerifier {
         };
 
         if !self.accepted_signers.contains(validated_signature.signer()) {
+            BATCH_VERIFICATION_SEQUENCER_METRICS.failed_responses[&"unknown_signer"].inc();
             tracing::warn!(
                 batch_number = batch_envelope.batch_number(),
                 request_id = request_id,
