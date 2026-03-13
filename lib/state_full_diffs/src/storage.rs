@@ -72,9 +72,8 @@ impl FullDiffsStorage {
 
         if override_allowed && block_number <= latest_block {
             tracing::info!(
-                "Rolling back state for block range [{}; {}]",
-                block_number,
-                latest_block
+                "Persisting block {block_number}. Latest block in storage: {latest_block} \
+                Rolling back state for block range {block_number}..={latest_block}",
             );
             let mut batch = self.rocks.new_write_batch();
             // Iterate through all keys and delete those with block_number >= the given block_number
