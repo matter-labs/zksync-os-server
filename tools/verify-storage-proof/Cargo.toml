@@ -10,7 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-zksync_os_rpc_api = { path = "../../lib/rpc_api" }
+zksync_os_rpc_api = { path = "../../lib/rpc_api", features = ["server"] }
 zksync_os_merkle_tree_api = { path = "../../lib/merkle_tree_api" }
 
 alloy = { workspace = true, default-features = false, features = [
@@ -19,7 +19,6 @@ alloy = { workspace = true, default-features = false, features = [
     "rpc-types",
     "providers",
     "sol-types",
-    "eips",
 ] }
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }

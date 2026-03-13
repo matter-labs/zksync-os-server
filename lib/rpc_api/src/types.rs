@@ -190,6 +190,25 @@ impl AddressScopedKey {
     }
 }
 
+/// Data from `StoredBatchInfo` needed to reconstruct and verify the batch hash against L1.
+///
+/// Together with the state commitment (derived from the Merkle proof), these fields allow
+/// reconstructing the full `StoredBatchInfo` struct and comparing its keccak256 hash against
+/// `storedBatchHash(batchNumber)` on the diamond proxy.
+///
+/// Two `StoredBatchInfo` fields are omitted because they are always zero in ZKsync OS:
+/// `indexRepeatedStorageChanges` and `timestamp`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct L1VerificationData {
+    pub batch_number: u64,
+    pub number_of_layer1_txs: u64,
+    pub priority_operations_hash: B256,
+    pub dependency_roots_rolling_hash: B256,
+    pub l2_to_l1_logs_root_hash: B256,
+    pub commitment: B256,
+}
+
 /// Storage proof returned from the `zks_getProof` RPC method. Rooted in the batch hash recorded on L1.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -201,6 +220,8 @@ pub struct BatchStorageProof {
     pub state_commitment_preimage: StateCommitmentPreimage,
     /// Flat storage proofs for each queried key.
     pub storage_proofs: Vec<flat::StorageSlotProof<AddressScopedKey>>,
+    /// Fields from `StoredBatchInfo` for L1 verification.
+    pub l1_verification_data: L1VerificationData,
 }
 
 impl BatchStorageProof {

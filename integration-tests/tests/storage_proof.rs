@@ -1,49 +1,38 @@
 use std::time::Duration;
 
+use alloy::network::ReceiptResponse;
 use alloy::primitives::{B256, U256};
 use alloy::providers::Provider;
-use alloy::rpc::types::Filter;
-use alloy::sol_types::SolEvent;
-use zksync_os_contract_interface::IExecutor::BlockCommit;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::contracts::Counter::CounterInstance;
 use zksync_os_integration_tests::contracts::Counter;
+use zksync_os_integration_tests::contracts::Counter::CounterInstance;
 use zksync_os_integration_tests::provider::ZksyncApi;
+use zksync_os_verify_storage_proof::l1::{fetch_stored_batch_hash, resolve_diamond_proxy};
 use zksync_os_verify_storage_proof::{VerifyParams, verify_storage_proof};
 
-async fn wait_for_batch_commitment(tester: &Tester, batch_number: u64) -> B256 {
-    let chain_id = tester.l2_provider.get_chain_id().await.unwrap();
-    let bridgehub_address = tester.l2_zk_provider.get_bridgehub_contract().await.unwrap();
-    let l1_state = L1State::fetch(
-        tester.l1_provider().clone().erased(),
-        tester.l1_provider().clone().erased(),
-        bridgehub_address,
-        chain_id,
+/// Waits until `storedBatchHash(batch_number)` returns a non-zero value on L1.
+async fn wait_for_batch_commitment(tester: &Tester, batch_number: u64) {
+    let bridgehub_address = tester
+        .l2_zk_provider
+        .get_bridgehub_contract()
+        .await
+        .unwrap();
+    let diamond_proxy = resolve_diamond_proxy(
+        tester.l1_provider(),
+        &tester.l2_zk_provider,
+        None,
+        Some(bridgehub_address),
     )
     .await
     .unwrap();
-    let diamond_proxy_address = l1_state.diamond_proxy_address_sl();
-
-    let filter = Filter::new()
-        .event_signature(BlockCommit::SIGNATURE_HASH)
-        .address(diamond_proxy_address);
 
     loop {
-        let logs = tester
-            .l1_provider()
-            .get_logs(&filter)
-            .await
-            .expect("failed to get logs");
-        for log in &logs {
-            let topics = log.inner.data.topics();
-            let bn = U256::from_be_bytes(topics[1].0);
-            if u64::try_from(bn).unwrap() == batch_number {
-                return topics[2];
-            }
+        match fetch_stored_batch_hash(tester.l1_provider(), diamond_proxy, batch_number).await {
+            Ok(_) => return,
+            Err(_) => tokio::time::sleep(Duration::from_millis(200)).await,
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -82,7 +71,7 @@ async fn verify_storage_proof_with_l1_contract() -> anyhow::Result<()> {
 
     // Wait for batch 2 to be committed on L1
     let batch_number = 2;
-    let _batch_commitment = wait_for_batch_commitment(&tester, batch_number).await;
+    wait_for_batch_commitment(&tester, batch_number).await;
 
     // Wait for proof to be available
     let queried_keys = vec![B256::ZERO];
@@ -111,8 +100,8 @@ async fn verify_storage_proof_with_l1_contract() -> anyhow::Result<()> {
     )
     .await?;
 
-    // The commitment should match L1
-    assert_eq!(result.storage_commitment, result.l1_batch_hash);
+    // The reconstructed hash should match L1
+    assert_eq!(result.computed_batch_hash, result.on_chain_batch_hash);
     // Slot 0 should have value 42 (counter was incremented)
     assert_eq!(
         result.storage_values[0],
@@ -140,7 +129,7 @@ async fn verify_storage_proof_with_bridgehub_discovery() -> anyhow::Result<()> {
 
     // Wait for batch 2 to be committed on L1
     let batch_number = 2;
-    let _batch_commitment = wait_for_batch_commitment(&tester, batch_number).await;
+    wait_for_batch_commitment(&tester, batch_number).await;
 
     // Wait for proof to be available
     let queried_keys = vec![B256::ZERO];
@@ -169,7 +158,7 @@ async fn verify_storage_proof_with_bridgehub_discovery() -> anyhow::Result<()> {
     )
     .await?;
 
-    assert_eq!(result.storage_commitment, result.l1_batch_hash);
+    assert_eq!(result.computed_batch_hash, result.on_chain_batch_hash);
     // Contract was just deployed, slot 0 should be empty (counter not incremented)
     assert_eq!(result.storage_values[0], (B256::ZERO, None));
 
@@ -202,7 +191,7 @@ async fn verify_storage_proof_empty_slot() -> anyhow::Result<()> {
         .expect("no contract deployed");
 
     let batch_number = 2;
-    let _batch_commitment = wait_for_batch_commitment(&tester, batch_number).await;
+    wait_for_batch_commitment(&tester, batch_number).await;
 
     let queried_keys = vec![B256::ZERO, B256::repeat_byte(0x1f)];
     loop {
@@ -229,7 +218,7 @@ async fn verify_storage_proof_empty_slot() -> anyhow::Result<()> {
     )
     .await?;
 
-    assert_eq!(result.storage_commitment, result.l1_batch_hash);
+    assert_eq!(result.computed_batch_hash, result.on_chain_batch_hash);
     // Both slots should be empty
     for (key, value) in &result.storage_values {
         assert!(value.is_none(), "Expected empty slot for key {key}");

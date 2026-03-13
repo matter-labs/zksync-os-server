@@ -59,8 +59,8 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     println!("Proof verified successfully against L1 batch commitment.");
-    println!("  Batch number:        {}", args.batch_number);
-    println!("  Storage commitment:  {}", result.storage_commitment);
+    println!("  Batch number:    {}", args.batch_number);
+    println!("  Batch hash:      {}", result.computed_batch_hash);
     println!();
     println!("Storage values:");
     for (key, value) in &result.storage_values {
