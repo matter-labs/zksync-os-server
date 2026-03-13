@@ -1,12 +1,6 @@
 name: Docker build and release
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag_name:
-        description: "Tag of an image to build."
-        type: string
-        required: true
   push:
     branches:
       - main
@@ -59,7 +53,6 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}
             us-docker.pkg.dev/matterlabs-infra/matterlabs-docker/${{ matrix.component }}
           tags: |
-            type=raw,value=${{ inputs.tag_name }},enable=${{ inputs.tag_name != '' }}
             type=ref,event=tag
             type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
             type=sha,format=short,prefix=,suffix=-{{date 'x'}},enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
