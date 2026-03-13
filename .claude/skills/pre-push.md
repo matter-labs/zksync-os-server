@@ -54,9 +54,20 @@ Any bigger change to server logic **must** have corresponding integration tests 
 
 Verify that no existing versioned wire format files under `lib/network/src/wire/replays/v*.rs` were modified. If wire format changes are needed, add a new versioned file instead.
 
+## 7. Mark Checks as Passed
+
+Once **all** checks above pass, create the flag file so the push hook allows the push:
+
+```bash
+touch .pre-push-passed
+```
+
+Then proceed with `git push`. The hook will automatically remove the flag after the push.
+
 ## Failure Protocol
 
 If any check fails:
 1. Fix the issue.
 2. Re-run **all** checks from the beginning (not just the one that failed).
-3. Only push once every check passes.
+3. Do **not** create the `.pre-push-passed` flag until every check passes.
+4. Only push once every check passes.
