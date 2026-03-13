@@ -55,7 +55,7 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
-use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
@@ -213,6 +213,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
+    if node_role.is_main() {
+        check_batch_verification_mismatch(
+            &config.batch_verification_config,
+            &l1_state.batch_verification,
+        );
+    }
 
     match (config.l1_sender_config.pubdata_mode, l1_state.da_input_mode) {
         (
@@ -1183,6 +1189,37 @@ fn init_and_report_internal_config_manager(
     internal_config_manager
 }
 
+/// Warns when the main node's batch verification server threshold is lower than the
+/// threshold configured on L1.
+///
+/// This is a startup sanity check only: the pipeline later enforces the effective threshold by
+/// taking the max(server.threshold, l1.threshold).
+///
+/// In practice, it means that the server operator expectation and the L1 state are mismatched.
+fn check_batch_verification_mismatch(
+    server_config: &config::BatchVerificationConfig,
+    l1_config: &BatchVerificationSL,
+) -> bool {
+    if !server_config.server_enabled {
+        return false;
+    }
+
+    let l1_threshold = match l1_config {
+        BatchVerificationSL::Enabled(config) => config.threshold,
+        BatchVerificationSL::Disabled => return false,
+    };
+
+    if server_config.threshold < l1_threshold {
+        tracing::warn!(
+            configured_threshold = server_config.threshold,
+            l1_threshold,
+            "Batch verification server threshold is lower than the L1 threshold; consider increasing the server threshold"
+        );
+        return true;
+    }
+    false
+}
+
 async fn commit_proof_execute_block_numbers(
     l1_state: &L1State,
     committed_batch_provider: &CommittedBatchProvider,
@@ -1392,4 +1429,76 @@ async fn find_last_matching_main_node_block(
         }
     }
     Ok(left)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_batch_verification_mismatch;
+    use crate::config::BatchVerificationConfig;
+    use alloy::primitives::address;
+    use zksync_os_contract_interface::l1_discovery::{
+        BatchVerificationSL, BatchVerificationSLConfig,
+    };
+
+    #[test]
+    fn test_batch_verification_is_disabled_on_server() {
+        let server_config = BatchVerificationConfig::default();
+        let l1_config = BatchVerificationSL::Enabled(BatchVerificationSLConfig {
+            threshold: 0,
+            validators: vec![address!("0x0000000000000000000000000000000000000001")],
+        });
+        let warned = check_batch_verification_mismatch(&server_config, &l1_config);
+        assert!(!warned);
+    }
+
+    #[test]
+    fn test_batch_verification_is_disabled_on_l1() {
+        let config = BatchVerificationConfig {
+            server_enabled: true,
+            ..Default::default()
+        };
+        let warned = check_batch_verification_mismatch(&config, &BatchVerificationSL::Disabled);
+        assert!(!warned);
+    }
+
+    #[test]
+    fn test_batch_verification_is_mismatched() {
+        let server_config = BatchVerificationConfig {
+            server_enabled: true,
+            threshold: 2,
+            ..Default::default()
+        };
+        let l1_config = BatchVerificationSL::Enabled(BatchVerificationSLConfig {
+            threshold: 3,
+            validators: vec![
+                address!("0x0000000000000000000000000000000000000001"),
+                address!("0x0000000000000000000000000000000000000002"),
+                address!("0x0000000000000000000000000000000000000003"),
+                address!("0x0000000000000000000000000000000000000004"),
+            ],
+        });
+        let warned = check_batch_verification_mismatch(&server_config, &l1_config);
+
+        assert!(warned);
+    }
+
+    #[test]
+    fn test_batch_verification_happy_path() {
+        let server_config = BatchVerificationConfig {
+            server_enabled: true,
+            threshold: 3,
+            ..Default::default()
+        };
+        let l1_config = BatchVerificationSL::Enabled(BatchVerificationSLConfig {
+            threshold: 2,
+            validators: vec![
+                address!("0x0000000000000000000000000000000000000001"),
+                address!("0x0000000000000000000000000000000000000002"),
+                address!("0x0000000000000000000000000000000000000003"),
+            ],
+        });
+        let warned = check_batch_verification_mismatch(&server_config, &l1_config);
+
+        assert!(!warned);
+    }
 }
