@@ -22,8 +22,8 @@ zksync_os_network.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
-fs2.workspace = true
 flate2.workspace = true
+fs2.workspace = true
 reqwest = { workspace = true, optional = true }
 tar.workspace = true
 tokio.workspace = true
@@ -41,6 +41,10 @@ serde_yaml.workspace = true
 # Needed for upgrade functionality tests
 zk_os_api.workspace = true
 zk_os_basic_system.workspace = true
+
+[build-dependencies]
+flate2.workspace = true
+sha2 = { workspace = true }
 
 [dev-dependencies]
 test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
