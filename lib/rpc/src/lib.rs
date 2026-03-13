@@ -5,6 +5,7 @@ mod config;
 pub use config::RpcConfig;
 use std::sync::Arc;
 use tokio::sync::watch;
+use tower::ServiceBuilder;
 
 mod eth_call_handler;
 pub use eth_call_handler::EthCallHandler;
@@ -17,6 +18,7 @@ mod result;
 mod rpc_storage;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
+mod http_timing_layer;
 pub mod js_tracer;
 mod log_proof_utils;
 mod monitoring_middleware;
@@ -32,6 +34,7 @@ use crate::debug_impl::DebugNamespace;
 use crate::eth_filter_impl::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
+use crate::http_timing_layer::HttpTimingLayer;
 use crate::monitoring_middleware::Monitoring;
 use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
@@ -127,7 +130,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Subpool
         // Allow requests from any origin
         .allow_origin(Any)
         .allow_headers([hyper::header::CONTENT_TYPE]);
-    let middleware = tower::ServiceBuilder::new().layer(cors);
+    let middleware = ServiceBuilder::new().layer(HttpTimingLayer).layer(cors);
 
     let max_response_size_bytes = config.max_response_size_bytes();
     let rpc_middleware = RpcServiceBuilder::new()
