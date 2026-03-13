@@ -424,8 +424,21 @@ impl Tester {
         .await?;
 
         let tempdir = Arc::new(tempdir);
+        let sl_provider = if let Some(gateway_rpc_url) = &gateway_rpc_url {
+            DynProvider::new(
+                ProviderBuilder::new()
+                    .connect(gateway_rpc_url)
+                    .await
+                    .with_context(|| {
+                        format!("failed to connect to gateway RPC at {gateway_rpc_url}")
+                    })?,
+            )
+        } else {
+            DynProvider::new(l1.provider.clone())
+        };
         let prover_tester = ProverTester::new(
             EthDynProvider::new(l1.provider.clone()),
+            sl_provider,
             EthDynProvider::new(l2_provider.clone()),
             DynProvider::new(l2_zk_provider.clone()),
         );
@@ -705,6 +718,10 @@ impl GatewayTester {
 
     pub fn gateway(&self) -> &Tester {
         &self.gateway
+    }
+
+    pub fn into_gateway(self) -> Tester {
+        self.gateway
     }
 
     pub fn into_primary_chain(mut self) -> Tester {

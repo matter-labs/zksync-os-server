@@ -5,9 +5,11 @@ use super::default_upgrade::DefaultUpgrade;
 use super::interfaces;
 use crate::Tester;
 use crate::assert_traits::ReceiptAssert;
-use crate::config::{ChainLayout, load_chain_config};
+use crate::config::load_chain_config;
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::provider::{ZksyncApi as _, ZksyncTestingProvider as _};
+use crate::upgrade::interfaces::ChainAssetHandlerBase::ChainAssetHandlerBaseInstance;
+use crate::upgrade::interfaces::ChainTypeManagerV30::ChainTypeManagerV30Instance;
 use crate::upgrade::interfaces::FacetCut;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
@@ -16,14 +18,12 @@ use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use anyhow::Context;
 use zksync_os_server::config::Config;
-use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 use zksync_os_types::ProtocolSemanticVersion;
 
 /// Object that helps with preparation and execution of protocol upgrades in integration tests.
 ///
 /// Tester assumes that governance is an EOA account, and uses impersonation
 /// to execute the upgrade with it.
-/// It also assumes that we don't have a gateway.
 #[derive(Debug)]
 pub struct UpgradeTester {
     pub tester: Tester,
@@ -154,10 +154,8 @@ impl UpgradeTester {
 
     // Fetch the contracts configuration from the tester.
     async fn fetch(tester: Tester) -> anyhow::Result<Self> {
-        let default_config: Config = load_chain_config(ChainLayout::Default {
-            protocol_version: PROTOCOL_VERSION,
-        });
-        let chain_id = default_config
+        let chain_config: Config = load_chain_config(tester.chain_layout);
+        let chain_id = chain_config
             .genesis_config
             .chain_id
             .expect("Chain id is missing in the config");
@@ -186,11 +184,10 @@ impl UpgradeTester {
         let l1_chain_admin_owner = l1_chain_admin.owner().call().await?;
 
         // Bytecode supplier is a bit special: right now it's not discoverable
-        // The value is hardcoded, keep it aligned with `node/bin/src/config.rs`, it must correspond
-        // to the value stored in `l1-state.json.gz`.
-        let bytecode_supplier_address = default_config
+        // yet, so fetch the expected address from the active chain config.
+        let bytecode_supplier_address = chain_config
             .genesis_config
-            .bridgehub_address
+            .bytecode_supplier_address
             .expect("Bytecode supplier address is missing in the config");
         anyhow::ensure!(
             !tester
@@ -298,11 +295,22 @@ impl UpgradeTester {
     }
 
     pub async fn pause_bridgehub_migrations(&self) -> anyhow::Result<()> {
-        let pause_migration_tx = self
-            .bridgehub
-            .pauseMigration()
-            .into_transaction_request()
-            .with_from(self.bridgehub_owner);
+        let pause_migration_tx = if self.tester.chain_layout.protocol_version().contains("v30") {
+            self.bridgehub
+                .pauseMigration()
+                .into_transaction_request()
+                .with_from(self.bridgehub_owner)
+        } else {
+            let chain_asset_handler = self.bridgehub.chainAssetHandler().call().await?;
+            let chain_asset_handler = ChainAssetHandlerBaseInstance::new(
+                chain_asset_handler,
+                self.bridgehub.provider().clone(),
+            );
+            chain_asset_handler
+                .pauseMigration()
+                .into_transaction_request()
+                .with_from(self.bridgehub_owner)
+        };
         self.send_impersonated_transaction(pause_migration_tx)
             .await?;
         Ok(())
@@ -362,9 +370,10 @@ impl UpgradeTester {
         deadline: U256,
         new_version: U256,
     ) -> anyhow::Result<()> {
-        let tx = self
-            .ctm
-            .setNewVersionUpgrade(
+        let tx = if self.tester.chain_layout.protocol_version().contains("v30") {
+            let ctm =
+                ChainTypeManagerV30Instance::new(*self.ctm.address(), self.ctm.provider().clone());
+            ctm.setNewVersionUpgrade(
                 upgrade_data,
                 self.protocol_version
                     .packed()
@@ -373,7 +382,22 @@ impl UpgradeTester {
                 new_version,
             )
             .into_transaction_request()
-            .with_from(self.ctm_owner);
+            .with_from(self.ctm_owner)
+        } else {
+            let verifier = self.diamond_proxy.getVerifier().call().await?;
+            self.ctm
+                .setNewVersionUpgrade(
+                    upgrade_data,
+                    self.protocol_version
+                        .packed()
+                        .expect("incorrect protocol version"),
+                    deadline,
+                    new_version,
+                    verifier,
+                )
+                .into_transaction_request()
+                .with_from(self.ctm_owner)
+        };
         self.send_impersonated_transaction(tx).await?;
         Ok(())
     }

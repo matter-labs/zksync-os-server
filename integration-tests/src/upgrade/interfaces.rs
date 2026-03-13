@@ -5,12 +5,20 @@ alloy::sol! {
 
     #[sol(rpc)]
     contract Bridgehub {
+        address public chainAssetHandler;
+
         // Getters
         function owner() external view returns (address);
         function chainTypeManager(uint256 _chainId) external view returns (address);
         function getZKChain(uint256 _chainId) external view returns (address);
 
-        // Upgrade functionality
+        // Upgrade functionality, only available for v30
+        function pauseMigration() external;
+    }
+
+    #[sol(rpc)]
+    contract ChainAssetHandlerBase {
+        // available for >= v31
         function pauseMigration() external;
     }
 
@@ -39,7 +47,7 @@ alloy::sol! {
     }
 
     #[sol(rpc)]
-    contract ChainTypeManager {
+    contract ChainTypeManagerV30 {
         function owner() external view returns (address);
 
         function setNewVersionUpgrade(
@@ -52,6 +60,20 @@ alloy::sol! {
         function getProtocolVersion(uint256 _chainId) external view returns (uint256);
     }
 
+    #[sol(rpc)]
+    contract ChainTypeManager {
+        function owner() external view returns (address);
+
+        function setNewVersionUpgrade(
+            DiamondCutData calldata _cutData,
+            uint256 _oldProtocolVersion,
+            uint256 _oldProtocolVersionDeadline,
+            uint256 _newProtocolVersion,
+            address _verifier
+        ) external;
+
+        function getProtocolVersion(uint256 _chainId) external view returns (uint256);
+    }
 
     // Represents the diamond proxy of the ZK chain on L1
     #[sol(rpc)]
@@ -61,6 +83,7 @@ alloy::sol! {
         // Getters facet
         function getAdmin() external view returns (address);
         function facets() external view returns (Facet[] memory);
+        function getVerifier() external view returns (address);
 
         // Admin facet
         function upgradeChainFromVersion(uint256 _protocolVersion, DiamondCutData calldata _cutData) external;

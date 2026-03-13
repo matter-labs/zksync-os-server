@@ -2,9 +2,10 @@ use alloy::primitives::{Address, Bytes, FixedBytes, U256};
 use alloy::providers::Provider;
 use alloy::sol_types::SolCall;
 use std::collections::BTreeMap;
-use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::contracts::SampleForceDeployment;
 use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV31, FacetCut, UpgradeTester};
+use zksync_os_integration_tests::{GatewayTester, Tester};
+use zksync_os_server::default_protocol_version::NEXT_PROTOCOL_VERSION;
 
 /// Executes the simplest patch protocol upgrade:
 /// - no contracts are deployed
@@ -30,6 +31,44 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
         .with_force_deployments(BTreeMap::new())
         .with_timestamp(upgrade_timestamp)
         .build();
+
+    upgrade_tester
+        .execute_default_upgrade(
+            &protocol_upgrade,
+            deadline,
+            upgrade_timestamp,
+            true,
+            Vec::new(),
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn upgrade_patch_no_deployments_gateway() -> anyhow::Result<()> {
+    let upgrade_timestamp = U256::from(0); // Protocol upgrade can be executed immediately.
+    let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
+
+    // Test that we can deposit L2 funds from a rich L1 account
+    let gateway_tester = GatewayTester::builder()
+        .protocol_version(NEXT_PROTOCOL_VERSION)
+        .num_chains(1)
+        .build()
+        .await?;
+    let tester = gateway_tester.into_gateway();
+    let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+
+    // Prepare protocol upgrade
+    let protocol_upgrade = upgrade_tester
+        .protocol_upgrade_builder()
+        .await?
+        .bump_patch(1)
+        .with_force_deployments(BTreeMap::new())
+        .with_timestamp(upgrade_timestamp)
+        .build();
+
+    tracing::warn!("upgrade was built");
 
     upgrade_tester
         .execute_default_upgrade(
