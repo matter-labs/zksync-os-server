@@ -1,8 +1,25 @@
 pub mod l1;
 pub mod l2;
 
-use alloy::primitives::{Address, B256};
+use alloy::network::Network;
+use alloy::primitives::{Address, B256, U256, keccak256};
 use alloy::providers::Provider;
+use alloy::sol;
+use alloy::sol_types::SolValue;
+
+sol! {
+    struct StoredBatchInfo {
+        uint64 batchNumber;
+        bytes32 batchHash;
+        uint64 indexRepeatedStorageChanges;
+        uint256 numberOfLayer1Txs;
+        bytes32 priorityOperationsHash;
+        bytes32 dependencyRootsRollingHash;
+        bytes32 l2LogsTreeRoot;
+        uint256 timestamp;
+        bytes32 commitment;
+    }
+}
 
 /// Parameters for the storage proof verification pipeline.
 pub struct VerifyParams {
@@ -16,10 +33,10 @@ pub struct VerifyParams {
 /// Result of a successful storage proof verification.
 #[derive(Debug)]
 pub struct VerificationResult {
-    /// The state commitment derived from the proof's Merkle tree root + metadata.
-    pub storage_commitment: B256,
-    /// The batch hash fetched from the L1 `BlockCommit` event.
-    pub l1_batch_hash: B256,
+    /// The `keccak256(abi.encode(StoredBatchInfo))` reconstructed from the proof.
+    pub computed_batch_hash: B256,
+    /// The on-chain `storedBatchHash(batchNumber)` from the diamond proxy.
+    pub on_chain_batch_hash: B256,
     /// Proven storage values, in the order of the queried keys.
     /// `None` means the slot does not exist in the tree.
     pub storage_values: Vec<(B256, Option<B256>)>,
@@ -27,14 +44,14 @@ pub struct VerificationResult {
 
 /// Runs the full verification pipeline:
 /// 1. Fetches the storage proof from L2 via `zks_getProof`
-/// 2. Resolves the diamond proxy address (auto-discovery or override)
-/// 3. Fetches the `batchHash` from the L1 `BlockCommit` event
-/// 4. Verifies the Merkle proof (Blake2s tree + state commitment preimage)
-/// 5. Compares the computed commitment against L1
+/// 2. Verifies the Merkle proof (Blake2s tree + state commitment preimage)
+/// 3. Resolves the diamond proxy address (auto-discovery or override)
+/// 4. Fetches `storedBatchHash(batchNumber)` from L1
+/// 5. Reconstructs `StoredBatchInfo`, hashes it, and compares against L1
 /// 6. Returns proven storage values
-pub async fn verify_storage_proof(
+pub async fn verify_storage_proof<N: Network>(
     l1_provider: &(impl Provider + Clone),
-    l2_provider: &impl Provider,
+    l2_provider: &impl Provider<N>,
     params: VerifyParams,
 ) -> anyhow::Result<VerificationResult> {
     // 1. Fetch proof from L2
@@ -46,7 +63,11 @@ pub async fn verify_storage_proof(
     )
     .await?;
 
-    // 2. Resolve diamond proxy
+    // 2. Verify the proof internally (Merkle tree + state commitment preimage)
+    let l1_verification_data = &proof.l1_verification_data;
+    let view = proof.verify(params.address, &params.keys)?;
+
+    // 3. Resolve diamond proxy
     let diamond_proxy = l1::resolve_diamond_proxy(
         l1_provider,
         l2_provider,
@@ -55,19 +76,27 @@ pub async fn verify_storage_proof(
     )
     .await?;
 
-    // 3. Fetch batchHash from L1
-    let l1_batch_hash =
-        l1::fetch_l1_batch_hash(l1_provider, diamond_proxy, params.batch_number).await?;
+    // 4. Fetch on-chain batch hash
+    let on_chain_batch_hash =
+        l1::fetch_stored_batch_hash(l1_provider, diamond_proxy, params.batch_number).await?;
 
-    // 4. Verify the proof internally (Merkle tree + state commitment preimage)
-    let view = proof.verify(params.address, &params.keys)?;
+    // 5. Reconstruct StoredBatchInfo from proof data + state commitment, hash, and compare
+    let stored_batch_info = StoredBatchInfo {
+        batchNumber: l1_verification_data.batch_number,
+        batchHash: view.storage_commitment,
+        indexRepeatedStorageChanges: 0,
+        numberOfLayer1Txs: U256::from(l1_verification_data.number_of_layer1_txs),
+        priorityOperationsHash: l1_verification_data.priority_operations_hash,
+        dependencyRootsRollingHash: l1_verification_data.dependency_roots_rolling_hash,
+        l2LogsTreeRoot: l1_verification_data.l2_to_l1_logs_root_hash,
+        timestamp: U256::ZERO,
+        commitment: l1_verification_data.commitment,
+    };
+    let computed_batch_hash = keccak256(stored_batch_info.abi_encode_params());
 
-    // 5. Compare commitments
     anyhow::ensure!(
-        view.storage_commitment == l1_batch_hash,
-        "Storage commitment mismatch!\n  Proof:  {}\n  L1:     {}",
-        view.storage_commitment,
-        l1_batch_hash,
+        computed_batch_hash == on_chain_batch_hash,
+        "Batch hash mismatch!\n  Computed: {computed_batch_hash}\n  L1:       {on_chain_batch_hash}",
     );
 
     // 6. Build result
@@ -79,8 +108,8 @@ pub async fn verify_storage_proof(
         .collect();
 
     Ok(VerificationResult {
-        storage_commitment: view.storage_commitment,
-        l1_batch_hash,
+        computed_batch_hash,
+        on_chain_batch_hash,
         storage_values,
     })
 }

@@ -5,7 +5,7 @@ Verifies ZKsync storage slot values against L1 batch commitments using `zks_getP
 ## Build
 
 ```bash
-cargo build -p zksync_os_verify_storage_proof -p zksync_os_rpc --release
+cargo build -p zksync_os_verify_storage_proof --release
 ```
 
 ## Usage
@@ -13,7 +13,7 @@ cargo build -p zksync_os_verify_storage_proof -p zksync_os_rpc --release
 With bridgehub auto-discovery (recommended):
 
 ```bash
-cargo run -p zksync_os_verify_storage_proof -p zksync_os_rpc -- \
+cargo run -p zksync_os_verify_storage_proof -- \
   --l2-rpc https://mainnet.era.zksync.io \
   --l1-rpc https://eth.llamarpc.com \
   --bridgehub 0x303a465B659cBB0ab36eE643eA362c509EEb5213 \
@@ -25,7 +25,7 @@ cargo run -p zksync_os_verify_storage_proof -p zksync_os_rpc -- \
 With explicit diamond proxy address:
 
 ```bash
-cargo run -p zksync_os_verify_storage_proof -p zksync_os_rpc -- \
+cargo run -p zksync_os_verify_storage_proof -- \
   --l2-rpc http://localhost:3050 \
   --l1-rpc http://localhost:8545 \
   --l1-contract 0x... \
