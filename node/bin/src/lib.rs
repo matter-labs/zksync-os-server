@@ -220,28 +220,34 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    match (config.l1_sender_config.pubdata_mode, l1_state.da_input_mode) {
-        (
-            PubdataMode::Calldata | PubdataMode::Blobs | PubdataMode::RelayedL2Calldata,
-            BatchDaInputMode::Validium,
-        )
-        | (PubdataMode::Validium, BatchDaInputMode::Rollup) => {
+    if node_role.is_main() {
+        let pubdata_mode = config
+            .l1_sender_config
+            .pubdata_mode
+            .expect("l1_sender_pubdata_mode must be set on the Main Node");
+        match (pubdata_mode, l1_state.da_input_mode) {
+            (
+                PubdataMode::Calldata | PubdataMode::Blobs | PubdataMode::RelayedL2Calldata,
+                BatchDaInputMode::Validium,
+            )
+            | (PubdataMode::Validium, BatchDaInputMode::Rollup) => {
+                panic!(
+                    "Pubdata mode doesn't correspond to pricing mode from the l1. \
+                    L1 mode: {:?}, configured pubdata mode: {:?}",
+                    l1_state.da_input_mode, pubdata_mode
+                );
+            }
+            _ => {}
+        };
+        if let (PubdataMode::Blobs | PubdataMode::Calldata, true) = (
+            pubdata_mode,
+            config.general_config.gateway_rpc_url.is_some(),
+        ) {
             panic!(
-                "Pubdata mode doesn't correspond to pricing mode from the l1. \
-                L1 mode: {:?}, configured pubdata mode: {:?}",
-                l1_state.da_input_mode, config.l1_sender_config.pubdata_mode
+                "Pubdata mode {:?} cannot be used when settling on Gateway",
+                pubdata_mode
             );
         }
-        _ => {}
-    };
-    if let (PubdataMode::Blobs | PubdataMode::Calldata, true) = (
-        config.l1_sender_config.pubdata_mode,
-        config.general_config.gateway_rpc_url.is_some(),
-    ) {
-        panic!(
-            "Pubdata mode {:?} cannot be used when settling on Gateway",
-            config.l1_sender_config.pubdata_mode
-        );
     }
 
     let genesis = Genesis::new(
@@ -598,9 +604,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // Channel for Batcher->GasAdjuster communication. Batcher send sidecar to gas adjuster to estimate blob fill ratio.
     let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::channel(10);
     if node_role.is_main() {
+        let pubdata_mode = config
+            .l1_sender_config
+            .pubdata_mode
+            .expect("l1_sender_pubdata_mode must be set on the Main Node");
         let gas_adjuster_config = gas_adjuster_config(
             config.gas_adjuster_config.clone(),
-            config.l1_sender_config.pubdata_mode,
+            pubdata_mode,
             config.l1_sender_config.max_priority_fee_per_gas.0,
         );
         let gas_adjuster = GasAdjuster::new(
@@ -744,6 +754,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     });
 
     if node_role.is_main() {
+        let external_price_api_client_config = config
+            .external_price_api_client_config
+            .clone()
+            .expect("external_price_api_client config must be set for Main Node");
         let mut base_token_price_updater = BaseTokenPriceUpdater::new(
             l1_state.diamond_proxy_l1.clone(),
             l1_provider.clone(),
@@ -751,7 +765,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 &config.base_token_price_updater_config,
                 &config.l1_sender_config,
             ),
-            config.external_price_api_client_config.clone().into(),
+            external_price_api_client_config.into(),
             token_price_sender,
         )
         .await
@@ -896,6 +910,10 @@ async fn run_main_node_pipeline(
     sidecar_sender: tokio::sync::mpsc::Sender<BlobTransactionSidecar>,
     committed_batch_provider: CommittedBatchProvider,
 ) {
+    let pubdata_mode = config
+        .l1_sender_config
+        .pubdata_mode
+        .expect("l1_sender_pubdata_mode must be set on the Main Node");
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
         .await
@@ -988,7 +1006,7 @@ async fn run_main_node_pipeline(
                 .maximum_in_flight_blocks,
             app_bin_base_path: config.general_config.rocks_db_path.join("app_bins").clone(),
             read_state: state.clone(),
-            pubdata_mode: config.l1_sender_config.pubdata_mode,
+            pubdata_mode,
         })
         .pipe(Batcher {
             startup_config: BatcherStartupConfig {
@@ -1001,7 +1019,7 @@ async fn run_main_node_pipeline(
             chain_address_sl: node_state_on_startup.l1_state.diamond_proxy_address_sl(),
             pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
             batcher_config: config.batcher_config.clone(),
-            pubdata_mode: config.l1_sender_config.pubdata_mode,
+            pubdata_mode,
             sidecar_sender,
             committed_batch_provider: committed_batch_provider.clone(),
             read_state: state.clone(),

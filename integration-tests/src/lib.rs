@@ -128,6 +128,7 @@ impl Tester {
             config.general_config.node_role = NodeRole::ExternalNode;
             config.network_config.boot_nodes = vec![self.node_record];
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
+            config.l1_sender_config.pubdata_mode = None;
             config.batch_verification_config.connect_address = self.batch_verification_url.clone();
             if let Some(f) = config_overrides {
                 f(config)

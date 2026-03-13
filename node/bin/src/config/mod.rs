@@ -50,7 +50,9 @@ pub struct Config {
     pub batch_verification_config: BatchVerificationConfig,
     pub base_token_price_updater_config: BaseTokenPriceUpdaterConfig,
     pub interop_fee_updater_config: InteropFeeUpdaterConfig,
-    pub external_price_api_client_config: ExternalPriceApiClientConfig,
+    /// Only required on the Main Node, where the base token price updater runs.
+    /// External Nodes never start that component and may omit this config entirely.
+    pub external_price_api_client_config: Option<ExternalPriceApiClientConfig>,
     pub fee_config: FeeConfig,
 }
 
@@ -218,7 +220,7 @@ pub struct GeneralConfig {
     pub blocks_to_retain_in_memory: usize,
 
     /// **IMPORTANT: It must be set for an external node. However, setting this DOES NOT make the node into an external node.
-    /// [`GeneralConfig::role`] is the source of truth for node type. **
+    /// [`GeneralConfig::node_role`] is the source of truth for node type. **
     #[config(default_t = None)]
     pub main_node_rpc_url: Option<String>,
 
@@ -508,10 +510,10 @@ pub struct L1SenderConfig {
     #[config(default_t = true)]
     pub enabled: bool,
 
-    /// Pubdata mode
-    #[config(default_t = PubdataMode::Blobs)]
+    /// Pubdata mode is used by block-producing components on the Main Node.
+    /// External Nodes only replay blocks, so they may leave this unset.
     #[config(with = Serde![str])]
-    pub pubdata_mode: PubdataMode,
+    pub pubdata_mode: Option<PubdataMode>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

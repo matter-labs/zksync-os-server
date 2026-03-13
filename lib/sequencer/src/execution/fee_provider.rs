@@ -39,7 +39,7 @@ pub struct FeeProvider {
     pubdata_price_provider: watch::Receiver<Option<U256>>,
     blob_fill_ratio_provider: watch::Receiver<Option<Ratio<u64>>>,
     token_price_provider: watch::Receiver<Option<TokenPricesForFees>>,
-    pubdata_mode: PubdataMode,
+    pubdata_mode: Option<PubdataMode>,
 }
 
 impl FeeProvider {
@@ -49,7 +49,7 @@ impl FeeProvider {
         pubdata_price_provider: watch::Receiver<Option<U256>>,
         blob_fill_ratio_provider: watch::Receiver<Option<Ratio<u64>>>,
         token_price_provider: watch::Receiver<Option<TokenPricesForFees>>,
-        pubdata_mode: PubdataMode,
+        pubdata_mode: Option<PubdataMode>,
     ) -> Self {
         Self {
             fee_config,
@@ -185,7 +185,11 @@ impl FeeProvider {
             price.ceil().to_integer()
         };
 
-        let desired_pubdata_price = if self.pubdata_mode == PubdataMode::Blobs {
+        let desired_pubdata_price = if self
+            .pubdata_mode
+            .expect("pubdata_mode must be set when producing blocks")
+            == PubdataMode::Blobs
+        {
             // Blobs are special in a way that
             // 1. They require additional overhead depending on native price.
             // 2. Blob fill ratio affects the effective pubdata price.
