@@ -93,12 +93,7 @@ impl<'a> ChainLayout<'a> {
 pub fn load_chain_config(layout: ChainLayout<'_>) -> Config {
     let local_dev_path = workspace_dir().join("local-chains").join("local_dev.yaml");
     let chain_config_path = layout.config_path();
-    let paths: Vec<PathBuf> = if local_dev_path.exists() {
-        vec![local_dev_path, chain_config_path]
-    } else {
-        vec![chain_config_path]
-    };
-    let mut config = load_config_from_paths(&paths);
+    let mut config = load_config_from_paths(&[local_dev_path, chain_config_path]);
     config.genesis_config.genesis_input_path = Some(layout.genesis_input_path());
     if let Some(ephemeral_state) = &config.general_config.ephemeral_state
         && ephemeral_state.is_relative()
