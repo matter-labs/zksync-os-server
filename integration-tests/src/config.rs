@@ -89,8 +89,16 @@ impl<'a> ChainLayout<'a> {
 }
 
 /// Load a `Config` from either default or multi-chain layout.
+/// Also loads `local-chains/local_dev.yaml` as a base layer when present.
 pub fn load_chain_config(layout: ChainLayout<'_>) -> Config {
-    let mut config = load_config_from_path(&layout.config_path());
+    let local_dev_path = workspace_dir().join("local-chains").join("local_dev.yaml");
+    let chain_config_path = layout.config_path();
+    let paths: Vec<PathBuf> = if local_dev_path.exists() {
+        vec![local_dev_path, chain_config_path]
+    } else {
+        vec![chain_config_path]
+    };
+    let mut config = load_config_from_paths(&paths);
     config.genesis_config.genesis_input_path = Some(layout.genesis_input_path());
     if let Some(ephemeral_state) = &config.general_config.ephemeral_state
         && ephemeral_state.is_relative()
@@ -112,29 +120,31 @@ fn workspace_dir() -> &'static Path {
     WORKSPACE_DIR.as_path()
 }
 
-/// Load config from the given path.
-fn load_config_from_path(config_path: &Path) -> Config {
+/// Load config from the given list of paths, each layered on top of the previous.
+fn load_config_from_paths(config_paths: &[PathBuf]) -> Config {
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
-    let config_contents = std::fs::read_to_string(config_path)
-        .unwrap_or_else(|e| panic!("Failed to read config file {}: {e}", config_path.display()));
-    let source_name = config_path.to_string_lossy();
 
-    match ConfigFormat::from_path(config_path) {
-        ConfigFormat::Yaml => {
-            let config_yaml: serde_yaml::Mapping = serde_yaml::from_str(&config_contents)
-                .expect("Failed to parse YAML config file from provided path");
+    for config_path in config_paths {
+        let config_contents = std::fs::read_to_string(config_path)
+            .unwrap_or_else(|e| panic!("Failed to read config file {}: {e}", config_path.display()));
+        let source_name = config_path.to_string_lossy();
 
-            config_sources.push(
-                Yaml::new(source_name.as_ref(), config_yaml)
-                    .expect("Failed to create YAML config source"),
-            );
-        }
-        ConfigFormat::Json => {
-            let config_json: serde_json::Map<String, serde_json::Value> =
-                serde_json::from_str(&config_contents)
-                    .expect("Failed to parse JSON config file from provided path");
-            config_sources.push(Json::new(source_name.as_ref(), config_json));
+        match ConfigFormat::from_path(config_path) {
+            ConfigFormat::Yaml => {
+                let config_yaml: serde_yaml::Mapping = serde_yaml::from_str(&config_contents)
+                    .expect("Failed to parse YAML config file from provided path");
+                config_sources.push(
+                    Yaml::new(source_name.as_ref(), config_yaml)
+                        .expect("Failed to create YAML config source"),
+                );
+            }
+            ConfigFormat::Json => {
+                let config_json: serde_json::Map<String, serde_json::Value> =
+                    serde_json::from_str(&config_contents)
+                        .expect("Failed to parse JSON config file from provided path");
+                config_sources.push(Json::new(source_name.as_ref(), config_json));
+            }
         }
     }
 
