@@ -34,7 +34,7 @@ mod util;
 /// ## Config loading order (later sources take precedence)
 /// 1. **Defaults defined here** — production-oriented (testnet/mainnet).
 /// 2. **Config files** passed via `--config`, applied in order. If `--config` is not provided and
-///    `local-chains/{version}/default/config.yaml` exists on disk, that file (along with
+///    `local-chains/{protocol_version}/default/config.yaml` exists on disk, that file (along with
 ///    `local-chains/local_dev.yaml`) is loaded automatically — this happens when running via
 ///    `cargo run` from the repo root. When `--config` is explicitly specified, only those
 ///    files are used. In Docker, the `local-chains/` directory is not copied into the image,
