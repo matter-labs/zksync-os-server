@@ -283,13 +283,6 @@ jobs:
           compare_to_earlier_commit: false
           action_fail: true # Fail the action if any of the tests failed
 
-      - name: Slack notification
-        if: ${{ failure() && github.ref == 'refs/heads/main' }}
-        uses: ./.github/actions/slack-notify
-        with:
-          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
-          context: "ZKsync OS Server Eth Spec Tests scheduled run failed"
-
 
   # Create a compatibility table from both test runs
   # to compare results and durations
