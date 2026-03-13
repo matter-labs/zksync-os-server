@@ -22,6 +22,6 @@ if [ -f "$FLAG_FILE" ]; then
   fi
 fi
 
-# Block the push
-echo "BLOCKED: Run /pre-push before pushing. Pre-push checks (format, lint, unit tests, integration tests) must all pass first." >&2
+# Block the push — including force pushes
+echo "BLOCKED: Run /pre-push before pushing. All pre-push checks (format, lint, unit tests, integration tests) must pass first. Do NOT bypass this by using --force or --force-with-lease without running /pre-push." >&2
 exit 2

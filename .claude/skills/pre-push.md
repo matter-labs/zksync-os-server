@@ -6,7 +6,13 @@ user_invocable: true
 
 # Pre-Push Checks
 
-Run **all** of the following checks before every `git push`. Do not skip any step. Do not push if any check fails — fix the issue first and re-run all checks.
+## MANDATORY — NO EXCEPTIONS
+
+Every check below **must** be executed before every `git push`, regardless of what was changed. Even if the change is documentation-only, config-only, or a single-line fix — **run every check anyway**. There are no exemptions.
+
+**Do NOT bypass this process by using `git push --force`, `git push --no-verify`, or any other flag that skips hooks or validation.** Force push (`--force` or `--force-with-lease`) is only permitted for rebases, and only AFTER all checks below have passed and the `.pre-push-passed` flag has been created.
+
+If a tool (like `cargo`) is not available in the environment, **stop and tell the user** — do not silently skip the check or proceed with the push.
 
 ## 1. Format
 
@@ -71,3 +77,4 @@ If any check fails:
 2. Re-run **all** checks from the beginning (not just the one that failed).
 3. Do **not** create the `.pre-push-passed` flag until every check passes.
 4. Only push once every check passes.
+5. **NEVER** bypass a failed check by force-pushing or skipping the hook.
