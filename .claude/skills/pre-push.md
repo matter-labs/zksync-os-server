@@ -12,7 +12,11 @@ Every check below **must** be executed before every `git push`, regardless of wh
 
 **Do NOT bypass this process by using `git push --force`, `git push --no-verify`, or any other flag that skips hooks or validation.** Force push (`--force` or `--force-with-lease`) is only permitted for rebases, and only AFTER all checks below have passed and the `.pre-push-passed` flag has been created.
 
-If a tool (like `cargo`) is not available in the environment, **stop and tell the user** — do not silently skip the check or proceed with the push.
+If a tool (like `cargo`, `cargo-nextest`, etc.) is not available in the environment, **do not silently skip the check or proceed with the push**. Instead:
+1. Tell the user which command is missing.
+2. Ask the user whether they would like you to install it (e.g., `rustup` for `cargo`, `cargo install cargo-nextest` for `nextest`).
+3. If the user agrees, attempt the installation and verify it succeeded before continuing.
+4. If the user declines, **stop** — do not proceed with the remaining checks or the push.
 
 ## 1. Format
 
