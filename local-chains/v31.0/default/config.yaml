@@ -8,7 +8,4 @@ l1_sender:
   operator_commit_sk: '0x62364ecc1a0007cc3ba165e57000a5d890f2d69d9e9b4a1e9e86af646c1f9b25'
   operator_prove_sk: '0xcfa9ab3c4cf0c6e4d207cf84cb95bbf87885174182f91b9c947b2c7a6b89439d'
   operator_execute_sk: '0xf292a0f460be19ab73c57c33d4a979ddf6cf4385c86d12158b393ece98ad4d30'
-external_price_api_client:
-  source: Forced
-  forced_prices:
-    '0x0000000000000000000000000000000000000001': 3000
+
