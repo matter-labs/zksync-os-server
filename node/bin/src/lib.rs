@@ -14,6 +14,7 @@ mod prover_input_generator;
 mod provider;
 mod state_initializer;
 pub mod tree_manager;
+pub mod util;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
@@ -54,12 +55,13 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
-use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
 use zksync_os_internal_config::InternalConfigManager;
+use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
@@ -70,6 +72,7 @@ use zksync_os_l1_watcher::{
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
+use zksync_os_mempool::subpools::interop_fee::InteropFeeSubpool;
 use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
 use zksync_os_mempool::subpools::l1::L1Subpool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
@@ -83,7 +86,7 @@ use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
-use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
+use zksync_os_rpc::{EthCallHandler, RpcStorage, run_jsonrpsee_server};
 use zksync_os_rpc_api::eth::EthApiClient;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::{FeeParams, FeeProvider, Sequencer};
@@ -210,6 +213,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
+    if node_role.is_main() {
+        check_batch_verification_mismatch(
+            &config.batch_verification_config,
+            &l1_state.batch_verification,
+        );
+    }
 
     if node_role.is_main() {
         let pubdata_mode = config
@@ -466,6 +475,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let next_migration_number = first_replay_record
         .as_ref()
         .map_or(0, |record| record.starting_migration_number);
+    let next_interop_fee_number = first_replay_record
+        .as_ref()
+        .map_or(0, |record| record.starting_interop_fee_number);
 
     let current_protocol_version = if let Some(record) = &first_replay_record {
         &record.protocol_version
@@ -475,6 +487,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
+    let interop_fee_subpool = InteropFeeSubpool::new(next_interop_fee_number);
     let interop_roots_subpool = InteropRootsSubpool::new(
         // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
         1,
@@ -625,6 +638,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
 
     let (token_price_sender, token_price_receiver) = watch::channel(None);
+    let interop_fee_token_price_receiver = token_price_receiver.clone();
     let previous_block_fee_params = if starting_block == 1 {
         None
     } else {
@@ -657,6 +671,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let pool = Pool::new(
         upgrade_subpool.clone(),
         sl_chain_id_subpool,
+        interop_fee_subpool.clone(),
         interop_roots_subpool,
         l1_subpool,
         l2_subpool.clone(),
@@ -665,6 +680,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         next_l1_priority_id,
         next_interop_event_index,
         next_migration_number,
+        next_interop_fee_number,
         pool,
         block_hashes_for_next_block,
         previous_block_timestamp,
@@ -701,6 +717,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let persistent_batch_storage =
         ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
+    let rpc_storage = RpcStorage::new(
+        repositories.clone(),
+        block_replay_storage.clone(),
+        finality_storage.clone(),
+        persistent_batch_storage.clone(),
+        state.clone(),
+    );
     tasks.spawn(
         L1PersistBatchWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
@@ -752,6 +775,37 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             base_token_price_updater
                 .run(stop_receiver_)
                 .map(|_| tracing::warn!("base_token_price_updater.run() unexpectedly exited"))
+                .await;
+        });
+    }
+
+    if node_role.is_main()
+        && config.general_config.gateway_rpc_url.is_some()
+        && current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
+    {
+        let eth_call_handler = EthCallHandler::new(
+            config.rpc_config.clone().into(),
+            rpc_storage.clone(),
+            chain_id,
+            last_constructed_block_ctx_receiver.clone(),
+        );
+        let mut interop_fee_updater = InteropFeeUpdater::new(
+            eth_call_handler,
+            sl_provider.clone().erased(),
+            interop_fee_subpool,
+            interop_fee_token_price_receiver,
+            InteropFeeUpdaterConfig {
+                polling_interval: config.interop_fee_updater_config.polling_interval,
+                update_deviation_percentage: config
+                    .interop_fee_updater_config
+                    .update_deviation_percentage,
+            },
+        );
+        let stop_receiver_ = stop_receiver.clone();
+        tasks.spawn(async move {
+            interop_fee_updater
+                .run(stop_receiver_)
+                .map(|_| tracing::warn!("interop_fee_updater.run() unexpectedly exited"))
                 .await;
         });
     }
@@ -811,13 +865,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // =========== Start JSON RPC ========
 
-    let rpc_storage = RpcStorage::new(
-        repositories,
-        block_replay_storage,
-        finality_storage,
-        persistent_batch_storage,
-        state,
-    );
     tasks.spawn(
         run_jsonrpsee_server(
             config.rpc_config.into(),
@@ -1160,6 +1207,37 @@ fn init_and_report_internal_config_manager(
     internal_config_manager
 }
 
+/// Warns when the main node's batch verification server threshold is lower than the
+/// threshold configured on L1.
+///
+/// This is a startup sanity check only: the pipeline later enforces the effective threshold by
+/// taking the max(server.threshold, l1.threshold).
+///
+/// In practice, it means that the server operator expectation and the L1 state are mismatched.
+fn check_batch_verification_mismatch(
+    server_config: &config::BatchVerificationConfig,
+    l1_config: &BatchVerificationSL,
+) -> bool {
+    if !server_config.server_enabled {
+        return false;
+    }
+
+    let l1_threshold = match l1_config {
+        BatchVerificationSL::Enabled(config) => config.threshold,
+        BatchVerificationSL::Disabled => return false,
+    };
+
+    if server_config.threshold < l1_threshold {
+        tracing::warn!(
+            configured_threshold = server_config.threshold,
+            l1_threshold,
+            "Batch verification server threshold is lower than the L1 threshold; consider increasing the server threshold"
+        );
+        return true;
+    }
+    false
+}
+
 async fn commit_proof_execute_block_numbers(
     l1_state: &L1State,
     committed_batch_provider: &CommittedBatchProvider,
@@ -1369,4 +1447,76 @@ async fn find_last_matching_main_node_block(
         }
     }
     Ok(left)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_batch_verification_mismatch;
+    use crate::config::BatchVerificationConfig;
+    use alloy::primitives::address;
+    use zksync_os_contract_interface::l1_discovery::{
+        BatchVerificationSL, BatchVerificationSLConfig,
+    };
+
+    #[test]
+    fn test_batch_verification_is_disabled_on_server() {
+        let server_config = BatchVerificationConfig::default();
+        let l1_config = BatchVerificationSL::Enabled(BatchVerificationSLConfig {
+            threshold: 0,
+            validators: vec![address!("0x0000000000000000000000000000000000000001")],
+        });
+        let warned = check_batch_verification_mismatch(&server_config, &l1_config);
+        assert!(!warned);
+    }
+
+    #[test]
+    fn test_batch_verification_is_disabled_on_l1() {
+        let config = BatchVerificationConfig {
+            server_enabled: true,
+            ..Default::default()
+        };
+        let warned = check_batch_verification_mismatch(&config, &BatchVerificationSL::Disabled);
+        assert!(!warned);
+    }
+
+    #[test]
+    fn test_batch_verification_is_mismatched() {
+        let server_config = BatchVerificationConfig {
+            server_enabled: true,
+            threshold: 2,
+            ..Default::default()
+        };
+        let l1_config = BatchVerificationSL::Enabled(BatchVerificationSLConfig {
+            threshold: 3,
+            validators: vec![
+                address!("0x0000000000000000000000000000000000000001"),
+                address!("0x0000000000000000000000000000000000000002"),
+                address!("0x0000000000000000000000000000000000000003"),
+                address!("0x0000000000000000000000000000000000000004"),
+            ],
+        });
+        let warned = check_batch_verification_mismatch(&server_config, &l1_config);
+
+        assert!(warned);
+    }
+
+    #[test]
+    fn test_batch_verification_happy_path() {
+        let server_config = BatchVerificationConfig {
+            server_enabled: true,
+            threshold: 3,
+            ..Default::default()
+        };
+        let l1_config = BatchVerificationSL::Enabled(BatchVerificationSLConfig {
+            threshold: 2,
+            validators: vec![
+                address!("0x0000000000000000000000000000000000000001"),
+                address!("0x0000000000000000000000000000000000000002"),
+                address!("0x0000000000000000000000000000000000000003"),
+            ],
+        });
+        let warned = check_batch_verification_mismatch(&server_config, &l1_config);
+
+        assert!(!warned);
+    }
 }

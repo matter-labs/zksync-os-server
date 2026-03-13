@@ -27,6 +27,7 @@ pub struct BlockContextProvider<Subpool> {
     next_l1_priority_id: u64,
     next_interop_event_index: InteropRootsLogIndex,
     next_migration_number: u64,
+    next_interop_fee_number: u64,
     pool: Pool<Subpool>,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
@@ -50,6 +51,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         next_l1_priority_id: u64,
         next_interop_event_index: InteropRootsLogIndex,
         next_migration_number: u64,
+        next_interop_fee_number: u64,
         pool: Pool<Subpool>,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
@@ -67,6 +69,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             next_l1_priority_id,
             next_interop_event_index,
             next_migration_number,
+            next_interop_fee_number,
             pool,
             block_hashes_for_next_block,
             previous_block_timestamp,
@@ -174,7 +177,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     force_preimages,
                     starting_interop_event_index: self.next_interop_event_index.clone(),
                     starting_migration_number: self.next_migration_number,
+                    starting_interop_fee_number: self.next_interop_fee_number,
                     interop_roots_per_block: self.interop_roots_per_block,
+                    strict_subpool_cleanup: true,
                 }
             }
             BlockCommand::Replay(record) => {
@@ -207,7 +212,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     force_preimages: record.force_preimages,
                     starting_interop_event_index: record.starting_interop_event_index.clone(),
                     starting_migration_number: record.starting_migration_number,
+                    starting_interop_fee_number: record.starting_interop_fee_number,
                     interop_roots_per_block: self.interop_roots_per_block,
+                    strict_subpool_cleanup: false,
                 }
             }
             BlockCommand::Rebuild(rebuild) => {
@@ -289,7 +296,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     force_preimages: rebuild.replay_record.force_preimages,
                     starting_interop_event_index: self.next_interop_event_index.clone(),
                     starting_migration_number: self.next_migration_number,
+                    starting_interop_fee_number: self.next_interop_fee_number,
                     interop_roots_per_block: self.interop_roots_per_block,
+                    strict_subpool_cleanup: false,
                 }
             }
         };
@@ -305,6 +314,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         &mut self,
         block_output: &BlockOutput,
         replay_record: &ReplayRecord,
+        strict_subpool_cleanup: bool,
     ) {
         let outcome = self
             .pool
@@ -312,6 +322,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 block_output.header.clone(),
                 &block_output.account_diffs,
                 replay_record,
+                strict_subpool_cleanup,
             )
             .await;
         if let Some(last_l1_priority_id) = outcome.last_l1_priority_id {
@@ -330,6 +341,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
 
         if let Some(last_migration_number) = outcome.last_migration_number {
             self.next_migration_number = last_migration_number + 1;
+        }
+        if let Some(last_interop_fee_number) = outcome.last_interop_fee_number {
+            self.next_interop_fee_number = last_interop_fee_number + 1;
         }
 
         // We update protocol version here, so that we take into account replay records with protocol version bumps.
