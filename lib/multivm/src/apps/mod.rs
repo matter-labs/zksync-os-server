@@ -50,7 +50,6 @@ pub mod v6 {
     pub fn multiblock_batch_path(base_dir: &Path) -> PathBuf {
         super::materialize_app(base_dir, "v6", "multiblock_batch.bin", MULTIBLOCK_BATCH)
     }
-
 }
 
 pub mod v7 {
@@ -92,7 +91,6 @@ pub mod v7 {
     pub fn multiblock_batch_path(base_dir: &Path) -> PathBuf {
         super::materialize_app(base_dir, "v7", "multiblock_batch.bin", MULTIBLOCK_BATCH)
     }
-
 }
 
 #[cfg(test)]

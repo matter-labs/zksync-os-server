@@ -187,6 +187,11 @@ pub struct GeneralConfig {
     /// Currently, it's a marker of whether chain settles to Gateway or not.
     pub gateway_rpc_url: Option<String>,
 
+    /// Gateway chain ID. Used by the migration watcher to construct `SetSLChainId` system
+    /// transactions when a `MigrateToGateway` event fires. Defaults to 506 (ZKsync Gateway).
+    #[config(default_t = 506)]
+    pub gateway_chain_id: u64,
+
     /// Min number of blocks to replay on restart
     /// Depending on L1/persistence state, we may need to replay more blocks than this number
     /// In some cases, we need to replay the whole blockchain (e.g. switching state backends) -
@@ -533,10 +538,6 @@ pub struct L1WatcherConfig {
     /// How often to poll L1 for new priority requests.
     #[config(default_t = 100 * TimeUnit::Millis)]
     pub poll_interval: Duration,
-
-    /// Whether to run gateway migration watcher.
-    #[config(default_t = false)]
-    pub enable_gw_migration_watcher: bool,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

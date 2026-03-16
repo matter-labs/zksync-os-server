@@ -11,8 +11,6 @@ l1_sender:
   operator_commit_sk: '0x9ca83d68f3dee0fbc196a797b3d08861fa8c4b645e356f400105861c2507f2b1'
   operator_prove_sk: '0x96e8145b4dcc68fe645e918683dc8b8e38f96cd3f63da46bf1e5447d8336fcfb'
   operator_execute_sk: '0x7d89e249224bad5c66aa29a6f6aeea59fd0e83e75e7ebe9edcac7619b4d27bba'
-l1_watcher:
-  enable_gw_migration_watcher: true
 rpc:
   address: 0.0.0.0:3051
 external_price_api_client:
