@@ -27,9 +27,13 @@ pub struct BlockContextProvider<Subpool> {
     next_l1_priority_id: u64,
     next_interop_event_index: InteropRootsLogIndex,
     next_migration_number: u64,
+    next_interop_fee_number: u64,
     pool: Pool<Subpool>,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
+    next_block_number: u64,
+    block_time: Duration,
+    max_transactions_in_block: usize,
     chain_id: u64,
     gas_limit: u64,
     pubdata_limit: u64,
@@ -50,9 +54,13 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         next_l1_priority_id: u64,
         next_interop_event_index: InteropRootsLogIndex,
         next_migration_number: u64,
+        next_interop_fee_number: u64,
         pool: Pool<Subpool>,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
+        next_block_number: u64,
+        block_time: Duration,
+        max_transactions_in_block: usize,
         chain_id: u64,
         gas_limit: u64,
         pubdata_limit: u64,
@@ -67,9 +75,13 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             next_l1_priority_id,
             next_interop_event_index,
             next_migration_number,
+            next_interop_fee_number,
             pool,
             block_hashes_for_next_block,
             previous_block_timestamp,
+            next_block_number,
+            block_time,
+            max_transactions_in_block,
             chain_id,
             gas_limit,
             pubdata_limit,
@@ -88,11 +100,11 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         block_command: BlockCommand,
     ) -> anyhow::Result<PreparedBlockCommand<'_>> {
         let prepared_command = match block_command {
-            BlockCommand::Produce(produce_command) => {
+            BlockCommand::Produce(_) => {
                 let fee_params = self.fee_provider.produce_fee_params().await?;
                 self.pool
                     .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
-
+                let block_number = self.next_block_number;
                 // Create stream:
                 // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
                 // - L1 transactions first, then L2 transactions.
@@ -111,7 +123,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     && upgrade_metadata.protocol_version > self.protocol_version
                 {
                     tracing::info!(
-                        block_number = produce_command.block_number,
+                        block_number,
                         ?upgrade_metadata,
                         "including protocol upgrade transaction in the block"
                     );
@@ -144,7 +156,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     eip1559_basefee,
                     native_price,
                     pubdata_price,
-                    block_number: produce_command.block_number,
+                    block_number,
                     timestamp,
                     chain_id: self.chain_id,
                     coinbase: self.fee_collector_address,
@@ -162,8 +174,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     block_context,
                     tx_source: best_txs.stream,
                     seal_policy: SealPolicy::Decide(
-                        produce_command.block_time,
-                        produce_command.max_transactions_in_block,
+                        self.block_time,
+                        self.max_transactions_in_block,
                     ),
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "produce",
@@ -174,10 +186,18 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     force_preimages,
                     starting_interop_event_index: self.next_interop_event_index.clone(),
                     starting_migration_number: self.next_migration_number,
+                    starting_interop_fee_number: self.next_interop_fee_number,
                     interop_roots_per_block: self.interop_roots_per_block,
+                    strict_subpool_cleanup: true,
                 }
             }
             BlockCommand::Replay(record) => {
+                anyhow::ensure!(
+                    self.next_block_number == record.block_context.block_number,
+                    "blocks received our of order: {} in component state, {} in resolved ReplayRecord",
+                    self.next_block_number,
+                    record.block_context.block_number
+                );
                 anyhow::ensure!(
                     self.previous_block_timestamp == record.previous_block_timestamp,
                     "inconsistent previous block timestamp: {} in component state, {} in resolved ReplayRecord",
@@ -207,7 +227,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     force_preimages: record.force_preimages,
                     starting_interop_event_index: record.starting_interop_event_index.clone(),
                     starting_migration_number: record.starting_migration_number,
+                    starting_interop_fee_number: record.starting_interop_fee_number,
                     interop_roots_per_block: self.interop_roots_per_block,
+                    strict_subpool_cleanup: false,
                 }
             }
             BlockCommand::Rebuild(rebuild) => {
@@ -289,7 +311,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     force_preimages: rebuild.replay_record.force_preimages,
                     starting_interop_event_index: self.next_interop_event_index.clone(),
                     starting_migration_number: self.next_migration_number,
+                    starting_interop_fee_number: self.next_interop_fee_number,
                     interop_roots_per_block: self.interop_roots_per_block,
+                    strict_subpool_cleanup: false,
                 }
             }
         };
@@ -305,6 +329,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         &mut self,
         block_output: &BlockOutput,
         replay_record: &ReplayRecord,
+        strict_subpool_cleanup: bool,
     ) {
         let outcome = self
             .pool
@@ -312,6 +337,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 block_output.header.clone(),
                 &block_output.account_diffs,
                 replay_record,
+                strict_subpool_cleanup,
             )
             .await;
         if let Some(last_l1_priority_id) = outcome.last_l1_priority_id {
@@ -331,6 +357,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         if let Some(last_migration_number) = outcome.last_migration_number {
             self.next_migration_number = last_migration_number + 1;
         }
+        if let Some(last_interop_fee_number) = outcome.last_interop_fee_number {
+            self.next_interop_fee_number = last_interop_fee_number + 1;
+        }
 
         // We update protocol version here, so that we take into account replay records with protocol version bumps.
         self.protocol_version = replay_record.protocol_version.clone();
@@ -347,6 +376,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 .try_into()
                 .unwrap(),
         );
+        self.next_block_number += 1;
         self.previous_block_timestamp = block_output.header.timestamp;
         self.fee_provider.on_canonical_state_change(replay_record);
     }

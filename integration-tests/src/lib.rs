@@ -191,6 +191,7 @@ impl Tester {
             config.general_config.node_role = NodeRole::ExternalNode;
             config.network_config.boot_nodes = vec![self.node_record];
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
+            config.l1_sender_config.pubdata_mode = None;
             config.general_config.gateway_rpc_url = self.gateway_rpc_url.clone();
             config.batch_verification_config.connect_address = self.batch_verification_url.clone();
             if let Some(f) = config_overrides {
@@ -319,6 +320,7 @@ impl Tester {
             gas_adjuster_config: Default::default(),
             batch_verification_config,
             base_token_price_updater_config: default_config.base_token_price_updater_config.clone(),
+            interop_fee_updater_config: default_config.interop_fee_updater_config.clone(),
             external_price_api_client_config: default_config
                 .external_price_api_client_config
                 .clone(),

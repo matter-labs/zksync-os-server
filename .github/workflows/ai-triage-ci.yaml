@@ -1,0 +1,114 @@
+name: Triage CI failures
+
+on:
+  workflow_run:
+    workflows:
+      - "Eth spec tests"
+    types: [completed]
+
+permissions:
+  actions: write
+
+defaults:
+  run:
+    shell: bash -ex ${0}
+
+jobs:
+  triage:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Analyze failure with Claude
+        id: analyze
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_ACCESS_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            WORKFLOW RUN ID: ${{ github.event.workflow_run.id }}
+            WORKFLOW NAME: ${{ github.event.workflow_run.name }}
+            BRANCH: ${{ github.event.workflow_run.head_branch }}
+            RUN ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+
+            Analyze this failed GitHub Actions workflow run for zksync-os-server.
+
+            Task:
+            1. Inspect the workflow run with the GitHub Actions tools.
+            2. Identify the failed jobs.
+            3. Fetch the relevant failed-job logs.
+            4. Classify the failure as either:
+               - "rerun": clear transient infrastructure failure
+               - "escalate": needs human attention
+
+            Decision rubric:
+            - Use "rerun" only for clear transient infra issues such as network timeout, DNS failure,
+              crates.io/registry unreachable, GCS/sccache error, docker pull failure, runner OOM,
+              anvil/geth startup timing race, GitHub API 5xx, or flaky test infrastructure.
+            - Use "escalate" for compilation errors, real test assertion failures, logic bugs,
+              configuration errors, or security issues.
+            - For "Eth spec tests", escalate only actual EVM spec assertion failures. Infra-only
+              failures should be "rerun".
+            - Consider RUN ATTEMPT as context, not a hard rule. On attempt 2 or later, bias toward
+              "escalate", but still explain the actual current failure from the logs.
+
+            Return only structured output matching the schema with:
+            - decision
+            - reason
+            - failure_type
+            - failed_jobs
+          claude_args: |
+            --allowedTools "mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
+            --max-turns 3
+            --json-schema '{"type":"object","properties":{"decision":{"type":"string","enum":["rerun","escalate"]},"reason":{"type":"string"},"failure_type":{"type":"string"},"failed_jobs":{"type":"string"}},"required":["decision","reason","failure_type","failed_jobs"]}'
+
+      - name: Finalize decision
+        id: result
+        if: always()
+        env:
+          RAW: ${{ steps.analyze.outputs.structured_output }}
+        run: |
+          if [ -z "${RAW}" ]; then
+            {
+              echo "decision=escalate"
+              echo "reason=Could not analyze logs (analysis step produced no output)"
+              echo "failure_type=analysis_error"
+              echo "failed_jobs=unknown"
+            } >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          decision="$(jq -r '.decision' <<< "${RAW}")"
+          reason="$(jq -r '.reason | gsub("[\\r\\n]+"; " ")' <<< "${RAW}")"
+          failure_type="$(jq -r '.failure_type | gsub("[\\r\\n]+"; " ")' <<< "${RAW}")"
+          failed_jobs="$(jq -r '.failed_jobs | gsub("[\\r\\n]+"; " ")' <<< "${RAW}")"
+          {
+            echo "decision=${decision}"
+            echo "reason=${reason}"
+            echo "failure_type=${failure_type}"
+            echo "failed_jobs=${failed_jobs}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Re-run failed jobs
+        if: steps.result.outputs.decision == 'rerun'
+        run: |
+          echo "Rerunning failed jobs for run ${RUN_ID}"
+          echo "Reason: ${{ steps.result.outputs.reason }}"
+          gh api -X POST "/repos/${REPO}/actions/runs/${RUN_ID}/rerun-failed-jobs"
+
+      - name: Notify Slack
+        if: steps.result.outputs.decision == 'escalate'
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+          title: ":rotating_light: CI Failure: ${{ github.event.workflow_run.name }}"
+          workflow: ${{ github.event.workflow_run.name }}
+          branch: ${{ github.event.workflow_run.head_branch }}
+          actor: ${{ github.event.workflow_run.actor.login }}
+          attempt: ${{ github.event.workflow_run.run_attempt }}
+          failed_jobs: ${{ steps.result.outputs.failed_jobs }}
+          reason: ${{ steps.result.outputs.reason }}
+          run_url: ${{ github.event.workflow_run.html_url }}

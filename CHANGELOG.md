@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.17.0](https://github.com/matter-labs/zksync-os-server/compare/v0.16.0...v0.17.0) (2026-03-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* Remove unnecessary configs for EN ([#986](https://github.com/matter-labs/zksync-os-server/issues/986))
+* Store FRI proofs locally, not in S3 ([#891](https://github.com/matter-labs/zksync-os-server/issues/891))
+* Commit encoding v4 support ([#899](https://github.com/matter-labs/zksync-os-server/issues/899))
+
+### Features
+
+* add gateway interop fee updater ([#968](https://github.com/matter-labs/zksync-os-server/issues/968)) ([fe50e31](https://github.com/matter-labs/zksync-os-server/commit/fe50e31ba453f0aa24a192a71fabdd3ea6779f01))
+* Add proper gateway migration watcher ([#921](https://github.com/matter-labs/zksync-os-server/issues/921)) ([c9e3622](https://github.com/matter-labs/zksync-os-server/commit/c9e36227614d63bf2d36ebd6d58c22436e8ffadf))
+* Adding operator signing with HSM ([#956](https://github.com/matter-labs/zksync-os-server/issues/956)) ([5008730](https://github.com/matter-labs/zksync-os-server/commit/5008730299c23f6fb5c0bfcd4965620ba49b9e41))
+* Bump zksync-os dev version ([#911](https://github.com/matter-labs/zksync-os-server/issues/911)) ([2bab2b8](https://github.com/matter-labs/zksync-os-server/commit/2bab2b8be287b882541d456a0cab26ab3407b336))
+* Commit encoding v4 support ([#899](https://github.com/matter-labs/zksync-os-server/issues/899)) ([f95ddbd](https://github.com/matter-labs/zksync-os-server/commit/f95ddbdc837b035bc944009ae4dfce47c5579e9d))
+* consensus integration 1/5: Sequencer split in BlockExecutor and BlockApplier ([#953](https://github.com/matter-labs/zksync-os-server/issues/953)) ([2f588c2](https://github.com/matter-labs/zksync-os-server/commit/2f588c2c43db788e8e2e27bed8ee38cbb75e1001))
+* **genesis:** derive execution_version from protocol version, remove from genesis.json ([#940](https://github.com/matter-labs/zksync-os-server/issues/940)) ([38a77fa](https://github.com/matter-labs/zksync-os-server/commit/38a77facc7e3cfbb481ebf5e9710c2bb0338be3b))
+* make operator signing keys optional for External Nodes ([#929](https://github.com/matter-labs/zksync-os-server/issues/929)) ([3894215](https://github.com/matter-labs/zksync-os-server/commit/38942150d7c9b8fe106ed5d3e9c136d435cae01c))
+* **merkle-tree:** Implement storage proofs for `zks_getProof` ([#904](https://github.com/matter-labs/zksync-os-server/issues/904)) ([eaa38d3](https://github.com/matter-labs/zksync-os-server/commit/eaa38d36818b6d64a11565b6032745c4afa2df12))
+* proper gateway settlement and local gateway setup ([#919](https://github.com/matter-labs/zksync-os-server/issues/919)) ([14b202f](https://github.com/matter-labs/zksync-os-server/commit/14b202f5c4a5bed26c308014e83cb00ed4a46bb4))
+* **rpc:** Additional format of l2_to_l1_log_proof ([#964](https://github.com/matter-labs/zksync-os-server/issues/964)) ([6397e96](https://github.com/matter-labs/zksync-os-server/commit/6397e968b47260ff922640bbec59bd4c83d9ec33))
+* scale eth_gasPrice by configurable factor ([#957](https://github.com/matter-labs/zksync-os-server/issues/957)) ([2240028](https://github.com/matter-labs/zksync-os-server/commit/2240028eee22c26a69082762767ae5595ce61bed))
+* some gateway features ([#886](https://github.com/matter-labs/zksync-os-server/issues/886)) ([ba995d7](https://github.com/matter-labs/zksync-os-server/commit/ba995d72d24b41769439ab85966f667d8265294a))
+* Store FRI proofs locally, not in S3 ([#891](https://github.com/matter-labs/zksync-os-server/issues/891)) ([2895b90](https://github.com/matter-labs/zksync-os-server/commit/2895b903e4f7c3929ec7f9f4e73944887543f475))
+* update rustc version; use prover binary in test ([#901](https://github.com/matter-labs/zksync-os-server/issues/901)) ([2ca6c08](https://github.com/matter-labs/zksync-os-server/commit/2ca6c086a9974f97c1641cf75744af7099690d2c))
+
+
+### Bug Fixes
+
+* Add more metrics for 2FA ([#1001](https://github.com/matter-labs/zksync-os-server/issues/1001)) ([ccb9ce8](https://github.com/matter-labs/zksync-os-server/commit/ccb9ce80af4001978e9b66631831cfc2aa071b0a))
+* Compare block hash during block replay ([#918](https://github.com/matter-labs/zksync-os-server/issues/918)) ([039a9ba](https://github.com/matter-labs/zksync-os-server/commit/039a9ba38e08c11ae4be8c80691988b640b3e3fc))
+* Decouple v1 batch verification transport ([#997](https://github.com/matter-labs/zksync-os-server/issues/997)) ([53c09b5](https://github.com/matter-labs/zksync-os-server/commit/53c09b542b83c9d32d46f02a5a18c74f828410f9))
+* do not do migration to set `execute_sl_block_number` for old batches ([#976](https://github.com/matter-labs/zksync-os-server/issues/976)) ([c4a00c7](https://github.com/matter-labs/zksync-os-server/commit/c4a00c76c0967d95e14b64ec45c21d220241f6dc))
+* fix legacy batch processing in persist batch watcher ([#975](https://github.com/matter-labs/zksync-os-server/issues/975)) ([e1d07c7](https://github.com/matter-labs/zksync-os-server/commit/e1d07c71fd46777f019a258516fa71a6f84922b4))
+* keep `StoredBatchInfo::last_block_timestamp` ([#977](https://github.com/matter-labs/zksync-os-server/issues/977)) ([73e5fe5](https://github.com/matter-labs/zksync-os-server/commit/73e5fe5c502f74e8c2932295b680c0611751d19d))
+* mempool pending fee refresh ([#955](https://github.com/matter-labs/zksync-os-server/issues/955)) ([07693c8](https://github.com/matter-labs/zksync-os-server/commit/07693c84cdca821efc779dd2180c6cb438e2e850))
+* multivm app path caching across tempdirs ([#948](https://github.com/matter-labs/zksync-os-server/issues/948)) ([69a457d](https://github.com/matter-labs/zksync-os-server/commit/69a457d8cc61c70c0e835ebdcbbc256e03e59efd))
+* Remove unnecessary configs for EN ([#986](https://github.com/matter-labs/zksync-os-server/issues/986)) ([b68775b](https://github.com/matter-labs/zksync-os-server/commit/b68775b670ad5a67d54ff1f82b34d08465318986))
+* rename aggregated root to multichain root ([#924](https://github.com/matter-labs/zksync-os-server/issues/924)) ([6cbc17b](https://github.com/matter-labs/zksync-os-server/commit/6cbc17b5886444284b12abc65640ba2fbe420a2d))
+* retry on pending commit tx in L1 watcher instead of panicking ([#952](https://github.com/matter-labs/zksync-os-server/issues/952)) ([8589852](https://github.com/matter-labs/zksync-os-server/commit/8589852c24cd59235cb25e5748589896e942cc22))
+* **rpc:** adjust latency histogram bucket range (1µs-32s) ([#990](https://github.com/matter-labs/zksync-os-server/issues/990)) ([10e4200](https://github.com/matter-labs/zksync-os-server/commit/10e4200960b3bd36b30addefc54b011e08a9ec03))
+* **rpc:** camelCase `batchNumber` is L2-&gt;L1 log proof ([#923](https://github.com/matter-labs/zksync-os-server/issues/923)) ([9f8bcdd](https://github.com/matter-labs/zksync-os-server/commit/9f8bcdd472af299615b08ea8718f98b3a67a853f))
+* **rpc:** lower eth_getLogs default limits to match industry standard ([#992](https://github.com/matter-labs/zksync-os-server/issues/992)) ([4f51503](https://github.com/matter-labs/zksync-os-server/commit/4f51503f353d89f87046cb0be21c005cd6e0a606))
+* **sequencer:** handle low-fee L2 transactions without stalling block production ([#927](https://github.com/matter-labs/zksync-os-server/issues/927)) ([c0d7385](https://github.com/matter-labs/zksync-os-server/commit/c0d73850edc30223af6965bc86f98408c3da6f37))
+* support 0x-prefixed hex in all config fields ([#931](https://github.com/matter-labs/zksync-os-server/issues/931)) ([a876bec](https://github.com/matter-labs/zksync-os-server/commit/a876becd96231a5a0b109f7ad5377310283482a1))
+* **tests:** decompress L1 state in build.rs instead of in-process cache ([#966](https://github.com/matter-labs/zksync-os-server/issues/966)) ([03ae2ed](https://github.com/matter-labs/zksync-os-server/commit/03ae2ed7fb110ecac99bdfa9a893d89768a8992e))
+* Use warn for server disconnects ([#998](https://github.com/matter-labs/zksync-os-server/issues/998)) ([266e134](https://github.com/matter-labs/zksync-os-server/commit/266e134cadf575680cabed60ebbfb2877beba244))
+* Warn on batch verification threshold mismatch ([#984](https://github.com/matter-labs/zksync-os-server/issues/984)) ([ad0fcab](https://github.com/matter-labs/zksync-os-server/commit/ad0fcab716fc0485c17c842815fb497285127852))
+
 ## [0.16.0](https://github.com/matter-labs/zksync-os-server/compare/v0.15.1...v0.16.0) (2026-02-25)
 
 

@@ -6,6 +6,7 @@ genesis:
   genesis_input_path: ./local-chains/v30.2/genesis.json
   chain_id: 6566
 l1_sender:
+  pubdata_mode: Blobs
   operator_commit_sk: '0xedc88f85d7a0e5aa8c48a11fc0261eb6bbe16f7fb1523df53bf570b250998a31'
   operator_prove_sk: '0x1f2f23356ff1f9c5998a059381ef678edde790080f94e791698047b1a35ef1b8'
   operator_execute_sk: '0xb878497fc910d43e9d692ccc256964f62d5a223293b4cff0a8c4bb9d352b3292'
@@ -15,4 +16,3 @@ external_price_api_client:
   source: Forced
   forced_prices:
     '0x0000000000000000000000000000000000000001': 3000
-

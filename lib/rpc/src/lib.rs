@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 
 mod eth_call_handler;
+pub use eth_call_handler::EthCallHandler;
 mod eth_filter_impl;
 mod eth_impl;
 mod eth_pubsub_impl;
@@ -28,7 +29,6 @@ mod web3_impl;
 mod zks_impl;
 
 use crate::debug_impl::DebugNamespace;
-use crate::eth_call_handler::EthCallHandler;
 use crate::eth_filter_impl::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;

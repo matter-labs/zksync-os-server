@@ -4,14 +4,16 @@ use alloy::{
 };
 use serde::{Deserialize, Serialize};
 use zksync_os_contract_interface::{
-    IMessageRoot::addInteropRootsInBatchCall, ISystemContext::setSettlementLayerChainIdCall,
-    InteropRoot,
+    IInteropCenter::setInteropFeeCall, IMessageRoot::addInteropRootsInBatchCall,
+    ISystemContext::setSettlementLayerChainIdCall, InteropRoot,
 };
 
 pub const BOOTLOADER_FORMAL_ADDRESS: Address =
     address!("0x0000000000000000000000000000000000008001");
 pub const L2_INTEROP_ROOT_STORAGE_ADDRESS: Address =
     address!("0x0000000000000000000000000000000000010008");
+pub const L2_INTEROP_CENTER_ADDRESS: Address =
+    address!("0x000000000000000000000000000000000001000d");
 pub const SYSTEM_CONTEXT_ADDRESS: Address = address!("0x000000000000000000000000000000000000800b");
 
 pub const SYSTEM_TX_TYPE_ID: u8 = 125;
@@ -23,12 +25,15 @@ pub enum SystemTxType {
     ImportInteropRoots(u64),
     /// Transaction subtype for setting the settlement layer chain id, contains migration number
     SetSLChainId(u64),
+    /// Transaction subtype for setting the interop fee, contains interop fee update number.
+    SetInteropFee(u64),
 }
 
 /// Helper type to encode/decode system transaction input and determine it's subtype
 pub(crate) enum SystemTxInput {
     ImportInteropRoots(Vec<InteropRoot>),
     SetSLChainId(ChainId, u64),
+    SetInteropFee(U256, u64),
 }
 
 impl SystemTxInput {
@@ -48,6 +53,13 @@ impl SystemTxInput {
                 .abi_encode(),
                 *salt,
             ),
+            Self::SetInteropFee(interop_fee, salt) => (
+                setInteropFeeCall {
+                    _interopFee: *interop_fee,
+                }
+                .abi_encode(),
+                *salt,
+            ),
         }
     }
 
@@ -55,6 +67,7 @@ impl SystemTxInput {
         match self {
             Self::ImportInteropRoots(_) => L2_INTEROP_ROOT_STORAGE_ADDRESS,
             Self::SetSLChainId(_, _) => SYSTEM_CONTEXT_ADDRESS,
+            Self::SetInteropFee(_, _) => L2_INTEROP_CENTER_ADDRESS,
         }
     }
 }

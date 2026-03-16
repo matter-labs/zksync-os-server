@@ -232,6 +232,15 @@ jobs:
           CRS_FILE_URL: https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key
         run: wget -q --show-progress "${CRS_FILE_URL}"
 
+      - name: Decompress L1 state fixtures
+        run: |
+          for gz_file in local-chains/*/l1-state.json.gz; do
+            json="${gz_file%.gz}"
+            if [ ! -f "$json" ]; then
+              gunzip -k "$gz_file"
+            fi
+          done
+
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
       - name: Run prover tests on GPU

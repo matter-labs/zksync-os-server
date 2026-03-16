@@ -40,7 +40,8 @@ impl ReadReplay for InMemReplay {
 
 fn dummy_record<P: AnyZksProtocolVersion>(block_number: BlockNumber) -> ReplayRecord {
     // Do full round conversion ReplayRecord->P::Record->ReplayRecord to get rid of unsupported
-    // fields for each protocol version (e.g. `starting_migration_number` will be zeroed out for v1).
+    // fields for each protocol version (e.g. `starting_migration_number` and
+    // `starting_interop_fee_number` will be zeroed out for v1).
     let record = ReplayRecord::new(
         BlockContext {
             block_number,
@@ -57,6 +58,7 @@ fn dummy_record<P: AnyZksProtocolVersion>(block_number: BlockNumber) -> ReplayRe
         vec![],
         InteropRootsLogIndex::default(),
         123,
+        456,
     );
     let zks_record: P::Record = record.into();
     zks_record

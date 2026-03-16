@@ -18,7 +18,12 @@ pub trait PipelineComponent: Send + 'static {
     /// Human-readable name for logging and metrics
     const NAME: &'static str;
 
-    /// Buffer size for the output channel
+    /// Buffer size for the output channel.
+    /// If set to `0`, this component won't start the next item
+    /// until the previous item is picked up by the next component.
+    /// Higher values allow this component to process items ahead of the downstream components.
+    /// Todo: it'd be cleaner to define the **Inbound** buffer size instead
+    /// Todo: this will be replaced by a more general backpressure mechanism
     const OUTPUT_BUFFER_SIZE: usize;
 
     /// Run the component, receiving from input and sending to output.

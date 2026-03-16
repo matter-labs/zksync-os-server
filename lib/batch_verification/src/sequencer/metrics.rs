@@ -1,9 +1,15 @@
 use std::time::Duration;
-use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
+use vise::{Buckets, Counter, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "batch_verification_sequencer")]
 pub struct BatchVerificationSequencerMetrics {
+    /// Threshold chosen by the main node for batch verification.
+    pub threshold: Gauge<u64>,
+
+    /// Number of signer addresses chosen by the main node for batch verification.
+    pub validators_count: Gauge<usize>,
+
     /// Histogram of the attempt number on which batch verification succeeds. factor 1.3 -> 19 buckets
     #[metrics(buckets = Buckets::exponential(1.0..=128.0, 1.3))]
     pub attempts_to_success: Histogram<u64>,
@@ -20,6 +26,11 @@ pub struct BatchVerificationSequencerMetrics {
     /// retries where needed, all successes will be recorded.
     #[metrics(labels = ["signer"], buckets = Buckets::exponential(1.0..=128.0, 1.3))]
     pub successful_attempt_per_signer: LabeledFamily<String, Histogram<u64>>,
+
+    /// Total number of responses received by the main node that did not validate into
+    /// a usable signature set entry (e.g. refused, invalid, unknown signer).
+    #[metrics(labels = ["reason"])]
+    pub failed_responses: LabeledFamily<&'static str, Counter>,
 
     /// Latest request_id used for batch verification
     pub last_request_id: Gauge<u64>,
