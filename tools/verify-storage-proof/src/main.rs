@@ -44,19 +44,17 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    println!("Connecting to L1 ({}) and L2 ({})...", args.l1_rpc, args.l2_rpc);
+    println!(
+        "Connecting to L1 ({}) and L2 ({})...",
+        args.l1_rpc, args.l2_rpc
+    );
     let l1_provider = ProviderBuilder::new().connect(&args.l1_rpc).await?;
     let l2_provider = ProviderBuilder::new().connect(&args.l2_rpc).await?;
 
     // 1. Resolve diamond proxy
     println!("\n--- Step 1: Resolve diamond proxy ---");
-    let diamond_proxy = resolve_diamond_proxy(
-        &l1_provider,
-        &l2_provider,
-        args.l1_contract,
-        args.bridgehub,
-    )
-    .await?;
+    let diamond_proxy =
+        resolve_diamond_proxy(&l1_provider, &l2_provider, args.l1_contract, args.bridgehub).await?;
     println!("  Diamond proxy: {diamond_proxy}");
 
     // 2. Fetch on-chain batch hash
@@ -97,10 +95,7 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             InnerStorageSlotProof::NonExisting { .. } => {
-                println!(
-                    "  Slot {i}: key={} (non-existing)",
-                    slot_proof.key.0
-                );
+                println!("  Slot {i}: key={} (non-existing)", slot_proof.key.0);
             }
         }
     }

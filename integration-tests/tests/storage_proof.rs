@@ -153,7 +153,11 @@ async fn verify_storage_proof_with_l1_contract() -> anyhow::Result<()> {
     wait_for_batch_commitment(&tester, batch_number).await;
 
     // Wait for proof to be available
-    tracing::info!(batch_number, ?contract_address, "waiting for proof availability");
+    tracing::info!(
+        batch_number,
+        ?contract_address,
+        "waiting for proof availability"
+    );
     let queried_keys = vec![B256::ZERO];
     let proof = loop {
         if let Some(proof) = tester
@@ -217,7 +221,11 @@ async fn verify_storage_proof_with_bridgehub_discovery() -> anyhow::Result<()> {
     wait_for_batch_commitment(&tester, batch_number).await;
 
     // Wait for proof to be available
-    tracing::info!(batch_number, ?contract_address, "waiting for proof availability");
+    tracing::info!(
+        batch_number,
+        ?contract_address,
+        "waiting for proof availability"
+    );
     let queried_keys = vec![B256::ZERO];
     let proof = loop {
         if let Some(proof) = tester
@@ -285,7 +293,11 @@ async fn verify_storage_proof_empty_slot() -> anyhow::Result<()> {
     let batch_number = 2;
     wait_for_batch_commitment(&tester, batch_number).await;
 
-    tracing::info!(batch_number, ?contract_address, "waiting for proof availability");
+    tracing::info!(
+        batch_number,
+        ?contract_address,
+        "waiting for proof availability"
+    );
     let queried_keys = vec![B256::ZERO, B256::repeat_byte(0x1f)];
     let proof = loop {
         if let Some(proof) = tester
