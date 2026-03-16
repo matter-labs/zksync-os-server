@@ -165,7 +165,7 @@ impl BatchVerificationServer {
             first_block_number: batch_envelope.batch.first_block_number,
             last_block_number: batch_envelope.batch.last_block_number,
             pubdata_mode: batch_envelope.batch.pubdata_mode,
-            commit_data: batch_envelope.batch.batch_info.commit_info.clone(),
+            commit_data: batch_envelope.batch.batch_info.commit_info.clone().into(),
             prev_commit_data: batch_envelope.batch.previous_stored_batch_info.clone(),
             request_id,
         };
@@ -238,7 +238,10 @@ mod tests {
             assert_eq!(req.first_block_number, 10);
             assert_eq!(req.last_block_number, 20);
             assert_eq!(req.pubdata_mode, batch_envelope.batch.pubdata_mode);
-            assert_eq!(req.commit_data, batch_envelope.batch.batch_info.commit_info);
+            assert_eq!(
+                req.commit_data,
+                batch_envelope.batch.batch_info.commit_info.clone().into()
+            );
             assert_eq!(req.request_id, 5);
         };
 

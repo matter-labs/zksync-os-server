@@ -2,6 +2,7 @@ use crate::client::metrics::BATCH_VERIFICATION_CLIENT_METRICS;
 use crate::{
     BatchVerificationRequest, BatchVerificationRequestDecoder, BatchVerificationResponse,
     BatchVerificationResponseCodec, BatchVerificationResult,
+    wire_format::ensure_supported_wire_format,
 };
 use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
@@ -148,13 +149,11 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
 
         let mut reader = StreamReader::new(stream);
         let batch_verification_version = reader.read_u32().await?;
-        let mut reader = FramedRead::new(
-            reader,
-            BatchVerificationRequestDecoder::new(batch_verification_version),
-        );
+        ensure_supported_wire_format(batch_verification_version)?;
+        let mut reader = FramedRead::new(reader, BatchVerificationRequestDecoder::new());
         let mut writer = FramedWrite::new(
             ChannelWriter::new(tx),
-            BatchVerificationResponseCodec::new(batch_verification_version),
+            BatchVerificationResponseCodec::new(),
         );
 
         let address = self.signer.address().to_string();
@@ -274,8 +273,9 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             &blocks.first().unwrap().1.protocol_version,
         );
 
-        if batch_info.commit_info != request.commit_data {
-            let diff = request.commit_data.diff(&batch_info.commit_info);
+        let expected_commit_data = batch_info.commit_info.clone().into();
+        if expected_commit_data != request.commit_data {
+            let diff = request.commit_data.diff(&expected_commit_data);
 
             return Err(BatchVerificationError::BatchDataMismatch(format!(
                 "Batch data mismatch: {diff:?}",
