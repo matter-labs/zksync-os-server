@@ -8,7 +8,7 @@ use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{
-    DynProvider, PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider,
+    DynProvider, Identity, PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider,
 };
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
@@ -142,6 +142,7 @@ pub struct Tester {
     l2_rpc_address: String,
     batch_verification_url: String,
     gateway_rpc_url: Option<String>,
+    sl_provider: EthDynProvider,
     chain_layout: ChainLayout<'static>,
     supporting_nodes: Vec<Tester>,
 }
@@ -153,6 +154,28 @@ impl Tester {
 
     pub fn l1_wallet(&self) -> &EthereumWallet {
         &self.l1.wallet
+    }
+
+    pub fn sl_provider(&self) -> &EthDynProvider {
+        &self.sl_provider
+    }
+
+    pub async fn gateway_provider(&self) -> anyhow::Result<Option<DynProvider<Zksync>>> {
+        let provider: Option<DynProvider<Zksync>> =
+            if let Some(gateway_rpc_url) = &self.gateway_rpc_url {
+                Some(DynProvider::<Zksync>::new(
+                    ProviderBuilder::<Identity, Identity, Zksync>::default()
+                        .with_recommended_fillers()
+                        .connect(gateway_rpc_url)
+                        .await
+                        .with_context(|| {
+                            format!("failed to connect to gateway RPC at {gateway_rpc_url}")
+                        })?,
+                ))
+            } else {
+                None
+            };
+        Ok(provider)
     }
 }
 
@@ -425,20 +448,32 @@ impl Tester {
 
         let tempdir = Arc::new(tempdir);
         let sl_provider = if let Some(gateway_rpc_url) = &gateway_rpc_url {
-            DynProvider::new(
-                ProviderBuilder::new()
+            let sl_provider = (|| async {
+                let sl_provider = ProviderBuilder::new()
+                    .wallet(l2_wallet.clone())
                     .connect(gateway_rpc_url)
-                    .await
-                    .with_context(|| {
-                        format!("failed to connect to gateway RPC at {gateway_rpc_url}")
-                    })?,
+                    .await?;
+
+                // Wait for L2 node to get up and be able to respond.
+                sl_provider.get_chain_id().await?;
+                anyhow::Ok(sl_provider)
+            })
+            .retry(
+                ConstantBuilder::default()
+                    .with_delay(Duration::from_millis(200))
+                    .with_max_times(50),
             )
+            .notify(|err: &anyhow::Error, dur: Duration| {
+                tracing::info!(%err, ?dur, "retrying connection to L2 node");
+            })
+            .await?;
+            EthDynProvider::new(sl_provider)
         } else {
-            DynProvider::new(l1.provider.clone())
+            l1.provider.clone()
         };
         let prover_tester = ProverTester::new(
             EthDynProvider::new(l1.provider.clone()),
-            sl_provider,
+            sl_provider.clone(),
             EthDynProvider::new(l2_provider.clone()),
             DynProvider::new(l2_zk_provider.clone()),
         );
@@ -453,6 +488,7 @@ impl Tester {
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             batch_verification_url,
             gateway_rpc_url,
+            sl_provider,
             node_record,
             tempdir: tempdir.clone(),
             chain_layout,

@@ -20,6 +20,7 @@ alloy::sol! {
     contract ChainAssetHandlerBase {
         // available for >= v31
         function pauseMigration() external;
+        function owner() external view returns (address);
     }
 
     enum Action {
@@ -84,6 +85,7 @@ alloy::sol! {
         function getAdmin() external view returns (address);
         function facets() external view returns (Facet[] memory);
         function getVerifier() external view returns (address);
+        function getTransactionFilterer() external view returns (address);
 
         // Admin facet
         function upgradeChainFromVersion(uint256 _protocolVersion, DiamondCutData calldata _cutData) external;
@@ -202,5 +204,12 @@ alloy::sol! {
             uint256 _processTo,
             bytes calldata _commitData
         ) external;
+    }
+
+    #[sol(rpc)]
+    contract GatewayTransactionFilterer {
+        mapping(address sender => bool whitelisted) public whitelistedSenders;
+        function grantWhitelist(address sender) external;
+        function owner() external view returns (address);
     }
 }

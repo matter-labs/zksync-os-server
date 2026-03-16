@@ -11,7 +11,7 @@ use zksync_os_contract_interface::l1_discovery::L1State;
 #[derive(Debug)]
 pub struct ProverTester {
     l1_provider: EthDynProvider,
-    sl_provider: DynProvider,
+    sl_provider: EthDynProvider,
     l2_provider: EthDynProvider,
     l2_zk_provider: DynProvider<Zksync>,
 }
@@ -20,7 +20,7 @@ impl ProverTester {
     /// Create a new client targeting the given base URL
     pub fn new(
         l1_provider: EthDynProvider,
-        sl_provider: DynProvider,
+        sl_provider: EthDynProvider,
         l2_provider: EthDynProvider,
         l2_zk_provider: DynProvider<Zksync>,
     ) -> Self {
