@@ -33,10 +33,11 @@ pub struct GatewayMigrationWatcher {
 }
 
 impl GatewayMigrationWatcher {
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
         zk_chain: ZkChain<DynProvider>,
         bridgehub: Bridgehub<DynProvider>,
-        chain_id: u64,
+        l2_chain_id: ChainId,
         l1_chain_id: ChainId,
         gw_chain_id: ChainId,
         current_migration_number: u64,
@@ -50,7 +51,7 @@ impl GatewayMigrationWatcher {
         let next_l1_block = find_l1_block_by_migration_number(
             zk_chain.clone(),
             chain_asset_handler_address,
-            chain_id,
+            l2_chain_id,
             current_migration_number,
         )
         .await
@@ -76,7 +77,7 @@ impl GatewayMigrationWatcher {
 
         let this = Self {
             server_notifier_contract,
-            l2_chain_id: chain_id,
+            l2_chain_id,
             l1_chain_id,
             gw_chain_id,
             sl_chain_id_subpool,
