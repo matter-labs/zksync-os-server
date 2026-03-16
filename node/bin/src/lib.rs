@@ -530,7 +530,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         if config.general_config.gateway_rpc_url.is_some() {
             tasks.spawn(
                 InteropWatcher::create_watcher(
-                    node_startup_state.l1_state.bridgehub_sl.clone(), // TODO: what bridgehub to use here?
+                    node_startup_state.l1_state.bridgehub_sl.clone(),
                     config.l1_watcher_config.clone().into(),
                     next_interop_event_index.clone(),
                     interop_roots_subpool.clone(),
