@@ -239,6 +239,8 @@ impl BatchInfo {
             dependency_roots_rolling_hash: commit_info.dependency_roots_rolling_hash,
             l2_to_l1_logs_root_hash: commit_info.l2_to_l1_logs_root_hash,
             commitment,
+            // unused
+            last_block_timestamp: Some(0),
         }
     }
 }
@@ -305,9 +307,10 @@ fn calculate_da_fields(
             (PubdataMode::Validium, _) => (B256::ZERO, vec![0u8; 32], None),
             (PubdataMode::Blobs, _) => {
                 // returns error in case of internal error during sidecar calculation
-                let blob_sidecar = SidecarBuilder::<SimpleCoder>::from_slice(pubdata)
-                    .build()
-                    .unwrap();
+                let blob_sidecar: BlobTransactionSidecar =
+                    SidecarBuilder::<SimpleCoder>::from_slice(pubdata)
+                        .build()
+                        .unwrap();
                 let versioned_hashes: Vec<u8> = blob_sidecar
                     .versioned_hashes()
                     .flat_map(|hash| hash.0.to_vec())

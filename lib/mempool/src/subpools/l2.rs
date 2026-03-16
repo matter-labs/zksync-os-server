@@ -3,6 +3,9 @@ use crate::{L2PooledTransaction, TxValidatorConfig};
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::Stream;
+use reth_chainspec::ChainSpecProvider;
+use reth_evm_ethereum::EthEvmConfig;
+use reth_primitives::Block as EthBlock;
 use reth_primitives_traits::transaction::error::InvalidTransactionError;
 use reth_transaction_pool::blobstore::NoopBlobStore;
 use reth_transaction_pool::error::InvalidPoolTransactionError;
@@ -22,7 +25,11 @@ use zksync_os_storage_api::{ReadRepository, ReadStateHistory};
 use zksync_os_types::{L2Transaction, ZkTransaction};
 
 pub(crate) type RethPool<State, Repository> = Pool<
-    EthTransactionValidator<ZkProviderFactory<State, Repository>, L2PooledTransaction>,
+    EthTransactionValidator<
+        ZkProviderFactory<State, Repository>,
+        L2PooledTransaction,
+        EthEvmConfig,
+    >,
     CoinbaseTipOrdering<L2PooledTransaction>,
     NoopBlobStore,
 >;
@@ -30,7 +37,11 @@ pub(crate) type RethPool<State, Repository> = Pool<
 #[allow(async_fn_in_trait)]
 #[auto_impl::auto_impl(&, Box, Arc)]
 pub trait L2Subpool:
-    TransactionPoolExt<Transaction = L2PooledTransaction> + Send + Sync + Debug + 'static
+    TransactionPoolExt<Transaction = L2PooledTransaction, Block = EthBlock>
+    + Send
+    + Sync
+    + Debug
+    + 'static
 {
     /// Convenience method to add a local L2 transaction
     fn add_l2_transaction(
@@ -117,7 +128,7 @@ impl L2TransactionsStreamMarker {
         // Reth provides `TxTypeNotSupported` and we do the same just in case.
         inner.txs.mark_invalid(
             &tx,
-            InvalidPoolTransactionError::Consensus(InvalidTransactionError::TxTypeNotSupported),
+            &InvalidPoolTransactionError::Consensus(InvalidTransactionError::TxTypeNotSupported),
         );
     }
 }
@@ -135,8 +146,9 @@ pub fn in_memory(
     // reth mempool metrics are propagated to `vise` collector. Only code inside the closure is
     // affected.
     ::metrics::with_local_recorder(&ViseRecorder, move || {
+        let chain_spec = zk_provider_factory.chain_spec();
         RethPool::new(
-            EthTransactionValidatorBuilder::new(zk_provider_factory)
+            EthTransactionValidatorBuilder::new(zk_provider_factory, EthEvmConfig::new(chain_spec))
                 .no_prague()
                 .with_max_tx_input_bytes(validator_config.max_input_bytes)
                 // set tx_fee_cap to 0, effectively disabling the tx fee checks in the reth mempool

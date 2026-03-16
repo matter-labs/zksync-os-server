@@ -20,7 +20,7 @@ pub use transaction::{
     L1UpgradeEnvelope, L1UpgradeTx, L2_INTEROP_ROOT_STORAGE_ADDRESS, L2Envelope, L2Transaction,
     REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, SYSTEM_TX_TYPE_ID, SystemTxEnvelope, SystemTxType,
     TransactionData, UpgradeInfo, UpgradeMetadata, UpgradeTxType, ZkEnvelope, ZkTransaction,
-    ZkTxType, ZksyncOsEncode,
+    ZkTxType, ZksyncOsEncode, utils::L2_INTEROP_CENTER_ADDRESS,
 };
 
 pub use zksync_os_contract_interface::InteropRoot;

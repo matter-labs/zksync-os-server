@@ -19,9 +19,10 @@ use zksync_os_integration_tests::{
     provider::ZksyncApi,
 };
 use zksync_os_rpc_api::types::LogProofTarget;
-use zksync_os_types::{L1PriorityTxType, L1TxType, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE};
+use zksync_os_types::{
+    L1PriorityTxType, L1TxType, L2_INTEROP_CENTER_ADDRESS, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+};
 
-const L2_INTEROP_CENTER_ADDRESS: Address = address!("000000000000000000000000000000000001000d");
 const L2_INTEROP_HANDLER_ADDRESS: Address = address!("000000000000000000000000000000000001000e");
 const L2_NATIVE_TOKEN_VAULT_ADDRESS: Address = address!("0000000000000000000000000000000000010004");
 const L2_ASSET_ROUTER_ADDRESS: Address = address!("0000000000000000000000000000000000010003");
@@ -318,7 +319,6 @@ async fn fund_wallet_via_l1_deposit(tester: &Tester, wallet: Address, amount: U2
         }))
         .await?;
     let max_fee_per_gas = base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas;
-    // todo: temporary measure, most likely the issue comes from zksync-os, should be removed once it's fixed on zksync-os side
     let gas_limit = tester
         .l2_provider
         .estimate_gas(
@@ -328,8 +328,7 @@ async fn fund_wallet_via_l1_deposit(tester: &Tester, wallet: Address, amount: U2
                 .to(wallet)
                 .value(amount),
         )
-        .await?
-        * 2;
+        .await?;
 
     let tx_base_cost = bridgehub
         .l2_transaction_base_cost(

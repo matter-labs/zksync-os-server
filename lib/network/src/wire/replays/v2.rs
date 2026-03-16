@@ -21,6 +21,7 @@ pub struct ReplayRecord {
     pub force_preimages: Vec<ForcedPreimage>,
     pub starting_interop_root_id: u64,
     pub starting_migration_number: u64,
+    pub starting_interop_fee_number: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable)]

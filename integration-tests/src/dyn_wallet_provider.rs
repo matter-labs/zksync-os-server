@@ -1,4 +1,4 @@
-use alloy::consensus::Account;
+use alloy::consensus::TrieAccount;
 use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::eips::eip2930::AccessListResult;
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -176,7 +176,7 @@ impl Provider<Ethereum> for EthDynProvider {
         self.0.get_account_info(address)
     }
 
-    fn get_account(&self, address: Address) -> RpcWithBlock<Address, Account> {
+    fn get_account(&self, address: Address) -> RpcWithBlock<Address, TrieAccount> {
         self.0.get_account(address)
     }
 

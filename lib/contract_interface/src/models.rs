@@ -3,8 +3,6 @@ use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy::sol_types::SolValue;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use structdiff::Difference;
-use structdiff::StructDiff;
 
 /// User-friendly version of [`IExecutor::PriorityOpsBatchInfo`].
 #[derive(Clone, Debug, Default)]
@@ -57,7 +55,7 @@ pub enum BatchDaInputMode {
 
 /// User-friendly version of [`IExecutor::StoredBatchInfo`] containing
 /// fields that are relevant for ZKsync OS.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredBatchInfo {
     pub batch_number: u64,
     pub state_commitment: B256,
@@ -66,6 +64,21 @@ pub struct StoredBatchInfo {
     pub dependency_roots_rolling_hash: B256,
     pub l2_to_l1_logs_root_hash: B256,
     pub commitment: B256,
+    // Unused, to remove in the next breaking version.
+    pub last_block_timestamp: Option<u64>,
+}
+
+impl PartialEq for StoredBatchInfo {
+    fn eq(&self, other: &Self) -> bool {
+        // skip `last_block_timestamp` check
+        self.batch_number == other.batch_number
+            && self.state_commitment == other.state_commitment
+            && self.number_of_layer1_txs == other.number_of_layer1_txs
+            && self.priority_operations_hash == other.priority_operations_hash
+            && self.dependency_roots_rolling_hash == other.dependency_roots_rolling_hash
+            && self.l2_to_l1_logs_root_hash == other.l2_to_l1_logs_root_hash
+            && self.commitment == other.commitment
+    }
 }
 
 impl StoredBatchInfo {
@@ -110,6 +123,8 @@ impl From<IExecutor::StoredBatchInfo> for StoredBatchInfo {
             dependency_roots_rolling_hash: value.dependencyRootsRollingHash,
             l2_to_l1_logs_root_hash: value.l2LogsTreeRoot,
             commitment: value.commitment,
+            // unused
+            last_block_timestamp: Some(0),
         }
     }
 }
@@ -162,8 +177,7 @@ impl From<crate::L2DACommitmentScheme> for DACommitmentScheme {
 }
 
 /// User-friendly version of [`IExecutor::CommitBatchInfoZKsyncOS`].
-#[derive(Clone, Serialize, Deserialize, PartialEq, Difference)]
-#[difference(expose)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct CommitBatchInfo {
     pub batch_number: u64,
     pub new_state_commitment: B256,

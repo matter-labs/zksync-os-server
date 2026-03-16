@@ -3,7 +3,7 @@ use crate::eth_call_handler::EthCallHandler;
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
 use crate::tx_handler::TxHandler;
-use alloy::consensus::Account;
+use alloy::consensus::TrieAccount;
 use alloy::consensus::transaction::Recovered;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::eip2930::AccessListResult;
@@ -731,7 +731,11 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         self.gas_price_impl().to_rpc_result()
     }
 
-    async fn get_account(&self, _address: Address, _block: BlockId) -> RpcResult<Option<Account>> {
+    async fn get_account(
+        &self,
+        _address: Address,
+        _block: BlockId,
+    ) -> RpcResult<Option<TrieAccount>> {
         // todo(#36): implement
         Err(unimplemented_rpc_err())
     }

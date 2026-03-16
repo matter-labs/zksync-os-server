@@ -18,9 +18,6 @@ use alloy::primitives::{Address, B256, Bytes, TxNonce, U256};
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 
-// `TransactionEnvelope` derive macro below depends on this being present
-use alloy::rlp as alloy_rlp;
-
 /// ZKsync OS transaction envelope describing [EIP-2718] envelopes, custom L1->L2 transaction
 /// envelope and custom transaction envelope for system transactions.
 ///

@@ -17,20 +17,22 @@ pub enum BlockCommand {
     /// Replay a block from block replay storage.
     Replay(Box<ReplayRecord>),
     /// Produce a new block from the mempool.
-    /// Second argument - local seal criteria - target block time and max transaction number
-    /// (Avoid container struct for now)
     Produce(ProduceCommand),
     /// Rebuild an existing block.
     Rebuild(Box<RebuildCommand>),
 }
 
+/// Type of the block command.
+#[derive(Debug, Clone, Copy)]
+pub enum BlockCommandType {
+    Replay,
+    Produce,
+    Rebuild,
+}
+
 /// Command to produce a new block.
 #[derive(Clone, Debug)]
-pub struct ProduceCommand {
-    pub block_number: u64,
-    pub block_time: Duration,
-    pub max_transactions_in_block: usize,
-}
+pub struct ProduceCommand;
 
 /// Command to rebuild existing block.
 #[derive(Clone, Debug)]
@@ -40,11 +42,11 @@ pub struct RebuildCommand {
 }
 
 impl BlockCommand {
-    pub fn block_number(&self) -> u64 {
+    pub fn command_type(&self) -> BlockCommandType {
         match self {
-            BlockCommand::Replay(record) => record.block_context.block_number,
-            BlockCommand::Produce(command) => command.block_number,
-            BlockCommand::Rebuild(command) => command.replay_record.block_context.block_number,
+            BlockCommand::Replay(_) => BlockCommandType::Replay,
+            BlockCommand::Produce(_) => BlockCommandType::Produce,
+            BlockCommand::Rebuild(_) => BlockCommandType::Rebuild,
         }
     }
 }
@@ -59,7 +61,7 @@ impl Display for BlockCommand {
                 record.transactions.len(),
                 record.starting_l1_priority_id,
             ),
-            BlockCommand::Produce(command) => write!(f, "Produce block: {command:?}"),
+            BlockCommand::Produce(_) => write!(f, "Produce block"),
             BlockCommand::Rebuild(command) => write!(
                 f,
                 "Rebuild block {} ({} txs);",
@@ -96,7 +98,11 @@ pub struct PreparedBlockCommand<'a> {
     pub force_preimages: Vec<(B256, Vec<u8>)>,
     pub starting_interop_root_id: u64,
     pub starting_migration_number: u64,
+    pub starting_interop_fee_number: u64,
     pub interop_roots_per_block: u64,
+    /// Whether canonical state transition should strictly consume executed txs from live subpools.
+    /// `true` for produced blocks, `false` for replay/rebuild.
+    pub strict_subpool_cleanup: bool,
 }
 
 /// Behaviour when VM returns an InvalidTransaction error.

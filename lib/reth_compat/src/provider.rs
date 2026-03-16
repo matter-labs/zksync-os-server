@@ -1,14 +1,21 @@
-use alloy::eips::{BlockNumHash, BlockNumberOrTag};
-use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue};
+use alloy::consensus::transaction::TransactionMeta;
+use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumHash, BlockNumberOrTag};
+use alloy::primitives::{
+    Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, TxHash, TxNumber,
+};
 use reth_chainspec::{Chain, ChainInfo, ChainSpec, ChainSpecBuilder, ChainSpecProvider};
-use reth_primitives_traits::{Account, Bytecode};
+use reth_db_models::StoredBlockBodyIndices;
+use reth_primitives::{Block as EthBlock, EthPrimitives, Receipt, TransactionSigned};
+use reth_primitives_traits::{Account, Bytecode, RecoveredBlock, SealedHeader};
 use reth_revm::db::BundleState;
 use reth_storage_api::errors::any::AnyError;
 use reth_storage_api::errors::{ProviderError, ProviderResult};
 use reth_storage_api::{
-    AccountReader, BlockHashReader, BlockIdReader, BlockNumReader, BytecodeReader,
-    HashedPostStateProvider, StateProofProvider, StateProvider, StateProviderBox,
-    StateProviderFactory, StateRootProvider, StorageRootProvider,
+    AccountReader, BlockBodyIndicesProvider, BlockHashReader, BlockIdReader, BlockNumReader,
+    BlockReader, BlockReaderIdExt, BlockSource, BytecodeReader, HashedPostStateProvider,
+    HeaderProvider, NodePrimitivesProvider, ReceiptProvider, ReceiptProviderIdExt,
+    StateProofProvider, StateProvider, StateProviderBox, StateProviderFactory, StateRootProvider,
+    StorageRootProvider, TransactionVariant, TransactionsProvider,
 };
 use reth_trie_common::updates::TrieUpdates;
 use reth_trie_common::{
@@ -16,6 +23,7 @@ use reth_trie_common::{
     StorageProof, TrieInput,
 };
 use std::fmt::Debug;
+use std::ops::{RangeBounds, RangeInclusive};
 use std::sync::Arc;
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zksync_os_storage_api::{ReadRepository, ReadStateHistory, ViewState};
@@ -241,6 +249,14 @@ impl<State: ReadStateHistory> StateProvider for ZkProvider<State> {
     ) -> ProviderResult<Option<StorageValue>> {
         todo!()
     }
+
+    fn storage_by_hashed_key(
+        &self,
+        _address: Address,
+        _hashed_storage_key: StorageKey,
+    ) -> ProviderResult<Option<StorageValue>> {
+        todo!()
+    }
 }
 
 impl<State: ReadStateHistory, Repository: ReadRepository> BlockHashReader
@@ -267,11 +283,11 @@ impl<State: ReadStateHistory, Repository: ReadRepository> BlockNumReader
     }
 
     fn best_block_number(&self) -> ProviderResult<BlockNumber> {
-        todo!()
+        Ok(self.repository.get_latest_block())
     }
 
     fn last_block_number(&self) -> ProviderResult<BlockNumber> {
-        todo!()
+        Ok(self.repository.get_latest_block())
     }
 
     fn block_number(&self, hash: B256) -> ProviderResult<Option<BlockNumber>> {
@@ -296,5 +312,279 @@ impl<State: ReadStateHistory, Repository: ReadRepository> BlockIdReader
 
     fn finalized_block_num_hash(&self) -> ProviderResult<Option<BlockNumHash>> {
         todo!()
+    }
+}
+
+impl<State: ReadStateHistory, Repository: ReadRepository> HeaderProvider
+    for ZkProviderFactory<State, Repository>
+{
+    type Header = alloy::consensus::Header;
+
+    fn header(&self, block_hash: BlockHash) -> ProviderResult<Option<Self::Header>> {
+        Ok(self
+            .repository
+            .get_block_by_hash(block_hash)
+            .map_err(AnyError::new)?
+            .map(|b| b.header.clone()))
+    }
+
+    fn header_by_number(&self, num: u64) -> ProviderResult<Option<Self::Header>> {
+        Ok(self
+            .repository
+            .get_block_by_number(num)
+            .map_err(AnyError::new)?
+            .map(|b| b.header.clone()))
+    }
+
+    fn headers_range(
+        &self,
+        _range: impl RangeBounds<BlockNumber>,
+    ) -> ProviderResult<Vec<Self::Header>> {
+        Ok(Vec::new())
+    }
+
+    fn sealed_header(
+        &self,
+        number: BlockNumber,
+    ) -> ProviderResult<Option<SealedHeader<Self::Header>>> {
+        Ok(self
+            .repository
+            .get_block_by_number(number)
+            .map_err(AnyError::new)?
+            .map(|b| SealedHeader::new(b.header.clone(), b.hash())))
+    }
+
+    fn sealed_headers_while(
+        &self,
+        _range: impl RangeBounds<BlockNumber>,
+        _predicate: impl FnMut(&SealedHeader<Self::Header>) -> bool,
+    ) -> ProviderResult<Vec<SealedHeader<Self::Header>>> {
+        Ok(Vec::new())
+    }
+}
+
+impl<State: ReadStateHistory, Repository: ReadRepository> NodePrimitivesProvider
+    for ZkProviderFactory<State, Repository>
+{
+    type Primitives = EthPrimitives;
+}
+
+impl<State: ReadStateHistory, Repository: ReadRepository> TransactionsProvider
+    for ZkProviderFactory<State, Repository>
+{
+    type Transaction = TransactionSigned;
+
+    fn transaction_id(&self, _tx_hash: TxHash) -> ProviderResult<Option<TxNumber>> {
+        Ok(None)
+    }
+
+    fn transaction_by_id(&self, _id: TxNumber) -> ProviderResult<Option<Self::Transaction>> {
+        Ok(None)
+    }
+
+    fn transaction_by_id_unhashed(
+        &self,
+        _id: TxNumber,
+    ) -> ProviderResult<Option<Self::Transaction>> {
+        Ok(None)
+    }
+
+    fn transaction_by_hash(&self, _hash: TxHash) -> ProviderResult<Option<Self::Transaction>> {
+        Ok(None)
+    }
+
+    fn transaction_by_hash_with_meta(
+        &self,
+        _hash: TxHash,
+    ) -> ProviderResult<Option<(Self::Transaction, TransactionMeta)>> {
+        Ok(None)
+    }
+
+    fn transactions_by_block(
+        &self,
+        _block_id: BlockHashOrNumber,
+    ) -> ProviderResult<Option<Vec<Self::Transaction>>> {
+        Ok(None)
+    }
+
+    fn transactions_by_block_range(
+        &self,
+        _range: impl RangeBounds<BlockNumber>,
+    ) -> ProviderResult<Vec<Vec<Self::Transaction>>> {
+        Ok(Vec::new())
+    }
+
+    fn transactions_by_tx_range(
+        &self,
+        _range: impl RangeBounds<TxNumber>,
+    ) -> ProviderResult<Vec<Self::Transaction>> {
+        Ok(Vec::new())
+    }
+
+    fn senders_by_tx_range(
+        &self,
+        _range: impl RangeBounds<TxNumber>,
+    ) -> ProviderResult<Vec<Address>> {
+        Ok(Vec::new())
+    }
+
+    fn transaction_sender(&self, _id: TxNumber) -> ProviderResult<Option<Address>> {
+        Ok(None)
+    }
+}
+
+impl<State: ReadStateHistory, Repository: ReadRepository> ReceiptProvider
+    for ZkProviderFactory<State, Repository>
+{
+    type Receipt = Receipt;
+
+    fn receipt(&self, _id: TxNumber) -> ProviderResult<Option<Self::Receipt>> {
+        Ok(None)
+    }
+
+    fn receipt_by_hash(&self, _hash: TxHash) -> ProviderResult<Option<Self::Receipt>> {
+        Ok(None)
+    }
+
+    fn receipts_by_block(
+        &self,
+        _block: BlockHashOrNumber,
+    ) -> ProviderResult<Option<Vec<Self::Receipt>>> {
+        Ok(None)
+    }
+
+    fn receipts_by_tx_range(
+        &self,
+        _range: impl RangeBounds<TxNumber>,
+    ) -> ProviderResult<Vec<Self::Receipt>> {
+        Ok(Vec::new())
+    }
+
+    fn receipts_by_block_range(
+        &self,
+        _block_range: RangeInclusive<BlockNumber>,
+    ) -> ProviderResult<Vec<Vec<Self::Receipt>>> {
+        Ok(Vec::new())
+    }
+}
+
+impl<State: ReadStateHistory, Repository: ReadRepository> ReceiptProviderIdExt
+    for ZkProviderFactory<State, Repository>
+{
+}
+
+impl<State: ReadStateHistory, Repository: ReadRepository> BlockBodyIndicesProvider
+    for ZkProviderFactory<State, Repository>
+{
+    fn block_body_indices(&self, _num: u64) -> ProviderResult<Option<StoredBlockBodyIndices>> {
+        Ok(None)
+    }
+
+    fn block_body_indices_range(
+        &self,
+        _range: RangeInclusive<BlockNumber>,
+    ) -> ProviderResult<Vec<StoredBlockBodyIndices>> {
+        Ok(Vec::new())
+    }
+}
+
+impl<State: ReadStateHistory, Repository: ReadRepository> BlockReader
+    for ZkProviderFactory<State, Repository>
+{
+    type Block = EthBlock;
+
+    fn find_block_by_hash(
+        &self,
+        _hash: B256,
+        _source: BlockSource,
+    ) -> ProviderResult<Option<Self::Block>> {
+        Ok(None)
+    }
+
+    fn block(&self, _id: BlockHashOrNumber) -> ProviderResult<Option<Self::Block>> {
+        Ok(None)
+    }
+
+    fn pending_block(&self) -> ProviderResult<Option<RecoveredBlock<Self::Block>>> {
+        Ok(None)
+    }
+
+    fn pending_block_and_receipts(
+        &self,
+    ) -> ProviderResult<Option<(RecoveredBlock<Self::Block>, Vec<Self::Receipt>)>> {
+        Ok(None)
+    }
+
+    fn recovered_block(
+        &self,
+        _id: BlockHashOrNumber,
+        _transaction_kind: TransactionVariant,
+    ) -> ProviderResult<Option<RecoveredBlock<Self::Block>>> {
+        Ok(None)
+    }
+
+    fn sealed_block_with_senders(
+        &self,
+        _id: BlockHashOrNumber,
+        _transaction_kind: TransactionVariant,
+    ) -> ProviderResult<Option<RecoveredBlock<Self::Block>>> {
+        Ok(None)
+    }
+
+    fn block_range(&self, _range: RangeInclusive<BlockNumber>) -> ProviderResult<Vec<Self::Block>> {
+        Ok(Vec::new())
+    }
+
+    fn block_with_senders_range(
+        &self,
+        _range: RangeInclusive<BlockNumber>,
+    ) -> ProviderResult<Vec<RecoveredBlock<Self::Block>>> {
+        Ok(Vec::new())
+    }
+
+    fn recovered_block_range(
+        &self,
+        _range: RangeInclusive<BlockNumber>,
+    ) -> ProviderResult<Vec<RecoveredBlock<Self::Block>>> {
+        Ok(Vec::new())
+    }
+
+    fn block_by_transaction_id(&self, _id: TxNumber) -> ProviderResult<Option<BlockNumber>> {
+        Ok(None)
+    }
+}
+
+impl<State: ReadStateHistory, Repository: ReadRepository> BlockReaderIdExt
+    for ZkProviderFactory<State, Repository>
+{
+    fn block_by_id(&self, _id: BlockId) -> ProviderResult<Option<Self::Block>> {
+        Ok(None)
+    }
+
+    fn sealed_header_by_id(
+        &self,
+        id: BlockId,
+    ) -> ProviderResult<Option<SealedHeader<Self::Header>>> {
+        match id {
+            BlockId::Number(num) => match self.convert_block_number(num)? {
+                Some(n) => self.sealed_header(n),
+                None => Ok(None),
+            },
+            BlockId::Hash(hash) => Ok(self
+                .repository
+                .get_block_by_hash(hash.block_hash)
+                .map_err(AnyError::new)?
+                .map(|b| SealedHeader::new(b.header.clone(), b.hash()))),
+        }
+    }
+
+    fn header_by_id(&self, id: BlockId) -> ProviderResult<Option<Self::Header>> {
+        match id {
+            BlockId::Number(num) => match self.convert_block_number(num)? {
+                Some(n) => self.header_by_number(n),
+                None => Ok(None),
+            },
+            BlockId::Hash(hash) => self.header(hash.block_hash),
+        }
     }
 }

@@ -1,20 +1,23 @@
+use crate::subpools::interop_fee::InteropFeeSubpool;
 use crate::subpools::interop_roots::InteropRootsSubpool;
 use crate::subpools::l1::L1Subpool;
 use crate::subpools::l2::{L2Subpool, L2TransactionsStreamMarker};
 use crate::subpools::sl_chain_id::SlChainIdSubpool;
 use crate::subpools::upgrade::{UpgradeSubpool, UpgradeTransactionsStream};
-use alloy::consensus::{Block, BlockBody, Header, Sealed};
+use alloy::consensus::{Header, Sealed};
 use alloy::primitives::TxHash;
 use futures::stream::{BoxStream, PollNext};
 use futures::{Stream, StreamExt};
 use reth_execution_types::ChangedAccount;
+use reth_primitives::{Block, BlockBody};
 use reth_primitives_traits::SealedBlock;
 use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
 use tokio::time::Instant;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    L1TxSerialId, L2Envelope, SystemTxType, UpgradeMetadata, ZkEnvelope, ZkTransaction,
+    InteropRootsLogIndex, L1TxSerialId, L2Envelope, SystemTxType, UpgradeMetadata, ZkEnvelope,
+    ZkTransaction,
 };
 
 /// General pool that provides unified access to all transaction sources in the system.
@@ -23,6 +26,7 @@ use zksync_os_types::{
 pub struct Pool<T> {
     upgrade_subpool: UpgradeSubpool,
     sl_chain_id_subpool: SlChainIdSubpool,
+    interop_fee_subpool: InteropFeeSubpool,
     interop_roots_subpool: InteropRootsSubpool,
     l1_subpool: L1Subpool,
     l2_subpool: T,
@@ -32,6 +36,7 @@ impl<T: L2Subpool> Pool<T> {
     pub fn new(
         upgrade_subpool: UpgradeSubpool,
         sl_chain_id_subpool: SlChainIdSubpool,
+        interop_fee_subpool: InteropFeeSubpool,
         interop_roots_subpool: InteropRootsSubpool,
         l1_subpool: L1Subpool,
         l2_subpool: T,
@@ -39,6 +44,7 @@ impl<T: L2Subpool> Pool<T> {
         Self {
             upgrade_subpool,
             sl_chain_id_subpool,
+            interop_fee_subpool,
             interop_roots_subpool,
             l1_subpool,
             l2_subpool,
@@ -58,7 +64,7 @@ impl<T: L2Subpool> Pool<T> {
     ) -> Option<StreamOutcome<'a>> {
         let mut upgrade_info_stream = self.upgrade_subpool.upgrade_info_stream().await;
 
-        let mut interop_stream = tokio_stream::StreamExt::peekable(
+        let interop_root_stream = tokio_stream::StreamExt::peekable(
             self.interop_roots_subpool
                 .interop_transactions_with_delay(next_interop_tx_allowed_after)
                 .await,
@@ -66,6 +72,9 @@ impl<T: L2Subpool> Pool<T> {
 
         let mut sl_chain_id_stream = tokio_stream::StreamExt::peekable(
             self.sl_chain_id_subpool.best_transactions_stream().await,
+        );
+        let interop_fee_stream = tokio_stream::StreamExt::peekable(
+            self.interop_fee_subpool.best_transactions_stream().await,
         );
 
         let l1_stream = self.l1_subpool.best_transactions_stream().await;
@@ -76,6 +85,13 @@ impl<T: L2Subpool> Pool<T> {
         }
         let l1_l2_stream = futures::stream::select_with_strategy(l1_stream, l2_stream, prio_left);
         let mut l1_l2_stream = tokio_stream::StreamExt::peekable(l1_l2_stream);
+
+        let interop_related_stream = futures::stream::select_with_strategy(
+            interop_fee_stream,
+            interop_root_stream,
+            prio_left,
+        );
+        let mut interop_related_stream = tokio_stream::StreamExt::peekable(interop_related_stream);
 
         let mut upgrade_metadata = None;
         loop {
@@ -123,10 +139,10 @@ impl<T: L2Subpool> Pool<T> {
                         stream: MarkingTxStream::unmarkable(sl_chain_id_stream),
                     });
                 }
-                Some(_) = interop_stream.peek() => {
+                Some(_) = interop_related_stream.peek() => {
                     return Some(StreamOutcome {
                         upgrade_metadata,
-                        stream: MarkingTxStream::unmarkable(interop_stream),
+                        stream: MarkingTxStream::unmarkable(interop_related_stream),
                     });
                 }
                 Some(_) = l1_l2_stream.peek() => {
@@ -163,9 +179,11 @@ impl<T: L2Subpool> Pool<T> {
         header: Sealed<Header>,
         account_diffs: &[AccountDiff],
         replay_record: &ReplayRecord,
+        strict_subpool_cleanup: bool,
     ) -> StateChangeOutcome {
         let mut upgrade_txs = Vec::new();
         let mut interop_txs = Vec::new();
+        let mut interop_fee_txs = Vec::new();
         let mut sl_chain_id_txs = Vec::new();
         let mut l1_transactions = Vec::new();
         let mut l2_transactions = Vec::new();
@@ -174,6 +192,9 @@ impl<T: L2Subpool> Pool<T> {
                 ZkEnvelope::System(system_tx) => match system_tx.system_subtype() {
                     SystemTxType::ImportInteropRoots(_) => {
                         interop_txs.push(system_tx);
+                    }
+                    SystemTxType::SetInteropFee(_) => {
+                        interop_fee_txs.push(system_tx);
                     }
                     SystemTxType::SetSLChainId(_) => {
                         sl_chain_id_txs.push(system_tx);
@@ -197,6 +218,10 @@ impl<T: L2Subpool> Pool<T> {
             .interop_roots_subpool
             .on_canonical_state_change(interop_txs)
             .await;
+        let last_interop_fee_number = self
+            .interop_fee_subpool
+            .on_canonical_state_change(interop_fee_txs, strict_subpool_cleanup)
+            .await;
         let last_migration_number = self
             .sl_chain_id_subpool
             .on_canonical_state_change(sl_chain_id_txs)
@@ -207,7 +232,7 @@ impl<T: L2Subpool> Pool<T> {
             .await;
 
         let (header, hash) = header.into_parts();
-        let body = BlockBody::<L2Envelope>::default();
+        let body = BlockBody::default();
         let block = Block::new(header, body);
         let sealed_block = SealedBlock::new_unchecked(block, hash);
         let changed_accounts = account_diffs
@@ -233,6 +258,7 @@ impl<T: L2Subpool> Pool<T> {
             last_interop_log_index,
             last_l1_priority_id,
             last_migration_number,
+            last_interop_fee_number,
         }
     }
 }
@@ -254,6 +280,8 @@ pub struct StateChangeOutcome {
     pub last_l1_priority_id: Option<L1TxSerialId>,
     /// Last migration number that was executed after canonical state change.
     pub last_migration_number: Option<u64>,
+    /// Last interop fee update number that was executed after canonical state change.
+    pub last_interop_fee_number: Option<u64>,
 }
 
 /// Transaction stream that is capable of marking last L2 transaction as invalid.

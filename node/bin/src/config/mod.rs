@@ -49,7 +49,10 @@ pub struct Config {
     pub gas_adjuster_config: GasAdjusterConfig,
     pub batch_verification_config: BatchVerificationConfig,
     pub base_token_price_updater_config: BaseTokenPriceUpdaterConfig,
-    pub external_price_api_client_config: ExternalPriceApiClientConfig,
+    pub interop_fee_updater_config: InteropFeeUpdaterConfig,
+    /// Only required on the Main Node, where the base token price updater runs.
+    /// External Nodes never start that component and may omit this config entirely.
+    pub external_price_api_client_config: Option<ExternalPriceApiClientConfig>,
     pub fee_config: FeeConfig,
 }
 
@@ -113,6 +116,9 @@ impl Config {
                 "base_token_price_updater",
             )
             .expect("Failed to insert base token price updater config");
+        schema
+            .insert(&InteropFeeUpdaterConfig::DESCRIPTION, "interop_fee_updater")
+            .expect("Failed to insert interop fee updater config");
         schema
             .insert(
                 &ExternalPriceApiClientConfig::DESCRIPTION,
@@ -214,7 +220,7 @@ pub struct GeneralConfig {
     pub blocks_to_retain_in_memory: usize,
 
     /// **IMPORTANT: It must be set for an external node. However, setting this DOES NOT make the node into an external node.
-    /// [`GeneralConfig::role`] is the source of truth for node type. **
+    /// [`GeneralConfig::node_role`] is the source of truth for node type. **
     #[config(default_t = None)]
     pub main_node_rpc_url: Option<String>,
 
@@ -410,11 +416,11 @@ pub struct RpcConfig {
     pub max_response_size: u32,
 
     /// Maximum number of blocks that could be scanned per filter
-    #[config(default_t = 100_000)]
+    #[config(default_t = 10_000)]
     pub max_blocks_per_filter: u64,
 
     /// Maximum number of logs that can be returned in a response
-    #[config(default_t = 20_000)]
+    #[config(default_t = 10_000)]
     pub max_logs_per_response: usize,
 
     /// Duration since the last filter poll, after which the filter is considered stale
@@ -504,10 +510,10 @@ pub struct L1SenderConfig {
     #[config(default_t = true)]
     pub enabled: bool,
 
-    /// Pubdata mode
-    #[config(default_t = PubdataMode::Blobs)]
+    /// Pubdata mode is used by block-producing components on the Main Node.
+    /// External Nodes only replay blocks, so they may leave this unset.
     #[config(with = Serde![str])]
-    pub pubdata_mode: PubdataMode,
+    pub pubdata_mode: Option<PubdataMode>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -859,6 +865,18 @@ pub struct BaseTokenPriceUpdaterConfig {
     /// Predefined fallback prices for tokens in case external API fetching fails on startup.
     #[config(default, with = Serde![*])]
     pub fallback_prices: HashMap<Address, f64>,
+}
+
+/// Config for the interop fee updater.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct InteropFeeUpdaterConfig {
+    /// How often to check whether interop fee should be updated.
+    #[config(default_t = Duration::from_secs(30))]
+    pub polling_interval: Duration,
+    /// Minimum percent deviation required to enqueue a new interop fee transaction.
+    #[config(default_t = 10)]
+    pub update_deviation_percentage: u32,
 }
 
 /// Config to force configured token prices in USD.

@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use smart_config::{ConfigRepository, ConfigSources, Environment, Json, Yaml};
-use std::process::Command;
 use std::{fs, future, path::Path, time::Duration};
 use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
@@ -11,9 +10,10 @@ use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
     ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
-    L1SenderConfig, L1WatcherConfig, MempoolConfig, NetworkConfig, ObservabilityConfig,
-    ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
-    RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+    InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, NetworkConfig,
+    ObservabilityConfig, ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig,
+    RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
+    TxValidatorConfig,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -292,11 +292,15 @@ async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse sequencer config");
 
-    let l1_sender_config = repo
+    let mut l1_sender_config = repo
         .single::<L1SenderConfig>()
         .expect("Failed to load L1 sender config")
         .parse()
         .expect("Failed to parse L1 sender config");
+    if general_config.node_role.is_external() {
+        // This line just enforces that we expect no pubdata mode for external node.
+        l1_sender_config.pubdata_mode = None;
+    }
 
     let l1_watcher_config = repo
         .single::<L1WatcherConfig>()
@@ -352,11 +356,23 @@ async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse base token price updater config");
 
-    let external_price_api_client_config = repo
-        .single::<ExternalPriceApiClientConfig>()
-        .expect("Failed to load external price API client config")
+    let interop_fee_updater_config = repo
+        .single::<InteropFeeUpdaterConfig>()
+        .expect("Failed to load interop fee updater config")
         .parse()
-        .expect("Failed to parse external price API client config");
+        .expect("Failed to parse interop fee updater config");
+
+    // Parse this config only for Main Nodes. External Nodes never start the base token price updater.
+    let external_price_api_client_config = if general_config.node_role.is_main() {
+        Some(
+            repo.single::<ExternalPriceApiClientConfig>()
+                .expect("Failed to load external price API client config")
+                .parse()
+                .expect("Failed to parse external price API client config"),
+        )
+    } else {
+        None
+    };
 
     let fee_config = repo
         .single::<FeeConfig>()
@@ -410,6 +426,7 @@ async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         gas_adjuster_config,
         batch_verification_config,
         base_token_price_updater_config,
+        interop_fee_updater_config,
         external_price_api_client_config,
         fee_config,
     }
@@ -447,28 +464,10 @@ fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
 
     if let Some(ephemeral_state) = &config.general_config.ephemeral_state {
         tracing::info!("Loading ephemeral state from {}", ephemeral_state.display());
-        #[cfg(target_os = "macos")]
-        let tar = "gtar";
-        #[cfg(not(target_os = "macos"))]
-        let tar = "tar";
-        let status = Command::new(tar)
-            .args([
-                "-xvf",
-                ephemeral_state.to_string_lossy().as_ref(),
-                &format!(
-                    "--one-top-level={}",
-                    config.general_config.rocks_db_path.to_string_lossy()
-                ),
-            ])
-            .status()
-            .expect("failed to call `tar` command; ensure it is present on your machine");
-        if !status.success() {
-            panic!(
-                "`tar` command failed to decompress ephemeral state from `{}` to `{}`",
-                ephemeral_state.display(),
-                config.general_config.rocks_db_path.display(),
-            );
-        }
+        zksync_os_server::util::unpack_ephemeral_state(
+            ephemeral_state,
+            &config.general_config.rocks_db_path,
+        );
     }
 
     Some(tempdir)

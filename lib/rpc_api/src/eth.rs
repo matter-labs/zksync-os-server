@@ -2,7 +2,7 @@
 // https://github.com/paradigmxyz/reth/blob/fcf58cb5acc2825e7c046f6741e90a8c5dab7847/crates/rpc/rpc-eth-api/src/core.rs
 
 use crate::types::{L2FeeHistory, ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt};
-use alloy::consensus::Account;
+use alloy::consensus::TrieAccount;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, B256, Bytes, U64, U256};
@@ -257,7 +257,8 @@ pub trait EthApi {
 
     /// Returns the account details by specifying an address and a block number/tag
     #[method(name = "getAccount")]
-    async fn get_account(&self, address: Address, block: BlockId) -> RpcResult<Option<Account>>;
+    async fn get_account(&self, address: Address, block: BlockId)
+    -> RpcResult<Option<TrieAccount>>;
 
     /// Introduced in EIP-1559, returns suggestion for the priority for dynamic fee transactions.
     #[method(name = "maxPriorityFeePerGas")]
