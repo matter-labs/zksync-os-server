@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 /// A node's role in the network.
+/// Use the term "External node" only for nodes that don't participate in consensus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeRole {
     #[serde(rename = "main")]

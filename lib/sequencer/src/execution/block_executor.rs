@@ -1,506 +1,195 @@
+use crate::config::SequencerConfig;
+use crate::execution::block_context_provider::BlockContextProvider;
+use crate::execution::execute_block_in_vm::execute_block_in_vm;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
-use crate::execution::utils::{BlockDump, hash_block_output};
-use crate::execution::vm_wrapper::VmWrapper;
-use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
-use crate::model::debug_formatting::BlockOutputDebug;
-use alloy::consensus::Transaction;
-use alloy::primitives::TxHash;
-use futures::StreamExt;
-use std::pin::Pin;
-use tokio::time::Sleep;
-use vise::EncodeLabelValue;
-use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::types::{BlockContext, BlockOutput};
-use zksync_os_metadata::NODE_SEMVER_VERSION;
-use zksync_os_observability::ComponentStateHandle;
-use zksync_os_storage_api::{
-    MeteredViewState, OverriddenStateView, ReadStateHistory, ReplayRecord, WriteState,
-};
-use zksync_os_types::{SystemTxType, ZkTransaction, ZkTxType, ZksyncOsEncode};
-// Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
-// MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
+use crate::execution::utils::save_dump;
+use crate::model::blocks::{BlockCommand, BlockCommandType};
+use anyhow::Context;
+use async_trait::async_trait;
+use tokio::sync::{mpsc, watch};
+use tokio::time::Instant;
+use zksync_os_interface::types::BlockOutput;
+use zksync_os_mempool::subpools::l2::L2Subpool;
+use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_storage_api::{OverlayBuffer, ReadStateHistory, ReplayRecord, WriteState};
+use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
-// a side effect of this is that it's harder to pass config values (normally we'd just pass the whole config object)
-// please be mindful when adding new parameters here
+/// Executes blocks, while only updating local in-memory state (mempool, block context).
+/// Does not persist anything to disk.
+/// Does not track the node role - reacts on the ordered inbound commands instead (`Produce` vs `Replay`)
+pub struct BlockExecutor<Subpool, State>
+where
+    Subpool: L2Subpool + Send + 'static,
+    State: ReadStateHistory + WriteState + Clone + Send + 'static,
+{
+    pub block_context_provider: BlockContextProvider<Subpool>,
+    pub state: State,
+    pub config: SequencerConfig,
+    /// Controls transaction acceptance state.
+    /// When max_blocks_to_produce limit is reached, sequencer sends NotAccepting to stop RPC from accepting new txs.
+    pub tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
+}
 
-pub async fn execute_block<R: ReadStateHistory + WriteState>(
-    mut command: PreparedBlockCommand<'_>,
-    state: R,
-    latency_tracker: &ComponentStateHandle<SequencerState>,
-) -> Result<
-    (
-        BlockOutput,
-        ReplayRecord,
-        Vec<(TxHash, InvalidTransaction)>,
-        bool,
-    ),
-    BlockDump,
-> {
-    tracing::debug!(command = ?command, block_number=command.block_context.block_number, "Executing command");
-    latency_tracker.enter_state(SequencerState::InitializingVm);
-    let ctx = command.block_context;
+#[async_trait]
+impl<Subpool, State> PipelineComponent for BlockExecutor<Subpool, State>
+where
+    Subpool: L2Subpool + Send + 'static,
+    State: ReadStateHistory + WriteState + Clone + Send + 'static,
+{
+    /// Input from `CommandSource`
+    type Input = BlockCommand;
+    /// Output to `BlockCanonizer`
+    /// Outputs executed blocks. Passes along information whether it's a replayed or new block -
+    ///  new blocks need to be canonized by network (enforced by `BlockCanonizer`)
+    type Output = (BlockOutput, ReplayRecord, BlockCommandType);
 
-    /* ---------- VM & state ----------------------------------------- */
-    let state_view = state
-        .state_view_at(ctx.block_number - 1)
-        .map_err(|e| BlockDump {
-            ctx,
-            txs: Vec::new(),
-            error: e.to_string(),
-        })?;
-    // Inject any forced preimages into the state view, these are expected to be added to the persistent state
-    // after the block is executed.
-    let state_view_with_force_preimages =
-        OverriddenStateView::with_preimages(state_view, &command.force_preimages);
-    let metered_state_view = MeteredViewState {
-        component_state_tracker: latency_tracker.clone(),
-        state_view: state_view_with_force_preimages,
-    };
-    let mut runner = VmWrapper::new(ctx, metered_state_view);
+    const NAME: &'static str = "block_executor";
 
-    let mut executed_txs = Vec::<ZkTransaction>::new();
-    let mut cumulative_gas_used = 0u64;
-    let mut purged_txs = Vec::new();
+    /// We don't need much buffer before `BlockCanonizer`,
+    /// because `BlockCanonizer` has a buffer within (see `produced_queue`).
+    /// This still allows us to be producing block `X+2`, while block `X+1` is in the buffer,
+    /// and block `X` is being canonized.
+    const OUTPUT_BUFFER_SIZE: usize = 1;
 
-    let mut all_processed_txs = Vec::new();
+    async fn run(
+        mut self,
+        mut input: PeekableReceiver<Self::Input>, // PeekableReceiver<BlockCommand>
+        output: mpsc::Sender<Self::Output>, // Sender<(BlockOutput, ReplayRecord, BlockCommandType)>
+    ) -> anyhow::Result<()> {
+        let latency_tracker = ComponentStateReporter::global()
+            .handle_for("block_executor", SequencerState::WaitingForCommand);
 
-    /* ---------- deadline config ------------------------------------ */
-    let deadline_dur = match command.seal_policy {
-        SealPolicy::Decide(d, _) => Some(d),
-        SealPolicy::UntilExhausted { .. } => None,
-    };
-    let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx attempt
-    let mut interop_roots_count = 0;
+        // Track how many Produce commands we've processed (for `sequencer_max_blocks_to_produce` config)
+        let mut produced_blocks_count = 0u64;
 
-    /* ---------- main loop ------------------------------------------ */
-    // seal_reason must only be used for observability - handling must remain generic
-    let seal_reason = loop {
-        latency_tracker.enter_state(SequencerState::WaitingForTx);
-        tokio::select! {
-            /* -------- deadline branch ------------------------------ */
-            _ = async {
-                    if let Some(d) = &mut deadline {
-                        d.as_mut().await
-                    }
-                },
-                if deadline.is_some()
-            => {
-                tracing::debug!(block_number = ctx.block_number,
-                               txs = executed_txs.len(),
-                               "deadline reached → sealing");
-                break SealReason::Timeout;                                     // leave the loop ⇒ seal
+        // Only used for metrics/logs
+        let mut last_processed_block_at: Option<Instant> = None;
+        // `BlockExecutor` doesn't persist/update state after block execution.
+        // Instead, we keep the diff in memory - and apply it on top of the last persisted block
+        let mut state_overlay_buffer = OverlayBuffer::default();
+
+        loop {
+            latency_tracker.enter_state(SequencerState::WaitingForCommand);
+
+            let Some(cmd) = input.recv().await else {
+                anyhow::bail!("inbound channel closed");
+            };
+            tracing::debug!("Command {cmd} received by BlockExecutor");
+            let cmd_type = cmd.command_type();
+
+            // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
+            if matches!(cmd, BlockCommand::Produce(_))
+                && let Some(limit) = self.config.max_blocks_to_produce
+            {
+                check_block_production_limit(
+                    limit,
+                    produced_blocks_count,
+                    &self.tx_acceptance_state_sender,
+                    &latency_tracker,
+                )
+                .await;
+                produced_blocks_count += 1;
             }
+            latency_tracker.enter_state(SequencerState::BlockContextTxs);
 
-            /* -------- stream branch ------------------------------- */
-            maybe_tx = command.tx_source.stream.next() => {
-                latency_tracker.enter_state(SequencerState::Execution);
-                let Some(tx) = maybe_tx else {
-                    tracing::debug!(
-                        block_number = ctx.block_number,
-                        txs = executed_txs.len(),
-                        "stream exhausted → sealing"
-                    );
-                    break SealReason::TxStreamExhausted;
-                };
+            let prepared_command = self.block_context_provider.prepare_command(cmd).await?;
 
-                if let Some(reason) = should_exclude_and_seal(&ctx, cumulative_gas_used, interop_roots_count, command.interop_roots_per_block, &tx) {
-                    tracing::debug!(block_number = ctx.block_number, "sealing block as next tx cannot be included");
-                    break reason;
-                }
+            let block_number = prepared_command.block_context.block_number;
+            tracing::info!(
+                block_number,
+                "Prepared context for block {block_number}. expected_block_output_hash: {:?}, starting_l1_priority_id: {}, timestamp: {}, execution_version: {}. Executing..",
+                prepared_command.expected_block_output_hash,
+                prepared_command.starting_l1_priority_id,
+                prepared_command.block_context.timestamp,
+                prepared_command.block_context.execution_version,
+            );
 
-                tracing::debug!(
-                    block_number=command.block_context.block_number,
-                    tx_hash=?tx.hash(),
-                    tx_index_in_block=executed_txs.len(),
-                    cumulative_gas_used_before=cumulative_gas_used,
-                    gas_limit=tx.inner.gas_limit(),
-                    signer=?tx.inner.signer(),
-                    "Executing transaction..."
-                );
+            let exec_view = state_overlay_buffer
+                .sync_with_base_and_build_view_for_block(&self.state, block_number)?;
 
-                all_processed_txs.push(tx.clone());
-
-                // Arm the deadline on the first tx attempt (success or failure).
-                // This prevents indefinite hangs when all L2 txs fail validation
-                // (e.g. BaseFeeGreaterThanMaxFee) and no L1 txs arrive to break
-                // the deadlock. Without this, the block executor would wait forever
-                // because the deadline only armed on success, and the sender is
-                // marked invalid in the BestTransactions iterator after a failure.
-                // Note that this behavior may result in an empty block being mined,
-                // which is supported server behavour.
-                if deadline.is_none() && let Some(dur) = deadline_dur {
-                    deadline = Some(Box::pin(tokio::time::sleep(dur)));
-                }
-
-                match runner.execute_next_tx(tx.clone().encode())
+            let (block_output, replay_record, purged_txs, strict_subpool_cleanup) =
+                execute_block_in_vm(prepared_command, exec_view, &latency_tracker)
                     .await
-                    .map_err(|e| {
-                        BlockDump {
-                            ctx,
-                            txs: all_processed_txs.clone(),
-                            error: e.to_string(),
+                    .map_err(|dump| {
+                        let error = anyhow::anyhow!("{}", dump.error);
+                        tracing::info!("Saving dump..");
+                        if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump) {
+                            tracing::error!(?err, "Failed to write block dump");
                         }
-                    })? {
-                    Ok(res) => {
-                        EXECUTION_METRICS.executed_transactions.inc();
-                        EXECUTION_METRICS.transaction_gas_used.observe(res.gas_used);
-                        EXECUTION_METRICS.transaction_native_used.observe(res.native_used);
-                        EXECUTION_METRICS.transaction_computation_native_used.observe(res.computational_native_used);
-                        EXECUTION_METRICS.transaction_pubdata_used.observe(res.pubdata_used);
-                        let status_str = if res.status  {"success"} else {"failure"};
-                        EXECUTION_METRICS.transaction_status[&status_str].inc();
-                        tracing::debug!(
-                            block_number=command.block_context.block_number,
-                            output=?res,
-                            "Transaction executed"
-                        );
+                        error
+                    })
+                    .context("execute_block")?;
 
-                        if let Some(SystemTxType::ImportInteropRoots(roots_count)) = tx.as_system_tx_type() {
-                            interop_roots_count += roots_count;
-                        }
-
-                        let tx_type = tx.tx_type();
-                        executed_txs.push(tx);
-                        cumulative_gas_used += res.gas_used;
-                        if tx_type == ZkTxType::Upgrade {
-                            match &command.seal_policy {
-                                SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
-                                    tracing::debug!(block_number = ctx.block_number, "sealing block as upgrade tx was executed");
-                                    break SealReason::UpgradeTx;
-                                }
-                                SealPolicy::UntilExhausted { allowed_to_finish_early: false } => {
-                                    // We trust that the execution stream will not break protocol invariants.
-                                    tracing::info!(block_number = ctx.block_number, "upgrade tx executed, but seal policy requires full exhaustion");
-                                }
-                            }
-                        }
-
-                        // If the only transaction provided is an SL chain id update transaction, we need to seal the block.
-                        if let Some(SystemTxType::SetSLChainId(_)) = executed_txs.last().unwrap().as_system_tx_type() {
-                            match &command.seal_policy {
-                                SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
-                                    tracing::debug!(block_number = ctx.block_number, "sealing block as chain id update tx was executed");
-                                    break SealReason::SLChainIdUpdateTx;
-                                }
-                                SealPolicy::UntilExhausted { allowed_to_finish_early: false } => {
-                                    // We trust that the execution stream will not break protocol invariants.
-                                    tracing::info!(block_number = ctx.block_number, "chain id update tx executed, but seal policy requires full exhaustion");
-                                }
-                            }
-                        }
-
-                        match command.seal_policy {
-                            SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
-                                tracing::debug!(block_number = ctx.block_number,
-                                               txs = executed_txs.len(),
-                                               "tx limit reached → sealing");
-                                break SealReason::TxCountLimit
-                            },
-                            _ => {}
-                        }
-                    }
-                    Err(e) => {
-                        match (tx.tx_type(), command.invalid_tx_policy) {
-                            (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
-                                return Err(
-                                    BlockDump {
-                                        ctx,
-                                        txs: all_processed_txs.clone(),
-                                        error: format!("invalid {} tx: {e:?} ({})", tx.tx_type(), tx.hash()),
-                                    }
-                                )
-                            }
-                            (ZkTxType::System, _) => {
-                                return Err(
-                                    BlockDump {
-                                        ctx,
-                                        txs: all_processed_txs.clone(),
-                                        error: format!("invalid system tx with type {:?}: {e:?} ({})", tx.as_system_tx_type(), tx.hash()),
-                                    }
-                                )
-                            }
-                            (ZkTxType::L2(_), InvalidTxPolicy::RejectAndContinue) => {
-                                let rejection_method = rejection_method(&e);
-
-                                // mark the tx as invalid regardless of the `rejection_method`.
-                                command.tx_source.mark_last_l2_tx_as_invalid();
-                                // add tx to `purged_txs` only if we are purging it.
-                                match (rejection_method, command.seal_policy, executed_txs.is_empty()) {
-                                    (TxRejectionMethod::Purge, _, _) => {
-                                        purged_txs.push((*tx.hash(), e.clone()));
-                                        tracing::info!(tx_hash = %tx.hash(), block_number = ctx.block_number, ?e, "invalid tx → purged");
-                                    }
-                                    (TxRejectionMethod::Skip, _, _) => {
-                                        tracing::info!(tx_hash = %tx.hash(), block_number = ctx.block_number, ?e, "invalid tx → skipped");
-                                    },
-                                    // For Produce, don't seal if no transactions have been executed yet
-                                    (TxRejectionMethod::SealBlock(reason), SealPolicy::Decide(..), true) => {
-                                        purged_txs.push((*tx.hash(), e.clone()));
-                                        tracing::info!(
-                                            tx_hash = %tx.hash(),
-                                            block_number = ctx.block_number,
-                                            ?e,
-                                            ?reason,
-                                            "block limit reached on first tx for Produce → rejecting tx instead of sealing",
-                                        );
-                                    }
-                                    (TxRejectionMethod::SealBlock(reason), _, _) => {
-                                        tracing::debug!(tx_hash = %tx.hash(), block_number = ctx.block_number, ?e, ?reason, "sealing block by criterion");
-                                        break reason;
-                                    }
-                                }
-                            }
-                            (ZkTxType::L2(_), InvalidTxPolicy::Abort) => {
-                                return Err(
-                                    BlockDump {
-                                        ctx,
-                                        txs: all_processed_txs.clone(),
-                                        error: format!("invalid l2 tx: {e:?} ({})", tx.hash()),
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
+            let time_since_last_block = last_processed_block_at
+                .map(|last_processed_block_at| last_processed_block_at.elapsed());
+            if let Some(time_since_last_block) = time_since_last_block {
+                EXECUTION_METRICS
+                    .time_since_last_block
+                    .observe(time_since_last_block);
             }
-        }
-    };
+            last_processed_block_at = Some(Instant::now());
 
-    // seal reason validation
-    match command.seal_policy {
-        SealPolicy::Decide(_, _) => {
-            if seal_reason == SealReason::TxStreamExhausted {
-                return Err(BlockDump {
-                    ctx,
-                    txs: all_processed_txs.clone(),
-                    error: format!("tx stream was unexpectedly exhausted {}", ctx.block_number),
-                });
-            }
-        }
-        SealPolicy::UntilExhausted {
-            allowed_to_finish_early,
-        } => {
-            if !allowed_to_finish_early && seal_reason != SealReason::TxStreamExhausted {
-                return Err(BlockDump {
-                    ctx,
-                    txs: all_processed_txs.clone(),
-                    error: format!(
-                        "block was expected to be sealed due to stream exhaustion, but sealed due to {:?} instead, block {}",
-                        seal_reason, ctx.block_number
-                    ),
-                });
+            tracing::debug!(block_number, "Executed. Updating mempools...");
+            latency_tracker.enter_state(SequencerState::UpdatingMempool);
+
+            self.block_context_provider
+                .on_canonical_state_change(&block_output, &replay_record, strict_subpool_cleanup)
+                .await;
+            let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
+            self.block_context_provider
+                .remove_transactions(purged_txs_hashes);
+
+            state_overlay_buffer.add_block(
+                block_number,
+                block_output.storage_writes.clone(),
+                block_output.published_preimages.clone(),
+            )?;
+
+            tracing::debug!(
+                block_number,
+                time_since_last_block = ?time_since_last_block,
+                "Block processed in `BlockExecutor`. Sending downstream..."
+            );
+            EXECUTION_METRICS.block_number.set(block_number);
+            EXECUTION_METRICS
+                .last_execution_version
+                .set(replay_record.block_context.execution_version as u64);
+
+            latency_tracker.enter_state(SequencerState::WaitingSend);
+            if output
+                .send((block_output.clone(), replay_record.clone(), cmd_type))
+                .await
+                .is_err()
+            {
+                anyhow::bail!("Outbound channel closed");
             }
         }
     }
+}
 
-    latency_tracker.enter_state(SequencerState::Sealing);
-
-    /* ---------- seal & return ------------------------------------- */
-    let mut output = runner.seal_block().await.map_err(|e| BlockDump {
-        ctx,
-        txs: all_processed_txs.clone(),
-        error: e.context("seal_block()").to_string(),
-    })?;
-
-    // Since we've overridden the state, we need to insert any forced preimages into the output as well.
-    // Note: the fact that we're doing it here, would also affect the block output hash,
-    // so we'll be able to check consistency upon re-execution.
-    output
-        .published_preimages
-        .extend(command.force_preimages.iter().map(|(k, v)| (*k, v.clone())));
-
-    // Remove failed transactions from output.tx_results.
-    // Note: Rejected transactions don't affect the VM state or output,
-    // yet they are still returned in output.tx_results.
-    // This results in an inconsistency - transaction exists in output, but doesn't exist in
-    // replay_record.transactions.
-    // Here, we manually remove all such tx_results from VM output.
-    output.tx_results.retain(|tx| tx.is_ok());
-
-    EXECUTION_METRICS
-        .storage_writes_per_block
-        .observe(output.storage_writes.len() as u64);
-    EXECUTION_METRICS.seal_reason[&seal_reason].inc();
-    EXECUTION_METRICS.gas_per_block.observe(cumulative_gas_used);
-    EXECUTION_METRICS
-        .pubdata_per_block
-        .observe(output.pubdata.len() as u64);
-    EXECUTION_METRICS
-        .transactions_per_block
-        .observe(executed_txs.len() as u64);
-    EXECUTION_METRICS
-        .computational_native_used_per_block
-        .observe(output.computational_native_used);
-
-    tracing::info!(
-        block_number = output.header.number,
-        command = command.metrics_label,
-        ?seal_reason,
-        tx_count = executed_txs.len(),
-        storage_writes = output.storage_writes.len(),
-        preimages = output.published_preimages.len(),
-        pubdata_bytes = output.pubdata.len(),
-        cumulative_gas_used,
-        purged_txs_len = purged_txs.len(),
-        "Block sealed in block executor"
-    );
-
-    tracing::debug!(
-        output = ?BlockOutputDebug(&output),
-        block_number = output.header.number,
-        "Block output"
-    );
-
-    let block_hash_output = hash_block_output(&output);
-
-    // Check if the block output matches the expected hash.
-    if let Some(expected_hash) = command.expected_block_output_hash
-        && expected_hash != block_hash_output
-    {
-        let error = format!(
-            "Block #{} output hash mismatch: expected {expected_hash}, got {block_hash_output}",
-            ctx.block_number,
+/// Checks if block production limit has been reached.
+/// If limit is reached, signals to stop accepting transactions and awaits indefinitely (never returns).
+/// Should only be called for Produce commands.
+async fn check_block_production_limit(
+    limit: u64,
+    already_produced_blocks_count: u64,
+    tx_acceptance_state_sender: &watch::Sender<TransactionAcceptanceState>,
+    latency_tracker: &ComponentStateHandle<SequencerState>,
+) {
+    if already_produced_blocks_count >= limit {
+        tracing::warn!(
+            already_produced_blocks_count,
+            limit,
+            "Reached max_blocks_to_produce limit, stopping transaction acceptance"
         );
-        tracing::error!(?output, block_number = ctx.block_number, expected = %expected_hash, actual = %block_hash_output, "Block output hash mismatch");
-        return Err(BlockDump {
-            ctx,
-            txs: all_processed_txs.clone(),
-            error,
-        });
-    }
 
-    Ok((
-        output,
-        ReplayRecord::new(
-            ctx,
-            command.starting_l1_priority_id,
-            executed_txs,
-            command.previous_block_timestamp,
-            NODE_SEMVER_VERSION.clone(),
-            command.protocol_version,
-            block_hash_output,
-            command.force_preimages,
-            command.starting_interop_event_index,
-            command.starting_migration_number,
-            command.starting_interop_fee_number,
-        ),
-        purged_txs,
-        command.strict_subpool_cleanup,
-    ))
-}
+        // Signal to RPC that we're no longer accepting transactions
+        let _ = tx_acceptance_state_sender.send(TransactionAcceptanceState::NotAccepting(
+            NotAcceptingReason::BlockProductionDisabled,
+        ));
 
-fn should_exclude_and_seal(
-    ctx: &BlockContext,
-    cumulative_gas_used: u64,
-    interop_roots_count: u64,
-    interop_roots_per_block: u64,
-    tx: &ZkTransaction,
-) -> Option<SealReason> {
-    if cumulative_gas_used + tx.inner.gas_limit() > ctx.gas_limit {
-        return Some(SealReason::GasLimit);
-    }
-    if let Some(SystemTxType::ImportInteropRoots(roots_count)) = tx.as_system_tx_type()
-        && interop_roots_count + roots_count > interop_roots_per_block
-    {
-        return Some(SealReason::LimitedInteropOnlyBlock);
-    }
-    None
-}
-
-enum TxRejectionMethod {
-    // purge tx from the mempool
-    Purge,
-    // skip tx and all its descendants for the current block
-    Skip,
-    // block is out of some resource, so it should be sealed.
-    SealBlock(SealReason),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
-#[metrics(label = "seal_reason", rename_all = "snake_case")]
-pub enum SealReason {
-    TxStreamExhausted,
-    Timeout,
-    TxCountLimit,
-    // Tx's gas limit + cumulative block gas > block gas limit - no execution attempt
-    GasLimit,
-    // VM returned `BlockGasLimitReached`
-    GasVm,
-    NativeCycles,
-    Pubdata,
-    L2ToL1Logs,
-    Blobs,
-    // We executed upgrade transaction
-    UpgradeTx,
-    // We executed SL chain id update transaction
-    SLChainIdUpdateTx,
-    // Block contains only interop transactions with a limit of interop roots per block reached
-    LimitedInteropOnlyBlock,
-    Other,
-}
-
-fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
-    match error {
-        InvalidTransaction::InvalidEncoding
-        | InvalidTransaction::InvalidStructure
-        | InvalidTransaction::PriorityFeeGreaterThanMaxFee
-        | InvalidTransaction::CallerGasLimitMoreThanBlock
-        | InvalidTransaction::CallerGasLimitMoreThanTxLimit
-        | InvalidTransaction::CallGasCostMoreThanGasLimit
-        | InvalidTransaction::RejectCallerWithCode
-        | InvalidTransaction::OverflowPaymentInTransaction
-        | InvalidTransaction::NonceOverflowInTransaction
-        | InvalidTransaction::NonceTooLow { .. }
-        | InvalidTransaction::MalleableSignature
-        | InvalidTransaction::IncorrectFrom { .. }
-        | InvalidTransaction::CreateInitCodeSizeLimit
-        | InvalidTransaction::InvalidChainId
-        | InvalidTransaction::AccessListNotSupported
-        | InvalidTransaction::PubdataPriceTooHigh
-        | InvalidTransaction::BlockGasLimitTooHigh
-        | InvalidTransaction::UpgradeTxNotFirst
-        | InvalidTransaction::Revert { .. }
-        | InvalidTransaction::ReceivedInsufficientFees { .. }
-        | InvalidTransaction::InvalidMagic
-        | InvalidTransaction::InvalidReturndataLength
-        | InvalidTransaction::OutOfGasDuringValidation
-        | InvalidTransaction::OutOfNativeResourcesDuringValidation
-        | InvalidTransaction::NonceUsedAlready
-        | InvalidTransaction::NonceNotIncreased
-        | InvalidTransaction::PaymasterReturnDataTooShort
-        | InvalidTransaction::PaymasterInvalidMagic
-        | InvalidTransaction::PaymasterContextInvalid
-        | InvalidTransaction::PaymasterContextOffsetTooLong
-        | InvalidTransaction::AuthListIsEmpty
-        | InvalidTransaction::BlobElementIsNotSupported
-        | InvalidTransaction::EIP7623IntrinsicGasIsTooLow
-        | InvalidTransaction::NativeResourcesAreTooExpensive
-        | InvalidTransaction::OtherUnrecoverable(_)
-        | InvalidTransaction::EIP7702HasNullDestination
-        | InvalidTransaction::BlobListTooLong
-        | InvalidTransaction::EmptyBlobList
-        | InvalidTransaction::FilteredByValidator
-        | InvalidTransaction::CallerGasLimitTooHigh => TxRejectionMethod::Purge,
-
-        InvalidTransaction::GasPriceLessThanBasefee
-        | InvalidTransaction::LackOfFundForMaxFee { .. }
-        | InvalidTransaction::NonceTooHigh { .. }
-        | InvalidTransaction::BaseFeeGreaterThanMaxFee
-        | InvalidTransaction::BlobBaseFeeGreaterThanMaxFeePerBlobGas => TxRejectionMethod::Skip,
-
-        InvalidTransaction::BlockGasLimitReached => TxRejectionMethod::SealBlock(SealReason::GasVm),
-        InvalidTransaction::BlockNativeLimitReached => {
-            TxRejectionMethod::SealBlock(SealReason::NativeCycles)
-        }
-        InvalidTransaction::BlockPubdataLimitReached => {
-            TxRejectionMethod::SealBlock(SealReason::Pubdata)
-        }
-        InvalidTransaction::BlockL2ToL1LogsLimitReached => {
-            TxRejectionMethod::SealBlock(SealReason::L2ToL1Logs)
-        }
-        InvalidTransaction::BlockBlobGasLimitReached => {
-            TxRejectionMethod::SealBlock(SealReason::Blobs)
-        }
-        InvalidTransaction::OtherLimitReached(_) => TxRejectionMethod::SealBlock(SealReason::Other),
+        latency_tracker.enter_state(SequencerState::ConfiguredBlockLimitReached);
+        std::future::pending::<()>().await;
     }
 }
