@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_storage_api::{PersistedBatch, WriteBatch, WriteFinality};
+use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
 /// Persists executed batches via [`WriteBatch`].
 /// Note: batches are discovered by `commit_watcher.rs` from L1 as soon as they are committed.
@@ -17,23 +17,19 @@ use zksync_os_storage_api::{PersistedBatch, WriteBatch, WriteFinality};
 /// Only when batch is also executed on L1, this logic kicks in and batches are **persisted on disc**.
 /// Committed batches can be rolled back on L1, which is not the case for executed - so this separation
 /// ensures that we don't need to rollback any persistent node state on L1 commit rollback.
-pub struct L1PersistBatchWatcher<BatchStorage, Finality> {
+pub struct L1PersistBatchWatcher<BatchStorage> {
     zk_chain: ZkChain<DynProvider>,
     batch_storage: BatchStorage,
-    finality: Finality,
     committed_batches: HashMap<u64, DiscoveredCommittedBatch>,
     last_processed_commit_batch: u64,
     last_persisted_batch_on_start: u64,
 }
 
-impl<BatchStorage: WriteBatch, Finality: WriteFinality>
-    L1PersistBatchWatcher<BatchStorage, Finality>
-{
+impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     pub async fn create_watcher(
         config: L1WatcherConfig,
         zk_chain: ZkChain<DynProvider>,
         batch_storage: BatchStorage,
-        finality: Finality,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_persisted_batch = batch_storage.latest_batch();
@@ -56,7 +52,6 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality>
         let this = Self {
             zk_chain: zk_chain.clone(),
             batch_storage,
-            finality,
             committed_batches: HashMap::new(),
             last_processed_commit_batch: last_persisted_batch,
             last_persisted_batch_on_start: last_persisted_batch,
@@ -150,36 +145,6 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality>
             }
             tracing::debug!(batch_number, "discovered committed batch");
             let committed_batch = self.parse_committed_batch(report, log).await?;
-            // Wait until discovered batch is executed. Note: this will `await` for the entire time
-            // between L1 commit and L1 execute (potentially minutes or even hours).
-            //
-            // This logic is not totally resistant to reorgs. If `executeBatches` is reverted + the
-            // batch itself is reverted then the storage will persist an incorrect batch. The
-            // situation should be extremely rare but still possible. Two options here:
-            // 1. Trim batches that are no longer executed from the storage on start-up.
-            // 2. Track **finalized** executions along with regular (latest) ones. They cannot
-            //    be reorged and hence would be safe to depend on here.
-            //
-            // AFAIU (2) can also help with the similar priority tree issue.
-            self.finality
-                .subscribe()
-                .wait_for(|f| f.last_executed_batch >= batch_number)
-                .await
-                .map_err(anyhow::Error::from)
-                .map_err(L1WatcherError::Other)?;
-            let discovered_batch_hash = committed_batch.hash();
-            let stored_batch_hash = self.zk_chain.stored_batch_hash(batch_number).await?;
-            if stored_batch_hash != discovered_batch_hash {
-                // Discovered batch commitment does not match latest L1 state. Likely it got
-                // reverted at some point and we will discover another commitment.
-                tracing::warn!(
-                    ?discovered_batch_hash,
-                    ?stored_batch_hash,
-                    batch_number,
-                    "batch hash mismatch; ignoring"
-                );
-                return Ok(());
-            }
 
             self.committed_batches.insert(batch_number, committed_batch);
             self.last_processed_commit_batch = batch_number;
@@ -189,9 +154,7 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality>
 }
 
 #[async_trait::async_trait]
-impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessRawEvents
-    for L1PersistBatchWatcher<BatchStorage, Finality>
-{
+impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchStorage> {
     fn name(&self) -> &'static str {
         "persist_batch"
     }
@@ -218,6 +181,13 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessRawEvents
                 self.process_commit(report, log).await?;
             }
             s if s == BlockExecution::SIGNATURE_HASH => {
+                // This logic is not totally resistant to reorgs. If `executeBatches` is reverted + the
+                // batch itself is reverted then the storage will persist an incorrect batch. The
+                // situation should be extremely rare but still possible. Two options here:
+                // 1. Trim batches that are no longer executed from the storage on start-up.
+                // 2. Track **finalized** executions along with regular (latest) ones. They cannot
+                //    be reorged and hence would be safe to depend on here.
+
                 let execute = BlockExecution::decode_log(&log.inner)?.data;
                 let batch_number = execute.batchNumber.to::<u64>();
                 if batch_number > self.last_persisted_batch_on_start {

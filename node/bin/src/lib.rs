@@ -734,7 +734,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             persistent_batch_storage.clone(),
-            finality_storage.clone(),
         )
         .await
         .expect("failed to start L1 batch persist watcher")
