@@ -509,34 +509,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         upgrade_subpool.insert(upgrade_tx).await;
     }
 
-    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
-        && config.general_config.gateway_rpc_url.is_some()
-    {
-        tasks.spawn(
-            InteropWatcher::create_watcher(
-                node_startup_state.l1_state.bridgehub_sl.clone(), // TODO: what bridgehub to use here?
-                config.l1_watcher_config.clone().into(),
-                next_interop_event_index.clone(),
-                interop_roots_subpool.clone(),
-            )
-            .await
-            .expect("failed to start L1 interop roots watcher")
-            .run()
-            .map(report_exit("L1 interop roots watcher")),
-        );
-    }
-
     if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
-        let l1_chain_id = node_startup_state.l1_state.l1_chain_id;
-        let gw_chain_id = config.general_config.gateway_chain_id;
-
         tasks.spawn(
             GatewayMigrationWatcher::create_watcher(
                 node_startup_state.l1_state.diamond_proxy_l1.clone(),
                 node_startup_state.l1_state.bridgehub_l1.clone(),
                 chain_id,
-                l1_chain_id,
-                gw_chain_id,
+                node_startup_state.l1_state.l1_chain_id,
+                config.general_config.gateway_chain_id,
                 next_migration_number,
                 config.l1_watcher_config.clone().into(),
                 sl_chain_id_subpool.clone(),
@@ -546,6 +526,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .run()
             .map(report_exit("gateway migration watcher")),
         );
+
+        if config.general_config.gateway_rpc_url.is_some() {
+            tasks.spawn(
+                InteropWatcher::create_watcher(
+                    node_startup_state.l1_state.bridgehub_sl.clone(), // TODO: what bridgehub to use here?
+                    config.l1_watcher_config.clone().into(),
+                    next_interop_event_index.clone(),
+                    interop_roots_subpool.clone(),
+                )
+                .await
+                .expect("failed to start L1 interop roots watcher")
+                .run()
+                .map(report_exit("L1 interop roots watcher")),
+            );
+        }
     }
 
     let l1_subpool = L1Subpool::new(10);
