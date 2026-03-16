@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::time::Duration;
-use zksync_os_multivm::deployment_filter;
+use zksync_os_tx_validators::deployment_filter;
 use zksync_os_types::NodeRole;
 
 #[derive(Clone, Debug)]

@@ -20,7 +20,6 @@ zk_os_forward_system_0_2_8.workspace = true
 zk_os_forward_system_dev.workspace = true
 anyhow.workspace = true
 zksync_os_types.workspace = true
-zksync_os_evm_errors.workspace = true
 alloy = { workspace = true, default-features = false, features = [
     "consensus",
     "eips",

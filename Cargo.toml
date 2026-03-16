@@ -39,6 +39,7 @@ members = [
     "lib/reth_compat",
     "lib/operator_signer",
     "lib/raft",
+    "lib/tx_validators",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -280,6 +281,7 @@ zksync_os_base_token_adjuster = { version = "=0.17.1", path = "lib/base_token_ad
 zksync_os_reth_compat = { version = "=0.17.1", path = "lib/reth_compat" }
 zksync_os_operator_signer = { version = "=0.17.1", path = "lib/operator_signer" }
 zksync_os_integration_tests_macros = { version = "=0.17.1", path = "integration-tests-macros" }
+zksync_os_tx_validators = { version = "=0.17.1", path = "lib/tx_validators" }
 
 zksync_os_server = { version = "=0.17.1", path = "node/bin" }
 

@@ -8,21 +8,21 @@ use tokio::time::{Duration, timeout};
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
-use zksync_os_integration_tests::{DeploymentFilterConfig, MultiChainTester};
+use zksync_os_integration_tests::{DeploymentFilterConfig, GatewayTester};
 
 /// The default rich wallet address (derived from the well-known test private key).
 const AUTHORIZED_DEPLOYER: &str = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049";
 
 /// Set up a multi-chain environment with deployment filter and fund an unauthorized account.
-async fn setup() -> Result<(MultiChainTester, Address)> {
+async fn setup() -> Result<(GatewayTester, Address)> {
     let authorized = AUTHORIZED_DEPLOYER.parse::<Address>().unwrap();
     let config = DeploymentFilterConfig {
         enabled: true,
         allowed_deployers: vec![authorized],
     };
-    let mut mc = MultiChainTester::builder()
-        .num_chains(2)
+    let mut mc = GatewayTester::builder()
         .deployment_filter(config)
+        .num_chains(1)
         .build()
         .await?;
 
@@ -64,7 +64,7 @@ async fn unauthorized_address_deploy_is_rejected() -> Result<()> {
 }
 
 #[test_log::test(tokio::test)]
-async fn unauthorized_address_can_send_non_deploy_tx() -> Result<()> {
+async fn filter_only_blocks_deploys_not_transfers() -> Result<()> {
     let (mc, unauthorized) = setup().await?;
 
     mc.chain(0)
