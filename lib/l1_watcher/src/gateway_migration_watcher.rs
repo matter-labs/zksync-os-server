@@ -88,7 +88,7 @@ impl<T: MigrationProcessor> GatewayMigrationWatcher<T> {
             }
         })?;
 
-        tracing::error!(
+        tracing::info!(
             event_signature = T::Event::SIGNATURE,
             selector = %T::Event::SIGNATURE_HASH,
             contract = %server_notifier_contract,
@@ -136,7 +136,7 @@ impl<T: MigrationProcessor> ProcessL1Event for GatewayMigrationWatcher<T> {
     async fn process_event(&mut self, tx: T::Event, _log: Log) -> Result<(), L1WatcherError> {
         let migration_number = T::migration_number(&tx);
 
-        tracing::error!(
+        tracing::info!(
             event_signature = T::Event::SIGNATURE,
             l2_chain_id = self.l2_chain_id,
             new_sl_chain_id = self.new_sl_chain_id,

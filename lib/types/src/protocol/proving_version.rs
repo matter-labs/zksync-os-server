@@ -65,7 +65,7 @@ impl ProvingVersion {
     const V6_VK_HASH: &'static str =
         "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337";
 
-    /// todo
+    /// TODO: replace with the actual V7 VK hash once the proving circuit for v31 is finalized.
     const V7_VK_HASH: &'static str =
         "0x0000000000000000000000000000000000000000000000000000000000000000";
 

@@ -163,14 +163,15 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
     }
 
     fn prev_tree_index(&mut self, key: Bytes32) -> u64 {
-        // TODO this will fail for existing nodes
+        // TODO: callers only invoke this for keys that are absent (membership proofs for missing
+        // keys). If the key already exists in the tree, a different code path is needed.
         let res = &self
             .tree
             .db()
             .indices(self.block, &[FixedBytes::from_slice(key.as_u8_ref())])
             .unwrap()[0];
         match res {
-            KeyLookup::Existing(_) => todo!(),
+            KeyLookup::Existing(_) => todo!("prev_tree_index for existing keys is not implemented"),
             KeyLookup::Missing {
                 prev_key_and_index: (_, index),
                 ..
@@ -283,14 +284,15 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTreeDev
     }
 
     fn prev_tree_index(&mut self, key: Bytes32Dev) -> u64 {
-        // TODO this will fail for existing nodes
+        // TODO: callers only invoke this for keys that are absent (membership proofs for missing
+        // keys). If the key already exists in the tree, a different code path is needed.
         let res = &self
             .tree
             .db()
             .indices(self.block, &[FixedBytes::from_slice(key.as_u8_ref())])
             .unwrap()[0];
         match res {
-            KeyLookup::Existing(_) => todo!(),
+            KeyLookup::Existing(_) => todo!("prev_tree_index for existing keys is not implemented"),
             KeyLookup::Missing {
                 prev_key_and_index: (_, index),
                 ..

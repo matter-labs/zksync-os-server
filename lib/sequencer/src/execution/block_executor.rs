@@ -177,7 +177,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                     error: format!("upgrade tx {tx_hash} reverted"),
                                 });
                             } else {
-                                tracing::info!("Upgrade transaction succeeded");
+                                tracing::info!(block_number = ctx.block_number, "Upgrade transaction succeeded");
                             }
                             match &command.seal_policy {
                                 SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
