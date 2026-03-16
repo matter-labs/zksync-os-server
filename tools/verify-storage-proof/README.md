@@ -56,10 +56,26 @@ If auto-discovery is used (`--bridgehub`), the tool calls `eth_chainId` on L2 an
 
 \* One of `--bridgehub` or `--l1-contract` must be provided.
 
+## Local end-to-end test
+
+`test_local.sh` starts Anvil + the L2 server, deploys a contract, writes to storage, waits for the batch to be committed on L1, and runs the CLI tool to verify the proof.
+
+Prerequisites: [Foundry](https://getfoundry.sh/) (`anvil`, `cast`), `jq`, `curl`.
+
+```bash
+# First run (builds everything):
+./tools/verify-storage-proof/test_local.sh
+
+# Subsequent runs (skip build):
+./tools/verify-storage-proof/test_local.sh --skip-build
+```
+
+The script must be run from the repo root (it `cd`s there automatically). It cleans the DB on each run and takes ~15 seconds for the batch pipeline to produce a verifiable proof.
+
 ## Integration tests
 
 The integration tests live in `integration-tests/tests/storage_proof.rs` and exercise the library against a local node with L1 (Anvil). Each test manages its own L1/node instance — no external setup required.
 
 ```bash
-cargo nextest run -p zksync_os_integration_tests --test storage_proof
+RUST_LOG=info cargo nextest run -p zksync_os_integration_tests --test storage_proof --no-capture
 ```
