@@ -311,7 +311,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             Some(overrides) => execute(
                 execution_env.transaction,
                 execution_env.block_context,
-                OverriddenStateView::new(storage_view, overrides),
+                OverriddenStateView::with_state_overrides(storage_view, overrides),
             ),
             None => execute(
                 execution_env.transaction,
@@ -350,7 +350,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             Some(overrides) => call_trace_simulate(
                 execution_env.transaction,
                 execution_env.block_context,
-                OverriddenStateView::new(storage_view, overrides),
+                OverriddenStateView::with_state_overrides(storage_view, overrides),
                 call_config,
             ),
             None => call_trace_simulate(
@@ -379,7 +379,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
         let mut tracer_output = match state_overrides {
             Some(overrides) => {
-                let view = OverriddenStateView::new(storage_view, overrides);
+                let view = OverriddenStateView::with_state_overrides(storage_view, overrides);
                 let mut tracer = js_tracer::tracer::JsTracer::new(view.clone(), js_cfg)
                     .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))?;
 
@@ -442,7 +442,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             Some(overrides) => self.estimate_gas_with_view(
                 request,
                 block_context,
-                OverriddenStateView::new(storage_view, overrides),
+                OverriddenStateView::with_state_overrides(storage_view, overrides),
             ),
             None => self.estimate_gas_with_view(request, block_context, storage_view),
         }
