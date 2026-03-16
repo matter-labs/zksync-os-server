@@ -1,7 +1,7 @@
 use std::{
     cmp,
     collections::{BTreeMap, HashMap},
-    ops, slice,
+    fmt, ops, slice,
 };
 
 use alloy::primitives::B256;
@@ -53,7 +53,7 @@ impl AsEntry for (u64, TreeEntry) {
 }
 
 /// Generic database functionality. Its main implementation is [`RocksDB`].
-pub trait Database: Send + Sync {
+pub trait Database: Send + Sync + fmt::Debug {
     fn indices(&self, version: u64, keys: &[B256]) -> Result<Vec<KeyLookup>, DeserializeError>;
 
     fn try_manifest(&self) -> Result<Option<Manifest>, DeserializeError>;

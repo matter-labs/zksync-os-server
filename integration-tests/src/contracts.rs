@@ -56,6 +56,13 @@ alloy::sol!(
     "test-contracts/out/SimpleRevert.sol/SimpleRevert.json"
 );
 
+alloy::sol!(
+    /// Simple contract with storage state.
+    #[sol(rpc)]
+    Counter,
+    "test-contracts/out/Counter.sol/Counter.json"
+);
+
 alloy::sol! {
     #[sol(rpc)]
     interface IBaseToken {

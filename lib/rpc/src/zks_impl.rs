@@ -1,18 +1,25 @@
 use crate::ReadRpcStorage;
 use crate::log_proof_utils::{batch_tree_proof, chain_proof_vector, get_chain_log_proof};
 use crate::result::ToRpcResult;
-use alloy::primitives::{Address, B256, BlockNumber, TxHash, U256, keccak256};
+use alloy::primitives::{Address, B256, BlockNumber, TxHash, U64, U256, keccak256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Index;
 use anyhow::Context;
 use async_trait::async_trait;
+use blake2::{Blake2s256, Digest};
 use futures::{FutureExt, TryFutureExt};
 use jsonrpsee::core::RpcResult;
+use ruint::aliases::B160;
 use std::sync::Arc;
+use zk_ee::common_structs::derive_flat_storage_key;
 use zksync_os_genesis::{GenesisInput, GenesisInputSource};
+use zksync_os_merkle_tree_api::flat::StorageSlotProof;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_rpc_api::{
-    types::{BlockMetadata, L2ToL1LogProof, LogProofTarget},
+    types::{
+        AddressScopedKey, BatchStorageProof, BlockMetadata, L2ToL1LogProof, LogProofTarget,
+        StateCommitmentPreimage,
+    },
     zks::ZksApiServer,
 };
 use zksync_os_storage_api::{PersistedBatch, RepositoryError, StateError, read_multichain_root};
@@ -267,7 +274,7 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         }))
     }
 
-    async fn get_block_metadata_by_number_imp(
+    async fn get_block_metadata_by_number_impl(
         &self,
         block_number: u64,
     ) -> ZksResult<Option<BlockMetadata>> {
@@ -286,6 +293,96 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             pubdata_price_per_byte,
             native_price,
             execution_version,
+        }))
+    }
+
+    async fn get_proof_impl(
+        &self,
+        address: Address,
+        keys: &[B256],
+        batch_number: u64,
+    ) -> ZksResult<Option<BatchStorageProof>> {
+        let Some(batch) = self.storage.batch().get_batch_by_number(batch_number)? else {
+            return Ok(None);
+        };
+        let last_block_number = batch.last_block_number();
+
+        let last_block_replay = self
+            .storage
+            .replay_storage()
+            .get_replay_record(last_block_number)
+            .with_context(|| {
+                format!("missing last block {last_block_number} for batch #{batch_number}")
+            })?;
+        let block_hashes = last_block_replay.block_context.block_hashes;
+
+        let last_block = self
+            .storage
+            .repository()
+            .get_block_by_number(last_block_number)?
+            .with_context(|| {
+                format!("missing last block {last_block_number} for batch #{batch_number}")
+            })?;
+        let last_block_hash = last_block.header.hash_slow();
+
+        let last_256_block_hashes_blake = {
+            let mut blocks_hasher = Blake2s256::new();
+            for block_hash in &block_hashes.0[1..] {
+                blocks_hasher.update(block_hash.to_be_bytes::<32>());
+            }
+            blocks_hasher.update(last_block_hash.as_slice());
+            B256::from_slice(&blocks_hasher.finalize())
+        };
+
+        let address_for_keys = B160::from_be_bytes(address.into_array());
+        let flat_keys: Vec<_> = keys
+            .iter()
+            .map(|account_key| {
+                let flat_key = derive_flat_storage_key(&address_for_keys, &account_key.0.into());
+                B256::new(flat_key.as_u8_array())
+            })
+            .collect();
+        // We query tree version by the *block* number because the tree is updated on each block,
+        // rather than once per batch.
+        let Some((flat_proofs, tree_output)) = self
+            .storage
+            .tree()
+            .prove_flat(last_block_number, &flat_keys)?
+        else {
+            return Ok(None);
+        };
+
+        // Swap flat keys in the proofs back to address-scoped keys
+        let storage_proofs: Vec<_> = flat_proofs
+            .into_iter()
+            .zip(keys)
+            .map(|(proof, &key)| StorageSlotProof {
+                key: AddressScopedKey(key),
+                proof: proof.proof,
+            })
+            .collect();
+
+        let state_commitment_preimage = StateCommitmentPreimage {
+            next_free_slot: U64::from(tree_output.leaf_count),
+            block_number: U64::from(last_block_number),
+            last_256_block_hashes_blake,
+            last_block_timestamp: U64::from(last_block.header.timestamp),
+        };
+
+        let recovered = state_commitment_preimage.hash(tree_output.root_hash);
+        if batch.batch_info.state_commitment != recovered {
+            let err = anyhow::anyhow!(
+                "Mismatch between stored ({stored:?}) and recovered ({recovered:?}) state commitments \
+                 for batch #{batch_number}; preimage = {state_commitment_preimage:?}, tree_output = {tree_output:?}",
+                stored = batch.batch_info.state_commitment
+            );
+            return Err(err.into());
+        }
+
+        Ok(Some(BatchStorageProof {
+            address,
+            state_commitment_preimage,
+            storage_proofs,
         }))
     }
 }
@@ -323,7 +420,18 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
         &self,
         block_number: u64,
     ) -> RpcResult<Option<BlockMetadata>> {
-        self.get_block_metadata_by_number_imp(block_number)
+        self.get_block_metadata_by_number_impl(block_number)
+            .await
+            .to_rpc_result()
+    }
+
+    async fn get_proof(
+        &self,
+        account: Address,
+        keys: Vec<B256>,
+        batch_number: u64,
+    ) -> RpcResult<Option<BatchStorageProof>> {
+        self.get_proof_impl(account, &keys, batch_number)
             .await
             .to_rpc_result()
     }

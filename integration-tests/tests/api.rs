@@ -1,13 +1,21 @@
 use alloy::eips::Encodable2718;
 use alloy::network::{ReceiptResponse, TransactionBuilder, TxSigner};
-use alloy::primitives::{TxHash, U128, U256, address};
+use alloy::primitives::{Address, B256, TxHash, U128, U256, address};
 use alloy::providers::Provider;
-use alloy::rpc::types::TransactionRequest;
+use alloy::rpc::types::{Filter, TransactionRequest};
+use alloy::sol_types::SolEvent;
+use anyhow::Context as _;
 use regex::Regex;
 use std::time::Duration;
+use zksync_os_contract_interface::IExecutor::BlockCommit;
+use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::contracts::EventEmitter;
+use zksync_os_integration_tests::contracts::Counter::CounterInstance;
+use zksync_os_integration_tests::contracts::{Counter, EventEmitter};
+use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
+use zksync_os_integration_tests::provider::ZksyncApi;
+use zksync_os_rpc_api::types::BatchStorageProof;
 use zksync_os_server::config::FeeConfig;
 
 #[test_log::test(tokio::test)]
@@ -278,5 +286,137 @@ async fn estimate_gas_without_balance() -> anyhow::Result<()> {
         let estimated_gas = tester.l2_provider.estimate_gas(tx_request).await?;
         tracing::info!("Estimated gas for tx #{i}: {estimated_gas}");
     }
+    Ok(())
+}
+
+#[tracing::instrument(skip(provider))]
+async fn wait_for_batch_commitment(
+    diamond_proxy_address: Address,
+    provider: &EthDynProvider,
+    expected_batch_number: u64,
+) -> B256 {
+    let filter = Filter::new()
+        .event_signature(BlockCommit::SIGNATURE_HASH)
+        .address(diamond_proxy_address);
+
+    loop {
+        tracing::debug!("querying batch commitment logs");
+
+        let logs = provider
+            .get_logs(&filter)
+            .await
+            .expect("failed to get logs");
+        for log in &logs {
+            let topics = log.inner.data.topics();
+            assert_eq!(topics.len(), 4);
+            let batch_number = U256::from_be_bytes(topics[1].0);
+            let batch_number =
+                u64::try_from(batch_number).expect("incorrect batch number in event");
+            if batch_number == expected_batch_number {
+                tracing::info!(batch_number, "successfully waited for batch");
+                return topics[2];
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+#[tracing::instrument(skip(tester))]
+async fn wait_for_proof(
+    tester: &Tester,
+    address: Address,
+    storage_keys: &[B256],
+    batch_number: u64,
+) -> anyhow::Result<BatchStorageProof> {
+    loop {
+        let maybe_proof = tester
+            .l2_zk_provider
+            .get_storage_proof(address, storage_keys.to_vec(), batch_number)
+            .await?;
+        if let Some(proof) = maybe_proof {
+            return Ok(proof);
+        }
+        tracing::info!("no proof yet, waiting");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+#[test_log::test(tokio::test)]
+#[tracing::instrument]
+async fn get_storage_proof() -> anyhow::Result<()> {
+    let tester = Tester::setup().await?;
+
+    let bridgehub_address = tester.l2_zk_provider.get_bridgehub_contract().await?;
+    tracing::info!(?bridgehub_address);
+    let chain_id = tester.l2_provider.get_chain_id().await?;
+    tracing::info!(chain_id);
+
+    // Get L1 state which contains diamond proxy address
+    let l1_state = L1State::fetch(
+        tester.l1_provider().clone().erased(),
+        tester.l1_provider().clone().erased(),
+        bridgehub_address,
+        chain_id,
+    )
+    .await?;
+    let diamond_proxy_address = l1_state.diamond_proxy_address_sl();
+    tracing::info!(?diamond_proxy_address);
+
+    let deploy_tx_receipt = Counter::deploy_builder(tester.l2_provider.clone())
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    let contract_address = deploy_tx_receipt
+        .contract_address()
+        .expect("no contract deployed");
+    tracing::info!(?contract_address, "deployed counter");
+
+    let queried_keys = [B256::repeat_byte(0), B256::repeat_byte(0x1f)];
+    let batch_number = 2;
+    let batch_commitment =
+        wait_for_batch_commitment(diamond_proxy_address, tester.l1_provider(), batch_number).await;
+    tracing::info!(?batch_commitment);
+
+    let proof = wait_for_proof(&tester, contract_address, &queried_keys, batch_number).await?;
+    tracing::info!(?proof, "got proof");
+    let storage_view = proof
+        .verify(contract_address, &queried_keys)
+        .context("invalid proof")?;
+    assert_eq!(storage_view.storage_commitment, batch_commitment);
+    // The contract is not written to yet.
+    assert_eq!(storage_view.storage_values, [None; 2]);
+
+    tracing::info!("writing to counter contract");
+    let counter = CounterInstance::new(contract_address, tester.l2_provider.clone());
+    counter
+        .increment(U256::from(42))
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    tracing::info!("written to counter");
+
+    let new_batch_number = 3;
+    let new_batch_commitment = wait_for_batch_commitment(
+        diamond_proxy_address,
+        tester.l1_provider(),
+        new_batch_number,
+    )
+    .await;
+    assert_ne!(new_batch_commitment, batch_commitment);
+
+    let proof = wait_for_proof(&tester, contract_address, &queried_keys, new_batch_number).await?;
+    tracing::info!(?proof, "got proof");
+    let storage_view = proof
+        .verify(contract_address, &queried_keys)
+        .context("invalid proof")?;
+    assert_eq!(storage_view.storage_commitment, new_batch_commitment);
+    assert_eq!(
+        storage_view.storage_values,
+        [Some(B256::left_padding_from(&[42])), None]
+    );
+
     Ok(())
 }
