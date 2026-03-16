@@ -218,8 +218,8 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
         sample_force_deployment_address,
         SampleForceDeployment::DEPLOYED_BYTECODE.clone(),
     )]
-        .into_iter()
-        .collect();
+    .into_iter()
+    .collect();
 
     let gateway_tester = GatewayTester::builder()
         .protocol_version(NEXT_PROTOCOL_VERSION)
