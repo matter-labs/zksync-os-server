@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/matter-labs/zksync-os-server/compare/v0.17.0...v0.17.1) (2026-03-16)
+
+
+### Bug Fixes
+
+* batch storage persist delay ([#1015](https://github.com/matter-labs/zksync-os-server/issues/1015)) ([ce075bc](https://github.com/matter-labs/zksync-os-server/commit/ce075bcf740ec5842fd4d2d2cdad5194c1333c70))
+
 ## [0.17.0](https://github.com/matter-labs/zksync-os-server/compare/v0.16.0...v0.17.0) (2026-03-16)
 
 
