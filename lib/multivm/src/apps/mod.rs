@@ -1,3 +1,16 @@
+use std::path::{Path, PathBuf};
+
+fn materialize_app(base_dir: &Path, version: &str, file_name: &str, bytes: &[u8]) -> PathBuf {
+    let dir_path = base_dir.join(version);
+    std::fs::create_dir_all(&dir_path).unwrap();
+
+    let full_path = dir_path.join(file_name);
+    if !full_path.exists() {
+        std::fs::write(&full_path, bytes).unwrap();
+    }
+    full_path
+}
+
 pub mod v6 {
     use std::path::{Path, PathBuf};
 
@@ -7,7 +20,12 @@ pub mod v6 {
     ));
 
     pub fn singleblock_batch_path(base_dir: &Path) -> PathBuf {
-        materialize_app(base_dir, "singleblock_batch.bin", SINGLEBLOCK_BATCH_APP)
+        super::materialize_app(
+            base_dir,
+            "v6",
+            "singleblock_batch.bin",
+            SINGLEBLOCK_BATCH_APP,
+        )
     }
 
     pub const SINGLEBLOCK_BATCH_LOGGING_ENABLED: &[u8] = include_bytes!(concat!(
@@ -16,8 +34,9 @@ pub mod v6 {
     ));
 
     pub fn singleblock_batch_logging_enabled_path(base_dir: &Path) -> PathBuf {
-        materialize_app(
+        super::materialize_app(
             base_dir,
+            "v6",
             "singleblock_batch_logging_enabled.bin",
             SINGLEBLOCK_BATCH_LOGGING_ENABLED,
         )
@@ -29,23 +48,7 @@ pub mod v6 {
     ));
 
     pub fn multiblock_batch_path(base_dir: &Path) -> PathBuf {
-        materialize_app(base_dir, "multiblock_batch.bin", MULTIBLOCK_BATCH)
-    }
-
-    fn materialize_app(base_dir: &Path, file_name: &str, bytes: &[u8]) -> PathBuf {
-        let dir_path = base_dir.join(
-            module_path!()
-                .rsplit_once("::")
-                .expect("failed to get module name")
-                .1,
-        );
-        std::fs::create_dir_all(&dir_path).unwrap();
-
-        let full_path = dir_path.join(file_name);
-        if !full_path.exists() {
-            std::fs::write(&full_path, bytes).unwrap();
-        }
-        full_path
+        super::materialize_app(base_dir, "v6", "multiblock_batch.bin", MULTIBLOCK_BATCH)
     }
 
     #[cfg(test)]
@@ -76,7 +79,12 @@ pub mod v7 {
     ));
 
     pub fn singleblock_batch_path(base_dir: &Path) -> PathBuf {
-        materialize_app(base_dir, "singleblock_batch.bin", SINGLEBLOCK_BATCH_APP)
+        super::materialize_app(
+            base_dir,
+            "v7",
+            "singleblock_batch.bin",
+            SINGLEBLOCK_BATCH_APP,
+        )
     }
 
     pub const SINGLEBLOCK_BATCH_LOGGING_ENABLED: &[u8] = include_bytes!(concat!(
@@ -85,8 +93,9 @@ pub mod v7 {
     ));
 
     pub fn singleblock_batch_logging_enabled_path(base_dir: &Path) -> PathBuf {
-        materialize_app(
+        super::materialize_app(
             base_dir,
+            "v7",
             "singleblock_batch_logging_enabled.bin",
             SINGLEBLOCK_BATCH_LOGGING_ENABLED,
         )
@@ -98,23 +107,7 @@ pub mod v7 {
     ));
 
     pub fn multiblock_batch_path(base_dir: &Path) -> PathBuf {
-        materialize_app(base_dir, "multiblock_batch.bin", MULTIBLOCK_BATCH)
-    }
-
-    fn materialize_app(base_dir: &Path, file_name: &str, bytes: &[u8]) -> PathBuf {
-        let dir_path = base_dir.join(
-            module_path!()
-                .rsplit_once("::")
-                .expect("failed to get module name")
-                .1,
-        );
-        std::fs::create_dir_all(&dir_path).unwrap();
-
-        let full_path = dir_path.join(file_name);
-        if !full_path.exists() {
-            std::fs::write(&full_path, bytes).unwrap();
-        }
-        full_path
+        super::materialize_app(base_dir, "v7", "multiblock_batch.bin", MULTIBLOCK_BATCH)
     }
 
     #[cfg(test)]

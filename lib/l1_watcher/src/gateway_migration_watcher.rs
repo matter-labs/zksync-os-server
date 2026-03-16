@@ -89,11 +89,7 @@ impl<T: MigrationProcessor> GatewayMigrationWatcher<T> {
         })?;
 
         tracing::info!(
-            event_signature = T::Event::SIGNATURE,
-            selector = %T::Event::SIGNATURE_HASH,
             contract = %server_notifier_contract,
-            l2_chain_id = chain_id,
-            new_sl_chain_id = new_sl_chain_id,
             starting_l1_block = next_l1_block,
             "gateway migration watcher starting"
         );
@@ -137,8 +133,6 @@ impl<T: MigrationProcessor> ProcessL1Event for GatewayMigrationWatcher<T> {
         let migration_number = T::migration_number(&tx);
 
         tracing::info!(
-            event_signature = T::Event::SIGNATURE,
-            l2_chain_id = self.l2_chain_id,
             new_sl_chain_id = self.new_sl_chain_id,
             migration_number,
             "gateway migration event caught"
