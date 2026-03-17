@@ -332,11 +332,9 @@ async fn wait_for_proof(
     }
 }
 
-#[test_log::test(tokio::test)]
+#[test_multisetup([CURRENT_TO_L1])]
 #[tracing::instrument]
-async fn get_storage_proof() -> anyhow::Result<()> {
-    let tester = Tester::setup().await?;
-
+async fn get_storage_proof(tester: Tester) -> anyhow::Result<()> {
     let bridgehub_address = tester.l2_zk_provider.get_bridgehub_contract().await?;
     tracing::info!(?bridgehub_address);
     let chain_id = tester.l2_provider.get_chain_id().await?;
