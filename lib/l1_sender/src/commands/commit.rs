@@ -2,7 +2,7 @@ use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchSignatureData, FriProof, SignedBatchEnvelope};
 use crate::commands::SendToL1;
 use alloy::consensus::BlobTransactionSidecar;
-use alloy::primitives::{Bytes, U256};
+use alloy::primitives::{Address, Bytes, U256};
 use alloy::sol_types::SolCall;
 use std::fmt::Display;
 use zksync_os_batch_types::BatchSignatureSet;
@@ -80,7 +80,7 @@ impl SendToL1 for CommitCommand {
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxMined;
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1Passthrough;
 
-    fn solidity_call(&self, _gateway: bool) -> Bytes {
+    fn solidity_call(&self, _gateway: bool, _operator: &Address) -> Bytes {
         if let Some(signatures_set) = &self.signatures {
             let mut signatures = signatures_set.to_vec().clone();
             signatures.sort_by(|a, b| a.signer().cmp(b.signer()));

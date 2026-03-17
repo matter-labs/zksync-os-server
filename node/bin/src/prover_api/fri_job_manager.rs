@@ -259,6 +259,9 @@ impl FriJobManager {
                     program_proof,
                 )
             }
+            ProvingVersion::V7 => {
+                todo!("verifying v7 proofs is unsupported for now")
+            }
         };
 
         if let Err(SubmitError::FriProofVerificationError {
