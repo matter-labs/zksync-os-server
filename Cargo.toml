@@ -38,6 +38,7 @@ members = [
     "lib/base_token_adjuster",
     "lib/reth_compat",
     "lib/operator_signer",
+    "lib/raft",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -272,6 +273,7 @@ zksync_os_batch_types = { version = "=0.17.1", path = "lib/batch_types" }
 zksync_os_internal_config = { version = "=0.17.1", path = "lib/internal_config" }
 zksync_os_interop_fee_updater = { version = "=0.17.1", path = "lib/interop_fee_updater" }
 zksync_os_network = { version = "=0.17.1", path = "lib/network" }
+zksync_os_raft = { version = "=0.17.1", path = "lib/raft" }
 zksync_os_metadata = { version = "=0.17.1", path = "lib/metadata" }
 zksync_os_external_price_api = { version = "=0.17.1", path = "lib/external_price_api" }
 zksync_os_base_token_adjuster = { version = "=0.17.1", path = "lib/base_token_adjuster" }

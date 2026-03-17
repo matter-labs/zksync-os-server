@@ -1,0 +1,19 @@
+[package]
+name = "zksync_os_raft"
+description = "OpenRaft integration for ZKsync OS"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+zksync_os_sequencer.workspace = true
+zksync_os_storage_api.workspace = true

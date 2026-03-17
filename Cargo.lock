@@ -14463,6 +14463,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_raft"
+version = "0.16.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "tokio",
+ "zksync_os_sequencer",
+ "zksync_os_storage_api",
+]
+
+[[package]]
 name = "zksync_os_reth_compat"
 version = "0.17.1"
 dependencies = [
@@ -14741,6 +14753,7 @@ dependencies = [
  "zksync_os_operator_signer",
  "zksync_os_pipeline",
  "zksync_os_priority_tree",
+ "zksync_os_raft",
  "zksync_os_reth_compat",
  "zksync_os_revm_consistency_checker",
  "zksync_os_rocksdb",
