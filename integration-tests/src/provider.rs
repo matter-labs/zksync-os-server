@@ -2,11 +2,11 @@ use std::time::{Duration, Instant};
 
 use crate::network::Zksync;
 use alloy::eips::BlockId;
-use alloy::primitives::{Address, TxHash};
+use alloy::primitives::{Address, StorageKey, TxHash};
 use alloy::providers::Provider;
 use alloy::transports::TransportResult;
 use anyhow::Context as _;
-use zksync_os_rpc_api::types::{L2ToL1LogProof, LogProofTarget};
+use zksync_os_rpc_api::types::{BatchStorageProof, L2ToL1LogProof, LogProofTarget};
 
 /// RPC interface that gives access to methods specific to ZKsync OS.
 #[allow(async_fn_in_trait)]
@@ -33,6 +33,17 @@ pub trait ZksyncApi: Provider<Zksync> {
     ) -> TransportResult<Option<L2ToL1LogProof>> {
         self.client()
             .request("zks_getL2ToL1LogProof", (tx_hash, index, target))
+            .await
+    }
+
+    async fn get_storage_proof(
+        &self,
+        address: Address,
+        keys: Vec<StorageKey>,
+        batch_number: u64,
+    ) -> TransportResult<Option<BatchStorageProof>> {
+        self.client()
+            .request("zks_getProof", (address, keys, batch_number))
             .await
     }
 }
@@ -79,6 +90,17 @@ pub trait ZksyncTestingProvider: Provider<Zksync> {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         Ok(())
+    }
+
+    async fn wait_for_block(&self, block_number: u64) -> anyhow::Result<()> {
+        tracing::info!("Waiting for block {block_number} to be processed on L2");
+        loop {
+            let latest_block = self.get_block_number_by_id(BlockId::latest()).await?;
+            if latest_block >= Some(block_number) {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 

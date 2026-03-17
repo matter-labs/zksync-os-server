@@ -136,6 +136,7 @@ impl BatchInfo {
         );
 
         /* ---------- new state commitment ---------- */
+        // FIXME: extract to a type common batch types?
         let mut hasher = Blake2s256::new();
         hasher.update(last_block_tree.root_hash.as_slice());
         hasher.update(last_block_tree.leaf_count.to_be_bytes());

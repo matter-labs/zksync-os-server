@@ -50,6 +50,7 @@ impl TryFrom<v0::ReplayRecord> for StorageReplayRecord {
             force_preimages: vec![],
             starting_interop_event_index: InteropRootsLogIndex::default(),
             starting_migration_number: 0,
+            starting_interop_fee_number: 0,
         })
     }
 }
@@ -154,6 +155,7 @@ impl TryFrom<v1::ReplayRecord> for StorageReplayRecord {
                 .collect(),
             starting_interop_event_index: value.starting_interop_event_index,
             starting_migration_number: 0,
+            starting_interop_fee_number: 0,
         })
     }
 }
@@ -211,6 +213,7 @@ impl From<StorageReplayRecord> for v2::ReplayRecord {
                 .collect(),
             starting_interop_event_index: value.starting_interop_event_index,
             starting_migration_number: value.starting_migration_number,
+            starting_interop_fee_number: value.starting_interop_fee_number,
         }
     }
 }
@@ -259,6 +262,7 @@ impl TryFrom<v2::ReplayRecord> for StorageReplayRecord {
                 .collect(),
             starting_interop_event_index: value.starting_interop_event_index,
             starting_migration_number: value.starting_migration_number,
+            starting_interop_fee_number: value.starting_interop_fee_number,
         })
     }
 }

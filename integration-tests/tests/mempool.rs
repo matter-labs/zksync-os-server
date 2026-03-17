@@ -8,11 +8,10 @@ use futures::FutureExt;
 use std::time::Duration;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
-use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, TesterBuilder, test_casing};
+use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, TesterBuilder, test_multisetup};
 use zksync_os_server::config::FeeConfig;
 
-#[test_casing([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn sensitive_to_balance_changes(mut tester: Tester) -> anyhow::Result<()> {
     // Test that mempool gets notified when an account's balance changes, hence potentially
     // making that account's queued transactions minable.
@@ -116,8 +115,7 @@ async fn sensitive_to_balance_changes(mut tester: Tester) -> anyhow::Result<()> 
 
 /// A transaction with maxFeePerGas below the chain's base fee must not stall
 /// block production for other senders.
-#[test_casing([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn low_fee_tx_does_not_hang_block_executor(builder: TesterBuilder) -> anyhow::Result<()> {
     // Use a deterministic base fee so the "low fee" value is unambiguous.
     let known_base_fee: u128 = 100_000_000; // 100M wei = 0.1 gwei

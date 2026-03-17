@@ -1,9 +1,12 @@
 use alloy::consensus::Sealed;
 use alloy::network::primitives::BlockTransactions;
-use alloy::primitives::{Address, B256, BlockHash, TxHash, U256};
+use alloy::primitives::{Address, B256, BlockHash, TxHash, U64, U256};
 use alloy::rpc::types::{FeeHistory, Log};
+use anyhow::Context;
+use blake2::{Blake2s256, Digest};
 use jsonrpsee::core::Serialize;
 use serde::Deserialize;
+use zksync_os_merkle_tree_api::flat;
 use zksync_os_types::{BlockExt, ZkEnvelope, ZkReceiptEnvelope};
 
 pub type ZkTransactionReceipt =
@@ -138,4 +141,130 @@ impl From<L2ToL1Log> for zksync_os_types::L2ToL1Log {
             value: value.value,
         }
     }
+}
+
+/// Data hashed into the state commitment of the batch together with the Merkle tree root hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateCommitmentPreimage {
+    /// Number of leaves in the Merkle tree.
+    pub next_free_slot: U64,
+    /// Number of the last block in the batch.
+    pub block_number: U64,
+    /// Linear Blake2s-256 hash of the last 256 block hashes ending with `block_number` (inclusive).
+    pub last_256_block_hashes_blake: B256,
+    /// Timestamp (in seconds) of the last block in the batch.
+    pub last_block_timestamp: U64,
+}
+
+impl StateCommitmentPreimage {
+    /// Hashes this preimage together with the provided Merkle tree root hash, resulting the state commitment hash
+    /// recorded on L1 (accessible e.g. via `BlockCommit` event emitted by the diamond proxy).
+    pub fn hash(&self, tree_root_hash: B256) -> B256 {
+        let mut hasher = Blake2s256::new();
+        hasher.update(tree_root_hash.as_slice());
+        hasher.update(self.next_free_slot.to_be_bytes::<8>());
+        hasher.update(self.block_number.to_be_bytes::<8>());
+        hasher.update(self.last_256_block_hashes_blake);
+        hasher.update(self.last_block_timestamp.to_be_bytes::<8>());
+        B256::from_slice(&hasher.finalize())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AddressScopedKey(pub B256);
+
+impl AddressScopedKey {
+    // There's a similar function in `zk_ee`, but it relies on multiple unstable features.
+    fn derive_flat_key(address: Address, key: B256) -> B256 {
+        let mut hasher = Blake2s256::new();
+        hasher.update([0_u8; 12]); // address padding
+        hasher.update(address.0);
+        hasher.update(key.0);
+        B256::from_slice(&hasher.finalize())
+    }
+
+    fn to_flat_key(self, address: Address) -> B256 {
+        Self::derive_flat_key(address, self.0)
+    }
+}
+
+/// Storage proof returned from the `zks_getProof` RPC method. Rooted in the batch hash recorded on L1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchStorageProof {
+    /// Queried address (duplicated to make the proof self-sufficient).
+    pub address: Address,
+    /// State commitment preimage data, excluding the Merkle tree root hash (which can be recovered from
+    /// `storage_proofs`).
+    pub state_commitment_preimage: StateCommitmentPreimage,
+    /// Flat storage proofs for each queried key.
+    pub storage_proofs: Vec<flat::StorageSlotProof<AddressScopedKey>>,
+}
+
+impl BatchStorageProof {
+    const TREE_DEPTH: u8 = 64;
+
+    /// Verifies this proof.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `queried_keys` is empty (the proof would be useless in this case).
+    pub fn verify(
+        &self,
+        queried_address: Address,
+        queried_keys: &[B256],
+    ) -> anyhow::Result<StorageView> {
+        assert!(!queried_keys.is_empty(), "useless proof");
+
+        anyhow::ensure!(
+            self.address == queried_address,
+            "Mismatched address: queried {queried_address:?}, got {:?}",
+            self.address
+        );
+        let actual_keys = self.storage_proofs.iter().map(|proof| proof.key.0);
+        anyhow::ensure!(
+            actual_keys.clone().eq(queried_keys.iter().copied()),
+            "Mismatched proven slots: queried {queried_keys:?}, got {:?}",
+            actual_keys.collect::<Vec<_>>()
+        );
+
+        let mut cached_tree_root_hash = None;
+        let mut storage_values = Vec::with_capacity(self.storage_proofs.len());
+        for proof in &self.storage_proofs {
+            let flat_key = proof.key.to_flat_key(self.address);
+            let tree_root_hash = proof
+                .proof
+                .verify(Self::TREE_DEPTH, flat_key)
+                .with_context(|| format!("invalid proof for key {:?}", proof.key))?;
+            if let Some(cached) = cached_tree_root_hash {
+                anyhow::ensure!(
+                    cached == tree_root_hash,
+                    "Tree root hash mismatch for key {:?}: expected {cached:?}, got {tree_root_hash:?}",
+                    proof.key,
+                );
+            } else {
+                cached_tree_root_hash = Some(tree_root_hash);
+            }
+
+            storage_values.push(proof.value());
+        }
+
+        // `unwrap()` is safe due to checks above.
+        let tree_root_hash = cached_tree_root_hash.unwrap();
+        Ok(StorageView {
+            storage_commitment: self.state_commitment_preimage.hash(tree_root_hash),
+            storage_values,
+        })
+    }
+}
+
+/// Proven view of the storage returned from [`BatchStorageProof::verify()`].
+#[derive(Debug)]
+pub struct StorageView {
+    /// Storage commitment hash. In most cases, must be checked against L1.
+    pub storage_commitment: B256,
+    /// Proven storage values in the order of queried keys.
+    pub storage_values: Vec<Option<B256>>,
 }

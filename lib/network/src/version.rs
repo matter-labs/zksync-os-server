@@ -110,7 +110,7 @@ impl Decodable for ZksVersion {
 ///
 /// # Example
 /// ```
-/// use zksync_os_network::wire::ZksVersion;
+/// use zksync_os_network::version::ZksVersion;
 ///
 /// let version = ZksVersion::try_from(1).unwrap();
 /// assert_eq!(version, ZksVersion::Zks1);

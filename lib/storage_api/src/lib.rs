@@ -28,3 +28,5 @@ pub use state_override_view::OverriddenStateView;
 
 mod read_multichain_root;
 pub use read_multichain_root::read_multichain_root;
+mod overlay_buffer;
+pub use overlay_buffer::{BlockOverlay, OverlayBuffer};

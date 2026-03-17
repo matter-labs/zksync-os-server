@@ -1,4 +1,5 @@
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
@@ -50,9 +51,22 @@ fn type_kind(ty: &Type) -> Option<ParamKind> {
     }
 }
 
-fn split_helper_attrs(attrs: Vec<Attribute>) -> Result<(Vec<Attribute>, Option<syn::Expr>)> {
+fn path_matches(path: &syn::Path, expected: &[&str]) -> bool {
+    path.segments.len() == expected.len()
+        && path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .zip(expected.iter().copied())
+            .all(|(actual, expected)| actual == expected)
+}
+
+fn split_helper_attrs(
+    attrs: Vec<Attribute>,
+) -> Result<(Vec<Attribute>, Option<syn::Expr>, Option<TokenStream2>)> {
     let mut output = Vec::with_capacity(attrs.len());
     let mut builder_expr = None;
+    let mut runtime_args = None;
 
     for attr in attrs {
         if attr.path().is_ident("test_builder") {
@@ -63,12 +77,24 @@ fn split_helper_attrs(attrs: Vec<Attribute>) -> Result<(Vec<Attribute>, Option<s
                 ));
             }
             builder_expr = Some(attr.parse_args()?);
+        } else if attr.path().is_ident("test_runtime")
+            || path_matches(attr.path(), &["tokio", "test"])
+        {
+            if runtime_args.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "duplicate runtime test attribute",
+                ));
+            }
+            runtime_args = Some(attr.parse_args::<TokenStream2>()?);
+        } else if path_matches(attr.path(), &["test_log", "test"]) {
+            continue;
         } else {
             output.push(attr);
         }
     }
 
-    Ok((output, builder_expr))
+    Ok((output, builder_expr, runtime_args))
 }
 
 fn case_fn_name(case: &Path) -> Result<syn::Ident> {
@@ -91,6 +117,7 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// - if the function takes a `TesterBuilder`, the wrapper starts from `case.builder()`
 /// - if the function takes a `Tester`, the wrapper builds it with `case.builder().build().await?`
 /// - if the function takes a `TestCase`, the wrapper passes the case value directly
+/// - each wrapper is annotated with `#[test_log::test(tokio::test)]` by default
 ///
 /// Supported parameter types are:
 ///
@@ -101,16 +128,12 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// `TestCase` may be combined with either `TesterBuilder` or `Tester`.
 /// `TesterBuilder` and `Tester` cannot be used together in the same function signature.
 ///
-/// Apply your test framework attribute, such as `#[tokio::test]` or
-/// `#[test_log::test(tokio::test)]`, to the annotated function. Those attributes are copied onto
-/// each generated wrapper test.
-///
 /// # Cases
 ///
 /// The attribute expects a bracketed list of case paths:
 ///
 /// ```ignore
-/// #[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 /// ```
 ///
 /// Each path should evaluate to a `TestCase`, typically one of the exported constants from
@@ -123,11 +146,22 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// shape `fn(TesterBuilder) -> TesterBuilder`.
 ///
 /// ```ignore
-/// #[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 /// #[test_builder(|builder| builder.block_time(Duration::from_secs(5)))]
-/// #[test_log::test(tokio::test)]
 /// async fn pending_nonce_uses_slow_blocks(tester: Tester) -> anyhow::Result<()> {
 ///     // `tester` is built from the adjusted builder for each case.
+///     Ok(())
+/// }
+/// ```
+///
+/// # Runtime customization
+///
+/// Use `#[test_runtime(...)]` to pass options to the generated `tokio::test(...)` runtime.
+///
+/// ```ignore
+/// #[test_multisetup([CURRENT_TO_L1])]
+/// #[test_runtime(flavor = "multi_thread")]
+/// async fn does_not_get_stuck(tester: Tester) -> anyhow::Result<()> {
 ///     Ok(())
 /// }
 /// ```
@@ -137,10 +171,9 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// Build and use a ready `Tester`:
 ///
 /// ```ignore
-/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_casing};
+/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_multisetup};
 ///
-/// #[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-/// #[test_log::test(tokio::test)]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 /// async fn basic_rpc_smoke(tester: Tester) -> anyhow::Result<()> {
 ///     let chain_id = tester.l2_provider.get_chain_id().await?;
 ///     assert!(chain_id > 0);
@@ -151,11 +184,10 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// Inspect the case without starting the node:
 ///
 /// ```ignore
-/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, TestCase, test_casing};
+/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, TestCase, test_multisetup};
 /// use zksync_os_integration_tests::SettlementLayer;
 ///
-/// #[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-/// #[test_log::test(tokio::test)]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 /// async fn case_metadata_is_expected(case: TestCase) -> anyhow::Result<()> {
 ///     match case.settlement_layer {
 ///         SettlementLayer::L1 | SettlementLayer::Gateway => {}
@@ -167,10 +199,9 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// Customize the builder inside the test before constructing a `Tester`:
 ///
 /// ```ignore
-/// use zksync_os_integration_tests::{CURRENT_TO_L1, TesterBuilder, test_casing};
+/// use zksync_os_integration_tests::{CURRENT_TO_L1, TesterBuilder, test_multisetup};
 ///
-/// #[test_casing([CURRENT_TO_L1])]
-/// #[test_log::test(tokio::test)]
+/// #[test_multisetup([CURRENT_TO_L1])]
 /// async fn prover_flow(builder: TesterBuilder) -> anyhow::Result<()> {
 ///     let tester = builder.enable_prover().build().await?;
 ///     tester.prover_tester.wait_for_batch_proven(1).await?;
@@ -182,11 +213,10 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 ///
 /// ```ignore
 /// use zksync_os_integration_tests::{
-///     CURRENT_TO_L1, NEXT_TO_GATEWAY, TestCase, Tester, test_casing,
+///     CURRENT_TO_L1, NEXT_TO_GATEWAY, TestCase, Tester, test_multisetup,
 /// };
 ///
-/// #[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-/// #[test_log::test(tokio::test)]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 /// async fn settlement_layer_matches_runtime(
 ///     case: TestCase,
 ///     tester: Tester,
@@ -204,8 +234,9 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// - only `TestCase`, `TesterBuilder`, and `Tester` parameters are accepted
 /// - `TesterBuilder` and `Tester` cannot be used together in the same function
 /// - `#[test_builder(...)]` may be used at most once
+/// - `#[test_runtime(...)]` may be used at most once
 #[proc_macro_attribute]
-pub fn test_casing(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn test_multisetup(attr: TokenStream, item: TokenStream) -> TokenStream {
     let cases = parse_macro_input!(attr as CaseList);
     let mut input = parse_macro_input!(item as ItemFn);
 
@@ -215,7 +246,7 @@ pub fn test_casing(attr: TokenStream, item: TokenStream) -> TokenStream {
             .into();
     }
 
-    let (wrapper_attrs, builder_expr) = match split_helper_attrs(input.attrs) {
+    let (wrapper_attrs, builder_expr, runtime_args) = match split_helper_attrs(input.attrs) {
         Ok(attrs) => attrs,
         Err(err) => return err.into_compile_error().into(),
     };
@@ -289,6 +320,21 @@ pub fn test_casing(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         quote! {}
     };
+    let test_attr: TokenStream2 = if let Some(runtime_args) = runtime_args {
+        if runtime_args.is_empty() {
+            quote! {
+                #[test_log::test(tokio::test)]
+            }
+        } else {
+            quote! {
+                #[test_log::test(tokio::test(#runtime_args))]
+            }
+        }
+    } else {
+        quote! {
+            #[test_log::test(tokio::test)]
+        }
+    };
 
     let wrappers = cases.cases.iter().map(|case| {
         let fn_name = match case_fn_name(case) {
@@ -296,6 +342,7 @@ pub fn test_casing(attr: TokenStream, item: TokenStream) -> TokenStream {
             Err(err) => return err.into_compile_error(),
         };
         quote! {
+            #test_attr
             #(#wrapper_attrs)*
             async fn #fn_name() -> anyhow::Result<()> {
                 let case = #case;

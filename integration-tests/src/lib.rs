@@ -2,7 +2,7 @@ use crate::config::{ChainLayout, load_chain_config};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::prover_tester::ProverTester;
-use crate::provider::ZksyncApi;
+use crate::provider::{ZksyncApi, ZksyncTestingProvider};
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
@@ -31,7 +31,9 @@ use zksync_os_server::config::{
     GeneralConfig, NetworkConfig, ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig,
     RpcConfig, SequencerConfig, StatusServerConfig,
 };
-use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
+use zksync_os_server::default_protocol_version::{
+    NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
+};
 use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
@@ -56,7 +58,7 @@ pub enum SettlementLayer {
     Gateway,
 }
 
-pub use zksync_os_integration_tests_macros::test_casing;
+pub use zksync_os_integration_tests_macros::test_multisetup;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TestCase {
@@ -214,6 +216,7 @@ impl Tester {
             config.general_config.node_role = NodeRole::ExternalNode;
             config.network_config.boot_nodes = vec![self.node_record];
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
+            config.l1_sender_config.pubdata_mode = None;
             config.general_config.gateway_rpc_url = self.gateway_rpc_url.clone();
             config.batch_verification_config.connect_address = self.batch_verification_url.clone();
             if let Some(f) = config_overrides {
@@ -342,6 +345,7 @@ impl Tester {
             gas_adjuster_config: Default::default(),
             batch_verification_config,
             base_token_price_updater_config: default_config.base_token_price_updater_config.clone(),
+            interop_fee_updater_config: default_config.interop_fee_updater_config.clone(),
             external_price_api_client_config: default_config
                 .external_price_api_client_config
                 .clone(),
@@ -438,6 +442,8 @@ impl Tester {
             .connect(&l2_rpc_ws_url)
             .await?;
 
+        // Deposits fail before genesis upgrade tx is processed, so we wait for the first block with upgrade tx.
+        l2_zk_provider.wait_for_block(1).await?;
         ensure_test_wallet_funded(
             &l1,
             &EthDynProvider::new(l2_provider.clone()),
@@ -776,7 +782,7 @@ pub struct GatewayTesterBuilder {
 impl Default for GatewayTesterBuilder {
     fn default() -> Self {
         Self {
-            protocol_version: NEXT_PROTOCOL_VERSION,
+            protocol_version: PROTOCOL_VERSION_V31_0,
             num_chains: None,
             chain_options: NodeBuilderOptions::default(),
         }

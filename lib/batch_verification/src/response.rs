@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tokio_util::codec::{self, LengthDelimitedCodec};
 
-use crate::BATCH_VERIFICATION_WIRE_FORMAT_VERSION;
 use zksync_os_batch_types::BatchSignature;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -20,16 +19,19 @@ pub struct BatchVerificationResponse {
 
 pub struct BatchVerificationResponseDecoder {
     inner: LengthDelimitedCodec,
-    wire_format_version: u32,
+}
+
+impl Default for BatchVerificationResponseDecoder {
+    fn default() -> Self {
+        Self {
+            inner: LengthDelimitedCodec::new(),
+        }
+    }
 }
 
 impl BatchVerificationResponseDecoder {
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        Self {
-            inner: LengthDelimitedCodec::new(),
-            wire_format_version: BATCH_VERIFICATION_WIRE_FORMAT_VERSION, // server always uses the latest version
-        }
+        Self::default()
     }
 }
 
@@ -44,7 +46,7 @@ impl codec::Decoder for BatchVerificationResponseDecoder {
         self.inner
             .decode(src)?
             .map(|bytes| {
-                BatchVerificationResponse::decode(&bytes, self.wire_format_version)
+                BatchVerificationResponse::decode(&bytes)
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
             })
             .transpose()
@@ -53,15 +55,19 @@ impl codec::Decoder for BatchVerificationResponseDecoder {
 
 pub struct BatchVerificationResponseCodec {
     inner: LengthDelimitedCodec,
-    wire_format_version: u32,
+}
+
+impl Default for BatchVerificationResponseCodec {
+    fn default() -> Self {
+        Self {
+            inner: LengthDelimitedCodec::new(),
+        }
+    }
 }
 
 impl BatchVerificationResponseCodec {
-    pub fn new(wire_format_version: u32) -> Self {
-        Self {
-            inner: LengthDelimitedCodec::new(),
-            wire_format_version,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -73,9 +79,6 @@ impl codec::Encoder<BatchVerificationResponse> for BatchVerificationResponseCode
         item: BatchVerificationResponse,
         dst: &mut alloy::rlp::BytesMut,
     ) -> Result<(), Self::Error> {
-        self.inner.encode(
-            item.encode_with_version(self.wire_format_version).into(),
-            dst,
-        )
+        self.inner.encode(item.encode().into(), dst)
     }
 }

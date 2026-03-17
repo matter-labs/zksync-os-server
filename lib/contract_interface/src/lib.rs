@@ -53,6 +53,16 @@ alloy::sol! {
         function setSettlementLayerChainId(uint256 _newSettlementLayerChainId);
     }
 
+    interface IInteropCenter {
+        function setInteropFee(uint256 _interopFee);
+        function interopProtocolFee() external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    interface IGWAssetTracker {
+        function gatewaySettlementFee() external view returns (uint256);
+    }
+
     // `DynamicIncrementalMerkle.sol`
     struct Bytes32PushTree {
         uint256 _nextLeafIndex;

@@ -1,4 +1,4 @@
-use crate::execution::block_executor::SealReason;
+use crate::execution::execute_block_in_vm::SealReason;
 use std::time::Duration;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use vise::{Counter, EncodeLabelValue};

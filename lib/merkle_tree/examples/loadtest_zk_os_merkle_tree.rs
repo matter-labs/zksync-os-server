@@ -27,6 +27,7 @@ impl TreeParams for WithDynHasher {
     const INTERNAL_NODE_DEPTH: u8 = <DefaultTreeParams>::INTERNAL_NODE_DEPTH;
 }
 
+#[derive(Debug)]
 pub struct WithBatching<'a> {
     inner: Patched<&'a mut dyn Database>,
     batch_size: usize,

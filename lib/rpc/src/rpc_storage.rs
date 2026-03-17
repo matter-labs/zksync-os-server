@@ -1,11 +1,12 @@
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
-use std::ops::RangeInclusive;
+use std::{ops::RangeInclusive, sync::Arc};
 use zksync_os_interface::traits::{PreimageSource, ReadStorage};
-use zksync_os_storage_api::notifications::SubscribeToBlocks;
+use zksync_os_merkle_tree_api::MerkleTreeProver;
 use zksync_os_storage_api::{
     ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, RepositoryBlock,
     RepositoryError, RepositoryResult, StateError, StateResult, ViewState,
+    notifications::SubscribeToBlocks,
 };
 
 pub trait ReadRpcStorage: ReadStateHistory + Clone {
@@ -14,6 +15,7 @@ pub trait ReadRpcStorage: ReadStateHistory + Clone {
     fn replay_storage(&self) -> &dyn ReadReplay;
     fn finality(&self) -> &dyn ReadFinality;
     fn batch(&self) -> &dyn ReadBatch;
+    fn tree(&self) -> &dyn MerkleTreeProver;
 
     /// Get sealed block with transaction hashes by its hash OR number.
     fn get_block_by_hash_or_number(
@@ -112,6 +114,7 @@ pub struct RpcStorage<Repository, Replay, Finality, Batch, StateHistory> {
     finality: Finality,
     batch: Batch,
     state: StateHistory,
+    tree: Arc<dyn MerkleTreeProver>,
 }
 
 impl<Repository, Replay, Finality, Batch, StateHistory> std::fmt::Debug
@@ -131,6 +134,7 @@ impl<Repository, Replay, Finality, Batch, StateHistory>
         finality: Finality,
         batch: Batch,
         state: StateHistory,
+        tree: Arc<dyn MerkleTreeProver>,
     ) -> Self {
         Self {
             repository,
@@ -138,6 +142,7 @@ impl<Repository, Replay, Finality, Batch, StateHistory>
             finality,
             batch,
             state,
+            tree,
         }
     }
 }
@@ -168,6 +173,10 @@ impl<
 
     fn batch(&self) -> &dyn ReadBatch {
         &self.batch
+    }
+
+    fn tree(&self) -> &dyn MerkleTreeProver {
+        self.tree.as_ref()
     }
 }
 

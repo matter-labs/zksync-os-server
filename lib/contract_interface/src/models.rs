@@ -3,8 +3,6 @@ use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy::sol_types::SolValue;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use structdiff::Difference;
-use structdiff::StructDiff;
 
 /// User-friendly version of [`IExecutor::PriorityOpsBatchInfo`].
 #[derive(Clone, Debug, Default)]
@@ -179,8 +177,7 @@ impl From<crate::L2DACommitmentScheme> for DACommitmentScheme {
 }
 
 /// User-friendly version of [`IExecutor::CommitBatchInfoZKsyncOS`].
-#[derive(Clone, Serialize, Deserialize, PartialEq, Difference)]
-#[difference(expose)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct CommitBatchInfo {
     pub batch_number: u64,
     pub new_state_commitment: B256,

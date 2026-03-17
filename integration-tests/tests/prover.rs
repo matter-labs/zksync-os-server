@@ -1,10 +1,9 @@
 #![cfg(feature = "prover-tests")]
 
-use zksync_os_integration_tests::{CURRENT_TO_L1, TesterBuilder, test_casing};
+use zksync_os_integration_tests::{CURRENT_TO_L1, TesterBuilder, test_multisetup};
 
 // todo: add gateway test once v31 is fully ready.
-#[test_casing([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn prover(builder: TesterBuilder) -> anyhow::Result<()> {
     // Test that prover can successfully prove at least one batch
     let tester = builder.enable_prover().build().await?;

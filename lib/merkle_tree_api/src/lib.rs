@@ -1,11 +1,13 @@
 //! ZK OS Merkle tree API.
 
+use std::fmt;
+
 use alloy::primitives::B256;
 pub use zksync_os_crypto::hasher::{Hasher, blake2::Blake2Hasher};
 
 pub use crate::{
     hasher::HashTree,
-    proofs::{BatchTreeProof, IntermediateHash, TreeOperation},
+    proofs::{BatchTreeProof, IntermediateHash, MerkleTreeView, TreeOperation},
     types::{Leaf, MAX_TREE_DEPTH, TreeBatchOutput, TreeEntry},
 };
 
@@ -15,7 +17,7 @@ mod proofs;
 mod types;
 
 /// Provider of Merkle tree proof data.
-pub trait MerkleTreeProver {
+pub trait MerkleTreeProver: Send + Sync + fmt::Debug {
     /// Returns the tree depth. Should return a constant value for a tree instance.
     ///
     /// This is defined as an instance method to keep the trait dyn-compatible.
