@@ -31,7 +31,9 @@ use zksync_os_server::config::{
     GeneralConfig, NetworkConfig, ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig,
     RpcConfig, SequencerConfig, StatusServerConfig,
 };
-use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
+use zksync_os_server::default_protocol_version::{
+    NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
+};
 use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
@@ -727,7 +729,7 @@ pub struct GatewayTesterBuilder {
 impl Default for GatewayTesterBuilder {
     fn default() -> Self {
         Self {
-            protocol_version: NEXT_PROTOCOL_VERSION,
+            protocol_version: PROTOCOL_VERSION_V31_0,
             num_chains: None,
             chain_options: NodeBuilderOptions::default(),
         }
