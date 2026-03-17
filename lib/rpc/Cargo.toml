@@ -22,6 +22,7 @@ zksync_os_metadata.workspace = true
 zksync_os_batch_types.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_contract_interface.workspace = true
+zksync_os_merkle_tree_api.workspace = true
 
 zksync_os_evm_errors.workspace = true
 zksync_os_interface.workspace = true
@@ -33,6 +34,7 @@ reth-rpc-eth-types.workspace = true
 alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc", "rand"] }
 anyhow.workspace = true
 async-trait.workspace = true
+blake2.workspace = true
 dashmap.workspace = true
 futures.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = ["macros", "client"] }

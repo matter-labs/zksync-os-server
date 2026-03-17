@@ -1,4 +1,4 @@
-use std::{iter, sync::LazyLock};
+use std::{fmt, iter, sync::LazyLock};
 
 use alloy::primitives::B256;
 use zksync_os_crypto::hasher::{Hasher, blake2::Blake2Hasher};
@@ -6,7 +6,7 @@ use zksync_os_crypto::hasher::{Hasher, blake2::Blake2Hasher};
 use crate::types::{Leaf, MAX_TREE_DEPTH};
 
 /// Tree hashing functionality.
-pub trait HashTree: Send + Sync {
+pub trait HashTree: Send + Sync + fmt::Debug {
     /// Returns the unique name of the hasher. This is used in Merkle tree tags to ensure
     /// that the tree remains consistent.
     fn name(&self) -> &'static str;

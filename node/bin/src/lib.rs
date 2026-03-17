@@ -292,6 +292,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .root_info()
         .expect("Failed to get genesis root info");
     let tree_db = tree_at_genesis.tree;
+    let tree_for_rpc = Arc::new(tree_db.clone());
 
     // todo: this can take a while; ideally committed batches should be loaded in the background
     //       and then `get()` method can be made async so that it waits for relevant batch to load
@@ -728,13 +729,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         finality_storage.clone(),
         persistent_batch_storage.clone(),
         state.clone(),
+        tree_for_rpc,
     );
     tasks.spawn(
         L1PersistBatchWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             persistent_batch_storage.clone(),
-            finality_storage.clone(),
         )
         .await
         .expect("failed to start L1 batch persist watcher")
