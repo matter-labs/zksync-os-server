@@ -9,8 +9,10 @@ use zksync_os_types::ConfigFormat;
 pub enum ChainLayout<'a> {
     /// local-chains/<version>/default/...
     Default { protocol_version: &'a str },
-    /// local-chains/<version>/multi_chain/...
-    MultiChain {
+    /// local-chains/<version>/multi_chain/chain_506.yaml
+    Gateway { protocol_version: &'a str },
+    /// local-chains/<version>/multi_chain/chain_<id>.yaml for chains settling to the gateway.
+    GatewayChain {
         protocol_version: &'a str,
         chain_index: usize, // 0 -> 6565, 1 -> 6566, ...
     },
@@ -20,20 +22,16 @@ impl<'a> ChainLayout<'a> {
     fn chain_id(self) -> Option<u64> {
         match self {
             ChainLayout::Default { .. } => None,
-            ChainLayout::MultiChain { chain_index, .. } => {
-                if chain_index == 0 {
-                    Some(506u64)
-                } else {
-                    Some(6565u64 - 1 + chain_index as u64)
-                }
-            }
+            ChainLayout::Gateway { .. } => Some(506),
+            ChainLayout::GatewayChain { chain_index, .. } => Some(6565u64 + chain_index as u64),
         }
     }
 
-    fn protocol_version(self) -> &'a str {
+    pub fn protocol_version(self) -> &'a str {
         match self {
             ChainLayout::Default { protocol_version } => protocol_version,
-            ChainLayout::MultiChain {
+            ChainLayout::Gateway { protocol_version } => protocol_version,
+            ChainLayout::GatewayChain {
                 protocol_version, ..
             } => protocol_version,
         }
@@ -42,7 +40,7 @@ impl<'a> ChainLayout<'a> {
     fn dir(self) -> &'static str {
         match self {
             ChainLayout::Default { .. } => "default",
-            ChainLayout::MultiChain { .. } => "multi_chain",
+            ChainLayout::Gateway { .. } | ChainLayout::GatewayChain { .. } => "multi_chain",
         }
     }
 
@@ -59,7 +57,7 @@ impl<'a> ChainLayout<'a> {
     fn config_path(self) -> PathBuf {
         match self {
             ChainLayout::Default { .. } => self.base_dir().join("config.yaml"),
-            ChainLayout::MultiChain { .. } => {
+            ChainLayout::Gateway { .. } | ChainLayout::GatewayChain { .. } => {
                 let chain_id = self.chain_id().expect("multi-chain always has chain_id");
                 self.base_dir().join(format!("chain_{chain_id}.yaml"))
             }
@@ -94,6 +92,11 @@ impl<'a> ChainLayout<'a> {
 pub fn load_chain_config(layout: ChainLayout<'_>) -> Config {
     let mut config = load_config_from_path(&layout.config_path());
     config.genesis_config.genesis_input_path = Some(layout.genesis_input_path());
+    if let Some(ephemeral_state) = &config.general_config.ephemeral_state
+        && ephemeral_state.is_relative()
+    {
+        config.general_config.ephemeral_state = Some(workspace_dir().join(ephemeral_state));
+    }
     config
 }
 

@@ -8,20 +8,16 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy::sol_types::SolValue;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
-use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::config::{ChainLayout, load_chain_config};
 use zksync_os_integration_tests::contracts::TestERC20::TestERC20Instance;
 use zksync_os_integration_tests::contracts::{IL2AssetRouter, L1AssetRouter, TestERC20};
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
 use zksync_os_integration_tests::provider::ZksyncApi;
-use zksync_os_server::config::Config;
-use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
+use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_multisetup};
 use zksync_os_types::{L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxType};
 
-#[test_log::test(tokio::test)]
-async fn erc20_deposit() -> anyhow::Result<()> {
-    let tester = Tester::setup().await?;
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+async fn erc20_deposit(tester: Tester) -> anyhow::Result<()> {
     let alice = tester.l1_wallet().default_signer().address();
 
     // Mint ERC20 tokens on L1 for Alice
@@ -46,7 +42,6 @@ async fn erc20_deposit() -> anyhow::Result<()> {
     let l2_erc20 = TestERC20::new(l2_erc20_address, tester.l2_provider.clone());
     // Check Alice's L2 balance.
     let l2_balance = l2_erc20.balanceOf(alice).call().await?;
-
     assert_eq!(
         l2_balance, deposit_amount,
         "Unexpected L2 balance after deposit"
@@ -63,9 +58,8 @@ async fn erc20_deposit() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_log::test(tokio::test)]
-async fn erc20_transfer() -> anyhow::Result<()> {
-    let tester = Tester::setup().await?;
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+async fn erc20_transfer(tester: Tester) -> anyhow::Result<()> {
     // We use L2 wallet's default signer as Alice because it already has L2 ETH.
     let alice = tester.l2_wallet.default_signer().address();
     let bob_signer = PrivateKeySigner::random();
@@ -108,9 +102,8 @@ async fn erc20_transfer() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_log::test(tokio::test)]
-async fn erc20_withdrawal() -> anyhow::Result<()> {
-    let tester = Tester::setup().await?;
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+async fn erc20_withdrawal(tester: Tester) -> anyhow::Result<()> {
     // We use L2 wallet's default signer as Alice because it already has L2 ETH.
     let alice = tester.l2_wallet.default_signer().address();
 
@@ -184,14 +177,8 @@ async fn deposit_erc20(
     to: Address,
     amount: U256,
 ) -> anyhow::Result<TransactionReceipt> {
-    let default_config: Config = load_chain_config(ChainLayout::Default {
-        protocol_version: PROTOCOL_VERSION,
-    });
-    let chain_id = default_config
-        .genesis_config
-        .chain_id
-        .expect("Chain id is missing in the config");
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
+    let chain_id = tester.l2_provider.get_chain_id().await?;
     let bridgehub = Bridgehub::new(
         tester.l2_zk_provider.get_bridgehub_contract().await?,
         tester.l1_provider().clone(),

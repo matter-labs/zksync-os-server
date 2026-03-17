@@ -5,11 +5,11 @@ use alloy::providers::Provider;
 use alloy::rpc::json_rpc::RpcRecv;
 use alloy::rpc::types::{Filter, Log, Transaction, TransactionRequest};
 use alloy::sol_types::SolEvent;
-use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::contracts::EventEmitter::{EventEmitterInstance, TestEvent};
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
+use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
 
 trait FilterSuite: Sized {
     type Expected: RpcRecv + PartialEq;
@@ -37,8 +37,7 @@ trait FilterSuite: Sized {
     }
 }
 
-async fn run_test<S: FilterSuite>() -> anyhow::Result<()> {
-    let tester = Tester::setup().await?;
+async fn run_test<S: FilterSuite>(tester: Tester) -> anyhow::Result<()> {
     let suite = S::init(&tester).await?;
     let filter_id = suite.create_filter(&tester).await?;
     let expected_change = suite.prepare_expected(&tester).await?;
@@ -264,28 +263,28 @@ impl FilterSuite for NewLogsSuite {
     }
 }
 
-#[test_log::test(tokio::test)]
-async fn new_block_filter() -> anyhow::Result<()> {
+#[test_multisetup([CURRENT_TO_L1])]
+async fn new_block_filter(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_newBlockFilter` picks up new canonized blocks
-    run_test::<NewBlockSuite>().await
+    run_test::<NewBlockSuite>(tester).await
 }
 
-#[test_log::test(tokio::test)]
-async fn pending_tx_hash_filter() -> anyhow::Result<()> {
+#[test_multisetup([CURRENT_TO_L1])]
+async fn pending_tx_hash_filter(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_newPendingTransactionFilter(full=false)` picks up new pending transactions' hashes
-    run_test::<PendingTxSuite<false>>().await
+    run_test::<PendingTxSuite<false>>(tester).await
 }
 
-#[test_log::test(tokio::test)]
-async fn pending_tx_full_filter() -> anyhow::Result<()> {
+#[test_multisetup([CURRENT_TO_L1])]
+async fn pending_tx_full_filter(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_newPendingTransactionFilter(full=true)` picks up new pending transactions
-    run_test::<PendingTxSuite<true>>().await
+    run_test::<PendingTxSuite<true>>(tester).await
 }
 
-#[test_log::test(tokio::test)]
-async fn new_log_filter() -> anyhow::Result<()> {
+#[test_multisetup([CURRENT_TO_L1])]
+async fn new_log_filter(tester: Tester) -> anyhow::Result<()> {
     // Test that:
     // * `eth_newFilter` picks up new logs
     // * `eth_getFilterLogs` returns all matching logs (regardless of what was already polled through `eth_getFilterChanges`)
-    run_test::<NewLogsSuite>().await
+    run_test::<NewLogsSuite>(tester).await
 }

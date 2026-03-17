@@ -35,6 +35,7 @@ impl PubdataMode {
             0 => Some(PubdataMode::Blobs),
             1 => Some(PubdataMode::Calldata),
             2 => Some(PubdataMode::Validium),
+            3 => Some(PubdataMode::RelayedL2Calldata),
             _ => None,
         }
     }

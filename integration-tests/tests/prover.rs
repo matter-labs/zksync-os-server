@@ -1,12 +1,12 @@
 #![cfg(feature = "prover-tests")]
 
-use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::{CURRENT_TO_L1, TesterBuilder, test_multisetup};
 
-#[test_log::test(tokio::test)]
-async fn prover() -> anyhow::Result<()> {
+// todo: add gateway test once v31 is fully ready.
+#[test_multisetup([CURRENT_TO_L1])]
+async fn prover(builder: TesterBuilder) -> anyhow::Result<()> {
     // Test that prover can successfully prove at least one batch
-    let tester = Tester::builder().enable_prover().build().await?;
-
+    let tester = builder.enable_prover().build().await?;
     // Test environment comes with some L1 transactions by default, so one batch should be provable
     // without any new transactions inside the test.
     tester.prover_tester.wait_for_batch_proven(1).await?;

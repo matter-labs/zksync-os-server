@@ -10,14 +10,12 @@ use alloy::{
     sol_types::{SolCall, SolType, SolValue},
 };
 use anyhow::{Context, Result};
-use test_log::test;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::assert_traits::ProviderAssert;
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
 use zksync_os_integration_tests::{
-    MultiChainTester, Tester, assert_traits::ReceiptAssert, contracts::TestERC20,
-    provider::ZksyncApi,
+    GatewayTester, Tester, assert_traits::ReceiptAssert, contracts::TestERC20, provider::ZksyncApi,
 };
 use zksync_os_rpc_api::types::LogProofTarget;
 use zksync_os_types::{
@@ -484,19 +482,19 @@ async fn fund_wallet_via_l1_deposit(tester: &Tester, wallet: Address, amount: U2
     Ok(())
 }
 
-#[test(tokio::test)]
-async fn test_interop_l2_to_l1_message_verification() -> Result<()> {
+#[test_log::test(tokio::test)]
+async fn test_interop_l2_to_l1_message_verification() -> anyhow::Result<()> {
     // 1. Send an L2->L1 message ("hello interop") on chain A
     // 2. Wait for block finalization and obtain the log proof
     // 3. Wait for the interop root to appear on chain B
     // 4. Call proveL2MessageInclusionShared on chain B and assert it returns true
 
-    // 3 chains: chain(0) is the gateway, chain_a() == chain(1), chain_b() == chain(2)
-    let multi_chain = MultiChainTester::setup(3).await?;
+    // 2 L2 chains + gateway.
+    let multi_chain = GatewayTester::setup(2).await?;
 
     let chain_a = multi_chain.chain_a();
     let chain_b = multi_chain.chain_b();
-    let gateway = multi_chain.chain(0);
+    let gateway = multi_chain.gateway();
 
     let chain_a_id = chain_a.l2_provider.get_chain_id().await?;
     let gw_chain_id = gateway.l2_provider.get_chain_id().await?;
@@ -562,16 +560,16 @@ async fn test_interop_l2_to_l1_message_verification() -> Result<()> {
     Ok(())
 }
 
-#[test(tokio::test)]
+#[test_log::test(tokio::test)]
 async fn test_interop_bundle_send() -> Result<()> {
     // This test validates the first part of the interop flow:
     // setting up two chains and sending an interop bundle from chain A to chain B
 
-    let multi_chain = MultiChainTester::setup(3).await?;
+    let multi_chain = GatewayTester::setup(2).await?;
 
     let chain_a = multi_chain.chain_a();
     let chain_b = multi_chain.chain_b();
-    let gateway = multi_chain.chain(0);
+    let gateway = multi_chain.gateway();
 
     let chain_a_id = chain_a.l2_provider.get_chain_id().await?;
     let chain_b_id = chain_b.l2_provider.get_chain_id().await?;
@@ -741,7 +739,7 @@ async fn test_interop_bundle_send() -> Result<()> {
     Ok(())
 }
 
-#[test(tokio::test)]
+#[test_log::test(tokio::test)]
 #[ignore = "Requires two running L2 chains with wallet setup"]
 async fn test_interop_erc20_transfer_manual() -> Result<()> {
     // This test would require:
@@ -751,7 +749,7 @@ async fn test_interop_erc20_transfer_manual() -> Result<()> {
     Ok(())
 }
 
-#[test(tokio::test)]
+#[test_log::test(tokio::test)]
 #[ignore = "Requires relayer integration - to be implemented"]
 async fn test_interop_root_propagation() -> Result<()> {
     // This test would verify that interop roots are properly propagated between chains

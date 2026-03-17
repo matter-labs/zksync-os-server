@@ -91,6 +91,17 @@ pub trait ZksyncTestingProvider: Provider<Zksync> {
         }
         Ok(())
     }
+
+    async fn wait_for_block(&self, block_number: u64) -> anyhow::Result<()> {
+        tracing::info!("Waiting for block {block_number} to be processed on L2");
+        loop {
+            let latest_block = self.get_block_number_by_id(BlockId::latest()).await?;
+            if latest_block >= Some(block_number) {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }
 
 impl<P> ZksyncTestingProvider for P where P: Provider<Zksync> {}

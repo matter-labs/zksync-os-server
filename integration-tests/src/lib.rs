@@ -2,31 +2,42 @@ use crate::config::{ChainLayout, load_chain_config};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::prover_tester::ProverTester;
+use crate::provider::{ZksyncApi, ZksyncTestingProvider};
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
-use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
+use alloy::providers::utils::Eip1559Estimator;
+use alloy::providers::{
+    DynProvider, PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider,
+};
+use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use zksync_os_contract_interface::Bridgehub;
+use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
+use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
 use zksync_os_server::config::{
     BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, FeeConfig,
     GeneralConfig, NetworkConfig, ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig,
     RpcConfig, SequencerConfig, StatusServerConfig,
 };
-use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
+use zksync_os_server::default_protocol_version::{
+    NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
+};
 use zksync_os_state_full_diffs::FullDiffsState;
-use zksync_os_types::NodeRole;
+use zksync_os_types::{
+    L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+};
 
 pub mod assert_traits;
 pub mod config;
@@ -40,6 +51,57 @@ mod utils;
 
 /// L1 chain id as expected by contracts deployed in `l1-state.json.gz`
 const L1_CHAIN_ID: u64 = 31337;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettlementLayer {
+    L1,
+    Gateway,
+}
+
+pub use zksync_os_integration_tests_macros::test_multisetup;
+
+#[derive(Debug, Clone, Copy)]
+pub struct TestCase {
+    pub protocol_version: &'static str,
+    pub settlement_layer: SettlementLayer,
+}
+
+impl TestCase {
+    pub const fn current_to_l1() -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            settlement_layer: SettlementLayer::L1,
+        }
+    }
+
+    pub const fn next_to_l1() -> Self {
+        Self {
+            protocol_version: NEXT_PROTOCOL_VERSION,
+            settlement_layer: SettlementLayer::L1,
+        }
+    }
+
+    pub const fn next_to_gateway() -> Self {
+        Self {
+            protocol_version: NEXT_PROTOCOL_VERSION,
+            settlement_layer: SettlementLayer::Gateway,
+        }
+    }
+
+    pub fn builder(self) -> TesterBuilder {
+        Tester::builder()
+            .protocol_version(self.protocol_version)
+            .settlement_layer(self.settlement_layer)
+    }
+
+    pub async fn setup(self) -> anyhow::Result<Tester> {
+        self.builder().build().await
+    }
+}
+
+pub const CURRENT_TO_L1: TestCase = TestCase::current_to_l1();
+pub const NEXT_TO_L1: TestCase = TestCase::next_to_l1();
+pub const NEXT_TO_GATEWAY: TestCase = TestCase::next_to_gateway();
 
 /// Set of private keys for batch verification participants.
 pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
@@ -81,6 +143,9 @@ pub struct Tester {
     node_record: NodeRecord,
     l2_rpc_address: String,
     batch_verification_url: String,
+    gateway_rpc_url: Option<String>,
+    chain_layout: ChainLayout<'static>,
+    supporting_nodes: Vec<Tester>,
 }
 
 impl Tester {
@@ -129,6 +194,7 @@ impl Tester {
             config.network_config.boot_nodes = vec![self.node_record];
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
             config.l1_sender_config.pubdata_mode = None;
+            config.general_config.gateway_rpc_url = self.gateway_rpc_url.clone();
             config.batch_verification_config.connect_address = self.batch_verification_url.clone();
             if let Some(f) = config_overrides {
                 f(config)
@@ -139,7 +205,7 @@ impl Tester {
             self.l1.clone(),
             false,
             Some(overrides_fun),
-            PROTOCOL_VERSION,
+            self.chain_layout,
         )
         .await
     }
@@ -148,7 +214,7 @@ impl Tester {
         l1: AnvilL1,
         enable_prover: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
-        protocol_version: &str,
+        chain_layout: ChainLayout<'static>,
     ) -> anyhow::Result<Self> {
         // Initialize and **hold** locked ports for the duration of node initialization.
         let l2_locked_port = LockedPort::acquire_unused().await?;
@@ -170,11 +236,13 @@ impl Tester {
         let proof_storage_path = tempdir.path().join("proof_storage_path");
         let (stop_sender, stop_receiver) = watch::channel(false);
 
+        let default_config = load_chain_config(chain_layout);
+
         // Create a handle to run the sequencer in the background
         let general_config = GeneralConfig {
             rocks_db_path: rocks_db_path.clone(),
             l1_rpc_url: l1.address.clone(),
-            ..Default::default()
+            ..default_config.general_config
         };
         let sequencer_config = SequencerConfig {
             fee_collector_address: Address::random(),
@@ -202,7 +270,6 @@ impl Tester {
             },
             ..Default::default()
         };
-
         let batch_verification_config = BatchVerificationConfig {
             server_enabled: false,
             listen_address: batch_verification_address.clone(),
@@ -220,8 +287,6 @@ impl Tester {
             enabled: true,
             address: status_address,
         };
-
-        let default_config = load_chain_config(ChainLayout::Default { protocol_version });
 
         let network_secret_key = zksync_os_network::rng_secret_key();
         let node_record = NodeRecord::from_secret_key(
@@ -263,9 +328,18 @@ impl Tester {
                 .clone(),
             fee_config: Default::default(),
         };
+
+        if let Some(ephemeral_state) = &config.general_config.ephemeral_state {
+            tracing::info!("Loading ephemeral state from {}", ephemeral_state.display());
+            zksync_os_server::util::unpack_ephemeral_state(
+                ephemeral_state,
+                &config.general_config.rocks_db_path,
+            );
+        }
         if let Some(f) = config_overrides {
             f(&mut config)
         }
+        let gateway_rpc_url = config.general_config.gateway_rpc_url.clone();
 
         let main_task = tokio::task::spawn(async move {
             zksync_os_server::run::<FullDiffsState>(stop_receiver, config).await;
@@ -340,34 +414,20 @@ impl Tester {
         })
         .await?;
 
-        // Note: Balance check is disabled for v31.0 genesis which doesn't pre-fund L2 wallets.
-        // Tests using v31.0 should fund wallets themselves via L1 deposits if needed.
-        if protocol_version == PROTOCOL_VERSION {
-            // Wait for all L1 priority transaction to get executed and for our L2 account to become rich
-            (|| async {
-                let balance = l2_provider
-                    .get_balance(l2_wallet.default_signer().address())
-                    .await?;
-                if balance == U256::ZERO {
-                    anyhow::bail!("L2 rich wallet balance is zero")
-                }
-                Ok(())
-            })
-            .retry(
-                ConstantBuilder::default()
-                    .with_delay(Duration::from_millis(200))
-                    .with_max_times(50),
-            )
-            .notify(|err: &anyhow::Error, dur: Duration| {
-                tracing::info!(%err, ?dur, "waiting for L2 account to become rich");
-            })
-            .await?;
-        }
-
         let l2_zk_provider = ProviderBuilder::new_with_network::<Zksync>()
             .wallet(l2_wallet.clone())
             .connect(&l2_rpc_ws_url)
             .await?;
+
+        // Deposits fail before genesis upgrade tx is processed, so we wait for the first block with upgrade tx.
+        l2_zk_provider.wait_for_block(1).await?;
+        ensure_test_wallet_funded(
+            &l1,
+            &EthDynProvider::new(l2_provider.clone()),
+            &DynProvider::new(l2_zk_provider.clone()),
+            &l2_wallet,
+        )
+        .await?;
 
         let tempdir = Arc::new(tempdir);
         let prover_tester = ProverTester::new(
@@ -385,14 +445,113 @@ impl Tester {
             main_task,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             batch_verification_url,
+            gateway_rpc_url,
             node_record,
             tempdir: tempdir.clone(),
+            chain_layout,
+            supporting_nodes: Vec::new(),
         })
     }
 }
 
-#[derive(Default)]
-pub struct TesterBuilder {
+async fn ensure_test_wallet_funded(
+    l1: &AnvilL1,
+    l2_provider: &EthDynProvider,
+    l2_zk_provider: &DynProvider<Zksync>,
+    l2_wallet: &EthereumWallet,
+) -> anyhow::Result<()> {
+    let beneficiary = l2_wallet.default_signer().address();
+    let balance = l2_provider.get_balance(beneficiary).await?;
+    if balance > U256::ZERO {
+        return Ok(());
+    }
+
+    let chain_id = l2_provider.get_chain_id().await?;
+    let bridgehub = Bridgehub::new(
+        l2_zk_provider.get_bridgehub_contract().await?,
+        l1.provider.clone(),
+        chain_id,
+    );
+    let amount = U256::from(1_000_000_000_000_000_000u128) * U256::from(1_000u64);
+    let max_priority_fee_per_gas = l1.provider.get_max_priority_fee_per_gas().await?;
+    let base_l1_fees = l1
+        .provider
+        .estimate_eip1559_fees_with(Eip1559Estimator::new(|base_fee_per_gas, _| {
+            alloy::eips::eip1559::Eip1559Estimation {
+                max_fee_per_gas: base_fee_per_gas * 3 / 2,
+                max_priority_fee_per_gas: 0,
+            }
+        }))
+        .await?;
+    let max_fee_per_gas = base_l1_fees.max_fee_per_gas + max_priority_fee_per_gas;
+    let gas_limit = l2_provider
+        .estimate_gas(
+            TransactionRequest::default()
+                .transaction_type(L1PriorityTxType::TX_TYPE)
+                .from(beneficiary)
+                .to(beneficiary)
+                .value(amount),
+        )
+        .await?;
+    let tx_base_cost = bridgehub
+        .l2_transaction_base_cost(
+            max_fee_per_gas + max_priority_fee_per_gas,
+            gas_limit,
+            REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+        )
+        .await?;
+
+    let receipt = l1
+        .provider
+        .send_transaction(
+            bridgehub
+                .request_l2_transaction_direct(
+                    amount + tx_base_cost,
+                    beneficiary,
+                    amount,
+                    vec![],
+                    gas_limit,
+                    REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+                    beneficiary,
+                )
+                .value(amount + tx_base_cost)
+                .max_fee_per_gas(max_fee_per_gas)
+                .max_priority_fee_per_gas(max_priority_fee_per_gas)
+                .into_transaction_request(),
+        )
+        .await?
+        .get_receipt()
+        .await?;
+    let l1_to_l2_tx_log = receipt
+        .logs()
+        .iter()
+        .filter_map(|log| log.log_decode::<NewPriorityRequest>().ok())
+        .next()
+        .expect("no L1->L2 logs produced by funding tx");
+    let l2_tx_hash = l1_to_l2_tx_log.inner.txHash;
+
+    PendingTransactionBuilder::new(l2_zk_provider.root().clone(), l2_tx_hash)
+        .get_receipt()
+        .await?;
+
+    (|| async {
+        let balance = l2_provider.get_balance(beneficiary).await?;
+        if balance > U256::ZERO {
+            Ok(())
+        } else {
+            anyhow::bail!("L2 wallet is still unfunded")
+        }
+    })
+    .retry(
+        ConstantBuilder::default()
+            .with_delay(Duration::from_secs(1))
+            .with_max_times(10),
+    )
+    .await
+}
+
+#[derive(Clone, Default)]
+struct NodeBuilderOptions {
     enable_prover: bool,
     block_time: Option<Duration>,
     batch_verification_threshold: Option<u64>,
@@ -401,70 +560,112 @@ pub struct TesterBuilder {
     estimate_gas_pubdata_price_factor: Option<f64>,
 }
 
+impl NodeBuilderOptions {
+    fn apply_to_config(&self, config: &mut Config) {
+        if let Some(block_time) = self.block_time {
+            config.sequencer_config.block_time = block_time;
+        }
+        if let Some(batch_verification_threshold) = self.batch_verification_threshold {
+            config.batch_verification_config.server_enabled = true;
+            config.batch_verification_config.threshold = batch_verification_threshold;
+        }
+        if let Some(fee_config) = self.fee_config.clone() {
+            config.fee_config = fee_config;
+        }
+        if let Some(factor) = self.gas_price_scale_factor {
+            config.rpc_config.gas_price_scale_factor = factor;
+        }
+        if let Some(factor) = self.estimate_gas_pubdata_price_factor {
+            config.rpc_config.estimate_gas_pubdata_price_factor = factor;
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct TesterBuilder {
+    options: NodeBuilderOptions,
+    protocol_version: &'static str,
+    settlement_layer: SettlementLayer,
+}
+
+impl Default for TesterBuilder {
+    fn default() -> Self {
+        Self {
+            options: NodeBuilderOptions::default(),
+            protocol_version: PROTOCOL_VERSION,
+            settlement_layer: SettlementLayer::L1,
+        }
+    }
+}
+
 impl TesterBuilder {
     #[cfg(feature = "prover-tests")]
     pub fn enable_prover(mut self) -> Self {
-        self.enable_prover = true;
+        self.options.enable_prover = true;
         self
     }
 
     pub fn block_time(mut self, block_time: Duration) -> Self {
-        self.block_time = Some(block_time);
+        self.options.block_time = Some(block_time);
         self
     }
 
     pub fn batch_verification(mut self, threshold: u64) -> Self {
-        self.batch_verification_threshold = Some(threshold);
+        self.options.batch_verification_threshold = Some(threshold);
         self
     }
 
     pub fn fee_config(mut self, c: FeeConfig) -> Self {
-        self.fee_config = Some(c);
+        self.options.fee_config = Some(c);
         self
     }
 
     pub fn gas_price_scale_factor(mut self, factor: f64) -> Self {
-        self.gas_price_scale_factor = Some(factor);
+        self.options.gas_price_scale_factor = Some(factor);
         self
     }
 
     pub fn estimate_gas_pubdata_price_factor(mut self, factor: f64) -> Self {
-        self.estimate_gas_pubdata_price_factor = Some(factor);
+        self.options.estimate_gas_pubdata_price_factor = Some(factor);
+        self
+    }
+
+    pub fn protocol_version(mut self, protocol_version: &'static str) -> Self {
+        self.protocol_version = protocol_version;
+        self
+    }
+
+    pub fn settlement_layer(mut self, settlement_layer: SettlementLayer) -> Self {
+        self.settlement_layer = settlement_layer;
         self
     }
 
     pub async fn build(self) -> anyhow::Result<Tester> {
-        let l1 = AnvilL1::start(ChainLayout::Default {
-            protocol_version: PROTOCOL_VERSION,
-        })
-        .await?;
-
-        let overrides_fun = move |config: &mut Config| {
-            if let Some(block_time) = self.block_time {
-                config.sequencer_config.block_time = block_time;
+        match self.settlement_layer {
+            SettlementLayer::L1 => {
+                let chain_layout = ChainLayout::Default {
+                    protocol_version: self.protocol_version,
+                };
+                let l1 = AnvilL1::start(chain_layout).await?;
+                let options = self.options;
+                Tester::launch_node(
+                    l1,
+                    options.enable_prover,
+                    Some(move |config: &mut Config| options.apply_to_config(config)),
+                    chain_layout,
+                )
+                .await
             }
-            if let Some(batch_verification_threshold) = self.batch_verification_threshold {
-                config.batch_verification_config.server_enabled = true;
-                config.batch_verification_config.threshold = batch_verification_threshold;
+            SettlementLayer::Gateway => {
+                let gateway_tester = GatewayTester::builder()
+                    .protocol_version(self.protocol_version)
+                    .num_chains(1)
+                    .chain_options(self.options)
+                    .build()
+                    .await?;
+                Ok(gateway_tester.into_primary_chain())
             }
-            if let Some(fee_config) = self.fee_config.clone() {
-                config.fee_config = fee_config;
-            }
-            if let Some(factor) = self.gas_price_scale_factor {
-                config.rpc_config.gas_price_scale_factor = factor;
-            }
-            if let Some(factor) = self.estimate_gas_pubdata_price_factor {
-                config.rpc_config.estimate_gas_pubdata_price_factor = factor;
-            }
-        };
-
-        Tester::launch_node(
-            l1,
-            self.enable_prover,
-            Some(overrides_fun),
-            PROTOCOL_VERSION,
-        )
-        .await
+        }
     }
 }
 
@@ -477,15 +678,16 @@ impl Drop for Tester {
     }
 }
 
-/// Multi-chain test environment with multiple L2 chains sharing the same L1
-pub struct MultiChainTester {
+/// Multi-chain test environment with multiple L2 chains settling to a gateway chain.
+pub struct GatewayTester {
     pub l1: AnvilL1,
+    pub gateway: Tester,
     pub chains: Vec<Tester>,
 }
 
-impl MultiChainTester {
-    pub fn builder() -> MultiChainTesterBuilder {
-        MultiChainTesterBuilder::default()
+impl GatewayTester {
+    pub fn builder() -> GatewayTesterBuilder {
+        GatewayTesterBuilder::default()
     }
 
     pub async fn setup(num_chains: usize) -> anyhow::Result<Self> {
@@ -499,86 +701,97 @@ impl MultiChainTester {
 
     /// Get chain A (first chain)
     pub fn chain_a(&self) -> &Tester {
-        self.chain(1)
+        self.chain(0)
     }
 
     /// Get chain B (second chain)
     pub fn chain_b(&self) -> &Tester {
-        self.chain(2)
+        self.chain(1)
+    }
+
+    pub fn gateway(&self) -> &Tester {
+        &self.gateway
+    }
+
+    pub fn into_primary_chain(mut self) -> Tester {
+        let mut chain = self.chains.remove(0);
+        chain.supporting_nodes.push(self.gateway);
+        chain
     }
 }
 
-#[derive(Default)]
-pub struct MultiChainTesterBuilder {
+pub struct GatewayTesterBuilder {
+    protocol_version: &'static str,
     num_chains: Option<usize>,
+    chain_options: NodeBuilderOptions,
 }
 
-impl MultiChainTesterBuilder {
+impl Default for GatewayTesterBuilder {
+    fn default() -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION_V31_0,
+            num_chains: None,
+            chain_options: NodeBuilderOptions::default(),
+        }
+    }
+}
+
+impl GatewayTesterBuilder {
+    pub fn protocol_version(mut self, protocol_version: &'static str) -> Self {
+        self.protocol_version = protocol_version;
+        self
+    }
+
     pub fn num_chains(mut self, num_chains: usize) -> Self {
         self.num_chains = Some(num_chains);
         self
     }
 
-    pub async fn build(self) -> anyhow::Result<MultiChainTester> {
+    fn chain_options(mut self, chain_options: NodeBuilderOptions) -> Self {
+        self.chain_options = chain_options;
+        self
+    }
+
+    pub async fn build(self) -> anyhow::Result<GatewayTester> {
         let num_chains = self.num_chains.unwrap_or(2);
         assert!(
-            num_chains >= 2,
-            "MultiChainTester requires at least 2 chains"
+            num_chains >= 1,
+            "GatewayTester requires at least 1 non-gateway chain"
         );
 
-        let l1 = AnvilL1::start(ChainLayout::MultiChain {
-            protocol_version: NEXT_PROTOCOL_VERSION,
-            chain_index: 0,
-        })
+        let protocol_version = self.protocol_version;
+        let l1 = AnvilL1::start(ChainLayout::Gateway { protocol_version }).await?;
+        let gateway = Tester::launch_node(
+            l1.clone(),
+            false,
+            None::<fn(&mut Config)>,
+            ChainLayout::Gateway { protocol_version },
+        )
         .await?;
+        let gateway_rpc_url = gateway.l2_rpc_url().to_owned();
 
-        // Launch L2 chains using chain configurations from config files
-        let mut chains: Vec<Tester> = Vec::new();
+        let mut chains = Vec::with_capacity(num_chains);
         for i in 0..num_chains {
-            // Load the chain config to get the chain ID, operator keys, and contract addresses
-            let chain_config = load_chain_config(ChainLayout::MultiChain {
-                protocol_version: NEXT_PROTOCOL_VERSION,
+            let chain_layout = ChainLayout::GatewayChain {
+                protocol_version,
                 chain_index: i,
-            });
+            };
+            let chain_config = load_chain_config(chain_layout);
             let chain_id = chain_config
                 .genesis_config
                 .chain_id
                 .expect("Chain ID must be set in chain config");
-            let gateway_rpc_url = chain_config
-                .general_config
-                .gateway_rpc_url
-                .map(|_| chains[0].l2_rpc_address.clone());
-            let ephemeral_state = chain_config.general_config.ephemeral_state;
-            let l1_sender_config = chain_config.l1_sender_config.clone();
-            let bridgehub_address = chain_config.genesis_config.bridgehub_address;
-            let bytecode_supplier_address = chain_config.genesis_config.bytecode_supplier_address;
-
-            let chain_override = move |config: &mut Config| {
-                if gateway_rpc_url.is_some() {
-                    config.general_config.gateway_rpc_url = gateway_rpc_url;
-                }
-                config.genesis_config.chain_id = Some(chain_id);
-                config.genesis_config.bridgehub_address = bridgehub_address;
-                config.genesis_config.bytecode_supplier_address = bytecode_supplier_address;
-                config.l1_sender_config = l1_sender_config.clone();
-                // Use short block time for faster tests
-                config.sequencer_config.block_time = Duration::from_millis(500);
-
-                if let Some(ephemeral_state) = &ephemeral_state {
-                    let ephemeral_state = Path::new("..").join(ephemeral_state);
-                    tracing::info!("Loading ephemeral state from {}", ephemeral_state.display());
-                    zksync_os_server::util::unpack_ephemeral_state(
-                        &ephemeral_state,
-                        &config.general_config.rocks_db_path,
-                    );
-                }
-            };
-
+            wait_for_gateway_readiness(&l1, &gateway, &chain_config).await?;
+            let gateway_rpc_url = gateway_rpc_url.clone();
+            let chain_options = self.chain_options.clone();
             let tester = Tester::launch_node(
                 l1.clone(),
-                false, // disable prover for faster tests
-                Some(chain_override),
-                NEXT_PROTOCOL_VERSION,
+                chain_options.enable_prover,
+                Some(move |config: &mut Config| {
+                    config.general_config.gateway_rpc_url = Some(gateway_rpc_url.clone());
+                    chain_options.apply_to_config(config);
+                }),
+                chain_layout,
             )
             .await?;
 
@@ -590,14 +803,60 @@ impl MultiChainTesterBuilder {
             );
 
             chains.push(tester);
-
-            if i + 1 < num_chains {
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
         }
 
-        Ok(MultiChainTester { l1, chains })
+        Ok(GatewayTester {
+            l1,
+            gateway,
+            chains,
+        })
     }
+}
+
+async fn wait_for_gateway_readiness(
+    l1: &AnvilL1,
+    gateway: &Tester,
+    chain_config: &Config,
+) -> anyhow::Result<()> {
+    let chain_id = chain_config
+        .genesis_config
+        .chain_id
+        .context("chain config is missing genesis chain_id")?;
+    let bridgehub_address = chain_config
+        .genesis_config
+        .bridgehub_address
+        .context("chain config is missing bridgehub_address")?;
+
+    (|| async {
+        let gateway_provider = ProviderBuilder::new()
+            .connect(gateway.l2_rpc_url())
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to connect to gateway RPC at {}",
+                    gateway.l2_rpc_url()
+                )
+            })?;
+
+        L1State::fetch_finalized(
+            DynProvider::new(l1.provider.clone()),
+            DynProvider::new(gateway_provider),
+            bridgehub_address,
+            chain_id,
+        )
+        .await
+        .with_context(|| format!("gateway is not ready for chain {chain_id}"))?;
+        anyhow::Ok(())
+    })
+    .retry(
+        ConstantBuilder::default()
+            .with_delay(Duration::from_millis(200))
+            .with_max_times(300),
+    )
+    .notify(|err: &anyhow::Error, dur: Duration| {
+        tracing::info!(chain_id, %err, ?dur, "retrying gateway readiness check");
+    })
+    .await
 }
 
 #[derive(Debug, Clone)]
@@ -686,7 +945,7 @@ async fn download_prover_and_unpack(gpu: bool) -> String {
     };
 
     let local_binary_name = asset_name.trim_end_matches(".tar.gz");
-    let dir = Path::new("prover-binaries");
+    let dir = std::path::Path::new("prover-binaries");
     if !std::fs::exists(dir).expect("failed to check dir existence") {
         std::fs::create_dir_all(dir).expect("failed to create dir");
     }
@@ -770,7 +1029,7 @@ async fn download_prover_and_unpack(gpu: bool) -> String {
 }
 
 #[cfg(feature = "prover-tests")]
-fn find_first_prover_binary(dir: &Path) -> Option<std::path::PathBuf> {
+fn find_first_prover_binary(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     for entry in std::fs::read_dir(dir).ok()? {
         let path = entry.ok()?.path();
         if path.is_dir() {

@@ -24,6 +24,11 @@ threads-required = 4
 [[profile.default.overrides]]
 # External node and batch verification tests spin up 2-3 nodes.
 filter = 'test(~external_node) | test(~batch_verification) | test(~upgrade)'
+threads-required = 3
+
+[[profile.default.overrides]]
+# All to gateway tests spin gateway + L2 chain.
+filter = 'test(~to_gateway)'
 threads-required = 2
 
 # Fast profile for local development — excludes the slowest integration tests.

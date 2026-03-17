@@ -8,11 +8,11 @@ use alloy::rpc::types::{Filter, Header, Log, Transaction, TransactionRequest};
 use alloy::sol_types::SolEvent;
 use futures::StreamExt;
 use tokio::time::error::Elapsed;
-use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::contracts::EventEmitter::{EventEmitterInstance, TestEvent};
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
+use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
 
 trait PubsubSuite: Sized {
     type Expected: RpcRecv + PartialEq;
@@ -29,8 +29,7 @@ trait PubsubSuite: Sized {
     async fn prepare_expected(&self, tester: &Tester) -> anyhow::Result<Self::Expected>;
 }
 
-async fn run_test<S: PubsubSuite>() -> anyhow::Result<()> {
-    let tester = Tester::setup().await?;
+async fn run_test<S: PubsubSuite>(tester: Tester) -> anyhow::Result<()> {
     let suite = S::init(&tester).await?;
     let mut stream = suite.subscribe(&tester).await?.into_stream();
     let expected_item = suite.prepare_expected(&tester).await?;
@@ -73,7 +72,6 @@ impl PubsubSuite for NewBlockSuite {
             .await?
             .expect_successful_receipt()
             .await?;
-
         // Get expected block header from JSON-RPC API
         let block_hash = receipt.block_hash.expect("receipt has no block hash");
         let block = tester
@@ -212,26 +210,26 @@ impl PubsubSuite for NewLogsSuite {
     }
 }
 
-#[test_log::test(tokio::test)]
-async fn new_block_pubsub() -> anyhow::Result<()> {
+#[test_multisetup([CURRENT_TO_L1])]
+async fn new_block_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to new block headers
-    run_test::<NewBlockSuite>().await
+    run_test::<NewBlockSuite>(tester).await
 }
 
-#[test_log::test(tokio::test)]
-async fn pending_tx_hash_pubsub() -> anyhow::Result<()> {
+#[test_multisetup([CURRENT_TO_L1])]
+async fn pending_tx_hash_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to pending transaction hashes
-    run_test::<PendingTxSuite<false>>().await
+    run_test::<PendingTxSuite<false>>(tester).await
 }
 
-#[test_log::test(tokio::test)]
-async fn pending_tx_full_pubsub() -> anyhow::Result<()> {
+#[test_multisetup([CURRENT_TO_L1])]
+async fn pending_tx_full_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to pending transactions
-    run_test::<PendingTxSuite<true>>().await
+    run_test::<PendingTxSuite<true>>(tester).await
 }
 
-#[test_log::test(tokio::test)]
-async fn new_log_pubsub() -> anyhow::Result<()> {
+#[test_multisetup([CURRENT_TO_L1])]
+async fn new_log_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to new logs
-    run_test::<NewLogsSuite>().await
+    run_test::<NewLogsSuite>(tester).await
 }

@@ -6,16 +6,15 @@ use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use futures::FutureExt;
 use std::time::Duration;
-use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
+use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, TesterBuilder, test_multisetup};
 use zksync_os_server::config::FeeConfig;
 
-#[test_log::test(tokio::test)]
-async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
+#[test_multisetup([CURRENT_TO_L1])]
+async fn sensitive_to_balance_changes(mut tester: Tester) -> anyhow::Result<()> {
     // Test that mempool gets notified when an account's balance changes, hence potentially
     // making that account's queued transactions minable.
-    let mut tester = Tester::setup().await?;
     // Alice is a rich account
     let alice = tester.l2_wallet.default_signer().address();
     // Bob is an account with zero funds
@@ -116,8 +115,8 @@ async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
 
 /// A transaction with maxFeePerGas below the chain's base fee must not stall
 /// block production for other senders.
-#[test_log::test(tokio::test)]
-async fn low_fee_tx_does_not_hang_block_executor() -> anyhow::Result<()> {
+#[test_multisetup([CURRENT_TO_L1])]
+async fn low_fee_tx_does_not_hang_block_executor(builder: TesterBuilder) -> anyhow::Result<()> {
     // Use a deterministic base fee so the "low fee" value is unambiguous.
     let known_base_fee: u128 = 100_000_000; // 100M wei = 0.1 gwei
     let fee_config = FeeConfig {
@@ -128,7 +127,7 @@ async fn low_fee_tx_does_not_hang_block_executor() -> anyhow::Result<()> {
         native_price_override: Some(U128::from(1_000_000u64)),
         pubdata_price_cap: None,
     };
-    let mut tester = Tester::builder()
+    let mut tester = builder
         .fee_config(fee_config)
         .block_time(Duration::from_millis(500))
         .build()
@@ -137,7 +136,7 @@ async fn low_fee_tx_does_not_hang_block_executor() -> anyhow::Result<()> {
     let alice = tester.l2_wallet.default_signer().address();
     let chain_id = tester.l2_provider.get_chain_id().await?;
 
-    // Step 1: Confirm baseline — chain is working
+    // Step 1: Confirm baseline - chain is working
     tester
         .l2_provider
         .send_transaction(
@@ -212,7 +211,7 @@ async fn low_fee_tx_does_not_hang_block_executor() -> anyhow::Result<()> {
 
     match result {
         Ok(Ok(_receipt)) => {
-            // Block executor handled the low-fee tx gracefully — test passes
+            // Block executor handled the low-fee tx gracefully - test passes
         }
         Ok(Err(e)) => {
             panic!("Follow-up transaction failed unexpectedly: {e:#}");

@@ -19,6 +19,7 @@ zksync_os_rpc_api.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_multivm.workspace = true
 zksync_os_network.workspace = true
+zksync_os_integration_tests_macros.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
