@@ -10,7 +10,6 @@ use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_m
 mod upgrade;
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-#[test_log::test(tokio::test)]
 async fn basic_transfers(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can process 100 concurrent transfers to random accounts
     let alice = tester.l2_wallet.default_signer().address();
@@ -46,7 +45,6 @@ async fn basic_transfers(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn eip2930(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can process EIP-2930 transactions
     let tx = TransactionRequest::default()

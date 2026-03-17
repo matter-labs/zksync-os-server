@@ -10,7 +10,6 @@ use zksync_os_integration_tests::contracts::{EventEmitter, SimpleRevert, Tracing
 use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_multisetup};
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-#[test_log::test(tokio::test)]
 async fn call_genesis(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can run `eth_call` on genesis
     tester
@@ -22,7 +21,6 @@ async fn call_genesis(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-#[test_log::test(tokio::test)]
 async fn call_pending(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can run `eth_call` on pending block
     tester
@@ -34,7 +32,6 @@ async fn call_pending(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn call_fail(tester: Tester) -> anyhow::Result<()> {
     // Test that the node responds with proper errors when `eth_call` fails
 
@@ -131,7 +128,6 @@ async fn call_fail(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn call_deploy(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can run `eth_call` with contract deployment
     let result = EventEmitter::deploy_builder(tester.l2_provider.clone())
@@ -142,7 +138,6 @@ async fn call_deploy(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn call_revert(tester: Tester) -> anyhow::Result<()> {
     // Test that the node returns error on reverting `eth_call`
     let simple_revert = SimpleRevert::deploy(tester.l2_provider.clone()).await?;
@@ -173,7 +168,6 @@ async fn call_revert(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn call_with_state_overrides(tester: Tester) -> anyhow::Result<()> {
     // Deploy a dummy contract with storage at slot 0, call it to read the value,
     // then call again with a state override for slot 0 and expect a different result.

@@ -21,7 +21,6 @@ use zksync_os_rpc_api::types::BatchStorageProof;
 use zksync_os_server::config::FeeConfig;
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn get_code(tester: Tester) -> anyhow::Result<()> {
     // Test that the node:
     // * can fetch deployed bytecode at the latest block
@@ -78,7 +77,6 @@ async fn get_code(tester: Tester) -> anyhow::Result<()> {
 
 #[test_multisetup([CURRENT_TO_L1])]
 #[test_builder(|builder| builder.block_time(Duration::from_secs(5)))]
-#[test_log::test(tokio::test)]
 async fn get_transaction_count(tester: Tester) -> anyhow::Result<()> {
     // Test that the node takes pending mempool transactions into account for `eth_getTransactionCount`
     // We set block time to 5 seconds to make sure that transaction spends >5 seconds in the mempool.
@@ -108,7 +106,6 @@ async fn get_transaction_count(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn get_net_version(tester: Tester) -> anyhow::Result<()> {
     // Test that the node returns correct chain ID in `net_version` RPC call
     let net_version = tester.l2_provider.get_net_version().await?;
@@ -118,7 +115,6 @@ async fn get_net_version(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn get_client_version(tester: Tester) -> anyhow::Result<()> {
     // Test that the node returns sensible value in `web3_clientVersion` RPC call
     let client_version = tester.l2_provider.get_client_version().await?;
@@ -128,7 +124,6 @@ async fn get_client_version(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn get_gas_price_uses_configured_scale_factor(builder: TesterBuilder) -> anyhow::Result<()> {
     let known_base_fee: u128 = 100_000_000;
     let fee_config = FeeConfig {
@@ -152,7 +147,6 @@ async fn get_gas_price_uses_configured_scale_factor(builder: TesterBuilder) -> a
 }
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-#[test_log::test(tokio::test)]
 async fn send_raw_transaction_sync(tester: Tester) -> anyhow::Result<()> {
     // Test that the node supports `eth_sendRawTransactionSync`
     let alice = tester.l2_wallet.default_signer().address();
@@ -193,7 +187,6 @@ async fn send_raw_transaction_sync(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn send_raw_transaction_sync_timeout(tester: Tester) -> anyhow::Result<()> {
     // Test that the node returns an error when `eth_sendRawTransactionSync` timeouts
     let alice = tester.l2_wallet.default_signer().address();
@@ -227,7 +220,6 @@ async fn send_raw_transaction_sync_timeout(tester: Tester) -> anyhow::Result<()>
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn estimate_gas_with_high_prices(builder: TesterBuilder) -> anyhow::Result<()> {
     // Tests the estimations are accurate with high fee overrides.
     // Following config has high pubdata price, that makes base token transfer to take >21000 gas.
@@ -265,7 +257,6 @@ async fn estimate_gas_with_high_prices(builder: TesterBuilder) -> anyhow::Result
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn estimate_gas_without_balance(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can estimate transaction's gas even if sender does not have enough balance.
     let req = TransactionRequest::default()

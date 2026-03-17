@@ -74,7 +74,6 @@ fn check_call_frame(
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn call_trace_transaction(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can call trace an existing transaction. Manually asserts call trace output.
     let alice = tester.l2_wallet.default_signer().address();
@@ -267,7 +266,6 @@ fn strip_call_frame(call_frame: &CallFrame) -> CallFrame {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn call_trace_transaction_equivalency(tester: Tester) -> anyhow::Result<()> {
     // Test that the node call traces are equivalent to L1 traces (produced by anvil).
     // Init data for `TracingSecondary`
@@ -298,7 +296,6 @@ async fn call_trace_transaction_equivalency(tester: Tester) -> anyhow::Result<()
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn call_trace_equivalency(tester: Tester) -> anyhow::Result<()> {
     // Test that the `debug_traceCall` output is equivalent to L1 output (as produced by anvil).
     // Init data for `TracingSecondary`
@@ -328,7 +325,6 @@ async fn call_trace_equivalency(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn call_trace_block(tester: Tester) -> anyhow::Result<()> {
     // Test that the node call traces are equivalent to L1 traces (produced by anvil).
     let alice = tester.l2_wallet.default_signer().address();
@@ -419,7 +415,6 @@ async fn call_trace_block(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn debug_trace_call_js_tracer(tester: Tester) -> anyhow::Result<()> {
     let secondary_data = U256::from(7);
     let calculate_value = U256::from(3);
@@ -480,7 +475,6 @@ async fn debug_trace_call_js_tracer(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn debug_trace_call_js_tracer_with_db(tester: Tester) -> anyhow::Result<()> {
     let secondary_data = U256::from(7);
     let calculate_value = U256::from(3);
@@ -543,7 +537,6 @@ async fn debug_trace_call_js_tracer_with_db(tester: Tester) -> anyhow::Result<()
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn debug_trace_call_stack(tester: Tester) -> anyhow::Result<()> {
     let secondary_data = U256::from(7);
     let calculate_value = U256::from(3);

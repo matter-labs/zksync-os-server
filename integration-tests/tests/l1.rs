@@ -16,7 +16,6 @@ use zksync_os_types::{
 };
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-#[test_log::test(tokio::test)]
 async fn l1_deposit(tester: Tester) -> anyhow::Result<()> {
     // Test that we can deposit L2 funds from a rich L1 account
     let alice = tester.l1_wallet().default_signer().address();
@@ -131,7 +130,6 @@ async fn l1_deposit(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-#[test_log::test(tokio::test)]
 async fn l1_withdraw(tester: Tester) -> anyhow::Result<()> {
     // Test that we can withdraw L2 funds to L1
     let alice = tester.l2_wallet.default_signer().address();

@@ -211,28 +211,24 @@ impl PubsubSuite for NewLogsSuite {
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn new_block_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to new block headers
     run_test::<NewBlockSuite>(tester).await
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn pending_tx_hash_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to pending transaction hashes
     run_test::<PendingTxSuite<false>>(tester).await
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn pending_tx_full_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to pending transactions
     run_test::<PendingTxSuite<true>>(tester).await
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_log::test(tokio::test)]
 async fn new_log_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to new logs
     run_test::<NewLogsSuite>(tester).await

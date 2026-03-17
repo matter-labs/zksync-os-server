@@ -17,7 +17,6 @@ use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_m
 use zksync_os_types::{L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxType};
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-#[test_log::test(tokio::test)]
 async fn erc20_deposit(tester: Tester) -> anyhow::Result<()> {
     let alice = tester.l1_wallet().default_signer().address();
 
@@ -60,7 +59,6 @@ async fn erc20_deposit(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-#[test_log::test(tokio::test)]
 async fn erc20_transfer(tester: Tester) -> anyhow::Result<()> {
     // We use L2 wallet's default signer as Alice because it already has L2 ETH.
     let alice = tester.l2_wallet.default_signer().address();
@@ -105,7 +103,6 @@ async fn erc20_transfer(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-#[test_log::test(tokio::test)]
 async fn erc20_withdrawal(tester: Tester) -> anyhow::Result<()> {
     // We use L2 wallet's default signer as Alice because it already has L2 ETH.
     let alice = tester.l2_wallet.default_signer().address();
