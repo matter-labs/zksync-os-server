@@ -12,7 +12,7 @@ use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::contracts::EventEmitter::{EventEmitterInstance, TestEvent};
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
-use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_casing};
+use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
 
 trait PubsubSuite: Sized {
     type Expected: RpcRecv + PartialEq;
@@ -210,28 +210,28 @@ impl PubsubSuite for NewLogsSuite {
     }
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn new_block_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to new block headers
     run_test::<NewBlockSuite>(tester).await
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn pending_tx_hash_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to pending transaction hashes
     run_test::<PendingTxSuite<false>>(tester).await
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn pending_tx_full_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to pending transactions
     run_test::<PendingTxSuite<true>>(tester).await
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn new_log_pubsub(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_subscribe` can subscribe to new logs

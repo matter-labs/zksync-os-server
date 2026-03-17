@@ -10,12 +10,12 @@ use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::{L1AssetRouter, L2BaseToken};
 use zksync_os_integration_tests::provider::ZksyncApi;
-use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_casing};
+use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_multisetup};
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxType,
 };
 
-#[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 #[test_log::test(tokio::test)]
 async fn l1_deposit(tester: Tester) -> anyhow::Result<()> {
     // Test that we can deposit L2 funds from a rich L1 account
@@ -130,7 +130,7 @@ async fn l1_deposit(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 #[test_log::test(tokio::test)]
 async fn l1_withdraw(tester: Tester) -> anyhow::Result<()> {
     // Test that we can withdraw L2 funds to L1

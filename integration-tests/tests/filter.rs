@@ -9,7 +9,7 @@ use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::contracts::EventEmitter::{EventEmitterInstance, TestEvent};
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
-use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_casing};
+use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
 
 trait FilterSuite: Sized {
     type Expected: RpcRecv + PartialEq;
@@ -263,28 +263,28 @@ impl FilterSuite for NewLogsSuite {
     }
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn new_block_filter(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_newBlockFilter` picks up new canonized blocks
     run_test::<NewBlockSuite>(tester).await
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn pending_tx_hash_filter(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_newPendingTransactionFilter(full=false)` picks up new pending transactions' hashes
     run_test::<PendingTxSuite<false>>(tester).await
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn pending_tx_full_filter(tester: Tester) -> anyhow::Result<()> {
     // Test that `eth_newPendingTransactionFilter(full=true)` picks up new pending transactions
     run_test::<PendingTxSuite<true>>(tester).await
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn new_log_filter(tester: Tester) -> anyhow::Result<()> {
     // Test that:

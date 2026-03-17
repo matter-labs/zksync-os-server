@@ -11,11 +11,11 @@ use zksync_os_integration_tests::BATCH_VERIFICATION_KEYS;
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::{
     CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, TesterBuilder, assert_traits::ReceiptAssert,
-    contracts::EventEmitter, test_casing,
+    contracts::EventEmitter, test_multisetup,
 };
 use zksync_os_server::config::Config;
 
-#[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 #[test_log::test(tokio::test)]
 async fn batch_verification_works(builder: TesterBuilder) -> anyhow::Result<()> {
     let builder = builder.batch_verification(1);
@@ -45,7 +45,7 @@ async fn batch_verification_works(builder: TesterBuilder) -> anyhow::Result<()> 
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn batch_verification_without_enough_ens(builder: TesterBuilder) -> anyhow::Result<()> {
     let builder = builder.batch_verification(2);
@@ -74,7 +74,7 @@ async fn batch_verification_without_enough_ens(builder: TesterBuilder) -> anyhow
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn batch_verification_with_2_ens(builder: TesterBuilder) -> anyhow::Result<()> {
     let builder = builder.batch_verification(2);
@@ -121,7 +121,7 @@ async fn batch_verification_with_2_ens(builder: TesterBuilder) -> anyhow::Result
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 #[test_log::test(tokio::test)]
 async fn transaction_replay(main_node: Tester) -> anyhow::Result<()> {
     let en1 = main_node.launch_external_node().await?;
@@ -158,7 +158,7 @@ async fn transaction_replay(main_node: Tester) -> anyhow::Result<()> {
 
 /// It is easy to write to a channel that the EN doesn't need
 /// which leads to the EN getting stuck when the channel is full.
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn does_not_get_stuck(main_node: Tester) -> anyhow::Result<()> {
     let en1 = main_node.launch_external_node().await?;
@@ -216,7 +216,7 @@ async fn check_contract_present(en: &Tester, contract_address: Address) -> anyho
     .await
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn forward_transactions(main_node: Tester) -> anyhow::Result<()> {
     let en = main_node.launch_external_node().await?;

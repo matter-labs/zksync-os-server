@@ -5,11 +5,11 @@ use alloy::providers::Provider;
 use alloy::rpc::types::{AccessListItem, TransactionRequest};
 use tokio::time::Instant;
 use zksync_os_integration_tests::assert_traits::{ReceiptAssert, ReceiptsAssert};
-use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_casing};
+use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_multisetup};
 
 mod upgrade;
 
-#[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 #[test_log::test(tokio::test)]
 async fn basic_transfers(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can process 100 concurrent transfers to random accounts
@@ -45,7 +45,7 @@ async fn basic_transfers(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn eip2930(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can process EIP-2930 transactions

@@ -56,7 +56,7 @@ pub enum SettlementLayer {
     Gateway,
 }
 
-pub use zksync_os_integration_tests_macros::test_casing;
+pub use zksync_os_integration_tests_macros::test_multisetup;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TestCase {

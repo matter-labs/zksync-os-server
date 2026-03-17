@@ -7,20 +7,20 @@ use alloy::sol_types::SolEvent;
 use anyhow::Context as _;
 use regex::Regex;
 use std::time::Duration;
-use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::{
-    CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, TesterBuilder, test_casing,
-};
 use zksync_os_contract_interface::IExecutor::BlockCommit;
 use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::Counter::CounterInstance;
 use zksync_os_integration_tests::contracts::{Counter, EventEmitter};
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
 use zksync_os_integration_tests::provider::ZksyncApi;
+use zksync_os_integration_tests::{
+    CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, TesterBuilder, test_multisetup,
+};
 use zksync_os_rpc_api::types::BatchStorageProof;
 use zksync_os_server::config::FeeConfig;
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn get_code(tester: Tester) -> anyhow::Result<()> {
     // Test that the node:
@@ -76,7 +76,7 @@ async fn get_code(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_builder(|builder| builder.block_time(Duration::from_secs(5)))]
 #[test_log::test(tokio::test)]
 async fn get_transaction_count(tester: Tester) -> anyhow::Result<()> {
@@ -107,7 +107,7 @@ async fn get_transaction_count(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn get_net_version(tester: Tester) -> anyhow::Result<()> {
     // Test that the node returns correct chain ID in `net_version` RPC call
@@ -117,7 +117,7 @@ async fn get_net_version(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn get_client_version(tester: Tester) -> anyhow::Result<()> {
     // Test that the node returns sensible value in `web3_clientVersion` RPC call
@@ -127,7 +127,7 @@ async fn get_client_version(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn get_gas_price_uses_configured_scale_factor(builder: TesterBuilder) -> anyhow::Result<()> {
     let known_base_fee: u128 = 100_000_000;
@@ -151,7 +151,7 @@ async fn get_gas_price_uses_configured_scale_factor(builder: TesterBuilder) -> a
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 #[test_log::test(tokio::test)]
 async fn send_raw_transaction_sync(tester: Tester) -> anyhow::Result<()> {
     // Test that the node supports `eth_sendRawTransactionSync`
@@ -192,7 +192,7 @@ async fn send_raw_transaction_sync(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn send_raw_transaction_sync_timeout(tester: Tester) -> anyhow::Result<()> {
     // Test that the node returns an error when `eth_sendRawTransactionSync` timeouts
@@ -226,7 +226,7 @@ async fn send_raw_transaction_sync_timeout(tester: Tester) -> anyhow::Result<()>
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn estimate_gas_with_high_prices(builder: TesterBuilder) -> anyhow::Result<()> {
     // Tests the estimations are accurate with high fee overrides.
@@ -264,7 +264,7 @@ async fn estimate_gas_with_high_prices(builder: TesterBuilder) -> anyhow::Result
     Ok(())
 }
 
-#[test_casing([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 #[test_log::test(tokio::test)]
 async fn estimate_gas_without_balance(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can estimate transaction's gas even if sender does not have enough balance.

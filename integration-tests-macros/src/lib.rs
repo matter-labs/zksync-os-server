@@ -110,7 +110,7 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// The attribute expects a bracketed list of case paths:
 ///
 /// ```ignore
-/// #[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 /// ```
 ///
 /// Each path should evaluate to a `TestCase`, typically one of the exported constants from
@@ -123,7 +123,7 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// shape `fn(TesterBuilder) -> TesterBuilder`.
 ///
 /// ```ignore
-/// #[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 /// #[test_builder(|builder| builder.block_time(Duration::from_secs(5)))]
 /// #[test_log::test(tokio::test)]
 /// async fn pending_nonce_uses_slow_blocks(tester: Tester) -> anyhow::Result<()> {
@@ -137,9 +137,9 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// Build and use a ready `Tester`:
 ///
 /// ```ignore
-/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_casing};
+/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_multisetup};
 ///
-/// #[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 /// #[test_log::test(tokio::test)]
 /// async fn basic_rpc_smoke(tester: Tester) -> anyhow::Result<()> {
 ///     let chain_id = tester.l2_provider.get_chain_id().await?;
@@ -151,10 +151,10 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// Inspect the case without starting the node:
 ///
 /// ```ignore
-/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, TestCase, test_casing};
+/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, TestCase, test_multisetup};
 /// use zksync_os_integration_tests::SettlementLayer;
 ///
-/// #[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 /// #[test_log::test(tokio::test)]
 /// async fn case_metadata_is_expected(case: TestCase) -> anyhow::Result<()> {
 ///     match case.settlement_layer {
@@ -167,9 +167,9 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// Customize the builder inside the test before constructing a `Tester`:
 ///
 /// ```ignore
-/// use zksync_os_integration_tests::{CURRENT_TO_L1, TesterBuilder, test_casing};
+/// use zksync_os_integration_tests::{CURRENT_TO_L1, TesterBuilder, test_multisetup};
 ///
-/// #[test_casing([CURRENT_TO_L1])]
+/// #[test_multisetup([CURRENT_TO_L1])]
 /// #[test_log::test(tokio::test)]
 /// async fn prover_flow(builder: TesterBuilder) -> anyhow::Result<()> {
 ///     let tester = builder.enable_prover().build().await?;
@@ -182,10 +182,10 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 ///
 /// ```ignore
 /// use zksync_os_integration_tests::{
-///     CURRENT_TO_L1, NEXT_TO_GATEWAY, TestCase, Tester, test_casing,
+///     CURRENT_TO_L1, NEXT_TO_GATEWAY, TestCase, Tester, test_multisetup,
 /// };
 ///
-/// #[test_casing([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 /// #[test_log::test(tokio::test)]
 /// async fn settlement_layer_matches_runtime(
 ///     case: TestCase,
@@ -205,7 +205,7 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// - `TesterBuilder` and `Tester` cannot be used together in the same function
 /// - `#[test_builder(...)]` may be used at most once
 #[proc_macro_attribute]
-pub fn test_casing(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn test_multisetup(attr: TokenStream, item: TokenStream) -> TokenStream {
     let cases = parse_macro_input!(attr as CaseList);
     let mut input = parse_macro_input!(item as ItemFn);
 
