@@ -10,7 +10,7 @@ pub trait StateInitializer: Sized {
     async fn new(config: &GeneralConfig, genesis: &Genesis) -> Self;
 
     // default no-op
-    async fn compact_periodically_optional(&self) {
+    async fn compact_periodically_optional(self) {
         future::pending::<()>().await;
     }
 }
@@ -26,7 +26,7 @@ impl StateInitializer for StateHandle {
         .await
     }
 
-    async fn compact_periodically_optional(&self) {
+    async fn compact_periodically_optional(self) {
         self.compact_periodically().await;
     }
 }

@@ -12,6 +12,7 @@ use crate::prover_api::{
 };
 
 use axum::{Router, extract::DefaultBodyLimit};
+use reth_tasks::shutdown::GracefulShutdown;
 use tokio::net::TcpListener;
 
 /// Application state shared across all request handlers.
@@ -29,7 +30,8 @@ pub async fn run(
     snark_job_manager: Arc<SnarkJobManager>,
     proof_storage: ProofStorage,
     bind_address: String,
-) -> anyhow::Result<()> {
+    shutdown: GracefulShutdown,
+) {
     let app_state = AppState {
         fri_job_manager,
         snark_job_manager,
@@ -42,10 +44,14 @@ pub async fn run(
         // Set the request body limit to 10MiB
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024));
 
-    let bind_address: SocketAddr = bind_address.parse()?;
+    let bind_address: SocketAddr = bind_address.parse().expect("failed to parse bind address");
     tracing::info!("starting proof data server on {bind_address}");
 
-    let listener = TcpListener::bind(bind_address).await?;
-    axum::serve(listener, app).await?;
-    Ok(())
+    let listener = TcpListener::bind(bind_address)
+        .await
+        .expect("failed to bind");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.ignore_guard())
+        .await
+        .expect("never errors according to doc");
 }

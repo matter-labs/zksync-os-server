@@ -35,7 +35,11 @@ impl PipelineComponent for BatchSink {
     ) -> anyhow::Result<()> {
         let mut input = input.into_inner();
         let mut internal_config = self.internal_config_manager.read_config()?;
-        while let Some(envelope) = input.recv().await {
+        loop {
+            let Some(envelope) = input.recv().await else {
+                tracing::info!("inbound channel closed");
+                return Ok(());
+            };
             tracing::info!(
                 batch_number = envelope.batch_number(),
                 latency_tracker = %envelope.latency_tracker,
@@ -55,7 +59,6 @@ impl PipelineComponent for BatchSink {
                     .write_config_and_panic(&internal_config, message)?;
             }
         }
-        anyhow::bail!("Failed to receive committed batch");
     }
 }
 
@@ -105,8 +108,10 @@ impl<T: Send + 'static> PipelineComponent for NoOpSink<T> {
 pub async fn clear_failing_block_config_task<F: ReadFinality>(
     finality: F,
     internal_config_manager: InternalConfigManager,
-) -> anyhow::Result<()> {
-    let mut internal_config = internal_config_manager.read_config()?;
+) {
+    let mut internal_config = internal_config_manager
+        .read_config()
+        .expect("failed to read internal config");
     if let Some(failing_block_number) = internal_config.failing_block {
         tracing::info!(
             "Starting `clear_failing_block_config_task` to monitor finality status for block number {failing_block_number}"
@@ -116,14 +121,14 @@ pub async fn clear_failing_block_config_task<F: ReadFinality>(
                 let message = "Removing `failing_block` from the internal config";
                 tracing::info!(message);
                 internal_config.failing_block = None;
-                internal_config_manager.write_config_and_panic(&internal_config, message)?;
+                internal_config_manager
+                    .write_config_and_panic(&internal_config, message)
+                    .expect("failed to write internal config");
             } else {
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     } else {
         // Do nothing
-        futures::future::pending::<()>().await;
-        Ok(())
     }
 }

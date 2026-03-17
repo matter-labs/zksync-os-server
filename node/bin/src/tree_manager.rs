@@ -49,7 +49,8 @@ impl PipelineComponent for TreeManager {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
 
             let Some((block_output, replay_record)) = input.recv().await else {
-                anyhow::bail!("inbound channel closed");
+                tracing::info!("inbound channel closed");
+                return Ok(());
             };
             latency_tracker.enter_state(GenericComponentState::Processing);
             let started_at = Instant::now();

@@ -75,12 +75,18 @@ impl PipelineComponent for SnarkProvingPipelineStep {
                         let _ = output.send(L1SenderCommand::Passthrough(Box::new(batch))).await;
                     }
                 }
-            } => anyhow::bail!("SNARK proving input stream ended unexpectedly"),
+            } => {
+                tracing::info!("inbound channel closed");
+                return Ok(());
+            },
             _ = async {
                 while let Some(proof_command) = self.proof_commands_receiver.recv().await {
                     let _ = output.send(L1SenderCommand::SendToL1(proof_command)).await;
                 }
-            } => anyhow::bail!("SNARK proving output stream ended unexpectedly"),
+            } => {
+                tracing::info!("outbound channel closed");
+                return Ok(());
+            },
         }
     }
 }

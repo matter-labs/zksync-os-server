@@ -13,11 +13,11 @@ use reth_network::{
     NetworkConfig as RethNetworkConfig, NetworkConfigBuilder, NetworkManager, PeersConfig,
 };
 use reth_provider::BlockNumReader;
+use reth_tasks::Runtime;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
-use tokio::task::JoinSet;
+use tokio::sync::mpsc;
 use zksync_os_metadata::NODE_CLIENT_VERSION;
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::NodeRole;
@@ -166,13 +166,20 @@ impl NetworkService {
     }
 
     /// Consume the service by registering it as an endless task that drives the network state.
-    pub fn run(mut self, tasks: &mut JoinSet<()>, stop_receiver: watch::Receiver<bool>) {
-        tasks.spawn(self.network_manager);
-        tasks.spawn(async move {
-            while !*stop_receiver.borrow() {
-                let Some(event) = self.protocol_rx.recv().await else {
-                    break;
-                };
+    pub fn spawn(mut self, runtime: &Runtime) {
+        runtime.spawn_critical_with_graceful_shutdown_signal(
+            "p2p network task",
+            |shutdown| async move {
+                self.network_manager
+                    .run_until_graceful_shutdown(shutdown, |_network| {
+                        // todo: save peers to disk like reth?
+                    })
+                    .await;
+                tracing::info!("p2p network graceful shutdown complete");
+            },
+        );
+        runtime.spawn_critical_task("p2p protocol logger", async move {
+            while let Some(event) = self.protocol_rx.recv().await {
                 // For now events are only used for diagnostical reasons (new connection got
                 // established or max connections reached). In the future we might have other events
                 // that we would want to process here somehow.

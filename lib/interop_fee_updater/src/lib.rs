@@ -48,21 +48,13 @@ impl<RpcStorage: ReadRpcStorage> InteropFeeUpdater<RpcStorage> {
         }
     }
 
-    pub async fn run(&mut self, mut stop_receiver: watch::Receiver<bool>) -> anyhow::Result<()> {
+    pub async fn run(mut self) {
         let mut timer = tokio::time::interval(self.config.polling_interval);
 
         loop {
-            tokio::select! {
-                _ = timer.tick() => {
-                    if let Err(err) = self.loop_iteration().await {
-                        tracing::warn!("Error in the `interop_fee_updater` loop iteration: {err:#}");
-                    }
-                }
-                changed = stop_receiver.changed() => {
-                    if changed.is_err() || *stop_receiver.borrow() {
-                        return Ok(());
-                    }
-                }
+            timer.tick().await;
+            if let Err(err) = self.loop_iteration().await {
+                tracing::warn!("Error in the `interop_fee_updater` loop iteration: {err:#}");
             }
         }
     }

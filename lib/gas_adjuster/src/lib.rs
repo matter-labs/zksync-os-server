@@ -217,7 +217,7 @@ impl GasAdjuster {
         }
     }
 
-    pub async fn run(mut self) -> anyhow::Result<()> {
+    pub async fn run(mut self) {
         let mut timer = tokio::time::interval(self.config.poll_period);
         let mut attempts_failed_in_a_row = 0usize;
         loop {

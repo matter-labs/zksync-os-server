@@ -31,6 +31,7 @@ zk_os_api.workspace = true
 zk_ee.workspace = true
 
 reth-rpc-eth-types.workspace = true
+reth-tasks.workspace = true
 alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc", "rand"] }
 anyhow.workspace = true
 async-trait.workspace = true

@@ -1,9 +1,11 @@
 use clap::{Parser, Subcommand};
+use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig};
 use smart_config::{ConfigRepository, ConfigSources, Environment, Json, Yaml};
-use std::{fs, future, path::Path, time::Duration};
+use std::sync::mpsc;
+use std::{fs, path::Path, time::Duration};
 use tempfile::TempDir;
+use tokio::runtime::Handle;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::watch;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
@@ -21,6 +23,7 @@ use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_types::ConfigFormat;
 
+const IMMEDIATE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Subcommand)]
@@ -101,6 +104,10 @@ pub async fn main() {
         .install_default()
         .expect("failed to install rustls ring crypto provider");
 
+    let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
+        .build()
+        .expect("failed to build runtime");
+
     let opt = Cli::parse();
 
     // =========== load configs ===========
@@ -163,12 +170,7 @@ pub async fn main() {
     let mut config = build_external_config(config_repo).await;
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
-    // =========== init interruption channel ===========
-
-    // todo: implement interruption handling in other tasks
-    let (stop_sender, stop_receiver) = watch::channel(false);
     // ======= Run tasks ===========
-    let main_stop = stop_receiver.clone(); // keep original for Prometheus
     let ephemeral_enabled = config.general_config.ephemeral;
     if !ephemeral_enabled && config.general_config.ephemeral_state.is_some() {
         panic!("`ephemeral_state` requires `ephemeral` mode to be enabled");
@@ -176,56 +178,38 @@ pub async fn main() {
     let _ephemeral_guard = ephemeral_enabled.then(|| enable_ephemeral_mode(&mut config));
     let prometheus_port = config.observability_config.prometheus.port;
 
-    let main_task = async move {
-        match config.general_config.state_backend {
-            StateBackendConfig::FullDiffs => run::<FullDiffsState>(main_stop.clone(), config).await,
-            StateBackendConfig::Compacted => run::<StateHandle>(main_stop.clone(), config).await,
-        }
+    match config.general_config.state_backend {
+        StateBackendConfig::FullDiffs => run::<FullDiffsState>(&runtime, config).await,
+        StateBackendConfig::Compacted => run::<StateHandle>(&runtime, config).await,
     };
 
-    let prometheus_task = async {
+    runtime.spawn_critical_with_graceful_shutdown_signal("prometheus", |shutdown| async move {
         if ephemeral_enabled {
             tracing::info!("Ephemeral mode enabled, skipping Prometheus exporter");
-            // no-op for the ephemeral mode
-            future::pending::<anyhow::Result<()>>().await
         } else {
             let prometheus: PrometheusExporterConfig =
                 PrometheusExporterConfig::pull(prometheus_port);
-            prometheus.run(stop_receiver.clone()).await
+            prometheus.run(shutdown).await.expect("prometheus failed");
         }
-    };
+    });
 
-    let stop_receiver_copy = stop_receiver.clone();
+    let task_manager_handle = runtime
+        .take_task_manager_handle()
+        .expect("Runtime must contain a TaskManager handle");
 
     tokio::select! {
-        _ = main_task => {
-            if *stop_receiver_copy.borrow() {
-                tracing::info!("Main task exited gracefully after stop signal");
-                // sleep to wait for other tasks to finish
-                tokio::time::sleep(GRACEFUL_SHUTDOWN_TIMEOUT).await;
-            } else {
-                tracing::warn!("Main task unexpectedly exited")
+        task_manager_result = task_manager_handle => {
+            if let Ok(Err(err)) = task_manager_result {
+                tracing::error!("shutting down due to error");
+                eprintln!("Error: {err:?}");
+                std::process::exit(1);
             }
         },
-        _ = handle_delayed_termination(stop_sender) => {},
-        res = prometheus_task => {
-            match res {
-                Ok(_) => {
-                    if *stop_receiver_copy.borrow() {
-                        tracing::info!("Prometheus exporter exited gracefully after stop signal");
-                        // sleep to wait for other tasks to finish
-                        tokio::time::sleep(GRACEFUL_SHUTDOWN_TIMEOUT).await;
-                    } else {
-                        tracing::warn!("Prometheus exporter unexpectedly exited")
-                    }
-                },
-                Err(err) => tracing::error!(?err, "Prometheus exporter failed"),
-            }
-        },
-    };
+        _ = handle_delayed_termination(runtime) => {},
+    }
 }
 
-async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
+async fn handle_delayed_termination(runtime: Runtime) {
     // sigint is sent on Ctrl+C
     let mut sigint =
         signal(SignalKind::interrupt()).expect("failed to register interrupt signal handler");
@@ -234,17 +218,25 @@ async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
     let mut sigterm =
         signal(SignalKind::terminate()).expect("failed to register terminate signal handler");
     tokio::select! {
-        _ = sigint.recv() => {
-            tracing::info!("Received SIGINT, shutting down immediately");
-        },
         _ = sigterm.recv() => {
-            tracing::info!("Received SIGTERM: scheduling shutdown in 10s");
+            tracing::info!("received SIGTERM: shutting down immediately");
+            let (tx, rx) = mpsc::channel();
+            std::thread::Builder::new()
+                .name("rt-shutdown".to_string())
+                .spawn(move || {
+                    drop(runtime);
+                    let _ = tx.send(());
+                })
+                .unwrap();
 
-            stop_sender
-                .send(true)
-                .expect("failed to send terminate signal");
+            let _ = rx.recv_timeout(IMMEDIATE_SHUTDOWN_TIMEOUT).inspect_err(|err| {
+                tracing::warn!(%err, "runtime shutdown timed out");
+            });
+        },
+        _ = sigint.recv() => {
+            tracing::info!("received SIGINT: shutting down gracefully (within 10s)");
 
-            tokio::time::sleep(GRACEFUL_SHUTDOWN_TIMEOUT).await;
+            runtime.graceful_shutdown_with_timeout(GRACEFUL_SHUTDOWN_TIMEOUT);
         },
     }
 }

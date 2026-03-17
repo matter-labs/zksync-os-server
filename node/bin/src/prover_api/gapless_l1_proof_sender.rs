@@ -58,7 +58,8 @@ impl PipelineComponent for GaplessL1ProofSender {
                     }
                 }
                 None => {
-                    anyhow::bail!("GaplessL1ProofSender input stream ended unexpectedly");
+                    tracing::info!("inbound channel closed");
+                    return Ok(());
                 }
             }
         }

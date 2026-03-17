@@ -95,7 +95,8 @@ impl PipelineComponent for UpgradeGatekeeper {
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             let Some(command) = input.recv().await else {
-                anyhow::bail!("UpgradeGatekeeper input stream ended unexpectedly");
+                tracing::info!("inbound channel closed");
+                return Ok(());
             };
 
             if let L1SenderCommand::SendToL1(command) = &command {

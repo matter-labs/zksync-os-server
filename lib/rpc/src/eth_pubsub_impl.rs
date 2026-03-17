@@ -9,6 +9,8 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use jsonrpsee::{PendingSubscriptionSink, SubscriptionMessage, SubscriptionSink};
+use reth_tasks::Runtime;
+use reth_tasks::shutdown::GracefulShutdown;
 use serde::Serialize;
 use std::ops::Deref;
 use tokio_stream::wrappers::ReceiverStream;
@@ -21,11 +23,16 @@ use zksync_os_types::BlockExt;
 pub struct EthPubsubNamespace<RpcStorage, Mempool> {
     storage: RpcStorage,
     mempool: Mempool,
+    runtime: Runtime,
 }
 
 impl<RpcStorage, Mempool> EthPubsubNamespace<RpcStorage, Mempool> {
-    pub fn new(storage: RpcStorage, mempool: Mempool) -> Self {
-        Self { storage, mempool }
+    pub fn new(storage: RpcStorage, mempool: Mempool, runtime: Runtime) -> Self {
+        Self {
+            storage,
+            mempool,
+            runtime,
+        }
     }
 }
 
@@ -155,10 +162,14 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthPubSubApiServer
     ) -> jsonrpsee::core::SubscriptionResult {
         let sink = subscription_sink.accept().await?;
         let message_stream = self.handle_accepted(&sink, kind, params).await?;
-        // todo: dangling task, respect stop_receiver and register task when there is a proper system
-        tokio::spawn(async move {
-            pipe_from_stream(sink, message_stream).await;
-        });
+        // This task is not critical but there is no way to spawn a non-critical task with graceful
+        // shutdown signal.
+        self.runtime.spawn_critical_with_graceful_shutdown_signal(
+            "eth pubsub subscription",
+            |shutdown| async move {
+                pipe_from_stream(sink, message_stream, shutdown).await;
+            },
+        );
 
         Ok(())
     }
@@ -192,9 +203,11 @@ where
 }
 
 /// Pipes all stream messages to the subscription sink.
+/// Exits when the sink closes (client disconnects or server stops) or when `shutdown` fires.
 async fn pipe_from_stream(
     sink: SubscriptionSink,
     mut stream: impl Stream<Item = SubscriptionMessage> + Unpin,
+    mut shutdown: GracefulShutdown,
 ) {
     loop {
         tokio::select! {
@@ -215,6 +228,10 @@ async fn pipe_from_stream(
                     // connection dropped
                     break;
                 }
+            }
+            _guard = &mut shutdown => {
+                // graceful shutdown signal received; exit so the guard is dropped
+                break;
             }
         }
     }

@@ -73,30 +73,16 @@ where
         let priority_tree_manager_for_prepare = self.priority_tree_manager.clone();
         let priority_tree_manager_for_caching = self.priority_tree_manager;
 
-        // Spawn the three tasks that make up the priority tree subsystem
-        let prepare_task = tokio::spawn({
-            async move {
-                priority_tree_manager_for_prepare
-                    .prepare_execute_commands(Some((input, output)), priority_txs_internal_sender)
-                    .await
-            }
-        });
-
-        let keep_caching_task = tokio::spawn({
-            async move {
-                priority_tree_manager_for_caching
-                    .keep_caching(priority_txs_internal_receiver)
-                    .await
-            }
-        });
-
-        // Wait for any task to complete (they should all run indefinitely)
         tokio::select! {
-            _ = prepare_task => {
-                anyhow::bail!("Priority tree prepare_execute_commands ended unexpectedly")
+            result = priority_tree_manager_for_caching
+                        .keep_caching(priority_txs_internal_receiver) => {
+                result.expect("keep_caching");
+                Ok(())
             }
-            _ = keep_caching_task => {
-                anyhow::bail!("Priority tree keep_caching ended unexpectedly")
+            result = priority_tree_manager_for_prepare
+                .prepare_execute_commands(Some((input, output)), priority_txs_internal_sender) => {
+                result.expect("prepare_execute_commands");
+                Ok(())
             }
         }
     }

@@ -46,6 +46,7 @@ use jsonrpsee::RpcModule;
 use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use jsonrpsee::ws_client::RpcServiceBuilder;
 use reth_rpc_eth_types::EthSubscriptionIdProvider;
+use reth_tasks::Runtime;
 use tower_http::cors::{Any, CorsLayer};
 use zksync_os_genesis::GenesisInputSource;
 use zksync_os_interface::types::BlockContext;
@@ -62,7 +63,7 @@ use zksync_os_rpc_api::zks::ZksApiServer;
 use zksync_os_types::TransactionAcceptanceState;
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
+pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     config: RpcConfig,
     chain_id: u64,
     bridgehub_address: Address,
@@ -74,6 +75,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Subpool
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     tx_forwarder: Option<DynProvider>,
     gateway_provider: Option<DynProvider>,
+    runtime: &Runtime,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
 
@@ -96,10 +98,9 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Subpool
         )
         .into_rpc(),
     )?;
-    rpc.merge(
-        EthFilterNamespace::new(config.clone(), storage.clone(), mempool.clone()).into_rpc(),
-    )?;
-    rpc.merge(EthPubsubNamespace::new(storage.clone(), mempool).into_rpc())?;
+    let eth_filter = EthFilterNamespace::new(config.clone(), storage.clone(), mempool.clone());
+    rpc.merge(eth_filter.clone().into_rpc())?;
+    rpc.merge(EthPubsubNamespace::new(storage.clone(), mempool, runtime.clone()).into_rpc())?;
     rpc.merge(
         ZksNamespace::new(
             bridgehub_address,
@@ -152,6 +153,17 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Subpool
 
     let server_handle = server.start(rpc);
 
-    server_handle.stopped().await;
+    runtime.spawn_critical_with_graceful_shutdown_signal("rpc server", |shutdown| async move {
+        tokio::select! {
+            _ = server_handle.clone().stopped() => {}
+            _ = eth_filter.watch_and_clear_stale_filters() => {}
+            _guard = shutdown => {
+                server_handle.stop().expect("failed to stop server");
+                server_handle.stopped().await;
+                tracing::info!("RPC server graceful shutdown complete");
+            }
+        }
+    });
+
     Ok(())
 }

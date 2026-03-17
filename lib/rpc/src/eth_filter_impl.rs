@@ -38,21 +38,13 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
     pub fn new(config: RpcConfig, storage: RpcStorage, mempool: Mempool) -> Self {
         let query_limits =
             QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
-        let this = Self {
+        Self {
             storage,
             query_limits,
             stale_filter_ttl: config.stale_filter_ttl,
             mempool,
             active_filters: Arc::new(DashMap::new()),
-        };
-
-        // todo: dangling task, respect stop_receiver and register task when there is a proper system
-        let this_clone = this.clone();
-        tokio::spawn(async move {
-            this_clone.watch_and_clear_stale_filters().await;
-        });
-
-        this
+        }
     }
 }
 
@@ -264,7 +256,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
 
     /// Endless future that [`Self::clear_stale_filters`] every `stale_filter_ttl` interval.
     /// Nonetheless, this endless future frees the thread at every await point.
-    async fn watch_and_clear_stale_filters(&self) {
+    pub(crate) async fn watch_and_clear_stale_filters(&self) {
         let mut interval = tokio::time::interval_at(
             tokio::time::Instant::now() + self.stale_filter_ttl,
             self.stale_filter_ttl,

@@ -3,7 +3,7 @@
 use std::{env, net::Ipv4Addr, time::Duration};
 
 use anyhow::Context as _;
-use tokio::sync::watch;
+use reth_tasks::shutdown::GracefulShutdown;
 use vise::MetricsCollection;
 use vise_exporter::MetricsExporter;
 
@@ -52,12 +52,10 @@ impl PrometheusExporterConfig {
     }
 
     /// Runs the exporter. This future should be spawned in a separate Tokio task.
-    pub async fn run(self, mut stop_receiver: watch::Receiver<bool>) -> anyhow::Result<()> {
+    pub async fn run(self, shutdown: GracefulShutdown) -> anyhow::Result<()> {
         let registry = MetricsCollection::lazy().collect();
         let metrics_exporter =
-            MetricsExporter::new(registry.into()).with_graceful_shutdown(async move {
-                stop_receiver.changed().await.ok();
-            });
+            MetricsExporter::new(registry.into()).with_graceful_shutdown(shutdown.ignore_guard());
 
         match self.transport {
             PrometheusTransport::Pull { port } => {

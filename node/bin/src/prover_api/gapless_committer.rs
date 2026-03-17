@@ -93,7 +93,8 @@ impl PipelineComponent for GaplessCommitter {
                     }
                 }
                 None => {
-                    anyhow::bail!("GaplessCommitter input stream ended unexpectedly");
+                    tracing::info!("inbound channel closed");
+                    return Ok(());
                 }
             }
         }
