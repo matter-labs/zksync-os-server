@@ -2,7 +2,7 @@ use crate::config::{ChainLayout, load_chain_config};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::prover_tester::ProverTester;
-use crate::provider::ZksyncApi;
+use crate::provider::{ZksyncApi, ZksyncTestingProvider};
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
@@ -417,6 +417,8 @@ impl Tester {
             .connect(&l2_rpc_ws_url)
             .await?;
 
+        // Deposits fail before genesis upgrade tx is processed, so we wait for the first block with upgrade tx.
+        l2_zk_provider.wait_for_block(1).await?;
         ensure_test_wallet_funded(
             &l1,
             &EthDynProvider::new(l2_provider.clone()),
