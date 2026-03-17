@@ -1,0 +1,63 @@
+# Protocol version artifact registry.
+#
+# This file is the single source of truth for which exact artifacts (forward_system
+# tags, app.bin tags, VK hashes, etc.) correspond to each execution and proving
+# version.  It is read by the multivm build script and validated in CI against
+# Cargo.toml to ensure consistency.
+#
+# Rules:
+# 1. Every ExecutionVersion variant used in multivm MUST have an entry here.
+# 2. Every ProvingVersion variant with an app.bin MUST have an entry here.
+# 3. The forward_system_tag values MUST match the git tags in Cargo.toml.
+# 4. Historical entries MUST NOT be modified once a version has been proven on L1.
+#
+# When adding a new version:
+# 1. Add a new [execution.VN] and/or [proving.VN] section below.
+# 2. Add the corresponding forward_system dependency in Cargo.toml.
+# 3. Update ExecutionVersion / ProvingVersion enums in lib/types/.
+# 4. Add the match arm in lib/multivm/src/lib.rs.
+
+# --- Execution versions ---
+# Maps ExecutionVersion enum variants to the forward_system crate that runs blocks.
+
+[execution.V1]
+# Historical: shares forward_system with V2 and V3.
+forward_system_crate = "zk_os_forward_system_0_0_28"
+forward_system_tag = "v0.0.28-interface-v0.0.14"
+
+[execution.V2]
+forward_system_crate = "zk_os_forward_system_0_0_28"
+forward_system_tag = "v0.0.28-interface-v0.0.14"
+
+[execution.V3]
+forward_system_crate = "zk_os_forward_system_0_0_28"
+forward_system_tag = "v0.0.28-interface-v0.0.14"
+
+[execution.V4]
+forward_system_crate = "zk_os_forward_system_0_1_2"
+forward_system_tag = "v0.1.2-interface-v0.0.14"
+
+[execution.V5]
+# Block execution uses v0.2.8 (proving tag); simulation uses v0.2.8-simulation-only.
+forward_system_crate = "zk_os_forward_system"
+forward_system_tag = "v0.2.8-interface-v0.0.14"
+simulation_crate = "zk_os_forward_system_0_2_8"
+simulation_tag = "v0.2.8-simulation-only-interface-v0.0.14"
+
+[execution.V6]
+forward_system_crate = "zk_os_forward_system_dev"
+forward_system_tag = "dev-20260311"
+
+# --- Proving versions ---
+# Maps ProvingVersion enum variants to the forward_system + app.bin used for proving.
+
+[proving.V6]
+forward_system_crate = "zk_os_forward_system"
+forward_system_tag = "v0.2.8-interface-v0.0.14"
+# app.bin was built from a different tag due to a toolchain-induced binary change.
+app_bin_tag = "v0.2.5"
+
+[proving.V7]
+forward_system_crate = "zk_os_forward_system_dev"
+forward_system_tag = "dev-20260311"
+app_bin_tag = "dev-20260311"
