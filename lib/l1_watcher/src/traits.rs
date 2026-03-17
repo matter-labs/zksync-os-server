@@ -1,5 +1,5 @@
 use crate::watcher::L1WatcherError;
-use alloy::primitives::Address;
+use alloy::primitives::{Address, B256};
 use alloy::rpc::types::{Log, Topic, ValueOrArray};
 use alloy::sol_types::SolEvent;
 
@@ -29,6 +29,12 @@ pub trait ProcessRawEvents: Send + Sync + 'static {
 
     fn filter_events(&self, logs: Vec<Log>) -> Vec<Log>;
 
+    /// Optional filter on topic1 (the first indexed event parameter) to include in the
+    /// `eth_getLogs` query. When `Some`, the RPC node filters logs server-side.
+    fn topic1_filter(&self) -> Option<B256> {
+        None
+    }
+
     /// Invoked each time a new log matching the filter is found.
     async fn process_raw_event(&mut self, event: Log) -> Result<(), L1WatcherError>;
 }
@@ -55,6 +61,10 @@ where
 
     fn filter_events(&self, logs: Vec<Log>) -> Vec<Log> {
         logs
+    }
+
+    fn topic1_filter(&self) -> Option<B256> {
+        ProcessL1Event::topic1_filter(self)
     }
 
     async fn process_raw_event(&mut self, log: Log) -> Result<(), L1WatcherError> {
@@ -89,6 +99,12 @@ pub trait ProcessL1Event {
 
     /// Returns the address of the contract this processor is interested in.
     fn contract_address(&self) -> Address;
+
+    /// Optional filter on topic1 (the first indexed event parameter). When `Some`, only logs
+    /// where topic1 equals the given value are forwarded to [`Self::process_event`].
+    fn topic1_filter(&self) -> Option<B256> {
+        None
+    }
 
     /// Invoked each time a new event is found.
     async fn process_event(

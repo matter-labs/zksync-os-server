@@ -16,6 +16,7 @@ pub enum ProvingVersion {
     V4 = 4,
     V5 = 5,
     V6 = 6,
+    V7 = 7,
 }
 
 impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
@@ -31,9 +32,9 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
             (30, 0) => Ok(ProvingVersion::V5),
             (30, 1) => Ok(ProvingVersion::V6),
             (30, 2) => Ok(ProvingVersion::V6),
-            (31, 0) => Ok(ProvingVersion::V6),
-            (31, 1) => Ok(ProvingVersion::V6),
-            (32, 0) => Ok(ProvingVersion::V6),
+            (31, 0) => Ok(ProvingVersion::V7),
+            (31, 1) => Ok(ProvingVersion::V7),
+            (32, 0) => Ok(ProvingVersion::V7),
             _ => Err(ProvingVersionError::UnsupportedVersion(version)),
         }
     }
@@ -64,6 +65,10 @@ impl ProvingVersion {
     const V6_VK_HASH: &'static str =
         "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337";
 
+    /// TODO: replace with the actual V7 VK hash once the proving circuit for v31 is finalized.
+    const V7_VK_HASH: &'static str =
+        "0x0000000000000000000000000000000000000000000000000000000000000000";
+
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
         match self {
@@ -73,6 +78,7 @@ impl ProvingVersion {
             Self::V4 => Self::V4_VK_HASH,
             Self::V5 => Self::V5_VK_HASH,
             Self::V6 => Self::V6_VK_HASH,
+            Self::V7 => Self::V7_VK_HASH,
         }
     }
 
@@ -112,9 +118,9 @@ mod tests {
             ((0, 29, 1), ProvingVersion::V4),
             ((0, 30, 0), ProvingVersion::V5),
             ((0, 30, 1), ProvingVersion::V6),
-            ((0, 31, 0), ProvingVersion::V6),
-            ((0, 31, 1), ProvingVersion::V6),
-            ((0, 32, 0), ProvingVersion::V6),
+            ((0, 31, 0), ProvingVersion::V7),
+            ((0, 31, 1), ProvingVersion::V7),
+            ((0, 32, 0), ProvingVersion::V7),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {

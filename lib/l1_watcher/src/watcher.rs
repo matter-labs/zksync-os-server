@@ -78,11 +78,14 @@ impl L1Watcher {
         from: BlockNumber,
         to: BlockNumber,
     ) -> Result<Vec<Log>, L1WatcherError> {
-        let filter = Filter::new()
+        let mut filter = Filter::new()
             .from_block(from)
             .to_block(to)
             .event_signature(self.processor.event_signatures())
             .address(self.processor.contract_addresses());
+        if let Some(topic1) = self.processor.topic1_filter() {
+            filter = filter.topic1(topic1);
+        }
         let new_logs = self.provider.get_logs(&filter).await?;
 
         if new_logs.is_empty() {
