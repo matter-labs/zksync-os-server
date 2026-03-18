@@ -38,7 +38,7 @@ pub struct Config {
     pub genesis_config: GenesisConfig,
     pub rpc_config: RpcConfig,
     pub mempool_config: MempoolConfig,
-    pub tx_validator_config: TxValidatorConfig,
+    pub tx_validator_config: MempoolTxValidatorConfig,
     pub sequencer_config: SequencerConfig,
     pub l1_sender_config: L1SenderConfig,
     pub l1_watcher_config: L1WatcherConfig,
@@ -76,7 +76,7 @@ impl Config {
             .insert(&MempoolConfig::DESCRIPTION, "mempool")
             .expect("Failed to insert mempool config");
         schema
-            .insert(&TxValidatorConfig::DESCRIPTION, "tx_validator")
+            .insert(&MempoolTxValidatorConfig::DESCRIPTION, "tx_validator")
             .expect("Failed to insert tx_validator config");
         schema
             .insert(&SequencerConfig::DESCRIPTION, "sequencer")
@@ -397,6 +397,15 @@ pub struct SequencerConfig {
     /// List of (block_number, db_key) pairs to override when downloading replay records.
     pub en_replay_record_overrides: Vec<(u64, Bytes)>,
 
+    /// Transaction validator configuration.
+    #[config(nest)]
+    pub tx_validator: TxValidatorConfig,
+}
+
+/// Configuration for all transaction validators applied during block production.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct TxValidatorConfig {
     /// Deployment filter configuration.
     #[config(nest)]
     pub deployment_filter: DeploymentFilterConfig,
@@ -574,7 +583,7 @@ pub struct MempoolConfig {
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
-pub struct TxValidatorConfig {
+pub struct MempoolTxValidatorConfig {
     /// Max input size of a transaction to be accepted by mempool
     #[config(default_t = 128 * 1024 * 1024)]
     pub max_input_bytes: usize,
@@ -1018,16 +1027,15 @@ impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
             block_pubdata_limit_bytes: c.sequencer_config.block_pubdata_limit_bytes,
             max_blocks_to_produce: c.sequencer_config.max_blocks_to_produce,
             interop_roots_per_tx: c.sequencer_config.interop_roots_per_tx,
-            deployment_filter: if c.sequencer_config.deployment_filter.enabled {
-                deployment_filter::Config::allow_list(
-                    c.sequencer_config
-                        .deployment_filter
-                        .allowed_deployers
-                        .iter()
-                        .copied(),
-                )
-            } else {
-                deployment_filter::Config::Unrestricted
+            tx_validator: {
+                let df = &c.sequencer_config.tx_validator.deployment_filter;
+                zksync_os_sequencer::config::TxValidatorConfig {
+                    deployment_filter: if df.enabled {
+                        deployment_filter::Config::allow_list(df.allowed_deployers.iter().copied())
+                    } else {
+                        deployment_filter::Config::Unrestricted
+                    },
+                }
             },
         }
     }
@@ -1100,8 +1108,8 @@ impl From<MempoolConfig> for zksync_os_mempool::PoolConfig {
     }
 }
 
-impl From<TxValidatorConfig> for zksync_os_mempool::TxValidatorConfig {
-    fn from(c: TxValidatorConfig) -> Self {
+impl From<MempoolTxValidatorConfig> for zksync_os_mempool::TxValidatorConfig {
+    fn from(c: MempoolTxValidatorConfig) -> Self {
         Self {
             max_input_bytes: c.max_input_bytes,
         }

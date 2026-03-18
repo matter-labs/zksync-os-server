@@ -497,7 +497,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         &genesis.genesis_upgrade_tx().await.protocol_version
     };
 
-    if config.sequencer_config.deployment_filter.enabled {
+    if config
+        .sequencer_config
+        .tx_validator
+        .deployment_filter
+        .enabled
+    {
         let exec_version = ExecutionVersion::try_from(current_protocol_version)
             .expect("Cannot determine execution version");
         assert!(

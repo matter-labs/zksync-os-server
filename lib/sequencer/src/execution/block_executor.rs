@@ -1,4 +1,5 @@
 use crate::config::SequencerConfig;
+use crate::config::TxValidatorConfig;
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::execute_block_in_vm::execute_block_in_vm;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
@@ -112,8 +113,7 @@ where
                 .sync_with_base_and_build_view_for_block(&self.state, block_number)?;
 
             let is_produce = matches!(cmd_type, BlockCommandType::Produce);
-            let (tracer, validator) =
-                make_deployment_filter(is_produce, &self.config.deployment_filter);
+            let (tracer, validator) = make_tx_validator(is_produce, &self.config.tx_validator);
             let (block_output, replay_record, purged_txs, strict_subpool_cleanup) = {
                 execute_block_in_vm(
                     prepared_command,
@@ -205,6 +205,13 @@ async fn check_block_production_limit(
         latency_tracker.enter_state(SequencerState::ConfiguredBlockLimitReached);
         std::future::pending::<()>().await;
     }
+}
+
+fn make_tx_validator(
+    is_produce: bool,
+    config: &TxValidatorConfig,
+) -> (deployment_filter::Tracer, deployment_filter::Validator) {
+    make_deployment_filter(is_produce, &config.deployment_filter)
 }
 
 fn make_deployment_filter(

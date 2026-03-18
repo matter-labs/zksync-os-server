@@ -802,7 +802,7 @@ impl GatewayTesterBuilder {
                     config.general_config.gateway_rpc_url = Some(gateway_rpc_url.clone());
                     chain_options.apply_to_config(config);
                     if let Some(deployment_filter) = deployment_filter {
-                        config.sequencer_config.deployment_filter = deployment_filter;
+                        config.sequencer_config.tx_validator.deployment_filter = deployment_filter;
                     }
                 }),
                 chain_layout,
