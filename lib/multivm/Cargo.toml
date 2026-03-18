@@ -36,4 +36,3 @@ url.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-test-casing.workspace = true

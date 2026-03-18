@@ -22,6 +22,8 @@ struct AppBinEntry {
     app_bin_tag: String,
     /// Sanitized identifier for the env var (e.g., "V0_2_5" or "DEV_20260311").
     env_name: String,
+    /// The execution version number (e.g., 5, 6).
+    exec_version: u32,
 }
 
 /// Sanitize a tag string into a valid env var component.
@@ -61,7 +63,7 @@ fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
         .expect("missing [execution_version] sections");
 
     let mut result = HashMap::new();
-    for (_key, section) in exec_versions {
+    for (key, section) in exec_versions {
         let section = section
             .as_table()
             .expect("execution_version entry is not a table");
@@ -73,10 +75,16 @@ fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
             Some(abt) => abt,
             None => continue, // No app binaries for this execution version.
         };
+        let exec_version = key
+            .strip_prefix('v')
+            .unwrap_or_else(|| panic!("expected 'vN' key, got: {key:?}"))
+            .parse::<u32>()
+            .unwrap_or_else(|e| panic!("invalid version number in {key:?}: {e}"));
         let env_name = sanitize_tag_for_env(app_bin_tag);
         result.entry(tag.to_string()).or_insert(AppBinEntry {
             app_bin_tag: app_bin_tag.to_string(),
             env_name,
+            exec_version,
         });
     }
 
@@ -172,6 +180,8 @@ fn main() {
 
     // Collect unique app_bin_tag → env_name for code generation (ordered for determinism).
     let mut unique_tags: BTreeMap<String, String> = BTreeMap::new();
+    // Collect exec_version → app_bin_tag for generating versioned modules.
+    let mut exec_version_tags: BTreeMap<u32, String> = BTreeMap::new();
 
     // Find forward_system crates and download their app.bin files.
     for package in &metadata.packages {
@@ -208,15 +218,22 @@ fn main() {
             unique_tags
                 .entry(entry.app_bin_tag.clone())
                 .or_insert_with(|| entry.env_name.clone());
+            exec_version_tags
+                .entry(entry.exec_version)
+                .or_insert_with(|| entry.app_bin_tag.clone());
             continue;
         }
     }
 
     // Generate apps_generated.rs with include_bytes! and lookup function.
-    generate_apps_code(&manifest_dir, &unique_tags);
+    generate_apps_code(&manifest_dir, &unique_tags, &exec_version_tags);
 }
 
-fn generate_apps_code(manifest_dir: &str, tags: &BTreeMap<String, String>) {
+fn generate_apps_code(
+    manifest_dir: &str,
+    tags: &BTreeMap<String, String>,
+    exec_version_tags: &BTreeMap<u32, String>,
+) {
     let mut code = String::new();
     writeln!(
         code,
@@ -260,6 +277,53 @@ fn generate_apps_code(manifest_dir: &str, tags: &BTreeMap<String, String>) {
     writeln!(code, "        _ => None,").unwrap();
     writeln!(code, "    }}").unwrap();
     writeln!(code, "}}").unwrap();
+
+    // Generate versioned modules: pub mod v5 { ... }, pub mod v6 { ... }
+    // Each module provides path helpers that don't require a tag argument.
+    writeln!(code).unwrap();
+    for (exec_version, app_bin_tag) in exec_version_tags {
+        writeln!(code, "pub mod v{exec_version} {{").unwrap();
+        writeln!(code, "    use std::path::{{Path, PathBuf}};").unwrap();
+        writeln!(code, "    pub const APP_BIN_TAG: &str = {:?};", app_bin_tag).unwrap();
+        writeln!(code).unwrap();
+        writeln!(
+            code,
+            "    pub fn singleblock_batch_path(base_dir: &Path) -> PathBuf {{"
+        )
+        .unwrap();
+        writeln!(
+            code,
+            "        super::resolve(APP_BIN_TAG, \"singleblock_batch\", base_dir)"
+        )
+        .unwrap();
+        writeln!(code, "    }}").unwrap();
+        writeln!(code).unwrap();
+        writeln!(
+            code,
+            "    pub fn singleblock_batch_logging_enabled_path(base_dir: &Path) -> PathBuf {{"
+        )
+        .unwrap();
+        writeln!(
+            code,
+            "        super::resolve(APP_BIN_TAG, \"singleblock_batch_logging_enabled\", base_dir)"
+        )
+        .unwrap();
+        writeln!(code, "    }}").unwrap();
+        writeln!(code).unwrap();
+        writeln!(
+            code,
+            "    pub fn multiblock_batch_path(base_dir: &Path) -> PathBuf {{"
+        )
+        .unwrap();
+        writeln!(
+            code,
+            "        super::resolve(APP_BIN_TAG, \"multiblock_batch\", base_dir)"
+        )
+        .unwrap();
+        writeln!(code, "    }}").unwrap();
+        writeln!(code, "}}").unwrap();
+        writeln!(code).unwrap();
+    }
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let out_path = std::path::Path::new(&out_dir).join("apps_generated.rs");

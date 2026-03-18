@@ -140,22 +140,6 @@ fn compute_prover_input(
     let execution_version =
         zksync_os_types::protocol_config::execution_version(&replay_record.protocol_version)
             .expect("invalid protocol version");
-    let app_bin_tag =
-        zksync_os_types::protocol_config::app_bin_tag(&replay_record.protocol_version)
-            .unwrap_or_else(|| {
-                panic!(
-                    "no app_bin_tag for protocol version {}",
-                    replay_record.protocol_version
-                )
-            });
-    let bin_path = if enable_logging {
-        zksync_os_multivm::apps::singleblock_batch_logging_enabled_path(
-            app_bin_tag,
-            &app_bin_base_path,
-        )
-    } else {
-        zksync_os_multivm::apps::singleblock_batch_path(app_bin_tag, &app_bin_base_path)
-    };
     let prover_input = match execution_version {
         1..=4 => {
             panic!(
@@ -163,6 +147,13 @@ fn compute_prover_input(
             );
         }
         5 => {
+            let bin_path = if enable_logging {
+                zksync_os_multivm::apps::v5::singleblock_batch_logging_enabled_path(
+                    &app_bin_base_path,
+                )
+            } else {
+                zksync_os_multivm::apps::v5::singleblock_batch_path(&app_bin_base_path)
+            };
             use zk_ee::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
@@ -195,6 +186,13 @@ fn compute_prover_input(
             .expect("proof gen failed")
         }
         6 => {
+            let bin_path = if enable_logging {
+                zksync_os_multivm::apps::v6::singleblock_batch_logging_enabled_path(
+                    &app_bin_base_path,
+                )
+            } else {
+                zksync_os_multivm::apps::v6::singleblock_batch_path(&app_bin_base_path)
+            };
             use zk_ee_dev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };

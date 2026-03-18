@@ -14,39 +14,24 @@ fn materialize_app(base_dir: &Path, tag: &str, file_name: &str, bytes: &[u8]) ->
     full_path
 }
 
-fn resolve(tag: &str, variant: &str, base_dir: &Path) -> PathBuf {
+// pub for generated versioned submodules (v5, v6, ...) to call.
+pub fn resolve(tag: &str, variant: &str, base_dir: &Path) -> PathBuf {
     let bytes = app_bin_bytes(tag, variant)
         .unwrap_or_else(|| panic!("unknown app_bin_tag/variant: {tag}/{variant}"));
     materialize_app(base_dir, tag, &format!("{variant}.bin"), bytes)
 }
 
-pub fn singleblock_batch_path(tag: &str, base_dir: &Path) -> PathBuf {
-    resolve(tag, "singleblock_batch", base_dir)
-}
-
-pub fn singleblock_batch_logging_enabled_path(tag: &str, base_dir: &Path) -> PathBuf {
-    resolve(tag, "singleblock_batch_logging_enabled", base_dir)
-}
-
-pub fn multiblock_batch_path(tag: &str, base_dir: &Path) -> PathBuf {
-    resolve(tag, "multiblock_batch", base_dir)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test_casing::test_casing;
 
-    // Tags from protocol-versions.toml that have app_bin_tag set.
-    const TAGS: &[&str] = &["v0.2.5", "dev-20260311"];
-
-    #[test_casing(2, TAGS)]
-    fn app_paths_are_scoped_to_the_requested_base_dir(tag: &str) {
+    #[test]
+    fn app_paths_are_scoped_to_the_requested_base_dir() {
         let dir_a = tempfile::tempdir().unwrap();
         let dir_b = tempfile::tempdir().unwrap();
 
-        let path_a = singleblock_batch_path(tag, dir_a.path());
-        let path_b = singleblock_batch_path(tag, dir_b.path());
+        let path_a = v5::singleblock_batch_path(dir_a.path());
+        let path_b = v5::singleblock_batch_path(dir_b.path());
         assert_ne!(path_a, path_b);
         assert!(path_a.exists());
         assert!(path_b.exists());
