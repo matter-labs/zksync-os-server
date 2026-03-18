@@ -11,15 +11,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as FmtWrite;
 use std::io::Write;
 
-/// A parsed `[execution_version."Vn"]` entry.
-struct ExecutionVersionDef {
-    id: u32,
-}
-
-/// A parsed `[proving_version."Vn"]` entry.
-struct ProvingVersionDef {
-    id: u32,
-    vk_hash: String,
+/// A parsed `[forward_system."name"]` entry (only the fields we need).
+struct ForwardSystemDef {
     app_bin_tag: Option<String>,
 }
 
@@ -56,23 +49,22 @@ fn main() {
 }
 
 fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
-    let mut exec_versions: HashMap<String, ExecutionVersionDef> = HashMap::new();
-    let mut proving_versions: HashMap<String, ProvingVersionDef> = HashMap::new();
+    let mut forward_systems: HashMap<String, ForwardSystemDef> = HashMap::new();
     let mut historical_vk_hashes = Vec::new();
 
-    // Raw protocol entries before resolution.
     struct RawProtocol {
         minor: u64,
         patch: u64,
-        exec_ref: String,
-        proving_ref: String,
+        forward_system_ref: String,
+        execution_version_id: u32,
+        proving_version_id: u32,
+        vk_hash: String,
     }
     let mut raw_protocols = Vec::new();
 
     enum Section {
         None,
-        ExecutionVersion(String),
-        ProvingVersion(String),
+        ForwardSystem(String),
         Protocol { minor: u64, patch: u64 },
         HistoricalVkHashes,
     }
@@ -80,65 +72,58 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
     let mut section = Section::None;
 
     // Temporaries for current section.
-    let mut cur_id: Option<u32> = None;
-    let mut cur_vk_hash: Option<String> = None;
     let mut cur_app_bin_tag: Option<String> = None;
-    let mut cur_exec_ref: Option<String> = None;
-    let mut cur_proving_ref: Option<String> = None;
+    let mut cur_fs_ref: Option<String> = None;
+    let mut cur_exec_id: Option<u32> = None;
+    let mut cur_proving_id: Option<u32> = None;
+    let mut cur_vk_hash: Option<String> = None;
 
     let flush = |section: &Section,
-                 id: &mut Option<u32>,
-                 vk: &mut Option<String>,
                  abt: &mut Option<String>,
-                 exec_ref: &mut Option<String>,
-                 proving_ref: &mut Option<String>,
-                 exec_versions: &mut HashMap<String, ExecutionVersionDef>,
-                 proving_versions: &mut HashMap<String, ProvingVersionDef>,
+                 fs_ref: &mut Option<String>,
+                 exec_id: &mut Option<u32>,
+                 proving_id: &mut Option<u32>,
+                 vk: &mut Option<String>,
+                 forward_systems: &mut HashMap<String, ForwardSystemDef>,
                  raw_protocols: &mut Vec<RawProtocol>| {
         match section {
-            Section::ExecutionVersion(name) => {
-                let id_val = id
-                    .take()
-                    .unwrap_or_else(|| panic!("missing id for execution_version.{name}"));
-                exec_versions.insert(name.clone(), ExecutionVersionDef { id: id_val });
-            }
-            Section::ProvingVersion(name) => {
-                let id_val = id
-                    .take()
-                    .unwrap_or_else(|| panic!("missing id for proving_version.{name}"));
-                let vk_hash = vk
-                    .take()
-                    .unwrap_or_else(|| panic!("missing vk_hash for proving_version.{name}"));
-                proving_versions.insert(
+            Section::ForwardSystem(name) => {
+                forward_systems.insert(
                     name.clone(),
-                    ProvingVersionDef {
-                        id: id_val,
-                        vk_hash,
+                    ForwardSystemDef {
                         app_bin_tag: abt.take(),
                     },
                 );
             }
             Section::Protocol { minor, patch } => {
-                let er = exec_ref.take().unwrap_or_else(|| {
-                    panic!("missing execution_version for protocol {minor}.{patch}")
+                let fs = fs_ref.take().unwrap_or_else(|| {
+                    panic!("missing forward_system for protocol {minor}.{patch}")
                 });
-                let pr = proving_ref.take().unwrap_or_else(|| {
-                    panic!("missing proving_version for protocol {minor}.{patch}")
+                let ev = exec_id.take().unwrap_or_else(|| {
+                    panic!("missing execution_version_id for protocol {minor}.{patch}")
                 });
+                let pv = proving_id.take().unwrap_or_else(|| {
+                    panic!("missing proving_version_id for protocol {minor}.{patch}")
+                });
+                let vk_hash = vk
+                    .take()
+                    .unwrap_or_else(|| panic!("missing vk_hash for protocol {minor}.{patch}"));
                 raw_protocols.push(RawProtocol {
                     minor: *minor,
                     patch: *patch,
-                    exec_ref: er,
-                    proving_ref: pr,
+                    forward_system_ref: fs,
+                    execution_version_id: ev,
+                    proving_version_id: pv,
+                    vk_hash,
                 });
             }
             _ => {}
         }
-        *id = None;
-        *vk = None;
         *abt = None;
-        *exec_ref = None;
-        *proving_ref = None;
+        *fs_ref = None;
+        *exec_id = None;
+        *proving_id = None;
+        *vk = None;
     };
 
     for line in contents.lines() {
@@ -151,26 +136,20 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
         if line.starts_with('[') {
             flush(
                 &section,
-                &mut cur_id,
-                &mut cur_vk_hash,
                 &mut cur_app_bin_tag,
-                &mut cur_exec_ref,
-                &mut cur_proving_ref,
-                &mut exec_versions,
-                &mut proving_versions,
+                &mut cur_fs_ref,
+                &mut cur_exec_id,
+                &mut cur_proving_id,
+                &mut cur_vk_hash,
+                &mut forward_systems,
                 &mut raw_protocols,
             );
 
             if let Some(name) = line
-                .strip_prefix("[execution_version.\"")
+                .strip_prefix("[forward_system.\"")
                 .and_then(|s| s.strip_suffix("\"]"))
             {
-                section = Section::ExecutionVersion(name.to_string());
-            } else if let Some(name) = line
-                .strip_prefix("[proving_version.\"")
-                .and_then(|s| s.strip_suffix("\"]"))
-            {
-                section = Section::ProvingVersion(name.to_string());
+                section = Section::ForwardSystem(name.to_string());
             } else if let Some(version_str) = line
                 .strip_prefix("[protocol.\"")
                 .and_then(|s| s.strip_suffix("\"]"))
@@ -191,20 +170,16 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
 
         if let Some((key, value)) = parse_kv(line) {
             match &section {
-                Section::ExecutionVersion(_) => {
-                    if key == "id" {
-                        cur_id = Some(value.parse().unwrap());
+                Section::ForwardSystem(_) => {
+                    if key == "app_bin_tag" {
+                        cur_app_bin_tag = Some(value);
                     }
                 }
-                Section::ProvingVersion(_) => match key {
-                    "id" => cur_id = Some(value.parse().unwrap()),
-                    "vk_hash" => cur_vk_hash = Some(value),
-                    "app_bin_tag" => cur_app_bin_tag = Some(value),
-                    _ => {}
-                },
                 Section::Protocol { .. } => match key {
-                    "execution_version" => cur_exec_ref = Some(value),
-                    "proving_version" => cur_proving_ref = Some(value),
+                    "forward_system" => cur_fs_ref = Some(value),
+                    "execution_version_id" => cur_exec_id = Some(value.parse().unwrap()),
+                    "proving_version_id" => cur_proving_id = Some(value.parse().unwrap()),
+                    "vk_hash" => cur_vk_hash = Some(value),
                     _ => {}
                 },
                 Section::HistoricalVkHashes => {
@@ -218,39 +193,34 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
     // Flush last entry.
     flush(
         &section,
-        &mut cur_id,
-        &mut cur_vk_hash,
-        &mut cur_exec_ref,
-        &mut cur_proving_ref,
         &mut cur_app_bin_tag,
-        &mut exec_versions,
-        &mut proving_versions,
+        &mut cur_fs_ref,
+        &mut cur_exec_id,
+        &mut cur_proving_id,
+        &mut cur_vk_hash,
+        &mut forward_systems,
         &mut raw_protocols,
     );
 
-    // Resolve references.
+    // Resolve forward_system references.
     let entries = raw_protocols
         .into_iter()
         .map(|rp| {
-            let ev = exec_versions.get(&rp.exec_ref).unwrap_or_else(|| {
-                panic!(
-                    "protocol {}.{} references unknown execution_version {:?}",
-                    rp.minor, rp.patch, rp.exec_ref
-                )
-            });
-            let pv = proving_versions.get(&rp.proving_ref).unwrap_or_else(|| {
-                panic!(
-                    "protocol {}.{} references unknown proving_version {:?}",
-                    rp.minor, rp.patch, rp.proving_ref
-                )
-            });
+            let fs = forward_systems
+                .get(&rp.forward_system_ref)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "protocol {}.{} references unknown forward_system {:?}",
+                        rp.minor, rp.patch, rp.forward_system_ref
+                    )
+                });
             ProtocolEntry {
                 minor: rp.minor,
                 patch: rp.patch,
-                execution_version: ev.id,
-                proving_version_id: pv.id,
-                vk_hash: pv.vk_hash.clone(),
-                app_bin_tag: pv.app_bin_tag.clone(),
+                execution_version: rp.execution_version_id,
+                proving_version_id: rp.proving_version_id,
+                vk_hash: rp.vk_hash,
+                app_bin_tag: fs.app_bin_tag.clone(),
             }
         })
         .collect();

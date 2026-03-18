@@ -18,7 +18,7 @@ fn parse_git_tag(package_id: &PackageId) -> anyhow::Result<String> {
 
 /// An app.bin download entry derived from protocol-versions.toml.
 struct AppBinEntry {
-    /// The tag to download app.bin from (may differ from forward_system_tag).
+    /// The tag to download app.bin from (may differ from forward_system tag).
     app_bin_tag: String,
     /// Sanitized identifier for the env var (e.g., "V0_2_5" or "DEV_20260311").
     env_name: String,
@@ -35,15 +35,10 @@ fn sanitize_tag_for_env(tag: &str) -> String {
         .collect()
 }
 
-/// A parsed execution version definition.
-struct ExecutionVersionDef {
-    forward_system_tag: String,
-}
-
 /// Load protocol-versions.toml and extract app.bin download info.
 ///
-/// Returns a map from forward_system_tag → AppBinEntry for protocol versions
-/// that have an app_bin_tag set (i.e., those that need app.bin downloads).
+/// Returns a map from forward_system tag → AppBinEntry for forward_system
+/// releases that have an app_bin_tag set.
 fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -56,62 +51,23 @@ fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
     let contents = std::fs::read_to_string(&versions_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", versions_path.display()));
 
-    let mut exec_versions: HashMap<String, ExecutionVersionDef> = HashMap::new();
-    let mut proving_app_bin_tags: HashMap<String, String> = HashMap::new(); // proving version name → app_bin_tag
-
-    struct RawProtocol {
-        exec_ref: String,
-        proving_ref: String,
-    }
-    let mut raw_protocols = Vec::new();
-
-    enum Section {
-        None,
-        ExecutionVersion(String),
-        ProvingVersion(String),
-        Protocol,
-        HistoricalVkHashes,
-    }
-
-    let mut section = Section::None;
-    let mut cur_forward_system_tag = String::new();
+    // Parse [forward_system.*] sections for tag and app_bin_tag.
+    // No need to parse protocol sections — the mapping is direct.
+    let mut result = HashMap::new();
+    let mut in_forward_system = false;
+    let mut cur_tag = String::new();
     let mut cur_app_bin_tag = String::new();
-    let mut cur_exec_ref = String::new();
-    let mut cur_proving_ref = String::new();
 
-    // Flush helpers use a macro-like approach to avoid borrow issues.
-    let flush = |section: &Section,
-                     fst: &mut String,
-                     abt: &mut String,
-                     exec_ref: &mut String,
-                     proving_ref: &mut String,
-                     exec_versions: &mut HashMap<String, ExecutionVersionDef>,
-                     proving_abt: &mut HashMap<String, String>,
-                     raw_protocols: &mut Vec<RawProtocol>| {
-        match section {
-            Section::ExecutionVersion(name) if !fst.is_empty() => {
-                exec_versions.insert(
-                    name.clone(),
-                    ExecutionVersionDef {
-                        forward_system_tag: std::mem::take(fst),
-                    },
-                );
-            }
-            Section::ProvingVersion(name) if !abt.is_empty() => {
-                proving_abt.insert(name.clone(), std::mem::take(abt));
-            }
-            Section::Protocol if !exec_ref.is_empty() && !proving_ref.is_empty() => {
-                raw_protocols.push(RawProtocol {
-                    exec_ref: std::mem::take(exec_ref),
-                    proving_ref: std::mem::take(proving_ref),
-                });
-            }
-            _ => {}
+    let mut flush = |in_fs: bool, tag: &mut String, abt: &mut String| {
+        if in_fs && !tag.is_empty() && !abt.is_empty() {
+            let env_name = sanitize_tag_for_env(abt);
+            result.entry(std::mem::take(tag)).or_insert(AppBinEntry {
+                app_bin_tag: std::mem::take(abt),
+                env_name,
+            });
         }
-        fst.clear();
+        tag.clear();
         abt.clear();
-        exec_ref.clear();
-        proving_ref.clear();
     };
 
     for line in contents.lines() {
@@ -121,91 +77,22 @@ fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
         }
 
         if line.starts_with('[') {
-            flush(
-                &section,
-                &mut cur_forward_system_tag,
-                &mut cur_app_bin_tag,
-                &mut cur_exec_ref,
-                &mut cur_proving_ref,
-                &mut exec_versions,
-                &mut proving_app_bin_tags,
-                &mut raw_protocols,
-            );
-
-            if let Some(name) = line
-                .strip_prefix("[execution_version.\"")
-                .and_then(|s| s.strip_suffix("\"]"))
-            {
-                section = Section::ExecutionVersion(name.to_string());
-            } else if let Some(name) = line
-                .strip_prefix("[proving_version.\"")
-                .and_then(|s| s.strip_suffix("\"]"))
-            {
-                section = Section::ProvingVersion(name.to_string());
-            } else if line.starts_with("[protocol.") {
-                section = Section::Protocol;
-            } else if line == "[historical_vk_hashes]" {
-                section = Section::HistoricalVkHashes;
-            } else {
-                section = Section::None;
-            }
+            flush(in_forward_system, &mut cur_tag, &mut cur_app_bin_tag);
+            in_forward_system = line.starts_with("[forward_system.");
             continue;
         }
 
-        if let Some((key, value)) = parse_toml_string(line) {
-            match &section {
-                Section::ExecutionVersion(_) => {
-                    if key == "forward_system_tag" {
-                        cur_forward_system_tag = value;
-                    }
-                }
-                Section::ProvingVersion(_) => {
-                    if key == "app_bin_tag" {
-                        cur_app_bin_tag = value;
-                    }
-                }
-                Section::Protocol => match key {
-                    "execution_version" => cur_exec_ref = value,
-                    "proving_version" => cur_proving_ref = value,
-                    _ => {}
-                },
+        if in_forward_system && let Some((key, value)) = parse_toml_string(line) {
+            match key {
+                "tag" => cur_tag = value,
+                "app_bin_tag" => cur_app_bin_tag = value,
                 _ => {}
             }
         }
     }
 
-    // Flush last entries.
-    flush(
-        &section,
-        &mut cur_forward_system_tag,
-        &mut cur_app_bin_tag,
-        &mut cur_exec_ref,
-        &mut cur_proving_ref,
-        &mut exec_versions,
-        &mut proving_app_bin_tags,
-        &mut raw_protocols,
-    );
-
-    // Resolve: for each protocol whose proving_version has an app_bin_tag,
-    // map its execution_version's forward_system_tag → AppBinEntry.
-    let mut result = HashMap::new();
-    for rp in &raw_protocols {
-        if let Some(app_bin_tag) = proving_app_bin_tags.get(&rp.proving_ref) {
-            let ev = exec_versions.get(&rp.exec_ref).unwrap_or_else(|| {
-                panic!(
-                    "protocol references unknown execution_version {:?}",
-                    rp.exec_ref
-                )
-            });
-            let env_name = sanitize_tag_for_env(app_bin_tag);
-            result
-                .entry(ev.forward_system_tag.clone())
-                .or_insert(AppBinEntry {
-                    app_bin_tag: app_bin_tag.clone(),
-                    env_name,
-                });
-        }
-    }
+    // Flush last entry.
+    flush(in_forward_system, &mut cur_tag, &mut cur_app_bin_tag);
 
     result
 }
@@ -404,7 +291,5 @@ fn generate_apps_code(manifest_dir: &str, tags: &BTreeMap<String, String>) {
     let out_path = std::path::Path::new(&out_dir).join("apps_generated.rs");
     std::fs::write(&out_path, code).unwrap();
 
-    // Also generate the old-style env var paths for backward compat during transition.
-    // (The include_bytes! macros in the generated code use the env vars set above.)
     let _ = manifest_dir;
 }

@@ -2,7 +2,7 @@
 # Validates that protocol-versions.toml is consistent with Cargo.toml.
 #
 # Checks performed:
-# 1. Every forward_system_crate in protocol-versions.toml is declared in Cargo.toml.
+# 1. Every forward_system crate in protocol-versions.toml is declared in Cargo.toml.
 # 2. The git tags in protocol-versions.toml match the tags in Cargo.toml for that crate.
 #
 # Usage: ./tools/check-versions-toml.sh
@@ -30,7 +30,7 @@ echo "Checking protocol-versions.toml against Cargo.toml..."
 echo ""
 
 # Parse protocol-versions.toml: extract all (crate, tag) pairs from
-# execution_version sections (forward_system_crate/tag, simulation_crate/tag).
+# forward_system sections (crate/tag, simulation_crate/simulation_tag).
 current_section=""
 declare -A crate_entries
 declare -A tag_entries
@@ -40,14 +40,14 @@ while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ -z "${line// /}" ]] && continue
 
-    # Detect section headers like [execution_version."V4"].
-    if [[ "$line" =~ ^\[([a-zA-Z0-9._\"]+)\] ]]; then
+    # Detect section headers like [forward_system."v0.2.8"].
+    if [[ "$line" =~ ^\[([a-zA-Z0-9._\"\-]+)\] ]]; then
         current_section="${BASH_REMATCH[1]}"
         continue
     fi
 
-    # Only process execution_version sections.
-    if [[ ! "$current_section" =~ ^execution_version\. ]]; then
+    # Only process forward_system sections.
+    if [[ ! "$current_section" =~ ^forward_system\. ]]; then
         continue
     fi
 
@@ -57,10 +57,10 @@ while IFS= read -r line; do
         value="${BASH_REMATCH[2]}"
 
         case "$key" in
-            forward_system_crate)
+            crate)
                 crate_entries["${current_section}:forward"]="$value"
                 ;;
-            forward_system_tag)
+            tag)
                 tag_entries["${current_section}:forward"]="$value"
                 ;;
             simulation_crate)

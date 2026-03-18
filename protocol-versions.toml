@@ -5,19 +5,18 @@
 # lib/types/build.rs (to generate protocol config code) and by
 # lib/multivm/build.rs (to download app.bin artifacts).
 #
-# ── Execution versions ──
-# Each [execution_version."Vn"] section defines the forward_system crate
-# that implements a given execution version, and optionally a separate
-# simulation crate for tx simulation (e.g. eth_estimateGas).
-#
-# ── Proving versions ──
-# Each [proving_version."Vn"] section defines the numeric ID used in the
-# proof wire format, the verification key hash for L1 proof verification,
-# and optionally an app_bin_tag for downloading RISC-V proving artifacts.
+# ── Forward system releases ──
+# Each [forward_system."name"] section defines a forward_system crate
+# release — the core engine that handles both block execution and proof
+# input generation. It carries the crate name, git tag, optional
+# app_bin_tag for RISC-V proving artifacts, and optional simulation
+# crate overrides.
 #
 # ── Protocol versions ──
-# Each [protocol."M.m.p"] references an execution_version and a
-# proving_version by name.
+# Each [protocol."M.m.p"] references a forward_system by name and
+# carries per-protocol metadata: execution_version_id (for runtime
+# dispatch), proving_version_id (for proof wire format), and vk_hash
+# (for L1 verification).
 #
 # The [historical_vk_hashes] section lists VK hashes from older protocol
 # versions (execution versions 1-3) that are no longer in the registry but
@@ -25,54 +24,34 @@
 #
 # Rules:
 # 1. Every protocol version the server can execute MUST have an entry here.
-# 2. The forward_system_crate values MUST match dependencies in Cargo.toml.
-# 3. The forward_system_tag values MUST match the git tags in Cargo.toml.
+# 2. The forward_system crate values MUST match dependencies in Cargo.toml.
+# 3. The forward_system tag values MUST match the git tags in Cargo.toml.
 # 4. Historical entries MUST NOT be modified once proven on L1.
 #
 # When adding a new protocol version:
-# 1. Add execution_version / proving_version sections if needed.
-# 2. Add a new [protocol."M.m.p"] section referencing them.
+# 1. Add a [forward_system."name"] section if this is a new crate release.
+# 2. Add a new [protocol."M.m.p"] section referencing it.
 # 3. Make sure the forward_system dependency exists in Cargo.toml.
 # 4. Run `./tools/check-versions-toml.sh` to verify consistency.
 
-# ---- Execution versions ----
+# ---- Forward system releases ----
 
-[execution_version."V4"]
-id = 4
-forward_system_crate = "zk_os_forward_system_0_0_28"
-forward_system_tag = "v0.0.28-interface-v0.0.14"
+[forward_system."v0.0.28"]
+crate = "zk_os_forward_system_0_0_28"
+tag = "v0.0.28-interface-v0.0.14"
 
-[execution_version."V5"]
-id = 5
-forward_system_crate = "zk_os_forward_system"
-forward_system_tag = "v0.2.8-interface-v0.0.14"
+[forward_system."v0.2.8"]
+crate = "zk_os_forward_system"
+tag = "v0.2.8-interface-v0.0.14"
+# app.bin was built from a different tag due to a toolchain-induced binary change.
+app_bin_tag = "v0.2.5"
+# Simulation uses a separate crate to support eth_estimateGas with 0-balance accounts.
 simulation_crate = "zk_os_forward_system_0_2_8"
 simulation_tag = "v0.2.8-simulation-only-interface-v0.0.14"
 
-[execution_version."V6"]
-id = 6
-forward_system_crate = "zk_os_forward_system_dev"
-forward_system_tag = "dev-20260311"
-
-# ---- Proving versions ----
-
-[proving_version."V4"]
-id = 4
-vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
-
-[proving_version."V5"]
-id = 5
-vk_hash = "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581"
-
-[proving_version."V6"]
-id = 6
-vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
-# app.bin was built from a different tag due to a toolchain-induced binary change.
-app_bin_tag = "v0.2.5"
-
-[proving_version."V7"]
-id = 7
-vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+[forward_system."dev-20260311"]
+crate = "zk_os_forward_system_dev"
+tag = "dev-20260311"
 app_bin_tag = "dev-20260311"
 
 # ---- Protocol versions ----
@@ -80,44 +59,58 @@ app_bin_tag = "dev-20260311"
 # Protocol version 0.29.x — v0.1.x branch of zksync-os
 
 [protocol."0.29.0"]
-execution_version = "V4"
-proving_version = "V4"
+forward_system = "v0.0.28"
+execution_version_id = 4
+proving_version_id = 4
+vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 
 [protocol."0.29.1"]
-execution_version = "V4"
-proving_version = "V4"
+forward_system = "v0.0.28"
+execution_version_id = 4
+proving_version_id = 4
+vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 
 # Protocol version 0.30.x — v0.2.x branch of zksync-os
-# Simulation uses a separate crate (zk_os_forward_system_0_2_8) to support
-# eth_estimateGas with 0-balance accounts.
 
 [protocol."0.30.0"]
-execution_version = "V5"
-proving_version = "V5"
+forward_system = "v0.2.8"
+execution_version_id = 5
+proving_version_id = 5
+vk_hash = "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581"
 
 [protocol."0.30.1"]
-execution_version = "V5"
-proving_version = "V6"
+forward_system = "v0.2.8"
+execution_version_id = 5
+proving_version_id = 6
+vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
 [protocol."0.30.2"]
-execution_version = "V5"
-proving_version = "V6"
+forward_system = "v0.2.8"
+execution_version_id = 5
+proving_version_id = 6
+vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
 # Protocol version 0.31.x — dev branch of zksync-os
 
 [protocol."0.31.0"]
-execution_version = "V6"
-proving_version = "V7"
+forward_system = "dev-20260311"
+execution_version_id = 6
+proving_version_id = 7
+vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 [protocol."0.31.1"]
-execution_version = "V6"
-proving_version = "V7"
+forward_system = "dev-20260311"
+execution_version_id = 6
+proving_version_id = 7
+vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 # Protocol version 0.32.x — next anticipated version; routes to current latest for upgrade testing.
 
 [protocol."0.32.0"]
-execution_version = "V6"
-proving_version = "V7"
+forward_system = "dev-20260311"
+execution_version_id = 6
+proving_version_id = 7
+vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 # ---- Historical VK hashes ----
 # VK hashes from older protocol versions (execution versions 1-3) that are no
