@@ -94,12 +94,14 @@ vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 execution_version = "v6"
 # TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 7
+# Placeholder — real VK hash will be set once the proving stack for v6 is finalized.
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 [protocol."0.31.1"]
 execution_version = "v6"
 # TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 7
+# Placeholder — real VK hash will be set once the proving stack for v6 is finalized.
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 # Protocol version 0.32.x — next anticipated version; routes to current latest for upgrade testing.
@@ -108,6 +110,7 @@ vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 execution_version = "v6"
 # TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 7
+# Placeholder — real VK hash will be set once the proving stack for v6 is finalized.
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 # ---- Historical VK hashes ----
