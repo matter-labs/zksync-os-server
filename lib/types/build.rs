@@ -17,6 +17,7 @@ struct ProtocolEntry {
     execution_version: u32,
     proving_version_id: u32,
     vk_hash: String,
+    app_bin_tag: Option<String>,
 }
 
 fn main() {
@@ -55,11 +56,13 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
     let mut cur_execution_version: Option<u32> = None;
     let mut cur_proving_version_id: Option<u32> = None;
     let mut cur_vk_hash: Option<String> = None;
+    let mut cur_app_bin_tag: Option<String> = None;
 
     let flush = |section: &Section,
                  ev: &mut Option<u32>,
                  pv: &mut Option<u32>,
                  vk: &mut Option<String>,
+                 abt: &mut Option<String>,
                  entries: &mut Vec<ProtocolEntry>| {
         if let Section::Protocol { minor, patch } = section {
             if let (Some(execution_version), Some(proving_version_id), Some(vk_hash)) =
@@ -71,6 +74,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                     execution_version,
                     proving_version_id,
                     vk_hash,
+                    app_bin_tag: abt.take(),
                 });
             } else {
                 panic!(
@@ -82,6 +86,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
         *ev = None;
         *pv = None;
         *vk = None;
+        *abt = None;
     };
 
     for line in contents.lines() {
@@ -97,6 +102,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                 &mut cur_execution_version,
                 &mut cur_proving_version_id,
                 &mut cur_vk_hash,
+                &mut cur_app_bin_tag,
                 &mut entries,
             );
             // Parse version from [protocol."0.29.0"]
@@ -119,6 +125,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                 &mut cur_execution_version,
                 &mut cur_proving_version_id,
                 &mut cur_vk_hash,
+                &mut cur_app_bin_tag,
                 &mut entries,
             );
             section = Section::HistoricalVkHashes;
@@ -132,6 +139,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                 &mut cur_execution_version,
                 &mut cur_proving_version_id,
                 &mut cur_vk_hash,
+                &mut cur_app_bin_tag,
                 &mut entries,
             );
             section = Section::None;
@@ -150,6 +158,9 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                     "vk_hash" => {
                         cur_vk_hash = Some(value);
                     }
+                    "app_bin_tag" => {
+                        cur_app_bin_tag = Some(value);
+                    }
                     _ => {} // ignore other keys (forward_system_crate, etc.)
                 },
                 Section::HistoricalVkHashes => {
@@ -167,6 +178,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
         &mut cur_execution_version,
         &mut cur_proving_version_id,
         &mut cur_vk_hash,
+        &mut cur_app_bin_tag,
         &mut entries,
     );
 
@@ -247,6 +259,28 @@ fn generate_code(entries: &[ProtocolEntry], historical_vk_hashes: &[String]) -> 
             e.minor, e.patch, e.proving_version_id
         )
         .unwrap();
+    }
+    writeln!(code, "        _ => None,").unwrap();
+    writeln!(code, "    }}").unwrap();
+    writeln!(code, "}}").unwrap();
+    writeln!(code).unwrap();
+
+    // app_bin_tag_impl
+    writeln!(
+        code,
+        "fn app_bin_tag_impl(minor: u64, patch: u64) -> Option<&'static str> {{"
+    )
+    .unwrap();
+    writeln!(code, "    match (minor, patch) {{").unwrap();
+    for e in entries {
+        if let Some(tag) = &e.app_bin_tag {
+            writeln!(
+                code,
+                "        ({}, {}) => Some({:?}),",
+                e.minor, e.patch, tag
+            )
+            .unwrap();
+        }
     }
     writeln!(code, "        _ => None,").unwrap();
     writeln!(code, "    }}").unwrap();

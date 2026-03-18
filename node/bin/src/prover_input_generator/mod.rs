@@ -140,6 +140,22 @@ fn compute_prover_input(
     let proving_id =
         zksync_os_types::protocol_config::proving_version_id(&replay_record.protocol_version)
             .expect("invalid protocol version");
+    let app_bin_tag =
+        zksync_os_types::protocol_config::app_bin_tag(&replay_record.protocol_version)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no app_bin_tag for protocol version {}",
+                    replay_record.protocol_version
+                )
+            });
+    let bin_path = if enable_logging {
+        zksync_os_multivm::apps::singleblock_batch_logging_enabled_path(
+            app_bin_tag,
+            &app_bin_base_path,
+        )
+    } else {
+        zksync_os_multivm::apps::singleblock_batch_path(app_bin_tag, &app_bin_base_path)
+    };
     let prover_input = match proving_id {
         1..=5 => {
             panic!(
@@ -160,14 +176,6 @@ fn compute_prover_input(
             };
 
             let list_source = TxListSource { transactions };
-
-            let bin_path = if enable_logging {
-                zksync_os_multivm::apps::v6::singleblock_batch_logging_enabled_path(
-                    &app_bin_base_path,
-                )
-            } else {
-                zksync_os_multivm::apps::v6::singleblock_batch_path(&app_bin_base_path)
-            };
 
             let da_commitment_scheme = (da_commitment_scheme as u8)
                 .try_into()
@@ -200,14 +208,6 @@ fn compute_prover_input(
             };
 
             let list_source = TxListSource { transactions };
-
-            let bin_path = if enable_logging {
-                zksync_os_multivm::apps::v7::singleblock_batch_logging_enabled_path(
-                    &app_bin_base_path,
-                )
-            } else {
-                zksync_os_multivm::apps::v7::singleblock_batch_path(&app_bin_base_path)
-            };
 
             let da_commitment_scheme = (da_commitment_scheme as u8)
                 .try_into()

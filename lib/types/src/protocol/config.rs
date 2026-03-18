@@ -24,6 +24,12 @@ pub fn proving_version_id(version: &ProtocolSemanticVersion) -> Result<u32, Prot
         .ok_or_else(|| ProtocolConfigError::UnsupportedVersion(version.clone()))
 }
 
+/// Look up the app_bin_tag for a given protocol version.
+/// Returns `None` if this protocol version doesn't have app binaries.
+pub fn app_bin_tag(version: &ProtocolSemanticVersion) -> Option<&'static str> {
+    app_bin_tag_impl(version.minor, version.patch)
+}
+
 /// Verify that a VK hash is known and matches the expected VK hash for the given protocol version.
 pub fn verify_vk_hash(
     version: &ProtocolSemanticVersion,

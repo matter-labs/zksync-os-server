@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as FmtWrite;
 
 use cargo_metadata::{MetadataCommand, PackageId};
 use reqwest::StatusCode;
@@ -191,6 +192,12 @@ fn download_with_retry(client: &Client, url: &str, path: &str) -> anyhow::Result
     unreachable!("loop always returns on success or final attempt");
 }
 
+const APP_BIN_VARIANTS: &[&str] = &[
+    "singleblock_batch",
+    "multiblock_batch",
+    "singleblock_batch_logging_enabled",
+];
+
 fn main() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let metadata = MetadataCommand::new().exec().unwrap();
@@ -198,6 +205,9 @@ fn main() {
 
     // Load app.bin download mappings from protocol-versions.toml.
     let app_bin_entries = load_app_bin_entries();
+
+    // Collect unique app_bin_tag → env_name for code generation (ordered for determinism).
+    let mut unique_tags: BTreeMap<String, String> = BTreeMap::new();
 
     // Find forward_system crates and download their app.bin files.
     for package in &metadata.packages {
@@ -216,11 +226,7 @@ fn main() {
             let download_tag = &entry.app_bin_tag;
             let dir = format!("{manifest_dir}/apps/{download_tag}");
             std::fs::create_dir_all(&dir).expect("failed to create directory");
-            for variant in [
-                "multiblock_batch",
-                "singleblock_batch",
-                "singleblock_batch_logging_enabled",
-            ] {
+            for variant in APP_BIN_VARIANTS {
                 let url = format!(
                     "https://github.com/matter-labs/zksync-os/releases/download/{download_tag}/{variant}.bin"
                 );
@@ -235,7 +241,67 @@ fn main() {
                 "cargo:rustc-env=ZKSYNC_OS_APPS_{}_SOURCE_PATH={dir}",
                 entry.env_name
             );
+            unique_tags
+                .entry(entry.app_bin_tag.clone())
+                .or_insert_with(|| entry.env_name.clone());
             continue;
         }
     }
+
+    // Generate apps_generated.rs with include_bytes! and lookup function.
+    generate_apps_code(&manifest_dir, &unique_tags);
+}
+
+fn generate_apps_code(manifest_dir: &str, tags: &BTreeMap<String, String>) {
+    let mut code = String::new();
+    writeln!(
+        code,
+        "// Auto-generated from protocol-versions.toml — do not edit."
+    )
+    .unwrap();
+    writeln!(code).unwrap();
+
+    // Generate const include_bytes! for each tag + variant.
+    for (tag, env_name) in tags {
+        for variant in APP_BIN_VARIANTS {
+            let const_name = format!("{}_{}_BYTES", env_name, variant.to_ascii_uppercase());
+            writeln!(
+                code,
+                "const {const_name}: &[u8] = include_bytes!(concat!(env!(\"ZKSYNC_OS_APPS_{env_name}_SOURCE_PATH\"), \"/{variant}.bin\"));"
+            )
+            .unwrap();
+        }
+        let _ = tag; // used only as the map key for ordering
+        writeln!(code).unwrap();
+    }
+
+    // Generate lookup function.
+    writeln!(
+        code,
+        "fn app_bin_bytes(tag: &str, variant: &str) -> Option<&'static [u8]> {{"
+    )
+    .unwrap();
+    writeln!(code, "    match (tag, variant) {{").unwrap();
+    for (tag, env_name) in tags {
+        for variant in APP_BIN_VARIANTS {
+            let const_name = format!("{}_{}_BYTES", env_name, variant.to_ascii_uppercase());
+            writeln!(
+                code,
+                "        ({:?}, {:?}) => Some({const_name}),",
+                tag, variant
+            )
+            .unwrap();
+        }
+    }
+    writeln!(code, "        _ => None,").unwrap();
+    writeln!(code, "    }}").unwrap();
+    writeln!(code, "}}").unwrap();
+
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let out_path = std::path::Path::new(&out_dir).join("apps_generated.rs");
+    std::fs::write(&out_path, code).unwrap();
+
+    // Also generate the old-style env var paths for backward compat during transition.
+    // (The include_bytes! macros in the generated code use the env vars set above.)
+    let _ = manifest_dir;
 }
