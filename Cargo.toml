@@ -213,6 +213,7 @@ rustls = { version = "0.23.31", default-features = false, features = ["ring", "s
 test-casing = "0.2.0-beta.1"
 quote = "1"
 syn = "2"
+proc-macro2 = "1"
 
 tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"

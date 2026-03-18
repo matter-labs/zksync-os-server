@@ -208,7 +208,7 @@ impl BatchInfo {
                 )
                     .abi_encode_packed(),
             )),
-            31 => B256::from(keccak256(
+            31 | 32 => B256::from(keccak256(
                 (
                     U256::from(commit_info.chain_id),
                     commit_info.first_block_timestamp,
