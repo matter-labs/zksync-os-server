@@ -13,8 +13,8 @@
 #
 # ── Protocol versions ──
 # Each [protocol."M.m.p"] references an execution version and carries
-# per-protocol metadata: verifier_version_deprecated (for proof wire
-# format) and vk_hash (for L1 verification).
+# per-protocol metadata: vk_hash (for L1 verification) and
+# verifier_version_deprecated (legacy, to be removed in V32).
 #
 # The [historical_vk_hashes] section lists VK hashes from older protocol
 # versions (execution versions 1-3) that are no longer in the registry but
@@ -58,13 +58,13 @@ app_bin_tag = "dev-20260311"
 
 [protocol."0.29.0"]
 execution_version = "v4"
-# TODO: rename to verifier_version in protocol version 0.32
+# TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 4
 vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 
 [protocol."0.29.1"]
 execution_version = "v4"
-# TODO: rename to verifier_version in protocol version 0.32
+# TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 4
 vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 
@@ -72,19 +72,19 @@ vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 
 [protocol."0.30.0"]
 execution_version = "v5"
-# TODO: rename to verifier_version in protocol version 0.32
+# TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 5
 vk_hash = "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581"
 
 [protocol."0.30.1"]
 execution_version = "v5"
-# TODO: rename to verifier_version in protocol version 0.32
+# TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 6
 vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
 [protocol."0.30.2"]
 execution_version = "v5"
-# TODO: rename to verifier_version in protocol version 0.32
+# TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 6
 vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
@@ -92,13 +92,13 @@ vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
 [protocol."0.31.0"]
 execution_version = "v6"
-# TODO: rename to verifier_version in protocol version 0.32
+# TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 7
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 [protocol."0.31.1"]
 execution_version = "v6"
-# TODO: rename to verifier_version in protocol version 0.32
+# TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 7
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
@@ -106,7 +106,7 @@ vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 [protocol."0.32.0"]
 execution_version = "v6"
-# TODO: rename to verifier_version in protocol version 0.32
+# TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 7
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
