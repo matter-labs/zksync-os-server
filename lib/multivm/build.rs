@@ -37,8 +37,8 @@ fn sanitize_tag_for_env(tag: &str) -> String {
 
 /// Load protocol-versions.toml and extract app.bin download info.
 ///
-/// Returns a map from execution_version tag → AppBinEntry for
-/// execution versions that have an app_bin_tag set.
+/// Returns a map from git tag → AppBinEntry for execution versions
+/// that have an app_bin_tag set.
 fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -51,62 +51,36 @@ fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
     let contents = std::fs::read_to_string(&versions_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", versions_path.display()));
 
-    // Parse [execution_version.*] sections for tag and app_bin_tag.
-    // No need to parse protocol sections — the mapping is direct.
+    let root: toml::Value = contents
+        .parse()
+        .unwrap_or_else(|e| panic!("failed to parse protocol-versions.toml: {e}"));
+
+    let exec_versions = root
+        .get("execution_version")
+        .and_then(toml::Value::as_table)
+        .expect("missing [execution_version] sections");
+
     let mut result = HashMap::new();
-    let mut in_forward_system = false;
-    let mut cur_tag = String::new();
-    let mut cur_app_bin_tag = String::new();
-
-    let mut flush = |in_fs: bool, tag: &mut String, abt: &mut String| {
-        if in_fs && !tag.is_empty() && !abt.is_empty() {
-            let env_name = sanitize_tag_for_env(abt);
-            result.entry(std::mem::take(tag)).or_insert(AppBinEntry {
-                app_bin_tag: std::mem::take(abt),
-                env_name,
-            });
-        }
-        tag.clear();
-        abt.clear();
-    };
-
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.starts_with('#') || line.is_empty() {
-            continue;
-        }
-
-        if line.starts_with('[') {
-            flush(in_forward_system, &mut cur_tag, &mut cur_app_bin_tag);
-            in_forward_system = line.starts_with("[execution_version.");
-            continue;
-        }
-
-        if in_forward_system && let Some((key, value)) = parse_toml_string(line) {
-            match key {
-                "tag" => cur_tag = value,
-                "app_bin_tag" => cur_app_bin_tag = value,
-                _ => {}
-            }
-        }
+    for (_key, section) in exec_versions {
+        let section = section
+            .as_table()
+            .expect("execution_version entry is not a table");
+        let tag = section
+            .get("tag")
+            .and_then(toml::Value::as_str)
+            .expect("missing tag in execution_version section");
+        let app_bin_tag = match section.get("app_bin_tag").and_then(toml::Value::as_str) {
+            Some(abt) => abt,
+            None => continue, // No app binaries for this execution version.
+        };
+        let env_name = sanitize_tag_for_env(app_bin_tag);
+        result.entry(tag.to_string()).or_insert(AppBinEntry {
+            app_bin_tag: app_bin_tag.to_string(),
+            env_name,
+        });
     }
-
-    // Flush last entry.
-    flush(in_forward_system, &mut cur_tag, &mut cur_app_bin_tag);
 
     result
-}
-
-fn parse_toml_string(line: &str) -> Option<(&str, String)> {
-    let (key, rest) = line.split_once('=')?;
-    let key = key.trim();
-    let rest = rest.trim();
-    // Handle both string values ("...") and integer values.
-    if let Some(value) = rest.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
-        Some((key, value.to_string()))
-    } else {
-        Some((key, rest.to_string()))
-    }
 }
 
 const DOWNLOAD_MAX_ATTEMPTS: usize = 5;

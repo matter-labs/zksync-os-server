@@ -31,6 +31,7 @@ echo ""
 
 # Parse protocol-versions.toml: extract all (crate, tag) pairs from
 # execution_version sections (crate/tag, simulation_crate/simulation_tag).
+# Sections are [execution_version."vN"].
 current_section=""
 declare -A crate_entries
 declare -A tag_entries
@@ -40,7 +41,7 @@ while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ -z "${line// /}" ]] && continue
 
-    # Detect section headers like [execution_version.5].
+    # Detect section headers like [execution_version."v5"].
     if [[ "$line" =~ ^\[([a-zA-Z0-9._\"\-]+)\] ]]; then
         current_section="${BASH_REMATCH[1]}"
         continue

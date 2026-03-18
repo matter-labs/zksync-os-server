@@ -25,6 +25,9 @@ zksync_os_interface.workspace = true
 chrono = { workspace = true, default-features = false, features = ["now"] }
 num.workspace = true
 
+[build-dependencies]
+toml.workspace = true
+
 [dev-dependencies]
 serde_json.workspace = true
 

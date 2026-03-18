@@ -191,6 +191,7 @@ thread_local = "1.1.9"
 pin-project = "1.1.10"
 assert_matches = "1.5"
 serde_yaml = "0.9"
+toml = "0.8"
 secrecy = "0.10.3"
 cargo_metadata = { version = "0.20.0", default-features = false }
 tracing-logfmt = { version = "0.3.5" }
