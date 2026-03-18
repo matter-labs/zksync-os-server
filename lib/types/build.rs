@@ -145,6 +145,17 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
         });
     }
 
+    // Validate: live versions must have a real (non-zero) VK hash.
+    let zero_hash = "0x0000000000000000000000000000000000000000000000000000000000000000";
+    for e in &entries {
+        if e.live && e.vk_hash == zero_hash {
+            panic!(
+                "protocol 0.{}.{} is marked live but has a zero VK hash",
+                e.minor, e.patch
+            );
+        }
+    }
+
     // Parse [historical_vk_hashes].
     let mut historical_vk_hashes = Vec::new();
     if let Some(table) = root.get("historical_vk_hashes").and_then(Value::as_table) {
