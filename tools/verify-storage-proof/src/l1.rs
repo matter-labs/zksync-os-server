@@ -2,6 +2,7 @@ use alloy::network::Network;
 use alloy::primitives::{Address, B256, U256};
 use alloy::providers::Provider;
 use alloy::sol;
+use anyhow::Context;
 
 sol! {
     interface IBridgehub {
@@ -16,7 +17,7 @@ sol! {
 /// Resolves the diamond proxy address. Uses the override if provided, otherwise
 /// auto-discovers via bridgehub by fetching the chain ID from L2.
 pub async fn resolve_diamond_proxy<N: Network>(
-    l1_provider: &(impl Provider + Clone),
+    l1_provider: &impl Provider,
     l2_provider: &impl Provider<N>,
     l1_contract_override: Option<Address>,
     bridgehub_override: Option<Address>,
@@ -25,15 +26,15 @@ pub async fn resolve_diamond_proxy<N: Network>(
         return Ok(addr);
     }
 
-    let bridgehub = bridgehub_override
-        .ok_or_else(|| anyhow::anyhow!("Either --l1-contract or --bridgehub must be provided"))?;
+    let bridgehub =
+        bridgehub_override.context("Either --l1-contract or --bridgehub must be provided")?;
 
     discover_diamond_proxy(l1_provider, l2_provider, bridgehub).await
 }
 
 /// Fetches chain ID from L2, then calls `bridgehub.getZKChain(chainId)` on L1.
 async fn discover_diamond_proxy<N: Network>(
-    l1_provider: &(impl Provider + Clone),
+    l1_provider: &impl Provider,
     l2_provider: &impl Provider<N>,
     bridgehub: Address,
 ) -> anyhow::Result<Address> {

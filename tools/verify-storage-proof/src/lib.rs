@@ -1,6 +1,8 @@
 pub mod l1;
 pub mod l2;
 
+use std::time::Duration;
+
 use alloy::network::Network;
 use alloy::primitives::{Address, B256, U256, keccak256};
 use alloy::providers::Provider;
@@ -28,6 +30,9 @@ pub struct VerifyParams {
     pub batch_number: u64,
     pub l1_contract: Option<Address>,
     pub bridgehub: Option<Address>,
+    /// If set, wait up to this duration for the batch to be committed on L1
+    /// instead of failing immediately when `storedBatchHash` returns zero.
+    pub commit_timeout: Option<Duration>,
 }
 
 /// Result of a successful storage proof verification.
@@ -50,7 +55,7 @@ pub struct VerificationResult {
 /// 5. Reconstructs `StoredBatchInfo`, hashes it, and compares against L1
 /// 6. Returns proven storage values
 pub async fn verify_storage_proof<N: Network>(
-    l1_provider: &(impl Provider + Clone),
+    l1_provider: &impl Provider,
     l2_provider: &impl Provider<N>,
     params: VerifyParams,
 ) -> anyhow::Result<VerificationResult> {
@@ -63,11 +68,19 @@ pub async fn verify_storage_proof<N: Network>(
     )
     .await?;
 
-    // 2. Verify the proof internally (Merkle tree + state commitment preimage)
+    // 2. Verify batch number matches
     let l1_verification_data = &proof.l1_verification_data;
+    anyhow::ensure!(
+        l1_verification_data.batch_number == params.batch_number,
+        "Batch number mismatch: requested {}, proof contains {}",
+        params.batch_number,
+        l1_verification_data.batch_number,
+    );
+
+    // 3. Verify the proof internally (Merkle tree + state commitment preimage)
     let view = proof.verify(params.address, &params.keys)?;
 
-    // 3. Resolve diamond proxy
+    // 4. Resolve diamond proxy
     let diamond_proxy = l1::resolve_diamond_proxy(
         l1_provider,
         l2_provider,
@@ -76,11 +89,14 @@ pub async fn verify_storage_proof<N: Network>(
     )
     .await?;
 
-    // 4. Fetch on-chain batch hash
-    let on_chain_batch_hash =
-        l1::fetch_stored_batch_hash(l1_provider, diamond_proxy, params.batch_number).await?;
+    // 5. Fetch on-chain batch hash (with optional wait)
+    let on_chain_batch_hash = if let Some(timeout) = params.commit_timeout {
+        wait_for_batch_hash(l1_provider, diamond_proxy, params.batch_number, timeout).await?
+    } else {
+        l1::fetch_stored_batch_hash(l1_provider, diamond_proxy, params.batch_number).await?
+    };
 
-    // 5. Reconstruct StoredBatchInfo from proof data + state commitment, hash, and compare
+    // 6. Reconstruct StoredBatchInfo from proof data + state commitment, hash, and compare
     let stored_batch_info = StoredBatchInfo {
         batchNumber: l1_verification_data.batch_number,
         batchHash: view.storage_commitment,
@@ -99,7 +115,7 @@ pub async fn verify_storage_proof<N: Network>(
         "Batch hash mismatch!\n  Computed: {computed_batch_hash}\n  L1:       {on_chain_batch_hash}",
     );
 
-    // 6. Build result
+    // 7. Build result
     let storage_values = params
         .keys
         .iter()
@@ -112,4 +128,23 @@ pub async fn verify_storage_proof<N: Network>(
         on_chain_batch_hash,
         storage_values,
     })
+}
+
+/// Polls `storedBatchHash` until it returns a non-zero value or the timeout expires.
+async fn wait_for_batch_hash(
+    provider: &impl Provider,
+    diamond_proxy: Address,
+    batch_number: u64,
+    timeout: Duration,
+) -> anyhow::Result<B256> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        match l1::fetch_stored_batch_hash(provider, diamond_proxy, batch_number).await {
+            Ok(hash) => return Ok(hash),
+            Err(_) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }

@@ -9,61 +9,16 @@ use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::Counter;
 use zksync_os_integration_tests::contracts::Counter::CounterInstance;
 use zksync_os_integration_tests::provider::ZksyncApi;
-use zksync_os_merkle_tree_api::flat::InnerStorageSlotProof;
 use zksync_os_rpc_api::types::BatchStorageProof;
 use zksync_os_verify_storage_proof::l1::{fetch_stored_batch_hash, resolve_diamond_proxy};
 use zksync_os_verify_storage_proof::{VerificationResult, VerifyParams, verify_storage_proof};
 
 fn log_proof(proof: &BatchStorageProof) {
-    tracing::info!(address = %proof.address, "=== Storage Proof ===");
-
     let sc = &proof.state_commitment_preimage;
-    tracing::info!(
-        next_free_slot = %sc.next_free_slot,
-        block_number = %sc.block_number,
-        last_block_timestamp = %sc.last_block_timestamp,
-        last_256_block_hashes_blake = %sc.last_256_block_hashes_blake,
-        "state commitment preimage"
-    );
-
     let l1 = &proof.l1_verification_data;
-    tracing::info!(
-        batch_number = l1.batch_number,
-        number_of_layer1_txs = l1.number_of_layer1_txs,
-        priority_operations_hash = %l1.priority_operations_hash,
-        l2_to_l1_logs_root_hash = %l1.l2_to_l1_logs_root_hash,
-        commitment = %l1.commitment,
-        "L1 verification data"
-    );
-
+    tracing::info!(address = %proof.address, ?sc, ?l1, "storage proof");
     for (i, slot_proof) in proof.storage_proofs.iter().enumerate() {
-        match &slot_proof.proof {
-            InnerStorageSlotProof::Existing(entry) => {
-                tracing::info!(
-                    slot = i,
-                    key = %slot_proof.key.0,
-                    index = entry.index,
-                    value = %entry.value,
-                    next_index = entry.next_index,
-                    siblings = entry.siblings.len(),
-                    "slot proof (existing)"
-                );
-            }
-            InnerStorageSlotProof::NonExisting {
-                left_neighbor,
-                right_neighbor,
-            } => {
-                tracing::info!(
-                    slot = i,
-                    key = %slot_proof.key.0,
-                    left_key = %left_neighbor.leaf_key,
-                    left_index = left_neighbor.inner.index,
-                    right_key = %right_neighbor.leaf_key,
-                    right_index = right_neighbor.inner.index,
-                    "slot proof (non-existing)"
-                );
-            }
-        }
+        tracing::info!(slot = i, ?slot_proof, "slot proof");
     }
 }
 
@@ -182,6 +137,7 @@ async fn verify_storage_proof_with_l1_contract() -> anyhow::Result<()> {
             batch_number,
             l1_contract: Some(diamond_proxy_address),
             bridgehub: None,
+            commit_timeout: None,
         },
     )
     .await?;
@@ -250,6 +206,7 @@ async fn verify_storage_proof_with_bridgehub_discovery() -> anyhow::Result<()> {
             batch_number,
             l1_contract: None,
             bridgehub: Some(bridgehub_address),
+            commit_timeout: None,
         },
     )
     .await?;
@@ -321,6 +278,7 @@ async fn verify_storage_proof_empty_slot() -> anyhow::Result<()> {
             batch_number,
             l1_contract: Some(diamond_proxy_address),
             bridgehub: None,
+            commit_timeout: None,
         },
     )
     .await?;

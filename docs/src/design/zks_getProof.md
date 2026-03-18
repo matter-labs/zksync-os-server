@@ -50,7 +50,7 @@ The preimage fields needed to recompute the L1 state commitment from the Merkle 
 |-------|------|-------------|
 | `nextFreeSlot` | `uint64` | The next available leaf index in the state tree after this batch. Part of the tree commitment. |
 | `blockNumber` | `uint64` | The last L2 block number in this batch. |
-| `last256BlockHashesBlake` | `H256` | `blake2s` of the concatenation of the last 256 block hashes (each as 32-byte big-endian). |
+| `last256BlockHashesBlake` | `H256` | `blake2s` of the concatenation of the last 256 block hashes (each as 32 bytes). |
 | `lastBlockTimestamp` | `uint64` | Timestamp of the last L2 block in this batch. |
 
 ### `storageProofs[i]`

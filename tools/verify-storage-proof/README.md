@@ -13,25 +13,23 @@ cargo build -p zksync_os_verify_storage_proof --release
 With bridgehub auto-discovery (recommended):
 
 ```bash
-cargo run -p zksync_os_verify_storage_proof -- \
+cargo run --release -p zksync_os_verify_storage_proof -- \
   --l2-rpc https://mainnet.era.zksync.io \
   --l1-rpc https://eth.llamarpc.com \
   --bridgehub 0x303a465B659cBB0ab36eE643eA362c509EEb5213 \
-  --address 0x... \
-  --keys 0x...,0x... \
-  --batch-number 12345
+  --batch-number 12345 \
+  0x... 0x...,0x...
 ```
 
 With explicit diamond proxy address:
 
 ```bash
-cargo run -p zksync_os_verify_storage_proof -- \
+cargo run --release -p zksync_os_verify_storage_proof -- \
   --l2-rpc http://localhost:3050 \
   --l1-rpc http://localhost:8545 \
   --l1-contract 0x... \
-  --address 0x... \
-  --keys 0x... \
-  --batch-number 1
+  --batch-number 1 \
+  0x... 0x...
 ```
 
 ## How it works
@@ -48,29 +46,14 @@ If auto-discovery is used (`--bridgehub`), the tool calls `eth_chainId` on L2 an
 |------|----------|-------------|
 | `--l2-rpc` | Yes | L2 JSON-RPC endpoint |
 | `--l1-rpc` | Yes | L1 JSON-RPC endpoint |
-| `--address` | Yes | Account address to prove storage for |
-| `--keys` | Yes | Comma-separated storage keys to verify |
+| `<ADDRESS>` | Yes | Account address to prove storage for (positional) |
+| `<KEYS>` | Yes | Comma-separated storage keys to verify (positional) |
 | `--batch-number` | Yes | L1 batch number to verify against |
 | `--bridgehub` | * | Bridgehub address on L1 (enables auto-discovery) |
 | `--l1-contract` | * | Diamond proxy address on L1 (skips auto-discovery) |
+| `--commit-timeout` | No | Seconds to wait for L1 batch commitment (default: 60, 0 = fail immediately) |
 
 \* One of `--bridgehub` or `--l1-contract` must be provided.
-
-## Local end-to-end test
-
-`test_local.sh` starts Anvil + the L2 server, deploys a contract, writes to storage, waits for the batch to be committed on L1, and runs the CLI tool to verify the proof.
-
-Prerequisites: [Foundry](https://getfoundry.sh/) (`anvil`, `cast`), `jq`, `curl`.
-
-```bash
-# First run (builds everything):
-./tools/verify-storage-proof/test_local.sh
-
-# Subsequent runs (skip build):
-./tools/verify-storage-proof/test_local.sh --skip-build
-```
-
-The script must be run from the repo root (it `cd`s there automatically). It cleans the DB on each run and takes ~15 seconds for the batch pipeline to produce a verifiable proof.
 
 ## Integration tests
 
