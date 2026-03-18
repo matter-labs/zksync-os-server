@@ -56,10 +56,12 @@ impl BatchMetadata {
             .context("Failed to get VK hash from protocol version")
     }
 
-    /// Gets the proving version ID (u32) for wire format compatibility.
-    pub fn proving_version_id(&self) -> anyhow::Result<u32> {
-        zksync_os_types::protocol_config::proving_version_id(&self.protocol_version)
-            .context("Failed to get proving version ID from protocol version")
+    /// Gets the L1 verifier version (u32) for wire format encoding.
+    ///
+    /// Deprecated: only used for encoding `proof[0]` in L1 proof submissions.
+    pub fn verifier_version_deprecated(&self) -> anyhow::Result<u32> {
+        zksync_os_types::protocol_config::verifier_version_deprecated(&self.protocol_version)
+            .context("Failed to get verifier version from protocol version")
     }
 }
 

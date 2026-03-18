@@ -78,13 +78,13 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     use zk_os_forward_system_dev::run::generate_batch_proof_input as generate_batch_proof_input_dev;
 
     let first_protocol_version = &blocks.first().unwrap().1.protocol_version;
-    let proving_id = zksync_os_types::protocol_config::proving_version_id(first_protocol_version)?;
+    let exec_version = zksync_os_types::protocol_config::execution_version(first_protocol_version)?;
     // execution version should be the same for all the blocks, it is ensured by the seal criteria
-    let batch_prover_input: ProverInput = match proving_id {
-        1..=5 => {
-            panic!("sealing batch with proving version id {proving_id} (v1-v5) is not supported");
+    let batch_prover_input: ProverInput = match exec_version {
+        1..=4 => {
+            panic!("sealing batch with execution version {exec_version} (v1-v4) is not supported");
         }
-        6 => {
+        5 => {
             // TODO: in the long-term we should generate proof input per batch
             generate_batch_proof_input(
                 blocks
@@ -100,7 +100,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
                     .collect(),
             )
         }
-        7 => {
+        6 => {
             // TODO: in the long-term we should generate proof input per batch
             generate_batch_proof_input_dev(
                 blocks
@@ -116,7 +116,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
                     .collect(),
             )
         }
-        _ => panic!("unsupported proving version id: {proving_id}"),
+        _ => panic!("unsupported execution version: {exec_version}"),
     };
 
     // Sanity check: all blocks in the batch should have the same protocol version

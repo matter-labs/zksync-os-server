@@ -15,7 +15,7 @@
 # ── Protocol versions ──
 # Each [protocol."M.m.p"] references a forward_system by name and
 # carries per-protocol metadata: execution_version_id (for runtime
-# dispatch), proving_version_id (for proof wire format), and vk_hash
+# dispatch), verifier_version (for proof wire format), and vk_hash
 # (for L1 verification).
 #
 # The [historical_vk_hashes] section lists VK hashes from older protocol
@@ -61,13 +61,13 @@ app_bin_tag = "dev-20260311"
 [protocol."0.29.0"]
 forward_system = "v0.0.28"
 execution_version_id = 4
-proving_version_id = 4
+verifier_version = 4
 vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 
 [protocol."0.29.1"]
 forward_system = "v0.0.28"
 execution_version_id = 4
-proving_version_id = 4
+verifier_version = 4
 vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 
 # Protocol version 0.30.x — v0.2.x branch of zksync-os
@@ -75,19 +75,19 @@ vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 [protocol."0.30.0"]
 forward_system = "v0.2.8"
 execution_version_id = 5
-proving_version_id = 5
+verifier_version = 5
 vk_hash = "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581"
 
 [protocol."0.30.1"]
 forward_system = "v0.2.8"
 execution_version_id = 5
-proving_version_id = 6
+verifier_version = 6
 vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
 [protocol."0.30.2"]
 forward_system = "v0.2.8"
 execution_version_id = 5
-proving_version_id = 6
+verifier_version = 6
 vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
 # Protocol version 0.31.x — dev branch of zksync-os
@@ -95,13 +95,13 @@ vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 [protocol."0.31.0"]
 forward_system = "dev-20260311"
 execution_version_id = 6
-proving_version_id = 7
+verifier_version = 7
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 [protocol."0.31.1"]
 forward_system = "dev-20260311"
 execution_version_id = 6
-proving_version_id = 7
+verifier_version = 7
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 # Protocol version 0.32.x — next anticipated version; routes to current latest for upgrade testing.
@@ -109,7 +109,7 @@ vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 [protocol."0.32.0"]
 forward_system = "dev-20260311"
 execution_version_id = 6
-proving_version_id = 7
+verifier_version = 7
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 # ---- Historical VK hashes ----

@@ -147,8 +147,8 @@ impl ProofCommand {
                 .first()
                 .unwrap()
                 .batch
-                .proving_version_id()
-                .expect("proving version ID must be valid")
+                .verifier_version_deprecated()
+                .expect("verifier version must be valid")
         };
 
         // todo: remove tostring

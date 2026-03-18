@@ -4,7 +4,7 @@
 /// The generated file contains:
 /// - `execution_version_impl(minor, patch) -> Option<u32>`
 /// - `vk_hash_impl(minor, patch) -> Option<&'static str>`
-/// - `proving_version_id_impl(minor, patch) -> Option<u32>`
+/// - `verifier_version_impl(minor, patch) -> Option<u32>`
 /// - `app_bin_tag_impl(minor, patch) -> Option<&'static str>`
 /// - `ALL_KNOWN_VK_HASHES: &[&str]` — all non-zero VK hashes (current + historical)
 use std::collections::{BTreeSet, HashMap};
@@ -21,7 +21,7 @@ struct ProtocolEntry {
     minor: u64,
     patch: u64,
     execution_version: u32,
-    proving_version_id: u32,
+    verifier_version: u32,
     vk_hash: String,
     app_bin_tag: Option<String>,
 }
@@ -57,7 +57,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
         patch: u64,
         forward_system_ref: String,
         execution_version_id: u32,
-        proving_version_id: u32,
+        verifier_version: u32,
         vk_hash: String,
     }
     let mut raw_protocols = Vec::new();
@@ -103,7 +103,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                     panic!("missing execution_version_id for protocol {minor}.{patch}")
                 });
                 let pv = proving_id.take().unwrap_or_else(|| {
-                    panic!("missing proving_version_id for protocol {minor}.{patch}")
+                    panic!("missing verifier_version for protocol {minor}.{patch}")
                 });
                 let vk_hash = vk
                     .take()
@@ -113,7 +113,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                     patch: *patch,
                     forward_system_ref: fs,
                     execution_version_id: ev,
-                    proving_version_id: pv,
+                    verifier_version: pv,
                     vk_hash,
                 });
             }
@@ -178,7 +178,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                 Section::Protocol { .. } => match key {
                     "forward_system" => cur_fs_ref = Some(value),
                     "execution_version_id" => cur_exec_id = Some(value.parse().unwrap()),
-                    "proving_version_id" => cur_proving_id = Some(value.parse().unwrap()),
+                    "verifier_version" => cur_proving_id = Some(value.parse().unwrap()),
                     "vk_hash" => cur_vk_hash = Some(value),
                     _ => {}
                 },
@@ -218,7 +218,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                 minor: rp.minor,
                 patch: rp.patch,
                 execution_version: rp.execution_version_id,
-                proving_version_id: rp.proving_version_id,
+                verifier_version: rp.verifier_version,
                 vk_hash: rp.vk_hash,
                 app_bin_tag: fs.app_bin_tag.clone(),
             }
@@ -288,10 +288,10 @@ fn generate_code(entries: &[ProtocolEntry], historical_vk_hashes: &[String]) -> 
     writeln!(code, "}}").unwrap();
     writeln!(code).unwrap();
 
-    // proving_version_id_impl
+    // verifier_version_impl
     writeln!(
         code,
-        "fn proving_version_id_impl(minor: u64, patch: u64) -> Option<u32> {{"
+        "fn verifier_version_impl(minor: u64, patch: u64) -> Option<u32> {{"
     )
     .unwrap();
     writeln!(code, "    match (minor, patch) {{").unwrap();
@@ -299,7 +299,7 @@ fn generate_code(entries: &[ProtocolEntry], historical_vk_hashes: &[String]) -> 
         writeln!(
             code,
             "        ({}, {}) => Some({}),",
-            e.minor, e.patch, e.proving_version_id
+            e.minor, e.patch, e.verifier_version
         )
         .unwrap();
     }

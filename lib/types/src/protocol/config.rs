@@ -17,10 +17,16 @@ pub fn vk_hash(version: &ProtocolSemanticVersion) -> Result<&'static str, Protoc
         .ok_or_else(|| ProtocolConfigError::UnsupportedVersion(version.clone()))
 }
 
-/// Look up the proving version ID (u32) for a given protocol version.
-/// This is used in serialized proof wire formats for backward compatibility.
-pub fn proving_version_id(version: &ProtocolSemanticVersion) -> Result<u32, ProtocolConfigError> {
-    proving_version_id_impl(version.minor, version.patch)
+/// Look up the L1 verifier version (u32) for a given protocol version.
+///
+/// Deprecated: this value is only needed for the L1 proof wire format where it is
+/// encoded into `proof[0]` so the on-chain verifier contract can select the correct
+/// verification key. New code should not dispatch on this value — use
+/// `execution_version` or protocol version directly instead.
+pub fn verifier_version_deprecated(
+    version: &ProtocolSemanticVersion,
+) -> Result<u32, ProtocolConfigError> {
+    verifier_version_impl(version.minor, version.patch)
         .ok_or_else(|| ProtocolConfigError::UnsupportedVersion(version.clone()))
 }
 
@@ -97,7 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn proving_version_id_mapping() {
+    fn verifier_version_deprecated_mapping() {
         let test_vector = [
             ((0, 29, 0), 4),
             ((0, 29, 1), 4),
@@ -111,15 +117,15 @@ mod tests {
 
         for ((major, minor, patch), expected) in test_vector.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
-            let pv_id = proving_version_id(&version)
+            let vv = verifier_version_deprecated(&version)
                 .unwrap_or_else(|e| panic!("Failed to convert version {version:?}: {e}"));
-            assert_eq!(pv_id, *expected);
+            assert_eq!(vv, *expected);
         }
 
         let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 3), (0, 33, 0)];
         for (major, minor, patch) in unknown_versions.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
-            assert!(proving_version_id(&version).is_err());
+            assert!(verifier_version_deprecated(&version).is_err());
         }
     }
 

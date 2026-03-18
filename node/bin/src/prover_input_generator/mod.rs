@@ -137,8 +137,8 @@ fn compute_prover_input(
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
-    let proving_id =
-        zksync_os_types::protocol_config::proving_version_id(&replay_record.protocol_version)
+    let execution_version =
+        zksync_os_types::protocol_config::execution_version(&replay_record.protocol_version)
             .expect("invalid protocol version");
     let app_bin_tag =
         zksync_os_types::protocol_config::app_bin_tag(&replay_record.protocol_version)
@@ -156,13 +156,13 @@ fn compute_prover_input(
     } else {
         zksync_os_multivm::apps::singleblock_batch_path(app_bin_tag, &app_bin_base_path)
     };
-    let prover_input = match proving_id {
-        1..=5 => {
+    let prover_input = match execution_version {
+        1..=4 => {
             panic!(
-                "computing prover input for batch with proving version id {proving_id} (v1-v5) is not supported"
+                "computing prover input for execution version {execution_version} (v1-v4) is not supported"
             );
         }
-        6 => {
+        5 => {
             use zk_ee::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
@@ -194,7 +194,7 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
-        7 => {
+        6 => {
             use zk_ee_dev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
@@ -226,7 +226,7 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
-        _ => panic!("unsupported proving version id: {proving_id}"),
+        _ => panic!("unsupported execution version: {execution_version}"),
     };
     let latency = prover_input_generation_latency.observe();
 

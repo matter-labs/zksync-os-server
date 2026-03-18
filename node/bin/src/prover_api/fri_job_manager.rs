@@ -222,21 +222,17 @@ impl FriJobManager {
         batch_number: u64,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
-        // TODO: This match is needed for the transition period.
-        // v0.5.2 airbender cannot verify proofs generated with v0.5.1.
-        // Once all networks are protocol upgraded, the code below can be removed.
-        let proving_id = batch_metadata
-            .proving_version_id()
-            // should be safe to unwrap, as it's been checked before this call
-            .expect("invalid proving version");
-        let result = match proving_id {
-            1..=5 => {
+        let exec_version =
+            zksync_os_types::protocol_config::execution_version(&batch_metadata.protocol_version)
+                .expect("invalid protocol version");
+        let result = match exec_version {
+            1..=4 => {
                 panic!(
-                    "proof verification for proving version id {proving_id} (v1-v5) is not supported"
+                    "proof verification for execution version {exec_version} (v1-v4) is not supported"
                 )
             }
-            6 => {
-                tracing::debug!("Using 0.5.2 proof verifier for batch {}", batch_number);
+            5 => {
+                tracing::debug!("Using fri proof verifier for batch {}", batch_number);
                 let program_proof =
                     bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
                         .map_err(|err| {
@@ -253,10 +249,10 @@ impl FriJobManager {
                     program_proof,
                 )
             }
-            7 => {
-                todo!("verifying v7 proofs is unsupported for now")
+            6 => {
+                todo!("verifying v6 proofs is unsupported for now")
             }
-            _ => panic!("unsupported proving version id: {proving_id}"),
+            _ => panic!("unsupported execution version: {exec_version}"),
         };
 
         if let Err(SubmitError::FriProofVerificationError {
