@@ -2,3 +2,5 @@
 # Workspace directory to properly resolve artifacts relative paths
 # it will always be relative to the workspace and can be rewritten if required
 WORKSPACE_DIR = { value = "./", relative = true, force = false }
+# Proof generation has deep call stacks in debug builds; 16 MiB avoids stack overflows.
+RUST_MIN_STACK = { value = "16777216", force = false }
