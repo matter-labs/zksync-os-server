@@ -20,6 +20,7 @@ struct ExecutionVersionDef {
 struct ProvingVersionDef {
     id: u32,
     vk_hash: String,
+    app_bin_tag: Option<String>,
 }
 
 /// A resolved `[protocol."M.m.p"]` entry.
@@ -65,7 +66,6 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
         patch: u64,
         exec_ref: String,
         proving_ref: String,
-        app_bin_tag: Option<String>,
     }
     let mut raw_protocols = Vec::new();
 
@@ -82,16 +82,16 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
     // Temporaries for current section.
     let mut cur_id: Option<u32> = None;
     let mut cur_vk_hash: Option<String> = None;
+    let mut cur_app_bin_tag: Option<String> = None;
     let mut cur_exec_ref: Option<String> = None;
     let mut cur_proving_ref: Option<String> = None;
-    let mut cur_app_bin_tag: Option<String> = None;
 
     let flush = |section: &Section,
                  id: &mut Option<u32>,
                  vk: &mut Option<String>,
+                 abt: &mut Option<String>,
                  exec_ref: &mut Option<String>,
                  proving_ref: &mut Option<String>,
-                 abt: &mut Option<String>,
                  exec_versions: &mut HashMap<String, ExecutionVersionDef>,
                  proving_versions: &mut HashMap<String, ProvingVersionDef>,
                  raw_protocols: &mut Vec<RawProtocol>| {
@@ -114,6 +114,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                     ProvingVersionDef {
                         id: id_val,
                         vk_hash,
+                        app_bin_tag: abt.take(),
                     },
                 );
             }
@@ -129,16 +130,15 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                     patch: *patch,
                     exec_ref: er,
                     proving_ref: pr,
-                    app_bin_tag: abt.take(),
                 });
             }
             _ => {}
         }
         *id = None;
         *vk = None;
+        *abt = None;
         *exec_ref = None;
         *proving_ref = None;
-        *abt = None;
     };
 
     for line in contents.lines() {
@@ -153,9 +153,9 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                 &section,
                 &mut cur_id,
                 &mut cur_vk_hash,
+                &mut cur_app_bin_tag,
                 &mut cur_exec_ref,
                 &mut cur_proving_ref,
-                &mut cur_app_bin_tag,
                 &mut exec_versions,
                 &mut proving_versions,
                 &mut raw_protocols,
@@ -199,12 +199,12 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                 Section::ProvingVersion(_) => match key {
                     "id" => cur_id = Some(value.parse().unwrap()),
                     "vk_hash" => cur_vk_hash = Some(value),
+                    "app_bin_tag" => cur_app_bin_tag = Some(value),
                     _ => {}
                 },
                 Section::Protocol { .. } => match key {
                     "execution_version" => cur_exec_ref = Some(value),
                     "proving_version" => cur_proving_ref = Some(value),
-                    "app_bin_tag" => cur_app_bin_tag = Some(value),
                     _ => {}
                 },
                 Section::HistoricalVkHashes => {
@@ -250,7 +250,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                 execution_version: ev.id,
                 proving_version_id: pv.id,
                 vk_hash: pv.vk_hash.clone(),
-                app_bin_tag: rp.app_bin_tag,
+                app_bin_tag: pv.app_bin_tag.clone(),
             }
         })
         .collect();
