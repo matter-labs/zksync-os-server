@@ -14,9 +14,9 @@
 #
 # ── Protocol versions ──
 # Each [protocol."M.m.p"] references a forward_system by name and
-# carries per-protocol metadata: execution_version_id (for runtime
-# dispatch), verifier_version (for proof wire format), and vk_hash
-# (for L1 verification).
+# carries per-protocol metadata: verifier_version (for proof wire
+# format) and vk_hash (for L1 verification). The execution version
+# is inherited from the forward_system.
 #
 # The [historical_vk_hashes] section lists VK hashes from older protocol
 # versions (execution versions 1-3) that are no longer in the registry but
@@ -39,10 +39,12 @@
 [forward_system."v0.0.28"]
 crate = "zk_os_forward_system_0_0_28"
 tag = "v0.0.28-interface-v0.0.14"
+execution_version_id = 4
 
 [forward_system."v0.2.8"]
 crate = "zk_os_forward_system"
 tag = "v0.2.8-interface-v0.0.14"
+execution_version_id = 5
 # app.bin was built from a different tag due to a toolchain-induced binary change.
 app_bin_tag = "v0.2.5"
 # Simulation uses a separate crate to support eth_estimateGas with 0-balance accounts.
@@ -52,6 +54,7 @@ simulation_tag = "v0.2.8-simulation-only-interface-v0.0.14"
 [forward_system."dev-20260311"]
 crate = "zk_os_forward_system_dev"
 tag = "dev-20260311"
+execution_version_id = 6
 app_bin_tag = "dev-20260311"
 
 # ---- Protocol versions ----
@@ -60,13 +63,11 @@ app_bin_tag = "dev-20260311"
 
 [protocol."0.29.0"]
 forward_system = "v0.0.28"
-execution_version_id = 4
 verifier_version = 4
 vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 
 [protocol."0.29.1"]
 forward_system = "v0.0.28"
-execution_version_id = 4
 verifier_version = 4
 vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 
@@ -74,19 +75,16 @@ vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 
 [protocol."0.30.0"]
 forward_system = "v0.2.8"
-execution_version_id = 5
 verifier_version = 5
 vk_hash = "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581"
 
 [protocol."0.30.1"]
 forward_system = "v0.2.8"
-execution_version_id = 5
 verifier_version = 6
 vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
 [protocol."0.30.2"]
 forward_system = "v0.2.8"
-execution_version_id = 5
 verifier_version = 6
 vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
@@ -94,13 +92,11 @@ vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
 [protocol."0.31.0"]
 forward_system = "dev-20260311"
-execution_version_id = 6
 verifier_version = 7
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 [protocol."0.31.1"]
 forward_system = "dev-20260311"
-execution_version_id = 6
 verifier_version = 7
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
@@ -108,7 +104,6 @@ vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 [protocol."0.32.0"]
 forward_system = "dev-20260311"
-execution_version_id = 6
 verifier_version = 7
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 

@@ -11,8 +11,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as FmtWrite;
 use std::io::Write;
 
-/// A parsed `[forward_system."name"]` entry (only the fields we need).
+/// A parsed `[forward_system."name"]` entry.
 struct ForwardSystemDef {
+    execution_version_id: u32,
     app_bin_tag: Option<String>,
 }
 
@@ -56,7 +57,6 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
         minor: u64,
         patch: u64,
         forward_system_ref: String,
-        execution_version_id: u32,
         verifier_version: u32,
         vk_hash: String,
     }
@@ -88,9 +88,13 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                  raw_protocols: &mut Vec<RawProtocol>| {
         match section {
             Section::ForwardSystem(name) => {
+                let ev = exec_id.take().unwrap_or_else(|| {
+                    panic!("missing execution_version_id for forward_system {name}")
+                });
                 forward_systems.insert(
                     name.clone(),
                     ForwardSystemDef {
+                        execution_version_id: ev,
                         app_bin_tag: abt.take(),
                     },
                 );
@@ -98,9 +102,6 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
             Section::Protocol { minor, patch } => {
                 let fs = fs_ref.take().unwrap_or_else(|| {
                     panic!("missing forward_system for protocol {minor}.{patch}")
-                });
-                let ev = exec_id.take().unwrap_or_else(|| {
-                    panic!("missing execution_version_id for protocol {minor}.{patch}")
                 });
                 let pv = proving_id.take().unwrap_or_else(|| {
                     panic!("missing verifier_version for protocol {minor}.{patch}")
@@ -112,7 +113,6 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                     minor: *minor,
                     patch: *patch,
                     forward_system_ref: fs,
-                    execution_version_id: ev,
                     verifier_version: pv,
                     vk_hash,
                 });
@@ -170,14 +170,13 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
 
         if let Some((key, value)) = parse_kv(line) {
             match &section {
-                Section::ForwardSystem(_) => {
-                    if key == "app_bin_tag" {
-                        cur_app_bin_tag = Some(value);
-                    }
-                }
+                Section::ForwardSystem(_) => match key {
+                    "execution_version_id" => cur_exec_id = Some(value.parse().unwrap()),
+                    "app_bin_tag" => cur_app_bin_tag = Some(value),
+                    _ => {}
+                },
                 Section::Protocol { .. } => match key {
                     "forward_system" => cur_fs_ref = Some(value),
-                    "execution_version_id" => cur_exec_id = Some(value.parse().unwrap()),
                     "verifier_version" => cur_proving_id = Some(value.parse().unwrap()),
                     "vk_hash" => cur_vk_hash = Some(value),
                     _ => {}
@@ -217,7 +216,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
             ProtocolEntry {
                 minor: rp.minor,
                 patch: rp.patch,
-                execution_version: rp.execution_version_id,
+                execution_version: fs.execution_version_id,
                 verifier_version: rp.verifier_version,
                 vk_hash: rp.vk_hash,
                 app_bin_tag: fs.app_bin_tag.clone(),
