@@ -6,6 +6,7 @@
 /// - `vk_hash_impl(minor, patch) -> Option<&'static str>`
 /// - `verifier_version_impl(minor, patch) -> Option<u32>`
 /// - `app_bin_tag_impl(minor, patch) -> Option<&'static str>`
+/// - `is_live_impl(minor) -> bool`
 /// - `ALL_KNOWN_VK_HASHES: &[&str]` — all non-zero VK hashes (current + historical)
 use std::collections::BTreeSet;
 use std::fmt::Write as FmtWrite;
@@ -20,6 +21,7 @@ struct ProtocolEntry {
     verifier_version: u32,
     vk_hash: String,
     app_bin_tag: Option<String>,
+    live: bool,
 }
 
 fn main() {
@@ -127,6 +129,11 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
             })
             .clone();
 
+        let live = section
+            .get("live")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
         entries.push(ProtocolEntry {
             minor,
             patch,
@@ -134,6 +141,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
             verifier_version,
             vk_hash,
             app_bin_tag,
+            live,
         });
     }
 
@@ -238,6 +246,25 @@ fn generate_code(entries: &[ProtocolEntry], historical_vk_hashes: &[String]) -> 
     }
     writeln!(code, "        _ => None,").unwrap();
     writeln!(code, "    }}").unwrap();
+    writeln!(code, "}}").unwrap();
+    writeln!(code).unwrap();
+
+    // is_live_impl — matches on minor version only (all patches of a live minor are live).
+    let live_minors: BTreeSet<u64> = entries.iter().filter(|e| e.live).map(|e| e.minor).collect();
+    writeln!(code, "fn is_live_impl(minor: u64) -> bool {{").unwrap();
+    writeln!(code, "    matches!(minor, {}", {
+        if live_minors.is_empty() {
+            "_ if false".to_string()
+        } else {
+            live_minors
+                .iter()
+                .map(|m| m.to_string())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        }
+    })
+    .unwrap();
+    writeln!(code, "    )").unwrap();
     writeln!(code, "}}").unwrap();
     writeln!(code).unwrap();
 

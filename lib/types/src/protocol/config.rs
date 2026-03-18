@@ -36,6 +36,12 @@ pub fn app_bin_tag(version: &ProtocolSemanticVersion) -> Option<&'static str> {
     app_bin_tag_impl(version.minor, version.patch)
 }
 
+/// Returns `true` if this protocol minor version is live (or expected to be live)
+/// on any existing environment. All patch versions of a live minor are considered live.
+pub fn is_live(version: &ProtocolSemanticVersion) -> bool {
+    version.major == 0 && is_live_impl(version.minor)
+}
+
 /// Verify that a VK hash is known and matches the expected VK hash for the given protocol version.
 pub fn verify_vk_hash(
     version: &ProtocolSemanticVersion,

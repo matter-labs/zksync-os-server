@@ -14359,6 +14359,7 @@ dependencies = [
  "reqwest",
  "tempfile",
  "test-casing",
+ "toml",
  "tracing",
  "url",
  "zksync_os_interface",
@@ -14864,6 +14865,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.17",
+ "toml",
  "zksync_os_contract_interface",
  "zksync_os_interface",
 ]
