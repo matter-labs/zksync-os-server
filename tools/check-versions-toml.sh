@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Validates that versions.toml is consistent with Cargo.toml.
+# Validates that protocol-versions.toml is consistent with Cargo.toml.
 #
 # Checks performed:
-# 1. Every forward_system_crate in versions.toml is declared in Cargo.toml.
-# 2. The git tags in versions.toml match the tags in Cargo.toml for that crate.
+# 1. Every forward_system_crate in protocol-versions.toml is declared in Cargo.toml.
+# 2. The git tags in protocol-versions.toml match the tags in Cargo.toml for that crate.
 #
 # Usage: ./tools/check-versions-toml.sh
 # Returns 0 on success, 1 on any mismatch.
@@ -11,11 +11,11 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSIONS_TOML="$REPO_ROOT/versions.toml"
+VERSIONS_TOML="$REPO_ROOT/protocol-versions.toml"
 CARGO_TOML="$REPO_ROOT/Cargo.toml"
 
 if [ ! -f "$VERSIONS_TOML" ]; then
-    echo "ERROR: versions.toml not found at $VERSIONS_TOML"
+    echo "ERROR: protocol-versions.toml not found at $VERSIONS_TOML"
     exit 1
 fi
 
@@ -26,10 +26,10 @@ fi
 
 errors=0
 
-echo "Checking versions.toml against Cargo.toml..."
+echo "Checking protocol-versions.toml against Cargo.toml..."
 echo ""
 
-# Parse versions.toml: extract all (crate, tag) pairs.
+# Parse protocol-versions.toml: extract all (crate, tag) pairs.
 # We read line by line, tracking the current section.
 current_section=""
 declare -A crate_entries
@@ -40,8 +40,8 @@ while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ -z "${line// /}" ]] && continue
 
-    # Detect section headers like [execution.V1] or [proving.V6].
-    if [[ "$line" =~ ^\[([a-zA-Z0-9._]+)\] ]]; then
+    # Detect section headers like [protocol."0.29.0"].
+    if [[ "$line" =~ ^\[([a-zA-Z0-9._\"]+)\] ]]; then
         current_section="${BASH_REMATCH[1]}"
         continue
     fi
@@ -89,7 +89,7 @@ for entry_key in "${!crate_entries[@]}"; do
     fi
 
     if [ "$cargo_tag" != "$expected_tag" ]; then
-        echo "  ERROR: [$entry_key] crate '$crate_name' has tag '$expected_tag' in versions.toml but '$cargo_tag' in Cargo.toml"
+        echo "  ERROR: [$entry_key] crate '$crate_name' has tag '$expected_tag' in protocol-versions.toml but '$cargo_tag' in Cargo.toml"
         errors=$((errors + 1))
     else
         echo "  OK: [$entry_key] $crate_name @ $expected_tag"
@@ -98,10 +98,10 @@ done
 
 echo ""
 if [ "$errors" -gt 0 ]; then
-    echo "FAILED: $errors inconsistencies found between versions.toml and Cargo.toml."
-    echo "Please update versions.toml or Cargo.toml so they agree."
+    echo "FAILED: $errors inconsistencies found between protocol-versions.toml and Cargo.toml."
+    echo "Please update protocol-versions.toml or Cargo.toml so they agree."
     exit 1
 else
-    echo "PASSED: versions.toml is consistent with Cargo.toml."
+    echo "PASSED: protocol-versions.toml is consistent with Cargo.toml."
     exit 0
 fi

@@ -181,7 +181,11 @@ impl<T: Clone> ProverJobMap<T> {
                 (
                     FriJob {
                         batch_number: metadata.batch_number,
-                        vk_hash: metadata.proving_version.vk_hash().to_string(),
+                        vk_hash: zksync_os_types::protocol_config::vk_hash(
+                            &metadata.protocol_version,
+                        )
+                        .expect("VK hash must exist for protocol version")
+                        .to_string(),
                     },
                     entry.batch_envelope.data.clone(),
                 )
@@ -229,7 +233,7 @@ impl<T: Clone> ProverJobMap<T> {
             None => true,
             Some(last) => {
                 last.batch_number + 1 == next_job_entry.metadata.batch_number
-                    && next_job_entry.metadata.proving_version == last.proving_version
+                    && next_job_entry.metadata.protocol_version == last.protocol_version
             }
         }
     }
@@ -421,7 +425,11 @@ impl<T: Clone> ProverJobMap<T> {
             .map(|(batch_number, entry)| JobState {
                 fri_job: FriJob {
                     batch_number: *batch_number,
-                    vk_hash: entry.metadata.proving_version.vk_hash().to_string(),
+                    vk_hash: zksync_os_types::protocol_config::vk_hash(
+                        &entry.metadata.protocol_version,
+                    )
+                    .expect("VK hash must exist for protocol version")
+                    .to_string(),
                 },
                 assigned_seconds_ago: entry
                     .metadata

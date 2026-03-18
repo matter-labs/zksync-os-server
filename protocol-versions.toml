@@ -1,0 +1,98 @@
+# Protocol version artifact registry.
+#
+# This file is the single source of truth for which exact artifacts
+# correspond to each protocol version.  It is read by the multivm build
+# script and validated in CI against Cargo.toml to ensure consistency.
+#
+# Each [protocol."M.m.p"] section contains:
+#   execution_version  – u32 stored in BlockContext, used by multivm to dispatch
+#   vk_hash            – verification key hash for L1 proof verification
+#   forward_system_crate / forward_system_tag – crate used for block execution
+#   simulation_crate / simulation_tag         – (optional) separate crate for tx simulation
+#   app_bin_tag        – (optional) tag for downloading app.bin proving artifacts;
+#                        if absent, no app.bin is needed for this protocol version
+#
+# Rules:
+# 1. Every protocol version the server can execute MUST have an entry here.
+# 2. The forward_system_crate values MUST match dependencies in Cargo.toml.
+# 3. The forward_system_tag values MUST match the git tags in Cargo.toml.
+# 4. Historical entries MUST NOT be modified once proven on L1.
+#
+# When adding a new protocol version:
+# 1. Add a new [protocol."M.m.p"] section below.
+# 2. Make sure the forward_system dependency exists in Cargo.toml.
+# 3. Run `./tools/check-versions-toml.sh` to verify consistency.
+
+# ---- Protocol version 0.29.x ----
+# Execution: v0.1.x branch of zksync-os (forward_system_0_1_2 → V4)
+
+[protocol."0.29.0"]
+execution_version = 4
+vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
+forward_system_crate = "zk_os_forward_system_0_0_28"
+forward_system_tag = "v0.0.28-interface-v0.0.14"
+
+[protocol."0.29.1"]
+execution_version = 4
+vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
+forward_system_crate = "zk_os_forward_system_0_0_28"
+forward_system_tag = "v0.0.28-interface-v0.0.14"
+
+# ---- Protocol version 0.30.x ----
+# Execution: v0.2.x branch of zksync-os (forward_system → V5)
+# Simulation uses a separate crate (zk_os_forward_system_0_2_8) to support
+# eth_estimateGas with 0-balance accounts.
+
+[protocol."0.30.0"]
+execution_version = 5
+vk_hash = "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581"
+forward_system_crate = "zk_os_forward_system"
+forward_system_tag = "v0.2.8-interface-v0.0.14"
+simulation_crate = "zk_os_forward_system_0_2_8"
+simulation_tag = "v0.2.8-simulation-only-interface-v0.0.14"
+
+[protocol."0.30.1"]
+execution_version = 5
+vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
+forward_system_crate = "zk_os_forward_system"
+forward_system_tag = "v0.2.8-interface-v0.0.14"
+simulation_crate = "zk_os_forward_system_0_2_8"
+simulation_tag = "v0.2.8-simulation-only-interface-v0.0.14"
+# app.bin was built from a different tag due to a toolchain-induced binary change.
+app_bin_tag = "v0.2.5"
+
+[protocol."0.30.2"]
+execution_version = 5
+vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
+forward_system_crate = "zk_os_forward_system"
+forward_system_tag = "v0.2.8-interface-v0.0.14"
+simulation_crate = "zk_os_forward_system_0_2_8"
+simulation_tag = "v0.2.8-simulation-only-interface-v0.0.14"
+app_bin_tag = "v0.2.5"
+
+# ---- Protocol version 0.31.x ----
+# Execution: dev branch of zksync-os (forward_system_dev → V6)
+
+[protocol."0.31.0"]
+execution_version = 6
+vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+forward_system_crate = "zk_os_forward_system_dev"
+forward_system_tag = "dev-20260311"
+app_bin_tag = "dev-20260311"
+
+[protocol."0.31.1"]
+execution_version = 6
+vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+forward_system_crate = "zk_os_forward_system_dev"
+forward_system_tag = "dev-20260311"
+app_bin_tag = "dev-20260311"
+
+# ---- Protocol version 0.32.x ----
+# Next anticipated version; routes to current latest (V6) for upgrade testing.
+
+[protocol."0.32.0"]
+execution_version = 6
+vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+forward_system_crate = "zk_os_forward_system_dev"
+forward_system_tag = "dev-20260311"
+app_bin_tag = "dev-20260311"

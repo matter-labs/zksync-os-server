@@ -14859,7 +14859,6 @@ dependencies = [
  "bincode 2.0.1",
  "chrono",
  "num",
- "num_enum",
  "reth-primitives-traits",
  "semver 1.0.26",
  "serde",

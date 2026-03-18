@@ -7,7 +7,7 @@ use zksync_os_l1_sender::batcher_model::{
     BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
 };
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_multichain_root};
-use zksync_os_types::{ProvingVersion, PubdataMode};
+use zksync_os_types::PubdataMode;
 
 /// Takes a vector of blocks and produces a batch envelope.
 #[allow(clippy::too_many_arguments)]
@@ -77,18 +77,14 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     use zk_os_forward_system::run::generate_batch_proof_input;
     use zk_os_forward_system_dev::run::generate_batch_proof_input as generate_batch_proof_input_dev;
 
-    let proving_version =
-        ProvingVersion::try_from(blocks.first().unwrap().1.protocol_version.clone())?;
+    let first_protocol_version = &blocks.first().unwrap().1.protocol_version;
+    let proving_id = zksync_os_types::protocol_config::proving_version_id(first_protocol_version)?;
     // execution version should be the same for all the blocks, it is ensured by the seal criteria
-    let batch_prover_input: ProverInput = match proving_version {
-        ProvingVersion::V1
-        | ProvingVersion::V2
-        | ProvingVersion::V3
-        | ProvingVersion::V4
-        | ProvingVersion::V5 => {
-            panic!("sealing batch with prover version v1-v5 is not supported");
+    let batch_prover_input: ProverInput = match proving_id {
+        1..=5 => {
+            panic!("sealing batch with proving version id {proving_id} (v1-v5) is not supported");
         }
-        ProvingVersion::V6 => {
+        6 => {
             // TODO: in the long-term we should generate proof input per batch
             generate_batch_proof_input(
                 blocks
@@ -104,7 +100,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
                     .collect(),
             )
         }
-        ProvingVersion::V7 => {
+        7 => {
             // TODO: in the long-term we should generate proof input per batch
             generate_batch_proof_input_dev(
                 blocks
@@ -120,6 +116,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
                     .collect(),
             )
         }
+        _ => panic!("unsupported proving version id: {proving_id}"),
     };
 
     // Sanity check: all blocks in the batch should have the same protocol version

@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use zksync_os_l1_sender::batcher_model::SignedBatchEnvelope;
-use zksync_os_types::ProvingVersion;
+use zksync_os_types::ProtocolSemanticVersion;
 
 #[derive(Debug)]
 pub struct JobEntry<T> {
@@ -12,7 +12,7 @@ pub struct JobEntry<T> {
 #[derive(Clone, Debug)]
 pub struct JobMetadata {
     pub batch_number: u64,
-    pub proving_version: ProvingVersion,
+    pub protocol_version: ProtocolSemanticVersion,
     pub tx_count: usize,
     pub computational_native_used: Option<u64>,
     pub added_at: Instant,
@@ -54,16 +54,13 @@ impl Debug for QueueStatistics {
 impl JobMetadata {
     pub fn new_from_batch<T>(batch_envelope: &SignedBatchEnvelope<T>) -> Self {
         let batch_number = batch_envelope.batch_number();
-        let proving_version = batch_envelope
-            .batch
-            .proving_version()
-            .expect("Must be valid execution as set by the server");
+        let protocol_version = batch_envelope.batch.protocol_version.clone();
         let tx_count = batch_envelope.batch.tx_count;
         let computational_native_used = batch_envelope.batch.computational_native_used;
 
         Self {
             batch_number,
-            proving_version,
+            protocol_version,
             tx_count,
             computational_native_used,
             added_at: Instant::now(),
@@ -86,7 +83,7 @@ impl JobMetadata {
 pub struct JobBatchStats {
     pub min_batch_number: u64,
     pub max_batch_number: u64,
-    pub proving_version: ProvingVersion,
+    pub protocol_version: ProtocolSemanticVersion,
     pub max_time_since_added: Duration,
     pub total_txs: usize,
     pub total_computational_native_used: Option<u64>,
@@ -124,7 +121,7 @@ impl JobBatchStats {
         JobBatchStats {
             min_batch_number: min_batch.batch_number,
             max_batch_number,
-            proving_version: min_batch.proving_version,
+            protocol_version: min_batch.protocol_version.clone(),
             max_time_since_added: min_batch.added_at.elapsed(),
             total_txs: metadata_list.iter().map(|m| m.tx_count).sum(),
             total_computational_native_used: metadata_list
@@ -163,8 +160,8 @@ impl Debug for JobBatchStats {
         }
         write!(
             f,
-            " with {} txs, proving version {:?}, spent in queue: {:?}",
-            self.total_txs, self.proving_version, self.max_time_since_added
+            " with {} txs, protocol version {}, spent in queue: {:?}",
+            self.total_txs, self.protocol_version, self.max_time_since_added
         )?;
         if let Some(info) = &self.job_with_max_attempts_info {
             write!(

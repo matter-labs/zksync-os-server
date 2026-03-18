@@ -31,10 +31,9 @@ pub use pubdata_mode::PubdataMode;
 mod node;
 pub use node::NodeRole;
 
-mod protocol;
+pub mod protocol;
 pub use protocol::{
-    ExecutionVersion, ExecutionVersionError, ProtocolSemanticVersion, ProtocolSemanticVersionError,
-    ProvingVersion, ProvingVersionError,
+    ProtocolSemanticVersion, ProtocolSemanticVersionError, config as protocol_config,
 };
 
 mod token_price;

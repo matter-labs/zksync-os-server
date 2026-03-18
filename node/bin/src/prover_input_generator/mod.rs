@@ -17,7 +17,7 @@ use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_by
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
+use zksync_os_types::{PubdataMode, ZksyncOsEncode};
 
 /// This component generates prover input from batch replay data
 pub struct ProverInputGenerator<ReadState> {
@@ -137,17 +137,16 @@ fn compute_prover_input(
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
-    let proving_version = ProvingVersion::try_from(replay_record.protocol_version.clone())
-        .expect("invalid protocol version");
-    let prover_input = match proving_version {
-        ProvingVersion::V1
-        | ProvingVersion::V2
-        | ProvingVersion::V3
-        | ProvingVersion::V4
-        | ProvingVersion::V5 => {
-            panic!("computing prover input for batch with prover version v1-v5 is not supported");
+    let proving_id =
+        zksync_os_types::protocol_config::proving_version_id(&replay_record.protocol_version)
+            .expect("invalid protocol version");
+    let prover_input = match proving_id {
+        1..=5 => {
+            panic!(
+                "computing prover input for batch with proving version id {proving_id} (v1-v5) is not supported"
+            );
         }
-        ProvingVersion::V6 => {
+        6 => {
             use zk_ee::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
@@ -187,7 +186,7 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
-        ProvingVersion::V7 => {
+        7 => {
             use zk_ee_dev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
@@ -227,6 +226,7 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
+        _ => panic!("unsupported proving version id: {proving_id}"),
     };
     let latency = prover_input_generation_latency.observe();
 

@@ -15,42 +15,59 @@ fn parse_git_tag(package_id: &PackageId) -> anyhow::Result<String> {
     Ok(tag.to_string())
 }
 
-/// Proving version entry loaded from versions.toml.
-struct ProvingEntry {
-    forward_system_tag: String,
+/// An app.bin download entry derived from protocol-versions.toml.
+struct AppBinEntry {
+    /// The tag to download app.bin from (may differ from forward_system_tag).
     app_bin_tag: String,
+    /// Sanitized identifier for the env var (e.g., "V0_2_5" or "DEV_20260311").
+    env_name: String,
 }
 
-/// Load the `[proving.*]` sections from versions.toml.
+/// Sanitize a tag string into a valid env var component.
+/// e.g., "v0.2.5" → "V0_2_5", "dev-20260311" → "DEV_20260311"
+fn sanitize_tag_for_env(tag: &str) -> String {
+    tag.chars()
+        .map(|c| match c {
+            '.' | '-' => '_',
+            c => c.to_ascii_uppercase(),
+        })
+        .collect()
+}
+
+/// Load protocol-versions.toml and extract app.bin download info.
 ///
-/// Returns a map from forward_system_tag → (proving_version_name, app_bin_tag).
-fn load_proving_versions() -> HashMap<String, (String, String)> {
+/// Returns a map from forward_system_tag → AppBinEntry for protocol versions
+/// that have an app_bin_tag set (i.e., those that need app.bin downloads).
+fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap();
-    let versions_path = workspace_root.join("versions.toml");
+    let versions_path = workspace_root.join("protocol-versions.toml");
     println!("cargo:rerun-if-changed={}", versions_path.to_str().unwrap());
 
     let contents = std::fs::read_to_string(&versions_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", versions_path.display()));
 
     let mut result = HashMap::new();
-    let mut current_version: Option<String> = None;
-    let mut current_entry = ProvingEntry {
-        forward_system_tag: String::new(),
-        app_bin_tag: String::new(),
-    };
+    let mut in_protocol_section = false;
+    let mut current_forward_system_tag = String::new();
+    let mut current_app_bin_tag = String::new();
 
-    let mut flush = |ver: &mut Option<String>, entry: &mut ProvingEntry| {
-        if let Some(ver) = ver.take()
-            && !entry.forward_system_tag.is_empty()
-        {
-            result.insert(
-                std::mem::take(&mut entry.forward_system_tag),
-                (ver, std::mem::take(&mut entry.app_bin_tag)),
-            );
+    let mut flush = |fs_tag: &mut String, abt: &mut String| {
+        if !fs_tag.is_empty() && !abt.is_empty() {
+            let env_name = sanitize_tag_for_env(abt);
+            result.entry(std::mem::take(fs_tag)).or_insert(AppBinEntry {
+                app_bin_tag: std::mem::take(abt),
+                env_name,
+            });
+            // Clear both even if entry existed.
+            *fs_tag = String::new();
+            *abt = String::new();
+        } else {
+            fs_tag.clear();
+            abt.clear();
         }
     };
 
@@ -60,37 +77,33 @@ fn load_proving_versions() -> HashMap<String, (String, String)> {
             continue;
         }
 
-        // Detect [proving.VN] sections.
-        if let Some(rest) = line.strip_prefix("[proving.") {
-            flush(&mut current_version, &mut current_entry);
-            current_version = rest.strip_suffix(']').map(String::from);
-            current_entry = ProvingEntry {
-                forward_system_tag: String::new(),
-                app_bin_tag: String::new(),
-            };
+        // Detect [protocol."M.m.p"] sections.
+        if line.starts_with("[protocol.") {
+            flush(&mut current_forward_system_tag, &mut current_app_bin_tag);
+            in_protocol_section = true;
             continue;
         }
 
-        // Any other section header flushes.
+        // Any other section header.
         if line.starts_with('[') {
-            flush(&mut current_version, &mut current_entry);
+            flush(&mut current_forward_system_tag, &mut current_app_bin_tag);
+            in_protocol_section = false;
             continue;
         }
 
-        // Parse key = "value".
-        if current_version.is_some()
+        if in_protocol_section
             && let Some((key, value)) = parse_toml_string(line)
         {
             match key {
-                "forward_system_tag" => current_entry.forward_system_tag = value,
-                "app_bin_tag" => current_entry.app_bin_tag = value,
+                "forward_system_tag" => current_forward_system_tag = value,
+                "app_bin_tag" => current_app_bin_tag = value,
                 _ => {}
             }
         }
     }
 
     // Flush last entry.
-    flush(&mut current_version, &mut current_entry);
+    flush(&mut current_forward_system_tag, &mut current_app_bin_tag);
 
     result
 }
@@ -99,8 +112,12 @@ fn parse_toml_string(line: &str) -> Option<(&str, String)> {
     let (key, rest) = line.split_once('=')?;
     let key = key.trim();
     let rest = rest.trim();
-    let value = rest.strip_prefix('"')?.strip_suffix('"')?;
-    Some((key, value.to_string()))
+    // Handle both string values ("...") and integer values.
+    if let Some(value) = rest.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
+        Some((key, value.to_string()))
+    } else {
+        Some((key, rest.to_string()))
+    }
 }
 
 const DOWNLOAD_MAX_ATTEMPTS: usize = 5;
@@ -181,10 +198,10 @@ fn main() {
     let metadata = MetadataCommand::new().exec().unwrap();
     let client = new_http_client().expect("failed to create HTTP client");
 
-    // Load proving version mappings from versions.toml.
-    let proving_versions = load_proving_versions();
+    // Load app.bin download mappings from protocol-versions.toml.
+    let app_bin_entries = load_app_bin_entries();
 
-    // Find forward_system crate and expose its path to the directory containing `app*.bin` files.
+    // Find forward_system crates and download their app.bin files.
     for package in &metadata.packages {
         if package.name.as_str() != "forward_system" {
             continue;
@@ -197,16 +214,8 @@ fn main() {
             }
         };
 
-        if let Some((proving_version, app_bin_tag)) = proving_versions.get(&tag) {
-            // Use the app_bin_tag from versions.toml for downloading binaries.
-            // This handles cases where the app.bin tag differs from the forward_system
-            // tag (e.g. V6 where a toolchain change altered binaries).
-            let download_tag = if app_bin_tag.is_empty() {
-                &tag
-            } else {
-                app_bin_tag
-            };
-
+        if let Some(entry) = app_bin_entries.get(&tag) {
+            let download_tag = &entry.app_bin_tag;
             let dir = format!("{manifest_dir}/apps/{download_tag}");
             std::fs::create_dir_all(&dir).expect("failed to create directory");
             for variant in [
@@ -224,7 +233,10 @@ fn main() {
                 download_with_retry(&client, &url, &path).expect("failed to download");
             }
 
-            println!("cargo:rustc-env=ZKSYNC_OS_{proving_version}_SOURCE_PATH={dir}");
+            println!(
+                "cargo:rustc-env=ZKSYNC_OS_APPS_{}_SOURCE_PATH={dir}",
+                entry.env_name
+            );
             continue;
         }
     }

@@ -9,9 +9,7 @@ use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool};
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{
-    ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion, ZkEnvelope,
-};
+use zksync_os_types::{InteropRootsLogIndex, ProtocolSemanticVersion, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
@@ -143,9 +141,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     Vec::new()
                 };
 
-                let execution_version: ExecutionVersion = (&self.protocol_version)
-                    .try_into()
-                    .context("Cannot instantiate a block for unsupported execution version")?;
+                let execution_version =
+                    zksync_os_types::protocol_config::execution_version(&self.protocol_version)
+                        .context("Cannot instantiate a block for unsupported execution version")?;
 
                 let FeeParams {
                     eip1559_basefee,
@@ -165,7 +163,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
-                    execution_version: execution_version as u32,
+                    execution_version,
                     blob_fee: U256::ONE,
                 };
                 self.last_constructed_block_ctx_sender

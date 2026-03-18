@@ -4,11 +4,7 @@ use alloy_rlp::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 use std::{fmt, ops::Deref, str::FromStr};
 
-mod execution_version;
-mod proving_version;
-
-pub use self::execution_version::{ExecutionVersion, ExecutionVersionError};
-pub use self::proving_version::{ProvingVersion, ProvingVersionError};
+pub mod config;
 
 const PACKED_SEMVER_PATCH_MASK: u32 = 0xFFFFFFFF;
 const PACKED_SEMVER_MINOR_OFFSET: u32 = 32;

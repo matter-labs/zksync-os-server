@@ -11,11 +11,12 @@ fn materialize_app(base_dir: &Path, version: &str, file_name: &str, bytes: &[u8]
     full_path
 }
 
+/// App binaries from tag v0.2.5 (used by protocol versions 0.30.1, 0.30.2).
 pub mod v6 {
     use std::path::{Path, PathBuf};
 
     pub const SINGLEBLOCK_BATCH_APP: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_V6_SOURCE_PATH"),
+        env!("ZKSYNC_OS_APPS_V0_2_5_SOURCE_PATH"),
         "/singleblock_batch.bin"
     ));
 
@@ -29,7 +30,7 @@ pub mod v6 {
     }
 
     pub const SINGLEBLOCK_BATCH_LOGGING_ENABLED: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_V6_SOURCE_PATH"),
+        env!("ZKSYNC_OS_APPS_V0_2_5_SOURCE_PATH"),
         "/singleblock_batch_logging_enabled.bin"
     ));
 
@@ -43,7 +44,7 @@ pub mod v6 {
     }
 
     pub const MULTIBLOCK_BATCH: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_V6_SOURCE_PATH"),
+        env!("ZKSYNC_OS_APPS_V0_2_5_SOURCE_PATH"),
         "/multiblock_batch.bin"
     ));
 
@@ -52,11 +53,12 @@ pub mod v6 {
     }
 }
 
+/// App binaries from tag dev-20260311 (used by protocol versions 0.31.x, 0.32.x).
 pub mod v7 {
     use std::path::{Path, PathBuf};
 
     pub const SINGLEBLOCK_BATCH_APP: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_V7_SOURCE_PATH"),
+        env!("ZKSYNC_OS_APPS_DEV_20260311_SOURCE_PATH"),
         "/singleblock_batch.bin"
     ));
 
@@ -70,7 +72,7 @@ pub mod v7 {
     }
 
     pub const SINGLEBLOCK_BATCH_LOGGING_ENABLED: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_V7_SOURCE_PATH"),
+        env!("ZKSYNC_OS_APPS_DEV_20260311_SOURCE_PATH"),
         "/singleblock_batch_logging_enabled.bin"
     ));
 
@@ -84,7 +86,7 @@ pub mod v7 {
     }
 
     pub const MULTIBLOCK_BATCH: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_V7_SOURCE_PATH"),
+        env!("ZKSYNC_OS_APPS_DEV_20260311_SOURCE_PATH"),
         "/multiblock_batch.bin"
     ));
 
