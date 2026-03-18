@@ -35,6 +35,11 @@ fn sanitize_tag_for_env(tag: &str) -> String {
         .collect()
 }
 
+/// A parsed execution version definition.
+struct ExecutionVersionDef {
+    forward_system_tag: String,
+}
+
 /// Load protocol-versions.toml and extract app.bin download info.
 ///
 /// Returns a map from forward_system_tag → AppBinEntry for protocol versions
@@ -51,25 +56,64 @@ fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
     let contents = std::fs::read_to_string(&versions_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", versions_path.display()));
 
-    let mut result = HashMap::new();
-    let mut in_protocol_section = false;
-    let mut current_forward_system_tag = String::new();
-    let mut current_app_bin_tag = String::new();
+    // First pass: parse execution_version definitions to get forward_system_tag per name.
+    let mut exec_versions: HashMap<String, ExecutionVersionDef> = HashMap::new();
 
-    let mut flush = |fs_tag: &mut String, abt: &mut String| {
-        if !fs_tag.is_empty() && !abt.is_empty() {
-            let env_name = sanitize_tag_for_env(abt);
-            result.entry(std::mem::take(fs_tag)).or_insert(AppBinEntry {
-                app_bin_tag: std::mem::take(abt),
-                env_name,
+    // Second pass data: raw protocol entries.
+    struct RawProtocol {
+        exec_ref: String,
+        app_bin_tag: Option<String>,
+    }
+    let mut raw_protocols = Vec::new();
+
+    enum Section {
+        None,
+        ExecutionVersion(String),
+        ProvingVersion,
+        Protocol,
+        HistoricalVkHashes,
+    }
+
+    let mut section = Section::None;
+    let mut cur_forward_system_tag = String::new();
+    let mut cur_exec_ref = String::new();
+    let mut cur_app_bin_tag = String::new();
+
+    let flush_exec =
+        |section: &Section,
+         fst: &mut String,
+         exec_versions: &mut HashMap<String, ExecutionVersionDef>| {
+            if let Section::ExecutionVersion(name) = section
+                && !fst.is_empty()
+            {
+                exec_versions.insert(
+                    name.clone(),
+                    ExecutionVersionDef {
+                        forward_system_tag: std::mem::take(fst),
+                    },
+                );
+            }
+            fst.clear();
+        };
+
+    let flush_protocol = |section: &Section,
+                          exec_ref: &mut String,
+                          abt: &mut String,
+                          raw_protocols: &mut Vec<RawProtocol>| {
+        if let Section::Protocol = section
+            && !exec_ref.is_empty()
+        {
+            raw_protocols.push(RawProtocol {
+                exec_ref: std::mem::take(exec_ref),
+                app_bin_tag: if abt.is_empty() {
+                    None
+                } else {
+                    Some(std::mem::take(abt))
+                },
             });
-            // Clear both even if entry existed.
-            *fs_tag = String::new();
-            *abt = String::new();
-        } else {
-            fs_tag.clear();
-            abt.clear();
         }
+        exec_ref.clear();
+        abt.clear();
     };
 
     for line in contents.lines() {
@@ -78,31 +122,77 @@ fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
             continue;
         }
 
-        // Detect [protocol."M.m.p"] sections.
-        if line.starts_with("[protocol.") {
-            flush(&mut current_forward_system_tag, &mut current_app_bin_tag);
-            in_protocol_section = true;
-            continue;
-        }
-
-        // Any other section header.
         if line.starts_with('[') {
-            flush(&mut current_forward_system_tag, &mut current_app_bin_tag);
-            in_protocol_section = false;
+            flush_exec(&section, &mut cur_forward_system_tag, &mut exec_versions);
+            flush_protocol(
+                &section,
+                &mut cur_exec_ref,
+                &mut cur_app_bin_tag,
+                &mut raw_protocols,
+            );
+
+            if let Some(name) = line
+                .strip_prefix("[execution_version.\"")
+                .and_then(|s| s.strip_suffix("\"]"))
+            {
+                section = Section::ExecutionVersion(name.to_string());
+            } else if line.starts_with("[proving_version.") {
+                section = Section::ProvingVersion;
+            } else if line.starts_with("[protocol.") {
+                section = Section::Protocol;
+            } else if line == "[historical_vk_hashes]" {
+                section = Section::HistoricalVkHashes;
+            } else {
+                section = Section::None;
+            }
             continue;
         }
 
-        if in_protocol_section && let Some((key, value)) = parse_toml_string(line) {
-            match key {
-                "forward_system_tag" => current_forward_system_tag = value,
-                "app_bin_tag" => current_app_bin_tag = value,
+        if let Some((key, value)) = parse_toml_string(line) {
+            match &section {
+                Section::ExecutionVersion(_) => {
+                    if key == "forward_system_tag" {
+                        cur_forward_system_tag = value;
+                    }
+                }
+                Section::Protocol => match key {
+                    "execution_version" => cur_exec_ref = value,
+                    "app_bin_tag" => cur_app_bin_tag = value,
+                    _ => {}
+                },
                 _ => {}
             }
         }
     }
 
-    // Flush last entry.
-    flush(&mut current_forward_system_tag, &mut current_app_bin_tag);
+    // Flush last entries.
+    flush_exec(&section, &mut cur_forward_system_tag, &mut exec_versions);
+    flush_protocol(
+        &section,
+        &mut cur_exec_ref,
+        &mut cur_app_bin_tag,
+        &mut raw_protocols,
+    );
+
+    // Resolve: for each protocol with an app_bin_tag, map its forward_system_tag → AppBinEntry.
+    let mut result = HashMap::new();
+    for rp in &raw_protocols {
+        if let Some(app_bin_tag) = &rp.app_bin_tag {
+            let ev = exec_versions.get(&rp.exec_ref).unwrap_or_else(|| {
+                panic!(
+                    "protocol references unknown execution_version {:?}",
+                    rp.exec_ref
+                )
+            });
+            let env_name = sanitize_tag_for_env(app_bin_tag);
+            result
+                .entry(ev.forward_system_tag.clone())
+                .or_insert(AppBinEntry {
+                    app_bin_tag: app_bin_tag.clone(),
+                    env_name,
+                });
+        }
+    }
 
     result
 }

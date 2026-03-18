@@ -29,8 +29,8 @@ errors=0
 echo "Checking protocol-versions.toml against Cargo.toml..."
 echo ""
 
-# Parse protocol-versions.toml: extract all (crate, tag) pairs.
-# We read line by line, tracking the current section.
+# Parse protocol-versions.toml: extract all (crate, tag) pairs from
+# execution_version sections (forward_system_crate/tag, simulation_crate/tag).
 current_section=""
 declare -A crate_entries
 declare -A tag_entries
@@ -40,9 +40,14 @@ while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ -z "${line// /}" ]] && continue
 
-    # Detect section headers like [protocol."0.29.0"].
+    # Detect section headers like [execution_version."V4"].
     if [[ "$line" =~ ^\[([a-zA-Z0-9._\"]+)\] ]]; then
         current_section="${BASH_REMATCH[1]}"
+        continue
+    fi
+
+    # Only process execution_version sections.
+    if [[ ! "$current_section" =~ ^execution_version\. ]]; then
         continue
     fi
 
