@@ -6,7 +6,6 @@
 /// - `vk_hash_impl(minor, patch) -> Option<&'static str>`
 /// - `verifier_version_impl(minor, patch) -> Option<u32>`
 /// - `app_bin_tag_impl(minor, patch) -> Option<&'static str>`
-/// - `is_live_impl(minor) -> bool`
 /// - `ALL_KNOWN_VK_HASHES: &[&str]` — all non-zero VK hashes (current + historical)
 use std::collections::BTreeSet;
 use std::fmt::Write as FmtWrite;
@@ -21,7 +20,6 @@ struct ProtocolEntry {
     verifier_version: u32,
     vk_hash: String,
     app_bin_tag: Option<String>,
-    live: bool,
 }
 
 fn main() {
@@ -129,11 +127,6 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
             })
             .clone();
 
-        let live = section
-            .get("live")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-
         entries.push(ProtocolEntry {
             minor,
             patch,
@@ -141,19 +134,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
             verifier_version,
             vk_hash,
             app_bin_tag,
-            live,
         });
-    }
-
-    // Validate: live versions must have a real (non-zero) VK hash.
-    let zero_hash = "0x0000000000000000000000000000000000000000000000000000000000000000";
-    for e in &entries {
-        if e.live && e.vk_hash == zero_hash {
-            panic!(
-                "protocol 0.{}.{} is marked live but has a zero VK hash",
-                e.minor, e.patch
-            );
-        }
     }
 
     // Parse [historical_vk_hashes].
@@ -260,25 +241,6 @@ fn generate_code(entries: &[ProtocolEntry], historical_vk_hashes: &[String]) -> 
     writeln!(code, "}}").unwrap();
     writeln!(code).unwrap();
 
-    // is_live_impl — matches on minor version only (all patches of a live minor are live).
-    let live_minors: BTreeSet<u64> = entries.iter().filter(|e| e.live).map(|e| e.minor).collect();
-    writeln!(code, "fn is_live_impl(minor: u64) -> bool {{").unwrap();
-    writeln!(code, "    matches!(minor, {}", {
-        if live_minors.is_empty() {
-            "_ if false".to_string()
-        } else {
-            live_minors
-                .iter()
-                .map(|m| m.to_string())
-                .collect::<Vec<_>>()
-                .join(" | ")
-        }
-    })
-    .unwrap();
-    writeln!(code, "    )").unwrap();
-    writeln!(code, "}}").unwrap();
-    writeln!(code).unwrap();
-
     // Collect all unique non-zero VK hashes.
     let zero_hash = "0x0000000000000000000000000000000000000000000000000000000000000000";
     let mut all_vk_hashes = BTreeSet::new();
@@ -294,6 +256,14 @@ fn generate_code(entries: &[ProtocolEntry], historical_vk_hashes: &[String]) -> 
     writeln!(code, "const ALL_KNOWN_VK_HASHES: &[&str] = &[").unwrap();
     for h in &all_vk_hashes {
         writeln!(code, "    {:?},", h).unwrap();
+    }
+    writeln!(code, "];").unwrap();
+    writeln!(code).unwrap();
+
+    // List of all supported protocol versions for diagnostic messages.
+    writeln!(code, "const ALL_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[").unwrap();
+    for e in entries {
+        writeln!(code, "    \"0.{}.{}\",", e.minor, e.patch).unwrap();
     }
     writeln!(code, "];").unwrap();
 

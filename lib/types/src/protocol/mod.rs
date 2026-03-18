@@ -43,16 +43,6 @@ impl ProtocolSemanticVersion {
         })
     }
 
-    /// Returns `true` if the system is live (or expected to be live) on any of the existing envs.
-    /// Driven by the `live` flag in `protocol-versions.toml`.
-    //
-    // TODO: Do not update to v31 without devp2p upgrade on batch verification. With current code, only v1 batch verification transport is supported (pre-v31).
-    // As such, batch verification will be incomplete and will compromise 2FA security on v31.
-    // v2 wire transport is needed for batch verification to work on v31.
-    pub fn is_live(&self) -> bool {
-        config::is_live(self)
-    }
-
     pub fn is_post_v31(&self) -> bool {
         self.minor >= 31
     }
@@ -210,21 +200,5 @@ mod tests {
 
         let deserialized: ProtocolSemanticVersion = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, version);
-    }
-
-    #[test]
-    fn test_protocol_semantic_version_is_live() {
-        // Live status is driven by protocol-versions.toml — update the `live` flag there.
-        let test_vector = [
-            ((0, 29, 5), false),
-            ((0, 30, 0), true),
-            ((0, 30, 1), true),
-            ((0, 30, 99), true),
-            ((0, 31, 0), false),
-        ];
-        for ((major, minor, patch), expected) in test_vector.iter() {
-            let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
-            assert_eq!(version.is_live(), *expected);
-        }
     }
 }

@@ -36,10 +36,9 @@ pub fn app_bin_tag(version: &ProtocolSemanticVersion) -> Option<&'static str> {
     app_bin_tag_impl(version.minor, version.patch)
 }
 
-/// Returns `true` if this protocol minor version is live (or expected to be live)
-/// on any existing environment. All patch versions of a live minor are considered live.
-pub fn is_live(version: &ProtocolSemanticVersion) -> bool {
-    version.major == 0 && is_live_impl(version.minor)
+/// Returns the list of all protocol versions this binary supports (e.g. `["0.29.0", "0.30.0", ...]`).
+pub fn supported_versions() -> &'static [&'static str] {
+    ALL_SUPPORTED_PROTOCOL_VERSIONS
 }
 
 /// Verify that a VK hash is known and matches the expected VK hash for the given protocol version.

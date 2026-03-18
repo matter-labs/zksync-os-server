@@ -488,6 +488,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         &genesis.genesis_upgrade_tx().await.protocol_version
     };
 
+    // Fail fast if the binary doesn't know this protocol version.
+    if zksync_os_types::protocol_config::execution_version(current_protocol_version).is_err() {
+        panic!(
+            "server binary does not support protocol version {current_protocol_version}; \
+             supported versions: {:?}",
+            zksync_os_types::protocol_config::supported_versions()
+        );
+    }
+
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
     let interop_fee_subpool = InteropFeeSubpool::new(next_interop_fee_number);

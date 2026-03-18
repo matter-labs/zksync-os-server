@@ -72,21 +72,18 @@ vk_hash = "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5"
 
 [protocol."0.30.0"]
 execution_version = "v5"
-live = true
 # TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 5
 vk_hash = "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581"
 
 [protocol."0.30.1"]
 execution_version = "v5"
-live = true
 # TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 6
 vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
 [protocol."0.30.2"]
 execution_version = "v5"
-live = true
 # TODO(V32): remove — verifier_version is not needed in L1 prove
 verifier_version_deprecated = 6
 vk_hash = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
