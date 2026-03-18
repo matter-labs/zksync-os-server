@@ -138,16 +138,17 @@ impl ProofCommand {
                     .into_stored(&batch.batch.protocol_version)
             })
             .collect();
-        // todo: awful and temporary
-        let verifier_version = match self.proof.proving_execution_version() {
-            // Use default verifier for fake proofs.
-            None => 0,
-            Some(4) => 4,
-            Some(5) => 5,
-            Some(6) => 6,
-            Some(execution_version) => panic!(
-                "unsupported or old execution version: {execution_version}; there's no verifier defined for it"
-            ),
+        // Derive the verifier version from the protocol version on the first batch.
+        // Fake proofs use verifier_version 0 (default).
+        let verifier_version = if matches!(self.proof, SnarkProof::Fake) {
+            0
+        } else {
+            self.batches
+                .first()
+                .unwrap()
+                .batch
+                .proving_version_id()
+                .expect("proving version ID must be valid")
         };
 
         // todo: remove tostring

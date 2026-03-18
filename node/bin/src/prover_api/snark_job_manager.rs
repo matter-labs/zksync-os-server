@@ -130,11 +130,6 @@ impl SnarkJobManager {
             "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk_hash}"
         );
 
-        let proving_version_id = consumed_batches_proven[0]
-            .batch
-            .proving_version_id()
-            .expect("proving version ID must be valid as set by server");
-
         let consumed_batches_proven: Vec<_> = consumed_batches_proven
             .into_iter()
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
@@ -142,10 +137,7 @@ impl SnarkJobManager {
 
         self.send_downstream(ProofCommand::new(
             consumed_batches_proven,
-            SnarkProof::Real(RealSnarkProof::V2 {
-                proof: payload,
-                proving_execution_version: proving_version_id,
-            }),
+            SnarkProof::Real(RealSnarkProof::V2 { proof: payload }),
         ))
         .await?;
         Ok(())

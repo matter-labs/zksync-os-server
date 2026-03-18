@@ -203,13 +203,7 @@ impl FriJobManager {
         };
 
         // Prepare the envelope and send it downstream.
-        let proving_version_id = batch_metadata
-            .proving_version_id()
-            .expect("Must be valid proving version ID as set by the server");
-        let proof = RealFriProof::V2 {
-            proof: proof_bytes,
-            proving_execution_version: proving_version_id,
-        };
+        let proof = RealFriProof::V2 { proof: proof_bytes };
         let envelope = removed_job
             .with_data(FriProof::Real(proof))
             .with_stage(BatchExecutionStage::FriProvedReal);
