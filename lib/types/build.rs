@@ -11,9 +11,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as FmtWrite;
 use std::io::Write;
 
-/// A parsed `[forward_system."name"]` entry.
+/// A parsed `[forward_system.N]` entry.
 struct ForwardSystemDef {
-    execution_version_id: u32,
     app_bin_tag: Option<String>,
 }
 
@@ -50,13 +49,13 @@ fn main() {
 }
 
 fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
-    let mut forward_systems: HashMap<String, ForwardSystemDef> = HashMap::new();
+    let mut forward_systems: HashMap<u32, ForwardSystemDef> = HashMap::new();
     let mut historical_vk_hashes = Vec::new();
 
     struct RawProtocol {
         minor: u64,
         patch: u64,
-        forward_system_ref: String,
+        forward_system_ref: u32,
         verifier_version: u32,
         vk_hash: String,
     }
@@ -64,7 +63,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
 
     enum Section {
         None,
-        ForwardSystem(String),
+        ForwardSystem(u32),
         Protocol { minor: u64, patch: u64 },
         HistoricalVkHashes,
     }
@@ -73,28 +72,22 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
 
     // Temporaries for current section.
     let mut cur_app_bin_tag: Option<String> = None;
-    let mut cur_fs_ref: Option<String> = None;
-    let mut cur_exec_id: Option<u32> = None;
+    let mut cur_fs_ref: Option<u32> = None;
     let mut cur_proving_id: Option<u32> = None;
     let mut cur_vk_hash: Option<String> = None;
 
     let flush = |section: &Section,
                  abt: &mut Option<String>,
-                 fs_ref: &mut Option<String>,
-                 exec_id: &mut Option<u32>,
+                 fs_ref: &mut Option<u32>,
                  proving_id: &mut Option<u32>,
                  vk: &mut Option<String>,
-                 forward_systems: &mut HashMap<String, ForwardSystemDef>,
+                 forward_systems: &mut HashMap<u32, ForwardSystemDef>,
                  raw_protocols: &mut Vec<RawProtocol>| {
         match section {
-            Section::ForwardSystem(name) => {
-                let ev = exec_id.take().unwrap_or_else(|| {
-                    panic!("missing execution_version_id for forward_system {name}")
-                });
+            Section::ForwardSystem(exec_version) => {
                 forward_systems.insert(
-                    name.clone(),
+                    *exec_version,
                     ForwardSystemDef {
-                        execution_version_id: ev,
                         app_bin_tag: abt.take(),
                     },
                 );
@@ -121,7 +114,6 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
         }
         *abt = None;
         *fs_ref = None;
-        *exec_id = None;
         *proving_id = None;
         *vk = None;
     };
@@ -138,18 +130,20 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                 &section,
                 &mut cur_app_bin_tag,
                 &mut cur_fs_ref,
-                &mut cur_exec_id,
                 &mut cur_proving_id,
                 &mut cur_vk_hash,
                 &mut forward_systems,
                 &mut raw_protocols,
             );
 
-            if let Some(name) = line
-                .strip_prefix("[forward_system.\"")
-                .and_then(|s| s.strip_suffix("\"]"))
+            if let Some(id_str) = line
+                .strip_prefix("[forward_system.")
+                .and_then(|s| s.strip_suffix(']'))
             {
-                section = Section::ForwardSystem(name.to_string());
+                let exec_version: u32 = id_str
+                    .parse()
+                    .unwrap_or_else(|_| panic!("expected integer in: {line}"));
+                section = Section::ForwardSystem(exec_version);
             } else if let Some(version_str) = line
                 .strip_prefix("[protocol.\"")
                 .and_then(|s| s.strip_suffix("\"]"))
@@ -170,13 +164,13 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
 
         if let Some((key, value)) = parse_kv(line) {
             match &section {
-                Section::ForwardSystem(_) => match key {
-                    "execution_version_id" => cur_exec_id = Some(value.parse().unwrap()),
-                    "app_bin_tag" => cur_app_bin_tag = Some(value),
-                    _ => {}
-                },
+                Section::ForwardSystem(_) => {
+                    if key == "app_bin_tag" {
+                        cur_app_bin_tag = Some(value);
+                    }
+                }
                 Section::Protocol { .. } => match key {
-                    "forward_system" => cur_fs_ref = Some(value),
+                    "forward_system" => cur_fs_ref = Some(value.parse().unwrap()),
                     "verifier_version" => cur_proving_id = Some(value.parse().unwrap()),
                     "vk_hash" => cur_vk_hash = Some(value),
                     _ => {}
@@ -194,7 +188,6 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
         &section,
         &mut cur_app_bin_tag,
         &mut cur_fs_ref,
-        &mut cur_exec_id,
         &mut cur_proving_id,
         &mut cur_vk_hash,
         &mut forward_systems,
@@ -209,14 +202,14 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                 .get(&rp.forward_system_ref)
                 .unwrap_or_else(|| {
                     panic!(
-                        "protocol {}.{} references unknown forward_system {:?}",
+                        "protocol {}.{} references unknown forward_system {}",
                         rp.minor, rp.patch, rp.forward_system_ref
                     )
                 });
             ProtocolEntry {
                 minor: rp.minor,
                 patch: rp.patch,
-                execution_version: fs.execution_version_id,
+                execution_version: rp.forward_system_ref,
                 verifier_version: rp.verifier_version,
                 vk_hash: rp.vk_hash,
                 app_bin_tag: fs.app_bin_tag.clone(),
