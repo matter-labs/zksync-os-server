@@ -68,7 +68,7 @@ impl ProvingVersion {
     /// verification key hash generated from zksync-os dev-20260311, zksync-airbender v0.5.2 and zkos-wrapper v0.5.4
     /// TODO: use proper zksync-os release once it's there
     const V7_VK_HASH: &'static str =
-        "0x7790e7a955229d9379c783b638252c721c73a9d863ec0de57cd2ed3beb628f04";
+        "0x84e5659871dfede9c6419d586ca4e4c175dae2652109421fa1e5d11b48711422";
 
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
