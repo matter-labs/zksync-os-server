@@ -2,10 +2,12 @@ use std::time::{Duration, Instant};
 
 use crate::network::Zksync;
 use alloy::eips::BlockId;
-use alloy::primitives::{Address, StorageKey, TxHash};
+use alloy::primitives::{Address, BlockNumber, StorageKey, TxHash};
 use alloy::providers::Provider;
 use alloy::transports::TransportResult;
 use anyhow::Context as _;
+use serde::Deserialize;
+use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_rpc_api::types::{BatchStorageProof, L2ToL1LogProof, LogProofTarget};
 
 /// RPC interface that gives access to methods specific to ZKsync OS.
@@ -45,6 +47,43 @@ pub trait ZksyncApi: Provider<Zksync> {
         self.client()
             .request("zks_getProof", (address, keys, batch_number))
             .await
+    }
+
+    async fn get_batch_number_by_block_number(
+        &self,
+        block_number: BlockNumber,
+    ) -> TransportResult<u64> {
+        #[derive(Debug, Deserialize)]
+        struct CommittedBatchView {
+            batch_info: StoredBatchInfo,
+        }
+
+        let CommittedBatchView { batch_info } = self
+            .client()
+            .request("unstable_getBatchByBlockNumber", (block_number,))
+            .await?;
+        tracing::debug!(block_number, ?batch_info, "got batch info for block");
+        Ok(batch_info.batch_number)
+    }
+
+    async fn wait_batch_number_by_block_number(
+        &self,
+        block_number: BlockNumber,
+    ) -> TransportResult<u64> {
+        loop {
+            match self.get_batch_number_by_block_number(block_number).await {
+                Ok(number) => return Ok(number),
+                Err(err)
+                    if err.as_error_resp().is_some_and(|err| {
+                        err.code == -32603 && err.message.contains("has not been finalized")
+                    }) =>
+                {
+                    tracing::info!(block_number, %err, "batch corresponding to block isn't finalized; waiting");
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 }
 
