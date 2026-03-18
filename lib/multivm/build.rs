@@ -91,9 +91,7 @@ fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
             continue;
         }
 
-        if in_protocol_section
-            && let Some((key, value)) = parse_toml_string(line)
-        {
+        if in_protocol_section && let Some((key, value)) = parse_toml_string(line) {
             match key {
                 "forward_system_tag" => current_forward_system_tag = value,
                 "app_bin_tag" => current_app_bin_tag = value,
