@@ -37,8 +37,8 @@ fn sanitize_tag_for_env(tag: &str) -> String {
 
 /// Load protocol-versions.toml and extract app.bin download info.
 ///
-/// Returns a map from forward_system tag → AppBinEntry for forward_system
-/// releases that have an app_bin_tag set.
+/// Returns a map from execution_version tag → AppBinEntry for
+/// execution versions that have an app_bin_tag set.
 fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -51,7 +51,7 @@ fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
     let contents = std::fs::read_to_string(&versions_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", versions_path.display()));
 
-    // Parse [forward_system.*] sections for tag and app_bin_tag.
+    // Parse [execution_version.*] sections for tag and app_bin_tag.
     // No need to parse protocol sections — the mapping is direct.
     let mut result = HashMap::new();
     let mut in_forward_system = false;
@@ -78,7 +78,7 @@ fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
 
         if line.starts_with('[') {
             flush(in_forward_system, &mut cur_tag, &mut cur_app_bin_tag);
-            in_forward_system = line.starts_with("[forward_system.");
+            in_forward_system = line.starts_with("[execution_version.");
             continue;
         }
 

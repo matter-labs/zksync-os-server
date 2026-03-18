@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as FmtWrite;
 use std::io::Write;
 
-/// A parsed `[forward_system.N]` entry.
+/// A parsed `[execution_version.N]` entry.
 struct ForwardSystemDef {
     app_bin_tag: Option<String>,
 }
@@ -94,7 +94,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
             }
             Section::Protocol { minor, patch } => {
                 let fs = fs_ref.take().unwrap_or_else(|| {
-                    panic!("missing forward_system for protocol {minor}.{patch}")
+                    panic!("missing execution_version for protocol {minor}.{patch}")
                 });
                 let pv = proving_id.take().unwrap_or_else(|| {
                     panic!("missing verifier_version for protocol {minor}.{patch}")
@@ -137,7 +137,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
             );
 
             if let Some(id_str) = line
-                .strip_prefix("[forward_system.")
+                .strip_prefix("[execution_version.")
                 .and_then(|s| s.strip_suffix(']'))
             {
                 let exec_version: u32 = id_str
@@ -170,7 +170,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                     }
                 }
                 Section::Protocol { .. } => match key {
-                    "forward_system" => cur_fs_ref = Some(value.parse().unwrap()),
+                    "execution_version" => cur_fs_ref = Some(value.parse().unwrap()),
                     "verifier_version" => cur_proving_id = Some(value.parse().unwrap()),
                     "vk_hash" => cur_vk_hash = Some(value),
                     _ => {}
@@ -202,7 +202,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
                 .get(&rp.forward_system_ref)
                 .unwrap_or_else(|| {
                     panic!(
-                        "protocol {}.{} references unknown forward_system {}",
+                        "protocol {}.{} references unknown execution_version {}",
                         rp.minor, rp.patch, rp.forward_system_ref
                     )
                 });
