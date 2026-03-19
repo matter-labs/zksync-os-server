@@ -68,7 +68,7 @@ use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
-    L1TxWatcher, L1UpgradeTxWatcher,
+    L1TxWatcher, L1UpgradeTxWatcher, LocalL2Reader,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
@@ -89,7 +89,7 @@ use zksync_os_raft::{
 };
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
-use zksync_os_rpc::{EthCallHandler, RpcStorage, run_jsonrpsee_server};
+use zksync_os_rpc::{EthCallHandler, ReadRpcStorage, RpcStorage, run_jsonrpsee_server};
 use zksync_os_rpc_api::eth::EthApiClient;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::{
@@ -114,6 +114,30 @@ const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
 const REPOSITORY_DB_NAME: &str = "repository";
 const BATCH_DB_NAME: &str = "batch";
 pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
+
+/// Bridges `EthCallHandler` to the `LocalL2Reader` trait required by `L1UpgradeTxWatcher`.
+/// Lives in `node/bin` because `zksync_os_rpc` depends on `zksync_os_l1_watcher`, making
+/// a direct dependency from `l1_watcher` on `rpc` circular.
+struct EthCallHandlerL2Reader<S>(EthCallHandler<S>);
+
+impl<S: ReadRpcStorage + Send + Sync + 'static> LocalL2Reader for EthCallHandlerL2Reader<S> {
+    fn call(
+        &self,
+        to: alloy::primitives::Address,
+        calldata: alloy::primitives::Bytes,
+    ) -> anyhow::Result<alloy::primitives::Bytes> {
+        use alloy::eips::BlockId;
+        use alloy::network::TransactionBuilder;
+        use alloy::rpc::types::TransactionRequest;
+
+        let request = TransactionRequest::default()
+            .with_to(to)
+            .with_input(calldata);
+        self.0
+            .call_impl(request, Some(BlockId::latest()), None, None)
+            .map_err(anyhow::Error::from)
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
@@ -517,6 +541,16 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             },
         };
         upgrade_subpool.insert(upgrade_tx).await;
+
+        // At v31+ genesis, seed currentSettlementLayerChainId. The value is provably 0 at genesis
+        // (no prior blocks ever set it), so no L2 read is needed.
+        if genesis_upgrade.protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
+            let bootstrap = zksync_os_types::SystemTxEnvelope::set_sl_chain_id(
+                node_startup_state.l1_state.sl_chain_id,
+                u64::MAX, // sentinel: not a real migration number
+            );
+            sl_chain_id_subpool.insert(bootstrap).await;
+        }
     }
 
     if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
@@ -662,7 +696,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let pool = Pool::new(
         upgrade_subpool.clone(),
-        sl_chain_id_subpool,
+        sl_chain_id_subpool.clone(),
         interop_fee_subpool.clone(),
         interop_roots_subpool,
         l1_subpool,
@@ -691,25 +725,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         fee_provider,
     );
 
-    // ========== Start L1 Upgrade Watcher ===========
-
-    tasks.spawn(
-        L1UpgradeTxWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            bytecode_supplier_address,
-            current_protocol_version.clone(),
-            upgrade_subpool,
-        )
-        .await
-        .expect("failed to start L1 upgrade transaction watcher")
-        .run()
-        .map(report_exit("L1 upgrade transaction watcher")),
-    );
-
-    // ========== Start L1 Persist Batch Watcher ===========
-
+    // These must come before the upgrade watcher so that EthCallHandlerL2Reader
+    // can read from the latest L2 state when seeding currentSettlementLayerChainId.
     let persistent_batch_storage =
         ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
     let rpc_storage = RpcStorage::new(
@@ -720,6 +737,38 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
         tree_for_rpc,
     );
+
+    // ========== Start L1 Upgrade Watcher ===========
+
+    let eth_call_handler_for_upgrade = EthCallHandler::new(
+        config.rpc_config.clone().into(),
+        rpc_storage.clone(),
+        chain_id,
+        last_constructed_block_ctx_receiver.clone(),
+    );
+    let l2_reader: Box<dyn LocalL2Reader> =
+        Box::new(EthCallHandlerL2Reader(eth_call_handler_for_upgrade));
+
+    tasks.spawn(
+        L1UpgradeTxWatcher::create_watcher(
+            config.l1_watcher_config.clone().into(),
+            node_startup_state.l1_state.diamond_proxy_l1.clone(),
+            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            bytecode_supplier_address,
+            current_protocol_version.clone(),
+            upgrade_subpool,
+            sl_chain_id_subpool,
+            node_startup_state.l1_state.sl_chain_id,
+            l2_reader,
+        )
+        .await
+        .expect("failed to start L1 upgrade transaction watcher")
+        .run()
+        .map(report_exit("L1 upgrade transaction watcher")),
+    );
+
+    // ========== Start L1 Persist Batch Watcher ===========
+
     tasks.spawn(
         L1PersistBatchWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
