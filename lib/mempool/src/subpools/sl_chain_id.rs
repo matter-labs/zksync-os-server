@@ -89,7 +89,11 @@ impl SlChainIdSubpool {
             assert_eq!(tx, &pending_tx);
 
             if let SystemTxType::SetSLChainId(migration_number) = *tx.system_subtype() {
-                last_migration_number = Some(migration_number);
+                // u64::MAX is the bootstrap sentinel — not a real gateway migration.
+                // Propagating it would cause u64::MAX + 1 overflow in BlockContextProvider.
+                if migration_number != u64::MAX {
+                    last_migration_number = Some(migration_number);
+                }
             }
         }
         last_migration_number
@@ -133,5 +137,32 @@ impl Stream for SlChainIdTransactionsStream {
             }
             StreamState::Closed => Poll::Ready(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_set_sl_chain_id_tx(migration_number: u64) -> SystemTxEnvelope {
+        SystemTxEnvelope::set_sl_chain_id(1u64, migration_number)
+    }
+
+    #[tokio::test]
+    async fn sentinel_migration_number_returns_none() {
+        let subpool = SlChainIdSubpool::default();
+        let tx = make_set_sl_chain_id_tx(u64::MAX);
+        subpool.insert(tx.clone()).await;
+        let result = subpool.on_canonical_state_change(vec![&tx]).await;
+        assert_eq!(result, None, "u64::MAX sentinel must not update migration tracking");
+    }
+
+    #[tokio::test]
+    async fn real_migration_number_returns_some() {
+        let subpool = SlChainIdSubpool::default();
+        let tx = make_set_sl_chain_id_tx(42);
+        subpool.insert(tx.clone()).await;
+        let result = subpool.on_canonical_state_change(vec![&tx]).await;
+        assert_eq!(result, Some(42));
     }
 }
