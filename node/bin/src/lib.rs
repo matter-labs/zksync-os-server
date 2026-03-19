@@ -68,7 +68,7 @@ use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
-    L1TxWatcher, L1UpgradeTxWatcher, LocalL2Reader,
+    L1TxWatcher, L1UpgradeTxWatcher, LocalL2Reader, SlChainIdBootstrapParams,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
@@ -757,9 +757,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             bytecode_supplier_address,
             current_protocol_version.clone(),
             upgrade_subpool,
-            sl_chain_id_subpool,
-            node_startup_state.l1_state.sl_chain_id,
-            l2_reader,
+            SlChainIdBootstrapParams {
+                sl_chain_id_subpool,
+                sl_chain_id: node_startup_state.l1_state.sl_chain_id,
+                l2_reader,
+            },
         )
         .await
         .expect("failed to start L1 upgrade transaction watcher")

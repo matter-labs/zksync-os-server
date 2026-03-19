@@ -154,7 +154,10 @@ mod tests {
         let tx = make_set_sl_chain_id_tx(u64::MAX);
         subpool.insert(tx.clone()).await;
         let result = subpool.on_canonical_state_change(vec![&tx]).await;
-        assert_eq!(result, None, "u64::MAX sentinel must not update migration tracking");
+        assert_eq!(
+            result, None,
+            "u64::MAX sentinel must not update migration tracking"
+        );
     }
 
     #[tokio::test]

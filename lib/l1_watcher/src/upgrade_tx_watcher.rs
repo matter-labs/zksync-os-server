@@ -9,10 +9,10 @@ use alloy::primitives::{Address, B256, BlockNumber, Bytes, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
+use anyhow::Context as _;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
 use zksync_os_contract_interface::ZkChain;
-use anyhow::Context as _;
 use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_types::{
@@ -38,6 +38,16 @@ const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 pub trait LocalL2Reader: Send + Sync + 'static {
     /// Executes a static call against the latest local L2 state and returns the raw output bytes.
     fn call(&self, to: Address, calldata: Bytes) -> anyhow::Result<Bytes>;
+}
+
+/// Groups the fields needed to bootstrap `SetSLChainId` at genesis and on the v30→v31 in-run
+/// upgrade. Extracted into its own struct so that [`L1UpgradeTxWatcher::create_watcher`] stays
+/// within clippy's argument-count limit.
+pub struct SlChainIdBootstrapParams {
+    pub sl_chain_id_subpool: SlChainIdSubpool,
+    /// The settlement-layer chain ID to inject when seeding `SystemContext`.
+    pub sl_chain_id: u64,
+    pub l2_reader: Box<dyn LocalL2Reader>,
 }
 
 pub struct L1UpgradeTxWatcher {
@@ -70,10 +80,13 @@ impl L1UpgradeTxWatcher {
         bytecode_supplier_address: Address,
         current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
-        sl_chain_id_subpool: SlChainIdSubpool,
-        sl_chain_id: u64,
-        l2_reader: Box<dyn LocalL2Reader>,
+        sl_chain_id_bootstrap: SlChainIdBootstrapParams,
     ) -> anyhow::Result<L1Watcher> {
+        let SlChainIdBootstrapParams {
+            sl_chain_id_subpool,
+            sl_chain_id,
+            l2_reader,
+        } = sl_chain_id_bootstrap;
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,

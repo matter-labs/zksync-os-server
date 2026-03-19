@@ -13,7 +13,7 @@ mod execute_watcher;
 pub use execute_watcher::L1ExecuteWatcher;
 
 mod upgrade_tx_watcher;
-pub use upgrade_tx_watcher::{L1UpgradeTxWatcher, LocalL2Reader};
+pub use upgrade_tx_watcher::{L1UpgradeTxWatcher, LocalL2Reader, SlChainIdBootstrapParams};
 
 mod interop_watcher;
 pub use interop_watcher::InteropWatcher;
