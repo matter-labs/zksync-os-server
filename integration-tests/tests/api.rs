@@ -2,7 +2,7 @@ use alloy::eips::Encodable2718;
 use alloy::network::{ReceiptResponse, TransactionBuilder, TxSigner};
 use alloy::primitives::{Address, B256, TxHash, U128, U256, address};
 use alloy::providers::Provider;
-use alloy::rpc::types::{Filter, TransactionRequest};
+use alloy::rpc::types::{Filter, Log, TransactionRequest};
 use alloy::sol_types::SolEvent;
 use anyhow::Context as _;
 use regex::Regex;
@@ -280,36 +280,28 @@ async fn estimate_gas_without_balance(tester: Tester) -> anyhow::Result<()> {
 }
 
 #[tracing::instrument(skip(provider))]
-async fn wait_for_batch_commitment(
-    diamond_proxy_address: Address,
+async fn fetch_batch_commitment(
     provider: &EthDynProvider,
+    filter_id: U256,
     expected_batch_number: u64,
 ) -> B256 {
-    let filter = Filter::new()
-        .event_signature(BlockCommit::SIGNATURE_HASH)
-        .address(diamond_proxy_address);
+    let logs: Vec<Log> = provider
+        .get_filter_changes(filter_id)
+        .await
+        .expect("failed to get logs");
+    tracing::info!(logs.len = logs.len(), "queried logs filter");
 
-    loop {
-        tracing::debug!("querying batch commitment logs");
-
-        let logs = provider
-            .get_logs(&filter)
-            .await
-            .expect("failed to get logs");
-        for log in &logs {
-            let topics = log.inner.data.topics();
-            assert_eq!(topics.len(), 4);
-            let batch_number = U256::from_be_bytes(topics[1].0);
-            let batch_number =
-                u64::try_from(batch_number).expect("incorrect batch number in event");
-            if batch_number == expected_batch_number {
-                tracing::info!(batch_number, "successfully waited for batch");
-                return topics[2];
-            }
+    for log in &logs {
+        let topics = log.inner.data.topics();
+        assert_eq!(topics.len(), 4);
+        let batch_number = U256::from_be_bytes(topics[1].0);
+        let batch_number = u64::try_from(batch_number).expect("incorrect batch number in event");
+        if batch_number == expected_batch_number {
+            tracing::info!(batch_number, "successfully waited for batch");
+            return topics[2];
         }
-
-        tokio::time::sleep(Duration::from_millis(200)).await;
     }
+    panic!("no logs for batch={expected_batch_number}: {logs:#?}");
 }
 
 #[tracing::instrument(skip(tester))]
@@ -351,6 +343,17 @@ async fn get_storage_proof(tester: Tester) -> anyhow::Result<()> {
     let diamond_proxy_address = l1_state.diamond_proxy_address_sl();
     tracing::info!(?diamond_proxy_address);
 
+    // We can effectively use filters API to not rely on block ranges specified in `Filter` (without specifying the starting block,
+    // using `eth_getLogs` can and frequently does return no logs for logs sufficiently far in the past).
+    let block_commit_filter = Filter::new()
+        .event_signature(BlockCommit::SIGNATURE_HASH)
+        .address(diamond_proxy_address);
+    let filter_id = tester
+        .l1_provider()
+        .new_filter(&block_commit_filter)
+        .await?;
+    tracing::info!(?filter_id, "installed BlockCommit filter");
+
     let deploy_tx_receipt = Counter::deploy_builder(tester.l2_provider.clone())
         .send()
         .await?
@@ -359,15 +362,30 @@ async fn get_storage_proof(tester: Tester) -> anyhow::Result<()> {
     let contract_address = deploy_tx_receipt
         .contract_address()
         .expect("no contract deployed");
-    tracing::info!(?contract_address, "deployed counter");
+    let deploy_block_number = deploy_tx_receipt
+        .block_number
+        .expect("no block for successful receipt");
+    tracing::info!(?contract_address, deploy_block_number, "deployed counter");
+    let deploy_batch_number = tester
+        .l2_zk_provider
+        .wait_batch_number_by_block_number(deploy_block_number)
+        .await?;
+    tracing::info!(deploy_batch_number, "resolved batch for deployment tx");
 
     let queried_keys = [B256::repeat_byte(0), B256::repeat_byte(0x1f)];
-    let batch_number = 2;
+    // Here and below, the commitment *must* be available right away because `wait_batch_number_by_block_number()`
+    // only returns the batch number once the batch is completely finalized on L1.
     let batch_commitment =
-        wait_for_batch_commitment(diamond_proxy_address, tester.l1_provider(), batch_number).await;
+        fetch_batch_commitment(tester.l1_provider(), filter_id, deploy_batch_number).await;
     tracing::info!(?batch_commitment);
 
-    let proof = wait_for_proof(&tester, contract_address, &queried_keys, batch_number).await?;
+    let proof = wait_for_proof(
+        &tester,
+        contract_address,
+        &queried_keys,
+        deploy_batch_number,
+    )
+    .await?;
     tracing::info!(?proof, "got proof");
     let storage_view = proof
         .verify(contract_address, &queried_keys)
@@ -378,24 +396,34 @@ async fn get_storage_proof(tester: Tester) -> anyhow::Result<()> {
 
     tracing::info!("writing to counter contract");
     let counter = CounterInstance::new(contract_address, tester.l2_provider.clone());
-    counter
+    let increment_receipt = counter
         .increment(U256::from(42))
         .send()
         .await?
         .expect_successful_receipt()
         .await?;
-    tracing::info!("written to counter");
+    let increment_block_number = increment_receipt
+        .block_number
+        .expect("no block for successful receipt");
+    tracing::info!(increment_block_number, "written to counter");
+    let increment_batch_number = tester
+        .l2_zk_provider
+        .wait_batch_number_by_block_number(increment_block_number)
+        .await?;
+    tracing::info!(increment_batch_number, "resolved batch for increment tx");
+    assert!(increment_batch_number > deploy_batch_number);
 
-    let new_batch_number = 3;
-    let new_batch_commitment = wait_for_batch_commitment(
-        diamond_proxy_address,
-        tester.l1_provider(),
-        new_batch_number,
-    )
-    .await;
+    let new_batch_commitment =
+        fetch_batch_commitment(tester.l1_provider(), filter_id, increment_batch_number).await;
     assert_ne!(new_batch_commitment, batch_commitment);
 
-    let proof = wait_for_proof(&tester, contract_address, &queried_keys, new_batch_number).await?;
+    let proof = wait_for_proof(
+        &tester,
+        contract_address,
+        &queried_keys,
+        increment_batch_number,
+    )
+    .await?;
     tracing::info!(?proof, "got proof");
     let storage_view = proof
         .verify(contract_address, &queried_keys)

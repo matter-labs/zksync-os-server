@@ -322,8 +322,15 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             .get_block_by_number(last_block_number)?
             .with_context(|| {
                 format!("missing last block {last_block_number} for batch #{batch_number}")
-            })?;
-        let last_block_hash = last_block.header.hash_slow();
+            })?
+            .into_inner();
+        let last_block_header_for_hashing = alloy::consensus::Header {
+            // `logs_bloom` must be zeroed out when computing block hashes due to how
+            // block hashes are defined elsewhere in the codebase.
+            logs_bloom: alloy::primitives::Bloom::default(),
+            ..last_block.header
+        };
+        let last_block_hash = last_block_header_for_hashing.hash_slow();
 
         let last_256_block_hashes_blake = {
             let mut blocks_hasher = Blake2s256::new();

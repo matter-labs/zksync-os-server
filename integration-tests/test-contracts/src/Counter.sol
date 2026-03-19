@@ -6,5 +6,10 @@ contract Counter {
 
     function increment(uint256 _by) public {
         counter += _by;
+        // Force at least one event in the block with the increment tx to check block hash computations
+        // in `zks_getProof`
+        emit Incremented(_by, counter);
     }
 }
+
+event Incremented(uint256 indexed by, uint256 indexed newValue);
