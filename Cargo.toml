@@ -86,6 +86,7 @@ zksync_os_interface = { version = "0.0.14" }
 # Historical versions of zksync-os that are kept to be able to replay old blocks and simulate calls on them. Only
 # forward system dependencies are expected to be in this section.
 
+# execution_version = v4 (see protocol-versions.toml)
 zk_os_forward_system_0_0_28 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.28-interface-v0.0.14", features = [
     "evm-compatibility",
     "no_print",
@@ -97,6 +98,7 @@ zk_os_forward_system_0_1_2 = { package = "forward_system", git = "https://github
     # It was used with this feature, so it should stay here forever.
     "testing",
 ], default-features = false }
+# execution_version = v5, simulation crate (see protocol-versions.toml)
 # v0.2.x is not historical yet, but we use a separate version for simulation so that `eth_estimateGas` can work with
 # 0-balance accounts. The fix was not a part of v0.2.5 and unfortunately cannot be included without changing `app.bin`.
 zk_os_forward_system_0_2_8 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.8-simulation-only-interface-v0.0.14", features = [
@@ -119,6 +121,8 @@ zk_os_forward_system_0_2_8 = { package = "forward_system", git = "https://github
 #execution_utils_prev = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.1" }
 #full_statement_verifier_prev = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.1" }
 
+# execution_version = v5 (see protocol-versions.toml)
+#
 # Current (as in most recently released) version of zksync-os used to prove and submit new batches. Also includes
 # airbender dependencies that are necessary to verify said proofs on the server end.
 #
@@ -135,6 +139,8 @@ zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com
 execution_utils = { git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
 full_statement_verifier = { git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
 
+# execution_version = v6 (see protocol-versions.toml)
+#
 # Next version of zksync-os that is currently in development. Usually points to a tag with some intermediary state.
 #
 # Can be updated at any time and changing it does not count as a breaking change.
