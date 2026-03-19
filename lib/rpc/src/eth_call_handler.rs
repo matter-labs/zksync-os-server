@@ -456,6 +456,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         block_context: BlockContext,
         mut storage_view: V,
     ) -> Result<U256, EthCallError> {
+        tracing::trace!(?block_context, "Estimating gas");
         // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
         // original geth logic. Source:
         // https://github.com/paradigmxyz/reth/blob/5bc8589162b6e23b07919d82a57eee14353f2862/crates/rpc/rpc-eth-api/src/helpers/estimate.rs
@@ -524,6 +525,11 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let mut res = execute(tx.clone(), block_context, storage_view.clone())
             .map_err(EthCallError::ForwardSubsystemError)?
             .map_err(EthCallError::InvalidTransaction)?;
+        tracing::trace!(
+            gas_limit = tx.gas_limit(),
+            ?res,
+            "Executed tx in estimate_gas with highest gas limit"
+        );
         match res.execution_result {
             ExecutionResult::Success(_) => {
                 // Transaction succeeded with the highest possible gas limit, we can proceed with
@@ -562,6 +568,11 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             res = execute(optimistic_tx, block_context, storage_view.clone())
                 .map_err(EthCallError::ForwardSubsystemError)?
                 .map_err(EthCallError::InvalidTransaction)?;
+            tracing::trace!(
+                gas_limit = tx.gas_limit(),
+                ?res,
+                "Executed tx in estimate_gas with optimistic gas limit"
+            );
 
             // Update the gas used based on the new result.
             gas_used = res.gas_used;
@@ -626,6 +637,11 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 ethres => {
                     // Unpack the result and environment if the transaction was successful.
                     res = ethres.map_err(EthCallError::InvalidTransaction)?;
+                    tracing::trace!(
+                        gas_limit = tx.gas_limit(),
+                        ?res,
+                        "Executed tx in estimate_gas with gas limit"
+                    );
                     // Update the estimated gas range based on the transaction result.
                     update_estimated_gas_range(
                         res.execution_result,
