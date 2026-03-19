@@ -5,17 +5,19 @@ use crate::util::ANVIL_L1_CHAIN_ID;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
-use alloy::primitives::{Address, B256, BlockNumber, U256};
+use alloy::primitives::{Address, B256, BlockNumber, Bytes, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
 use zksync_os_contract_interface::ZkChain;
+use anyhow::Context as _;
+use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_types::{
-    L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
-    UpgradeMetadata,
+    L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, SystemTxEnvelope,
+    UpgradeInfo, UpgradeMetadata,
 };
 // TODO: disabled until bytecode supplier integration is ready
 // use zksync_os_contract_interface::IBytecodeSupplier::BytecodePublished;
@@ -27,6 +29,16 @@ const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
 /// The constant value is higher than for other watchers, since we're looking for rare/specific events
 /// and we don't expect a lot of results.
 const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
+
+/// Provides in-process read access to the local L2 chain state.
+///
+/// Defined here rather than in `zksync_os_rpc` to avoid a circular dependency:
+/// `zksync_os_rpc` already depends on `zksync_os_l1_watcher`. Implemented in
+/// `node/bin` using `EthCallHandler`.
+pub trait LocalL2Reader: Send + Sync + 'static {
+    /// Executes a static call against the latest local L2 state and returns the raw output bytes.
+    fn call(&self, to: Address, calldata: Bytes) -> anyhow::Result<Bytes>;
+}
 
 pub struct L1UpgradeTxWatcher {
     admin_contract_l1: Address,
@@ -43,6 +55,11 @@ pub struct L1UpgradeTxWatcher {
 
     // Needed to process L1 blocks in chunks.
     max_blocks_to_process: u64,
+
+    // SL chain ID bootstrap fields:
+    sl_chain_id_subpool: SlChainIdSubpool,
+    sl_chain_id: u64,
+    l2_reader: Box<dyn LocalL2Reader>,
 }
 
 impl L1UpgradeTxWatcher {
@@ -53,6 +70,9 @@ impl L1UpgradeTxWatcher {
         bytecode_supplier_address: Address,
         current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
+        sl_chain_id_subpool: SlChainIdSubpool,
+        sl_chain_id: u64,
+        l2_reader: Box<dyn LocalL2Reader>,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             config.max_blocks_to_process,
@@ -105,6 +125,9 @@ impl L1UpgradeTxWatcher {
             current_protocol_version,
             upgrade_subpool,
             max_blocks_to_process: config.max_blocks_to_process,
+            sl_chain_id_subpool,
+            sl_chain_id,
+            l2_reader,
         };
         let l1_watcher = L1Watcher::new(
             zk_chain_l1.provider().clone(),
@@ -216,6 +239,28 @@ impl L1UpgradeTxWatcher {
                 .expect("system time before UNIX EPOCH")
                 .as_secs();
         }
+    }
+
+    fn read_current_sl_chain_id(&self) -> anyhow::Result<U256> {
+        use alloy::primitives::address;
+        use alloy::sol_types::SolCall;
+        use zksync_os_contract_interface::ISystemContext::currentSettlementLayerChainIdCall;
+
+        // Well-known system contract address, shared with `zksync_os_types::transaction::system::utils::SYSTEM_CONTEXT_ADDRESS`.
+        // Inlined here because the `transaction` module in `zksync_os_types` is not publicly accessible.
+        let system_context_address = address!("000000000000000000000000000000000000800b");
+        let calldata = Bytes::from(currentSettlementLayerChainIdCall {}.abi_encode());
+        let output = self
+            .l2_reader
+            .call(system_context_address, calldata)
+            .context("read currentSettlementLayerChainId")?;
+        let bytes: [u8; 32] = output.as_ref().try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "unexpected currentSettlementLayerChainId return length: {}",
+                output.len()
+            )
+        })?;
+        Ok(U256::from_be_bytes(bytes))
     }
 
     async fn fetch_force_preimages(
@@ -330,8 +375,28 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
             "sending upgrade transaction to the mempool"
         );
 
+        let old_version = self.current_protocol_version.clone();
         self.current_protocol_version = upgrade_info.protocol_version().clone();
         self.upgrade_subpool.insert(upgrade_info).await;
+
+        // When crossing the v30→v31 boundary, seed currentSettlementLayerChainId if it is 0.
+        // The upgrade tx lands first (block N) because Pool::best_transactions_stream is biased:
+        // upgrade has higher priority than sl_chain_id, and each call returns one stream per block.
+        if self.current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0)
+            && old_version < ProtocolSemanticVersion::new(0, 31, 0)
+        {
+            let current_sl_chain_id = self
+                .read_current_sl_chain_id()
+                .map_err(L1WatcherError::Batch)?;
+            if current_sl_chain_id == U256::ZERO {
+                tracing::info!(
+                    sl_chain_id = self.sl_chain_id,
+                    "injecting SetSLChainId bootstrap transaction for v31 upgrade"
+                );
+                let bootstrap = SystemTxEnvelope::set_sl_chain_id(self.sl_chain_id, u64::MAX);
+                self.sl_chain_id_subpool.insert(bootstrap).await;
+            }
+        }
 
         Ok(())
     }
