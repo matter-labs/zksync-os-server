@@ -50,6 +50,7 @@ impl RpcServiceT for Monitoring {
                 started.elapsed(),
                 request_size,
                 output_size,
+                out.as_error_code(),
             );
             out
         }
@@ -161,6 +162,7 @@ impl RpcServiceT for Monitoring {
                 started.elapsed(),
                 request_size,
                 output_size,
+                out.as_error_code(),
             );
             out
         }
@@ -199,10 +201,14 @@ fn log_and_report(
     elapsed: Duration,
     request_size: usize,
     output_size_bytes: usize,
+    error_code: Option<i32>,
 ) {
     API_METRICS.response_time[method].observe(elapsed);
     API_METRICS.request_size[method].observe(request_size);
     API_METRICS.response_size[method].observe(output_size_bytes);
+    if let Some(code) = error_code {
+        API_METRICS.errors[&(method.to_owned(), code)].inc();
+    }
 
     debug_dispatch!(
         targets: match method {

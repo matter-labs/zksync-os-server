@@ -1,5 +1,5 @@
 use std::time::Duration;
-use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
+use vise::{Buckets, Counter, Histogram, LabeledFamily, Metrics, Unit};
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.000001..=32.0, 2.0);
 const BLOCK_COUNTS: Buckets = Buckets::exponential(1.0..=100000.0, 10.0);
@@ -17,6 +17,8 @@ pub struct ApiMetrics {
     pub response_size: LabeledFamily<String, Histogram<usize>>,
     #[metrics(labels = ["method"], buckets = Buckets::exponential(1.0..=1_000.0, 2.0))]
     pub requests_in_batch_count: LabeledFamily<String, Histogram<u64>>,
+    #[metrics(labels = ["method", "code"])]
+    pub errors: LabeledFamily<(String, i32), Counter, 2>,
 }
 
 #[vise::register]
