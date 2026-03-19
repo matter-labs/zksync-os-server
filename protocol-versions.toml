@@ -43,6 +43,8 @@ crate = "zk_os_forward_system"
 tag = "v0.2.8-interface-v0.0.14"
 # app.bin was built from a different tag due to a toolchain-induced binary change.
 app_bin_tag = "v0.2.5"
+# Module name for zksync_os_multivm::apps::vN (historical, matches old proving version).
+app_module = 6
 # Simulation uses a separate crate to support eth_estimateGas with 0-balance accounts.
 simulation_crate = "zk_os_forward_system_0_2_8"
 simulation_tag = "v0.2.8-simulation-only-interface-v0.0.14"
@@ -51,6 +53,8 @@ simulation_tag = "v0.2.8-simulation-only-interface-v0.0.14"
 crate = "zk_os_forward_system_dev"
 tag = "dev-20260311"
 app_bin_tag = "dev-20260311"
+# Module name for zksync_os_multivm::apps::vN (historical, matches old proving version).
+app_module = 7
 
 # ---- Protocol versions ----
 

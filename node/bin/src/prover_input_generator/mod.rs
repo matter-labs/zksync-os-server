@@ -148,11 +148,11 @@ fn compute_prover_input(
         }
         5 => {
             let bin_path = if enable_logging {
-                zksync_os_multivm::apps::v5::singleblock_batch_logging_enabled_path(
+                zksync_os_multivm::apps::v6::singleblock_batch_logging_enabled_path(
                     &app_bin_base_path,
                 )
             } else {
-                zksync_os_multivm::apps::v5::singleblock_batch_path(&app_bin_base_path)
+                zksync_os_multivm::apps::v6::singleblock_batch_path(&app_bin_base_path)
             };
             use zk_ee::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
@@ -187,11 +187,11 @@ fn compute_prover_input(
         }
         6 => {
             let bin_path = if enable_logging {
-                zksync_os_multivm::apps::v6::singleblock_batch_logging_enabled_path(
+                zksync_os_multivm::apps::v7::singleblock_batch_logging_enabled_path(
                     &app_bin_base_path,
                 )
             } else {
-                zksync_os_multivm::apps::v6::singleblock_batch_path(&app_bin_base_path)
+                zksync_os_multivm::apps::v7::singleblock_batch_path(&app_bin_base_path)
             };
             use zk_ee_dev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
