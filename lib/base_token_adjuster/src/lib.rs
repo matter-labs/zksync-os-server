@@ -154,7 +154,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
             Self::resolve_api_token(
                 gateway_base_token_address,
                 base_token_adjuster_config.gateway_base_token_addr_override,
-                Some(18), // We expect gateway base token to be ETH or ZK, both have `18` decimals 
+                Some(18), // We expect gateway base token to be ETH or ZK, both have `18` decimals
                 &l1_provider,
             )
             .await?
