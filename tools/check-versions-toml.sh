@@ -2,8 +2,11 @@
 # Validates that protocol-versions.toml is consistent with Cargo.toml.
 #
 # Checks performed:
-# 1. Every forward_system crate in protocol-versions.toml is declared in Cargo.toml.
-# 2. The git tags in protocol-versions.toml match the tags in Cargo.toml for that crate.
+# 1. Forward check: every forward_system crate in protocol-versions.toml exists in Cargo.toml
+#    with a matching git tag.
+# 2. Reverse check: every forward_system crate in a "# ---- execution_version = vN ----"
+#    section of Cargo.toml is referenced by the corresponding execution_version section in
+#    protocol-versions.toml.
 #
 # Usage: ./tools/check-versions-toml.sh
 # Returns 0 on success, 1 on any mismatch.
@@ -26,15 +29,19 @@ fi
 
 errors=0
 
-echo "Checking protocol-versions.toml against Cargo.toml..."
+# ===========================================================================
+# Forward check: protocol-versions.toml → Cargo.toml
+# ===========================================================================
+
+echo "Forward check: protocol-versions.toml → Cargo.toml"
 echo ""
 
 # Parse protocol-versions.toml: extract all (crate, tag) pairs from
 # execution_version sections (crate/tag, simulation_crate/simulation_tag).
 # Sections are [execution_version."vN"].
 current_section=""
-declare -A crate_entries
-declare -A tag_entries
+declare -A toml_crate_entries
+declare -A toml_tag_entries
 
 while IFS= read -r line; do
     # Skip comments and empty lines.
@@ -59,25 +66,25 @@ while IFS= read -r line; do
 
         case "$key" in
             crate)
-                crate_entries["${current_section}:forward"]="$value"
+                toml_crate_entries["${current_section}:forward"]="$value"
                 ;;
             tag)
-                tag_entries["${current_section}:forward"]="$value"
+                toml_tag_entries["${current_section}:forward"]="$value"
                 ;;
             simulation_crate)
-                crate_entries["${current_section}:simulation"]="$value"
+                toml_crate_entries["${current_section}:simulation"]="$value"
                 ;;
             simulation_tag)
-                tag_entries["${current_section}:simulation"]="$value"
+                toml_tag_entries["${current_section}:simulation"]="$value"
                 ;;
         esac
     fi
 done < "$VERSIONS_TOML"
 
 # Now validate each (crate, tag) pair against Cargo.toml.
-for entry_key in "${!crate_entries[@]}"; do
-    crate_name="${crate_entries[$entry_key]}"
-    expected_tag="${tag_entries[$entry_key]:-}"
+for entry_key in "${!toml_crate_entries[@]}"; do
+    crate_name="${toml_crate_entries[$entry_key]}"
+    expected_tag="${toml_tag_entries[$entry_key]:-}"
 
     if [ -z "$expected_tag" ]; then
         echo "  WARN: $entry_key has crate '$crate_name' but no tag"
@@ -101,6 +108,67 @@ for entry_key in "${!crate_entries[@]}"; do
         echo "  OK: [$entry_key] $crate_name @ $expected_tag"
     fi
 done
+
+# ===========================================================================
+# Reverse check: Cargo.toml → protocol-versions.toml
+# ===========================================================================
+
+echo ""
+echo "Reverse check: Cargo.toml → protocol-versions.toml"
+echo ""
+
+# Collect all (crate, tag) pairs known in protocol-versions.toml for quick lookup.
+declare -A toml_known_pairs
+for entry_key in "${!toml_crate_entries[@]}"; do
+    crate_name="${toml_crate_entries[$entry_key]}"
+    tag="${toml_tag_entries[$entry_key]:-}"
+    if [ -n "$tag" ]; then
+        toml_known_pairs["${crate_name}:${tag}"]=1
+    fi
+done
+
+# Parse Cargo.toml: find "# ---- execution_version = vN ----" section markers,
+# then check each forward_system crate under them.
+cargo_exec_version=""
+
+while IFS= read -r line; do
+    # Detect section markers: # ---- execution_version = vN ----
+    if [[ "$line" =~ ^#[[:space:]]*----[[:space:]]*execution_version[[:space:]]*=[[:space:]]*(v[0-9]+)[[:space:]]*---- ]]; then
+        cargo_exec_version="${BASH_REMATCH[1]}"
+        continue
+    fi
+
+    # Stop tracking when we hit a non-execution_version section marker or end of deps.
+    if [[ "$line" =~ ^#[[:space:]]*---- ]] && [[ ! "$line" =~ execution_version ]]; then
+        cargo_exec_version=""
+        continue
+    fi
+
+    # Skip if we're not in an execution_version section.
+    [ -z "$cargo_exec_version" ] && continue
+
+    # Skip comments and empty lines.
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "${line// /}" ]] && continue
+
+    # Match forward_system crate lines: name = { package = "forward_system", ... tag = "..." ... }
+    if [[ "$line" =~ ^([a-z_0-9]+)[[:space:]]*= ]] && [[ "$line" =~ package[[:space:]]*=[[:space:]]*\"forward_system\" ]]; then
+        cargo_crate=$(echo "$line" | grep -oP '^[a-z_0-9]+')
+        cargo_tag=$(echo "$line" | grep -oP 'tag\s*=\s*"\K[^"]+' || true)
+        [ -z "$cargo_tag" ] && continue
+
+        if [ -n "${toml_known_pairs["${cargo_crate}:${cargo_tag}"]:-}" ]; then
+            echo "  OK: [execution_version.\"$cargo_exec_version\"] $cargo_crate @ $cargo_tag"
+        else
+            echo "  ERROR: Cargo.toml has forward_system crate '$cargo_crate' @ '$cargo_tag' under execution_version $cargo_exec_version, but it is not referenced in protocol-versions.toml"
+            errors=$((errors + 1))
+        fi
+    fi
+done < "$CARGO_TOML"
+
+# ===========================================================================
+# Result
+# ===========================================================================
 
 echo ""
 if [ "$errors" -gt 0 ]; then

@@ -14358,7 +14358,6 @@ dependencies = [
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
  "reqwest",
  "tempfile",
- "test-casing",
  "toml",
  "tracing",
  "url",
