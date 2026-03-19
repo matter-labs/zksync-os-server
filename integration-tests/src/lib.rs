@@ -830,10 +830,6 @@ impl GatewayTesterBuilder {
 
     pub async fn build(self) -> anyhow::Result<GatewayTester> {
         let num_chains = self.num_chains.unwrap_or(2);
-        assert!(
-            num_chains >= 1,
-            "GatewayTester requires at least 1 non-gateway chain"
-        );
 
         let protocol_version = self.protocol_version;
         let l1 = AnvilL1::start(ChainLayout::Gateway { protocol_version }).await?;
