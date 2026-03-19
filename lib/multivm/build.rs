@@ -22,8 +22,8 @@ struct AppBinEntry {
     app_bin_tag: String,
     /// Sanitized identifier for the env var (e.g., "V0_2_5" or "DEV_20260311").
     env_name: String,
-    /// The module number for `apps::vN` (from `app_module` in TOML).
-    app_module: u32,
+    /// The execution version number (e.g., 5, 6).
+    exec_version: u32,
 }
 
 /// Sanitize a tag string into a valid env var component.
@@ -75,16 +75,16 @@ fn load_app_bin_entries() -> HashMap<String, AppBinEntry> {
             Some(abt) => abt,
             None => continue, // No app binaries for this execution version.
         };
-        let app_module = section
-            .get("app_module")
-            .and_then(toml::Value::as_integer)
-            .unwrap_or_else(|| panic!("missing app_module for execution_version {key:?}"))
-            as u32;
+        let exec_version = key
+            .strip_prefix('v')
+            .unwrap_or_else(|| panic!("expected 'vN' key, got: {key:?}"))
+            .parse::<u32>()
+            .unwrap_or_else(|e| panic!("invalid version number in {key:?}: {e}"));
         let env_name = sanitize_tag_for_env(app_bin_tag);
         result.entry(tag.to_string()).or_insert(AppBinEntry {
             app_bin_tag: app_bin_tag.to_string(),
             env_name,
-            app_module,
+            exec_version,
         });
     }
 
@@ -180,8 +180,8 @@ fn main() {
 
     // Collect unique app_bin_tag → env_name for code generation (ordered for determinism).
     let mut unique_tags: BTreeMap<String, String> = BTreeMap::new();
-    // Collect app_module → app_bin_tag for generating versioned modules.
-    let mut app_module_tags: BTreeMap<u32, String> = BTreeMap::new();
+    // Collect exec_version → app_bin_tag for generating versioned modules.
+    let mut exec_version_tags: BTreeMap<u32, String> = BTreeMap::new();
 
     // Find forward_system crates and download their app.bin files.
     for package in &metadata.packages {
@@ -218,21 +218,21 @@ fn main() {
             unique_tags
                 .entry(entry.app_bin_tag.clone())
                 .or_insert_with(|| entry.env_name.clone());
-            app_module_tags
-                .entry(entry.app_module)
+            exec_version_tags
+                .entry(entry.exec_version)
                 .or_insert_with(|| entry.app_bin_tag.clone());
             continue;
         }
     }
 
     // Generate apps_generated.rs with include_bytes! and lookup function.
-    generate_apps_code(&manifest_dir, &unique_tags, &app_module_tags);
+    generate_apps_code(&manifest_dir, &unique_tags, &exec_version_tags);
 }
 
 fn generate_apps_code(
     manifest_dir: &str,
     tags: &BTreeMap<String, String>,
-    app_module_tags: &BTreeMap<u32, String>,
+    exec_version_tags: &BTreeMap<u32, String>,
 ) {
     let mut code = String::new();
     writeln!(
@@ -281,8 +281,8 @@ fn generate_apps_code(
     // Generate versioned modules: pub mod v5 { ... }, pub mod v6 { ... }
     // Each module provides path helpers that don't require a tag argument.
     writeln!(code).unwrap();
-    for (app_module, app_bin_tag) in app_module_tags {
-        writeln!(code, "pub mod v{app_module} {{").unwrap();
+    for (exec_version, app_bin_tag) in exec_version_tags {
+        writeln!(code, "pub mod v{exec_version} {{").unwrap();
         writeln!(code, "    use std::path::{{Path, PathBuf}};").unwrap();
         writeln!(code, "    pub const APP_BIN_TAG: &str = {:?};", app_bin_tag).unwrap();
         writeln!(code).unwrap();

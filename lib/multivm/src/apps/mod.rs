@@ -30,8 +30,8 @@ mod tests {
         let dir_a = tempfile::tempdir().unwrap();
         let dir_b = tempfile::tempdir().unwrap();
 
-        let path_a = v6::singleblock_batch_path(dir_a.path());
-        let path_b = v6::singleblock_batch_path(dir_b.path());
+        let path_a = v5::singleblock_batch_path(dir_a.path());
+        let path_b = v5::singleblock_batch_path(dir_b.path());
         assert_ne!(path_a, path_b);
         assert!(path_a.exists());
         assert!(path_b.exists());
