@@ -11,6 +11,10 @@
 # block execution and proof input generation. N matches the value
 # stored in BlockContext.execution_version at runtime.
 #
+# Optional fields: simulation_crate/simulation_tag (separate crate for
+# eth_estimateGas), replay_crate/replay_tag (separate crate used by
+# older execution versions that share this section).
+#
 # ── Protocol versions ──
 # Each [protocol."M.m.p"] references an execution version and carries
 # per-protocol metadata: vk_hash (for L1 verification) and
@@ -35,8 +39,12 @@
 # ---- Execution versions ----
 
 [execution_version."v4"]
-crate = "zk_os_forward_system_0_0_28"
-tag = "v0.0.28-interface-v0.0.14"
+crate = "zk_os_forward_system_0_1_2"
+tag = "v0.1.2-interface-v0.0.14"
+# V1-V3 block execution also uses a forward_system crate for replay; it
+# lives under the v4 section because v1-v3 have no separate protocol entries.
+replay_crate = "zk_os_forward_system_0_0_28"
+replay_tag = "v0.0.28-interface-v0.0.14"
 
 [execution_version."v5"]
 crate = "zk_os_forward_system"

@@ -85,14 +85,8 @@ zksync_os_interface = { version = "0.0.14" }
 
 # ---- execution_version = v4 ----
 # Historical: kept to replay old blocks (protocol 0.29.x).
-
-zk_os_forward_system_0_0_28 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.28-interface-v0.0.14", features = [
-    "evm-compatibility",
-    "no_print",
-] }
-
-# ---- historical forward_system crates ----
-# Not referenced from protocol-versions.toml — kept only as build dependencies for replay compatibility.
+# zk_os_forward_system_0_1_2 is the v4 execution crate.
+# zk_os_forward_system_0_0_28 handles v1-v3 block replay.
 
 zk_os_forward_system_0_1_2 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.2-interface-v0.0.14", features = [
     "production",
@@ -101,6 +95,10 @@ zk_os_forward_system_0_1_2 = { package = "forward_system", git = "https://github
     # It was used with this feature, so it should stay here forever.
     "testing",
 ], default-features = false }
+zk_os_forward_system_0_0_28 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.28-interface-v0.0.14", features = [
+    "evm-compatibility",
+    "no_print",
+] }
 
 # ---- execution_version = v5 ----
 # Current live version (protocol 0.30.x). Used for execution, proving, and simulation.

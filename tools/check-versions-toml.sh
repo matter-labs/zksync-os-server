@@ -77,6 +77,12 @@ while IFS= read -r line; do
             simulation_tag)
                 toml_tag_entries["${current_section}:simulation"]="$value"
                 ;;
+            replay_crate)
+                toml_crate_entries["${current_section}:replay"]="$value"
+                ;;
+            replay_tag)
+                toml_tag_entries["${current_section}:replay"]="$value"
+                ;;
         esac
     fi
 done < "$VERSIONS_TOML"
