@@ -3,6 +3,7 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
+use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
 
 #[test_multisetup([CURRENT_TO_L1])]
@@ -25,6 +26,12 @@ async fn node_stop_and_restart_preserves_state() -> anyhow::Result<()> {
 
     // Restart the same node (same DB, same L1).
     let restarted = tester.restart().await?;
+    // Wait for receipt's block to be available. It might not be immediately available because
+    // repository DB did not persist the receipt during previous run.
+    restarted
+        .l2_zk_provider
+        .wait_for_block(receipt.block_number.unwrap())
+        .await?;
 
     // The transaction sent before the restart must still be retrievable.
     let recovered = restarted
