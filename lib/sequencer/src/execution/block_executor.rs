@@ -1,4 +1,5 @@
 use crate::config::SequencerConfig;
+use crate::config::TxValidatorConfig;
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::execute_block_in_vm::execute_block_in_vm;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
@@ -6,6 +7,8 @@ use crate::execution::utils::save_dump;
 use crate::model::blocks::{BlockCommand, BlockCommandType};
 use anyhow::Context;
 use async_trait::async_trait;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use zksync_os_interface::types::BlockOutput;
@@ -13,6 +16,7 @@ use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{OverlayBuffer, ReadStateHistory, ReplayRecord, WriteState};
+use zksync_os_tx_validators::deployment_filter;
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
 /// Executes blocks, while only updating local in-memory state (mempool, block context).
@@ -108,18 +112,27 @@ where
             let exec_view = state_overlay_buffer
                 .sync_with_base_and_build_view_for_block(&self.state, block_number)?;
 
-            let (block_output, replay_record, purged_txs, strict_subpool_cleanup) =
-                execute_block_in_vm(prepared_command, exec_view, &latency_tracker)
-                    .await
-                    .map_err(|dump| {
-                        let error = anyhow::anyhow!("{}", dump.error);
-                        tracing::info!("Saving dump..");
-                        if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump) {
-                            tracing::error!(?err, "Failed to write block dump");
-                        }
-                        error
-                    })
-                    .context("execute_block")?;
+            let is_produce = matches!(cmd_type, BlockCommandType::Produce);
+            let (tracer, validator) = make_tx_validator(is_produce, &self.config.tx_validator);
+            let (block_output, replay_record, purged_txs, strict_subpool_cleanup) = {
+                execute_block_in_vm(
+                    prepared_command,
+                    exec_view,
+                    &latency_tracker,
+                    tracer,
+                    validator,
+                )
+                .await
+            }
+            .map_err(|dump| {
+                let error = anyhow::anyhow!("{}", dump.error);
+                tracing::info!("Saving dump..");
+                if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump) {
+                    tracing::error!(?err, "Failed to write block dump");
+                }
+                error
+            })
+            .context("execute_block_in_vm")?;
 
             let time_since_last_block = last_processed_block_at
                 .map(|last_processed_block_at| last_processed_block_at.elapsed());
@@ -192,4 +205,28 @@ async fn check_block_production_limit(
         latency_tracker.enter_state(SequencerState::ConfiguredBlockLimitReached);
         std::future::pending::<()>().await;
     }
+}
+
+fn make_tx_validator(
+    is_produce: bool,
+    config: &TxValidatorConfig,
+) -> (deployment_filter::Tracer, deployment_filter::Validator) {
+    make_deployment_filter(is_produce, &config.deployment_filter)
+}
+
+fn make_deployment_filter(
+    is_produce: bool,
+    config: &deployment_filter::Config,
+) -> (deployment_filter::Tracer, deployment_filter::Validator) {
+    let filter_config = if is_produce {
+        config.clone()
+    } else {
+        // Replay and Rebuild commands use an unrestricted config to avoid re-filtering
+        // already-accepted historical blocks.
+        deployment_filter::Config::Unrestricted
+    };
+    let unauthorized_flag = Arc::new(AtomicBool::new(false));
+    let tracer = deployment_filter::Tracer::new(unauthorized_flag.clone(), filter_config);
+    let validator = deployment_filter::Validator::new(unauthorized_flag);
+    (tracer, validator)
 }

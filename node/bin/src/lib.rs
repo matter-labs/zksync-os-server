@@ -104,8 +104,8 @@ use zksync_os_storage_api::{
     WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
-    InteropRootsLogIndex, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
-    UpgradeInfo, UpgradeMetadata,
+    ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion, PubdataMode,
+    TransactionAcceptanceState, UpgradeInfo, UpgradeMetadata,
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -496,6 +496,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     } else {
         &genesis.genesis_upgrade_tx().await.protocol_version
     };
+
+    if config
+        .sequencer_config
+        .tx_validator
+        .deployment_filter
+        .enabled
+    {
+        let exec_version = ExecutionVersion::try_from(current_protocol_version)
+            .expect("Cannot determine execution version");
+        assert!(
+            exec_version >= ExecutionVersion::V6,
+            "Deployment filter requires execution version V6 or later (protocol >= v31.0), \
+             but current protocol version {current_protocol_version} uses {exec_version:?}"
+        );
+    }
 
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();

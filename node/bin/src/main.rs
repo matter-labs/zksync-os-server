@@ -10,10 +10,10 @@ use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
     ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
-    InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, NetworkConfig,
-    ObservabilityConfig, ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig,
-    RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
-    TxValidatorConfig,
+    InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
+    MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig, ProofStorageConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
+    StateBackendConfig, StatusServerConfig,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -281,7 +281,7 @@ async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .expect("Failed to parse mempool config");
 
     let tx_validator_config = repo
-        .single::<TxValidatorConfig>()
+        .single::<MempoolTxValidatorConfig>()
         .expect("Failed to load tx validator config")
         .parse()
         .expect("Failed to parse tx validator config");

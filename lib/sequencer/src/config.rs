@@ -1,6 +1,15 @@
 use std::path::PathBuf;
 use std::time::Duration;
+use zksync_os_tx_validators::deployment_filter;
 use zksync_os_types::NodeRole;
+
+/// Configuration for all transaction validators applied during block production.
+#[derive(Clone, Debug, Default)]
+pub struct TxValidatorConfig {
+    /// Deployment filter configuration.
+    /// When enabled, only transactions from allowed deployers can deploy contracts.
+    pub deployment_filter: deployment_filter::Config,
+}
 
 #[derive(Clone, Debug)]
 pub struct SequencerConfig {
@@ -28,4 +37,7 @@ pub struct SequencerConfig {
 
     /// Max number of interop roots to be included in a single transaction
     pub interop_roots_per_tx: usize,
+
+    /// Transaction validator configuration.
+    pub tx_validator: TxValidatorConfig,
 }

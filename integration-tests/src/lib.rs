@@ -26,6 +26,7 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
+pub use zksync_os_server::config::DeploymentFilterConfig;
 use zksync_os_server::config::{
     BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, FeeConfig,
     GeneralConfig, NetworkConfig, ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig,
@@ -777,6 +778,7 @@ pub struct GatewayTesterBuilder {
     protocol_version: &'static str,
     num_chains: Option<usize>,
     chain_options: NodeBuilderOptions,
+    deployment_filter: Option<DeploymentFilterConfig>,
 }
 
 impl Default for GatewayTesterBuilder {
@@ -785,6 +787,7 @@ impl Default for GatewayTesterBuilder {
             protocol_version: PROTOCOL_VERSION_V31_0,
             num_chains: None,
             chain_options: NodeBuilderOptions::default(),
+            deployment_filter: None,
         }
     }
 }
@@ -802,6 +805,12 @@ impl GatewayTesterBuilder {
 
     fn chain_options(mut self, chain_options: NodeBuilderOptions) -> Self {
         self.chain_options = chain_options;
+        self
+    }
+
+    /// Set the deployment filter config for all chains.
+    pub fn deployment_filter(mut self, config: DeploymentFilterConfig) -> Self {
+        self.deployment_filter = Some(config);
         self
     }
 
@@ -837,12 +846,17 @@ impl GatewayTesterBuilder {
             wait_for_gateway_readiness(&l1, &gateway, &chain_config).await?;
             let gateway_rpc_url = gateway_rpc_url.clone();
             let chain_options = self.chain_options.clone();
+            let deployment_filter = self.deployment_filter.clone();
+
             let tester = Tester::launch_node(
                 l1.clone(),
                 chain_options.enable_prover,
                 Some(move |config: &mut Config| {
                     config.general_config.gateway_rpc_url = Some(gateway_rpc_url.clone());
                     chain_options.apply_to_config(config);
+                    if let Some(deployment_filter) = deployment_filter {
+                        config.sequencer_config.tx_validator.deployment_filter = deployment_filter;
+                    }
                 }),
                 chain_layout,
             )

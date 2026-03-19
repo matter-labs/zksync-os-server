@@ -14686,6 +14686,7 @@ dependencies = [
  "zksync_os_observability",
  "zksync_os_pipeline",
  "zksync_os_storage_api",
+ "zksync_os_tx_validators",
  "zksync_os_types",
 ]
 
@@ -14765,6 +14766,7 @@ dependencies = [
  "zksync_os_status_server",
  "zksync_os_storage",
  "zksync_os_storage_api",
+ "zksync_os_tx_validators",
  "zksync_os_types",
 ]
 
@@ -14861,6 +14863,16 @@ dependencies = [
  "zksync_os_observability",
  "zksync_os_rocksdb",
  "zksync_os_types",
+]
+
+[[package]]
+name = "zksync_os_tx_validators"
+version = "0.17.1"
+dependencies = [
+ "alloy",
+ "tracing",
+ "zksync_os_evm_errors",
+ "zksync_os_interface",
 ]
 
 [[package]]

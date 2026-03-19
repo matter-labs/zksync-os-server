@@ -10,6 +10,7 @@ use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
 use zksync_os_interface::error::InvalidTransaction;
+use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_observability::ComponentStateHandle;
@@ -25,6 +26,8 @@ pub async fn execute_block_in_vm<V: ViewState>(
     mut command: PreparedBlockCommand<'_>,
     state_view: V,
     latency_tracker: &ComponentStateHandle<SequencerState>,
+    tracer: impl AnyTracer + Send + 'static,
+    validator: impl AnyTxValidator + Send + 'static,
 ) -> Result<
     (
         BlockOutput,
@@ -47,7 +50,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         component_state_tracker: latency_tracker.clone(),
         state_view: state_view_with_force_preimages,
     };
-    let mut runner = VmWrapper::new(ctx, metered_state_view);
+    let mut runner = VmWrapper::new(ctx, metered_state_view, tracer, validator);
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
     let mut cumulative_gas_used = 0u64;
