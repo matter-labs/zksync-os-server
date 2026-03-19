@@ -51,6 +51,7 @@ alloy::sol! {
 
     interface ISystemContext {
         function setSettlementLayerChainId(uint256 _newSettlementLayerChainId);
+        function currentSettlementLayerChainId() external view returns (uint256);
     }
 
     interface IInteropCenter {
