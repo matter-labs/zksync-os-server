@@ -12,17 +12,18 @@
 # stored in BlockContext.execution_version at runtime.
 #
 # Optional fields: simulation_crate/simulation_tag (separate crate for
-# eth_estimateGas), replay_crate/replay_tag (separate crate used by
-# older execution versions that share this section).
+# eth_estimateGas), app_bin_tag (when the app binary was built from a
+# different tag than the crate).
 #
 # ── Protocol versions ──
 # Each [protocol."M.m.p"] references an execution version and carries
 # per-protocol metadata: vk_hash (for L1 verification) and
 # verifier_version_deprecated (legacy, to be removed in V32).
 #
-# The [historical_vk_hashes] section lists VK hashes from older protocol
-# versions (execution versions 1-3) that are no longer in the registry but
-# are still accepted by validate_vk_hash for backward compatibility.
+# The [historical_vk_hashes] section lists VK hashes from execution
+# versions 1-3 (which predate the protocol semver system). They have no
+# [protocol] entries but are still accepted by validate_vk_hash for
+# backward compatibility.
 #
 # Rules:
 # 1. Every protocol version the server can execute MUST have an entry here.
@@ -38,13 +39,25 @@
 
 # ---- Execution versions ----
 
+# V1-V3 predate the protocol semver system — no [protocol] entries reference
+# them. They share the same forward_system crate (zksync-os v0.0.28).
+# Kept for block replay compatibility.
+
+[execution_version."v1"]
+crate = "zk_os_forward_system_0_0_28"
+tag = "v0.0.28-interface-v0.0.14"
+
+[execution_version."v2"]
+crate = "zk_os_forward_system_0_0_28"
+tag = "v0.0.28-interface-v0.0.14"
+
+[execution_version."v3"]
+crate = "zk_os_forward_system_0_0_28"
+tag = "v0.0.28-interface-v0.0.14"
+
 [execution_version."v4"]
 crate = "zk_os_forward_system_0_1_2"
 tag = "v0.1.2-interface-v0.0.14"
-# V1-V3 block execution also uses a forward_system crate for replay; it
-# lives under the v4 section because v1-v3 have no separate protocol entries.
-replay_crate = "zk_os_forward_system_0_0_28"
-replay_tag = "v0.0.28-interface-v0.0.14"
 
 [execution_version."v5"]
 crate = "zk_os_forward_system"
@@ -122,8 +135,9 @@ verifier_version_deprecated = 7
 vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 # ---- Historical VK hashes ----
-# VK hashes from older protocol versions (execution versions 1-3) that are no
-# longer in the registry but are still accepted for backward compatibility.
+# VK hashes from execution versions 1-3 (which predate the protocol semver
+# system). No [protocol] entries reference these, but they are still accepted
+# by validate_vk_hash for backward compatibility.
 
 [historical_vk_hashes]
 # zksync-os v0.0.21, zksync-airbender v0.4.4, zkos-wrapper v0.4.3

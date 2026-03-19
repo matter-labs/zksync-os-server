@@ -77,12 +77,6 @@ while IFS= read -r line; do
             simulation_tag)
                 toml_tag_entries["${current_section}:simulation"]="$value"
                 ;;
-            replay_crate)
-                toml_crate_entries["${current_section}:replay"]="$value"
-                ;;
-            replay_tag)
-                toml_tag_entries["${current_section}:replay"]="$value"
-                ;;
         esac
     fi
 done < "$VERSIONS_TOML"
@@ -138,8 +132,8 @@ done
 cargo_exec_version=""
 
 while IFS= read -r line; do
-    # Detect section markers: # ---- execution_version = vN ----
-    if [[ "$line" =~ ^#[[:space:]]*----[[:space:]]*execution_version[[:space:]]*=[[:space:]]*(v[0-9]+)[[:space:]]*---- ]]; then
+    # Detect section markers: # ---- execution_version = vN ---- or # ---- execution_version = vN-vM ----
+    if [[ "$line" =~ ^#[[:space:]]*----[[:space:]]*execution_version[[:space:]]*=[[:space:]]*(v[0-9v\-]+)[[:space:]]*---- ]]; then
         cargo_exec_version="${BASH_REMATCH[1]}"
         continue
     fi
