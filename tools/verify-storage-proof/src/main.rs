@@ -3,7 +3,6 @@ use std::time::Duration;
 use alloy::primitives::{Address, B256};
 use alloy::providers::ProviderBuilder;
 use clap::Parser;
-use tracing::info;
 use zksync_os_verify_storage_proof::{VerifyParams, verify_storage_proof};
 
 #[derive(Parser)]
@@ -33,7 +32,7 @@ struct Args {
     bridgehub: Option<Address>,
 
     /// Seconds to wait for batch commitment on L1 (0 = fail immediately)
-    #[arg(long, default_value = "60")]
+    #[arg(long, default_value = "60", value_name = "SECS")]
     commit_timeout: u64,
 
     /// Account address to prove storage for
@@ -78,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    info!(
+    tracing::info!(
         computed = %result.computed_batch_hash,
         on_chain = %result.on_chain_batch_hash,
         "batch hash verified"
@@ -86,11 +85,11 @@ async fn main() -> anyhow::Result<()> {
 
     for (key, value) in &result.storage_values {
         match value {
-            Some(v) => info!(key = %key, value = %v, "storage slot"),
-            None => info!(key = %key, "storage slot (empty)"),
+            Some(v) => tracing::info!(key = %key, value = %v, "storage slot"),
+            None => tracing::info!(key = %key, "storage slot (empty)"),
         }
     }
 
-    info!("proof verified successfully");
+    tracing::info!("proof verified successfully");
     Ok(())
 }

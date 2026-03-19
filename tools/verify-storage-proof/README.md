@@ -36,7 +36,7 @@ cargo run --release -p zksync_os_verify_storage_proof -- \
 
 1. Fetches a Merkle storage proof from L2 via `zks_getProof(address, keys, batchNumber)`
 2. Verifies the proof internally (Blake2s Merkle tree, depth 64) and computes the state commitment
-3. Fetches the `batchHash` from the L1 `BlockCommit` event for the given batch and confirms it matches the computed state commitment
+3. Reconstructs `StoredBatchInfo` from the proof data and state commitment, hashes it, and compares against `storedBatchHash(batchNumber)` on the diamond proxy contract
 
 If auto-discovery is used (`--bridgehub`), the tool calls `eth_chainId` on L2 and `bridgehub.getZKChain(chainId)` on L1 to find the diamond proxy address.
 

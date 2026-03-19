@@ -286,3 +286,5 @@ verify (response, onChainHash) :=
 ```
 
 Where `onChainHash` is obtained by the caller via `diamondProxy.storedBatchHash(batchNumber)` — a single `eth_call`, no event scanning required.
+
+Alternatively, the caller can obtain `onChainHash` by scanning `BlockCommit` events emitted by the diamond proxy for the relevant batch number.

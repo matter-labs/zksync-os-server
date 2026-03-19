@@ -38,6 +38,32 @@ fn log_result(result: &VerificationResult) {
     }
 }
 
+/// Waits until `zks_getProof` returns a proof for the given address/keys/batch.
+async fn wait_for_proof(
+    tester: &Tester,
+    contract_address: alloy::primitives::Address,
+    queried_keys: Vec<B256>,
+    batch_number: u64,
+) -> anyhow::Result<BatchStorageProof> {
+    tracing::info!(
+        batch_number,
+        ?contract_address,
+        "waiting for proof availability"
+    );
+    let proof = loop {
+        if let Some(proof) = tester
+            .l2_zk_provider
+            .get_storage_proof(contract_address, queried_keys.clone(), batch_number)
+            .await?
+        {
+            break proof;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    log_proof(&proof);
+    Ok(proof)
+}
+
 /// Waits until `storedBatchHash(batch_number)` returns a non-zero value on L1.
 async fn wait_for_batch_commitment(tester: &Tester, batch_number: u64) {
     tracing::info!(batch_number, "waiting for batch commitment on L1");
@@ -107,24 +133,14 @@ async fn verify_storage_proof_with_l1_contract() -> anyhow::Result<()> {
     let batch_number = 2;
     wait_for_batch_commitment(&tester, batch_number).await;
 
-    // Wait for proof to be available
-    tracing::info!(
-        batch_number,
-        ?contract_address,
-        "waiting for proof availability"
-    );
     let queried_keys = vec![B256::ZERO];
-    let proof = loop {
-        if let Some(proof) = tester
-            .l2_zk_provider
-            .get_storage_proof(contract_address, queried_keys.clone(), batch_number)
-            .await?
-        {
-            break proof;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    };
-    log_proof(&proof);
+    wait_for_proof(
+        &tester,
+        contract_address,
+        queried_keys.clone(),
+        batch_number,
+    )
+    .await?;
 
     // Run the full verification pipeline using our library with explicit diamond proxy
     tracing::info!("running verification with explicit diamond proxy");
@@ -176,24 +192,14 @@ async fn verify_storage_proof_with_bridgehub_discovery() -> anyhow::Result<()> {
     let batch_number = 2;
     wait_for_batch_commitment(&tester, batch_number).await;
 
-    // Wait for proof to be available
-    tracing::info!(
-        batch_number,
-        ?contract_address,
-        "waiting for proof availability"
-    );
     let queried_keys = vec![B256::ZERO];
-    let proof = loop {
-        if let Some(proof) = tester
-            .l2_zk_provider
-            .get_storage_proof(contract_address, queried_keys.clone(), batch_number)
-            .await?
-        {
-            break proof;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    };
-    log_proof(&proof);
+    wait_for_proof(
+        &tester,
+        contract_address,
+        queried_keys.clone(),
+        batch_number,
+    )
+    .await?;
 
     // Run the full verification pipeline with bridgehub auto-discovery
     tracing::info!("running verification with bridgehub discovery");
@@ -250,23 +256,14 @@ async fn verify_storage_proof_empty_slot() -> anyhow::Result<()> {
     let batch_number = 2;
     wait_for_batch_commitment(&tester, batch_number).await;
 
-    tracing::info!(
-        batch_number,
-        ?contract_address,
-        "waiting for proof availability"
-    );
     let queried_keys = vec![B256::ZERO, B256::repeat_byte(0x1f)];
-    let proof = loop {
-        if let Some(proof) = tester
-            .l2_zk_provider
-            .get_storage_proof(contract_address, queried_keys.clone(), batch_number)
-            .await?
-        {
-            break proof;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    };
-    log_proof(&proof);
+    wait_for_proof(
+        &tester,
+        contract_address,
+        queried_keys.clone(),
+        batch_number,
+    )
+    .await?;
 
     tracing::info!("running verification for empty slots");
     let result = verify_storage_proof(

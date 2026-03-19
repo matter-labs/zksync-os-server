@@ -137,14 +137,16 @@ async fn wait_for_batch_hash(
     batch_number: u64,
     timeout: Duration,
 ) -> anyhow::Result<B256> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        match l1::fetch_stored_batch_hash(provider, diamond_proxy, batch_number).await {
-            Ok(hash) => return Ok(hash),
-            Err(_) if tokio::time::Instant::now() < deadline => {
-                tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::timeout(timeout, async {
+        loop {
+            match l1::fetch_stored_batch_hash(provider, diamond_proxy, batch_number).await {
+                Ok(hash) => return Ok(hash),
+                Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
             }
-            Err(e) => return Err(e),
         }
-    }
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("Timed out waiting for batch {batch_number} to be committed on L1")
+    })?
 }
