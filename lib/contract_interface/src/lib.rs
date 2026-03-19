@@ -545,9 +545,13 @@ impl<P: Provider + Clone> Bridgehub<P> {
     }
 
     pub async fn zk_chain(&self) -> alloy::contract::Result<ZkChain<P>> {
+        self.zk_chain_by_chain_id(self.l2_chain_id).await
+    }
+
+    pub async fn zk_chain_by_chain_id(&self, chain_id: u64) -> alloy::contract::Result<ZkChain<P>> {
         let zk_chain_address = self
             .instance
-            .getZKChain(U256::from(self.l2_chain_id))
+            .getZKChain(U256::from(chain_id))
             .call()
             .await?;
         Ok(ZkChain::new(
