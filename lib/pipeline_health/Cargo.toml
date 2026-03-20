@@ -1,0 +1,15 @@
+[package]
+name = "zksync_os_pipeline_health"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zksync_os_observability = { path = "../observability" }
+zksync_os_types         = { path = "../types" }
+tokio                   = { workspace = true, features = ["time", "sync", "macros"] }
+vise                    = { workspace = true }
+tracing                 = { workspace = true }
+smart-config            = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

@@ -1,4 +1,3 @@
-use crate::StateLabel;
 use vise::EncodeLabelValue;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
@@ -13,17 +12,22 @@ pub enum GenericComponentState {
     ProcessingOrWaitingRecv,
 }
 
-impl StateLabel for GenericComponentState {
-    fn generic(&self) -> GenericComponentState {
-        *self
-    }
-
-    fn specific(&self) -> &'static str {
+impl GenericComponentState {
+    pub fn specific(&self) -> &'static str {
         match self {
             GenericComponentState::WaitingRecv => "waiting_recv",
             GenericComponentState::Processing => "processing",
             GenericComponentState::WaitingSend => "waiting_send",
-            GenericComponentState::ProcessingOrWaitingRecv => "processing_or_waiting_send",
+            GenericComponentState::ProcessingOrWaitingRecv => "processing_or_waiting_recv",
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WaitingRecv => "waiting_recv",
+            Self::Processing => "processing",
+            Self::WaitingSend => "waiting_send",
+            Self::ProcessingOrWaitingRecv => "processing_or_waiting_recv",
         }
     }
 }
