@@ -768,8 +768,20 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .external_price_api_client_config
             .clone()
             .expect("external_price_api_client config must be set for Main Node");
+        let gateway_diamond_proxy = if l1_state.l1_chain_id != l1_state.sl_chain_id {
+            Some(
+                l1_state
+                    .bridgehub_l1
+                    .zk_chain_by_chain_id(l1_state.sl_chain_id)
+                    .await
+                    .expect("Failed to get gateway_diamond_proxy"),
+            )
+        } else {
+            None
+        };
         let mut base_token_price_updater = BaseTokenPriceUpdater::new(
             l1_state.diamond_proxy_l1.clone(),
+            gateway_diamond_proxy,
             l1_provider.clone(),
             base_token_price_updater_config(
                 &config.base_token_price_updater_config,

@@ -116,6 +116,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
 {
     pub async fn new(
         zk_chain_l1: ZkChain<DynProvider>,
+        zk_chain_gateway: Option<ZkChain<DynProvider>>,
         mut l1_provider: FillProvider<F, P>,
         base_token_adjuster_config: BaseTokenPriceUpdaterConfig,
         external_price_api_client_config: ExternalPriceApiClientConfig,
@@ -133,32 +134,13 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
             None
         };
 
-        let base_token_address = base_token_adjuster_config
-            .base_token_addr_override
-            .unwrap_or(base_token_address);
-        let base_token = match base_token_address {
-            addr if addr == Address::ZERO || addr == Address::with_last_byte(0x01) => APIToken::ETH,
-            addr if addr == ZK_L1_ADDRESS => APIToken::ZK,
-            addr => {
-                let erc20 = IERC20::new(addr, l1_provider.clone());
-                let decimals = if let Some(decimals_override) =
-                    base_token_adjuster_config.base_token_decimals_override
-                {
-                    decimals_override
-                } else {
-                    erc20
-                        .decimals()
-                        .call()
-                        .await
-                        .context("Failed to call `decimals`")?
-                };
-
-                APIToken::ERC20 {
-                    address: base_token_address,
-                    decimals,
-                }
-            }
-        };
+        let base_token = Self::resolve_api_token(
+            base_token_address,
+            base_token_adjuster_config.base_token_addr_override,
+            base_token_adjuster_config.base_token_decimals_override,
+            &l1_provider,
+        )
+        .await?;
 
         if base_token != APIToken::ETH && token_multiplier_setter_address.is_none() {
             tracing::warn!(
@@ -167,8 +149,18 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
             );
         }
 
-        // Currently SL is always L1 and its base token is ETH.
-        let sl_token = APIToken::ETH;
+        let sl_token = if let Some(zk_chain_gateway) = zk_chain_gateway {
+            let gateway_base_token_address = zk_chain_gateway.get_base_token_address().await?;
+            Self::resolve_api_token(
+                gateway_base_token_address,
+                base_token_adjuster_config.gateway_base_token_addr_override,
+                Some(18), // We expect gateway base token to be ETH or ZK, both have `18` decimals
+                &l1_provider,
+            )
+            .await?
+        } else {
+            APIToken::ETH
+        };
 
         let price_api_client = match external_price_api_client_config {
             ExternalPriceApiClientConfig::Forced { forced } => {
@@ -233,6 +225,38 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
             zk_chain_address: *zk_chain_l1.address(),
             token_price_sender,
         })
+    }
+
+    async fn resolve_api_token(
+        token_address: Address,
+        token_address_override: Option<Address>,
+        decimals_override: Option<u8>,
+        l1_provider: &FillProvider<F, P>,
+    ) -> anyhow::Result<APIToken> {
+        let token_address = token_address_override.unwrap_or(token_address);
+        match token_address {
+            addr if addr == Address::ZERO || addr == Address::with_last_byte(0x01) => {
+                Ok(APIToken::ETH)
+            }
+            addr if addr == ZK_L1_ADDRESS => Ok(APIToken::ZK),
+            addr => {
+                let erc20 = IERC20::new(addr, l1_provider.clone());
+                let decimals = if let Some(decimals_override) = decimals_override {
+                    decimals_override
+                } else {
+                    erc20
+                        .decimals()
+                        .call()
+                        .await
+                        .context("Failed to call `decimals`")?
+                };
+
+                Ok(APIToken::ERC20 {
+                    address: token_address,
+                    decimals,
+                })
+            }
+        }
     }
 
     // `_stop_receiver` is currently unused.
