@@ -124,7 +124,8 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
-            self.health_reporter.enter_state(GenericComponentState::Processing);
+            self.health_reporter
+                .enter_state(GenericComponentState::Processing);
 
             let batch_envelope;
             let recreated;

@@ -14446,7 +14446,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_pipeline_health"
-version = "0.1.0"
+version = "0.17.1"
 dependencies = [
  "smart-config",
  "tokio",

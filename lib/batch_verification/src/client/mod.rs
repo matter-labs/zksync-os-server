@@ -164,7 +164,8 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
         );
 
         loop {
-            self.health_reporter.enter_state(GenericComponentState::WaitingRecv);
+            self.health_reporter
+                .enter_state(GenericComponentState::WaitingRecv);
             tokio::select! {
                 block = input.recv() => {
                     match block {

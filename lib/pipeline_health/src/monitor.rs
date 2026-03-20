@@ -248,9 +248,10 @@ mod tests {
             ComponentId::L1SenderCommit,
         );
         let health = make_health(GenericComponentState::WaitingRecv, 0, 0);
-        assert!(m
-            .evaluate(ComponentId::L1SenderCommit, &health, 100)
-            .is_none());
+        assert!(
+            m.evaluate(ComponentId::L1SenderCommit, &health, 100)
+                .is_none()
+        );
     }
 
     #[test]
@@ -263,9 +264,10 @@ mod tests {
             ComponentId::L1SenderCommit,
         );
         let health = make_health(GenericComponentState::Processing, 0, 0);
-        assert!(m
-            .evaluate(ComponentId::L1SenderCommit, &health, 100)
-            .is_none());
+        assert!(
+            m.evaluate(ComponentId::L1SenderCommit, &health, 100)
+                .is_none()
+        );
     }
 
     #[test]
@@ -338,9 +340,10 @@ mod tests {
             ComponentId::L1SenderCommit,
         );
         let health = make_health(GenericComponentState::WaitingSend, 5, 95);
-        assert!(m
-            .evaluate(ComponentId::L1SenderCommit, &health, 100)
-            .is_none());
+        assert!(
+            m.evaluate(ComponentId::L1SenderCommit, &health, 100)
+                .is_none()
+        );
     }
 
     #[test]
@@ -378,9 +381,10 @@ mod tests {
             ComponentId::FriJobManager,
         );
         let health = make_health(GenericComponentState::ProcessingOrWaitingRecv, 0, 95);
-        assert!(m
-            .evaluate(ComponentId::FriJobManager, &health, 100)
-            .is_none());
+        assert!(
+            m.evaluate(ComponentId::FriJobManager, &health, 100)
+                .is_none()
+        );
     }
 
     #[tokio::test]

@@ -26,6 +26,7 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
+use zksync_os_pipeline_health::PipelineHealthConfig;
 pub use zksync_os_server::config::DeploymentFilterConfig;
 use zksync_os_server::config::{
     BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, FeeConfig,

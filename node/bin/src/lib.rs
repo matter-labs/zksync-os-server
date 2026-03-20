@@ -864,8 +864,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // Merge pipeline acceptance state (PipelineBackpressure) with tx_acceptance_state_receiver
     // (BlockProductionDisabled) into a single combined receiver for the RPC server.
-    let combined_acceptance_rx =
-        merge_acceptance_receivers(tx_acceptance_state_receiver, pipeline_acceptance_rx, runtime);
+    let combined_acceptance_rx = merge_acceptance_receivers(
+        tx_acceptance_state_receiver,
+        pipeline_acceptance_rx,
+        runtime,
+    );
 
     // ======== Start Status Server ========
     if config.status_server_config.enabled {
@@ -1292,11 +1295,6 @@ async fn run_en_pipeline(
     );
     health_entries.push((ComponentId::TreeManager, tree_manager_rx));
 
-    // `batch_verification_client_reporter` is an `Option` so it can be created here (before the
-    // pipeline chain) and moved into `BatchVerificationClient::new` further below.
-    // It stays in scope through the entire pipeline chain construction — this is safe because
-    // Rust's ownership rules allow the `Option` to be consumed (`.unwrap()`) inside a non-async
-    // expression that is evaluated at build time, not inside a spawned task.
     let batch_verification_client_reporter = if config.batch_verification_config.client_enabled {
         let (reporter, rx) = make_reporter(
             &mut pipeline_monitor,
@@ -1313,7 +1311,7 @@ async fn run_en_pipeline(
 
     runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
 
-    Pipeline::new(runtime.clone())
+    let pipeline = Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
             replays_for_sequencer,
             up_to_block: config.sequencer_config.en_sync_up_to_block,
@@ -1349,23 +1347,25 @@ async fn run_en_pipeline(
         .pipe(TreeManager {
             tree: tree.clone(),
             health_reporter: tree_manager_reporter,
-        })
-        .pipe_if(
-            config.batch_verification_config.client_enabled,
-            BatchVerificationClient::new(
-                chain_id,
-                node_state_on_startup.l1_state.diamond_proxy_address_sl(),
-                config.batch_verification_config.connect_address.clone(),
-                config.batch_verification_config.signing_key.clone(),
-                finality.clone(),
-                node_state_on_startup.l1_state.clone(),
-                state.clone(),
-                // Safe unwrap: reporter is Some when client_enabled = true (same condition as pipe_if above)
-                batch_verification_client_reporter.unwrap(),
-            ),
-            NoOpSink::new(),
-        )
-        .spawn();
+        });
+
+    let pipeline = if config.batch_verification_config.client_enabled {
+        pipeline.pipe(BatchVerificationClient::new(
+            chain_id,
+            node_state_on_startup.l1_state.diamond_proxy_address_sl(),
+            config.batch_verification_config.connect_address.clone(),
+            config.batch_verification_config.signing_key.clone(),
+            finality.clone(),
+            node_state_on_startup.l1_state.clone(),
+            state.clone(),
+            batch_verification_client_reporter
+                .expect("batch verification reporter must exist when client is enabled"),
+        ))
+    } else {
+        pipeline.pipe(NoOpSink::new())
+    };
+
+    pipeline.spawn();
 
     // Run Priority Tree tasks for EN - not part of the pipeline.
     if config.general_config.run_priority_tree {

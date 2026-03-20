@@ -115,24 +115,17 @@ where
 
             let is_produce = matches!(cmd_type, BlockCommandType::Produce);
             let (tracer, validator) = make_tx_validator(is_produce, &self.config.tx_validator);
-            let (block_output, replay_record, purged_txs, strict_subpool_cleanup) = {
-                execute_block_in_vm(
-                    prepared_command,
-                    exec_view,
-                    tracer,
-                    validator,
-                )
-                .await
-            }
-            .map_err(|dump| {
-                let error = anyhow::anyhow!("{}", dump.error);
-                tracing::info!("Saving dump..");
-                if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump) {
-                    tracing::error!(?err, "Failed to write block dump");
-                }
-                error
-            })
-            .context("execute_block_in_vm")?;
+            let (block_output, replay_record, purged_txs, strict_subpool_cleanup) =
+                { execute_block_in_vm(prepared_command, exec_view, tracer, validator).await }
+                    .map_err(|dump| {
+                        let error = anyhow::anyhow!("{}", dump.error);
+                        tracing::info!("Saving dump..");
+                        if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump) {
+                            tracing::error!(?err, "Failed to write block dump");
+                        }
+                        error
+                    })
+                    .context("execute_block_in_vm")?;
 
             let time_since_last_block = last_processed_block_at
                 .map(|last_processed_block_at| last_processed_block_at.elapsed());
