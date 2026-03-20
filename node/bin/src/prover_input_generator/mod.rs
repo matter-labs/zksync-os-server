@@ -153,9 +153,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
                     _guard = shutdown => {
                         // Wait for CPU task to finish while holding shutdown guard. This blocks
                         // shutdown until prover input generation task finishes and frees up tree DB.
-                        if let Ok(result) = handle.await {
-                            let _ = result_tx.send(result);
-                        }
+                        let _ = handle.await;
                     }
                 }
             },

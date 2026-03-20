@@ -155,8 +155,17 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
 
     runtime.spawn_critical_with_graceful_shutdown_signal("rpc server", |shutdown| async move {
         tokio::select! {
-            _ = server_handle.clone().stopped() => {}
-            _ = eth_filter.watch_and_clear_stale_filters() => {}
+            // The JSON-RPC server stopped on its own before shutdown was requested.
+            _ = server_handle.clone().stopped() => {
+                // Note: this cannot trigger due to graceful `server_handle.stop()` below as they
+                // are in different mutually exclusive tokio::select branches.
+                panic!("RPC server stopped unexpectedly");
+            }
+            // The stale-filter cleanup loop exited unexpectedly; this task also ends in that case.
+            _ = eth_filter.watch_and_clear_stale_filters() => {
+                unreachable!("eth_filter.watch_and_clear_stale_filters() is an infinite loop")
+            }
+            // Graceful shutdown was requested; stop accepting RPC traffic and wait for the server to exit.
             _guard = shutdown => {
                 server_handle.stop().expect("failed to stop server");
                 server_handle.stopped().await;

@@ -27,30 +27,38 @@ impl Pipeline<()> {
         }
     }
 
-    /// Spawn terminal pipeline segment that ensures graceful shutdown for all other segments.
+    /// Spawns a final supervisor that waits for all pipeline segments to shut down.
     pub fn spawn(mut self) {
-        // Drop the receiver - for terminal pipelines we don't need it
+        // No consumer exists after the terminal stage.
         drop(self.receiver);
+
         self.runtime.spawn_critical_with_graceful_shutdown_signal(
             "pipeline",
             |shutdown| async move {
+                // Hold shutdown open until every spawned segment deregisters.
                 let _guard = shutdown.await;
+
                 while !self.spawned_tasks.is_empty() {
+                    // Each segment sends its name when it exits or handles shutdown.
                     let Some(name) = self.shutdown_receiver.recv().await else {
                         panic!(
                             "failed to receive deregistration for segments: {:?}",
                             self.spawned_tasks
                         );
                     };
+
                     if !self.spawned_tasks.remove(name) {
-                        tracing::warn!("tried to deregister non-existent segment");
+                        // Defensive logging for duplicate or unexpected notifications.
+                        tracing::warn!(%name, "tried to deregister non-existent segment");
                     } else {
                         tracing::debug!(%name, "pipeline segment deregistered");
                     }
+
                     if !self.spawned_tasks.is_empty() {
                         tracing::debug!("pipeline segments left: {:?}", self.spawned_tasks);
                     }
                 }
+
                 tracing::debug!("pipeline finished gracefully");
             },
         );
@@ -70,11 +78,15 @@ impl<Output: Send + 'static> Pipeline<Output> {
         self.runtime
             .spawn_critical_with_graceful_shutdown_signal(C::NAME, |shutdown| async move {
                 tokio::select! {
+                    // Segments are expected to run until shutdown, but if this one exits early (for
+                    // example because a channel closed), deregister it so shutdown does not wait
+                    // for it forever.
                     res = component.run(input_receiver, output_sender) => {
                         res.expect("pipeline segment failed");
                         tracing::debug!(name = C::NAME, "segment finished running");
                         shutdown_sender.send(C::NAME).await.expect("failed to send shutdown status");
                     }
+                    // Graceful shutdown started before the segment exited on its own; deregister it now.
                     _guard = shutdown => {
                         tracing::debug!(name = C::NAME, "segment shutting down");
                         shutdown_sender.send(C::NAME).await.expect("failed to send shutdown status");
