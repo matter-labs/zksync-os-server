@@ -121,16 +121,23 @@ async fn verify_storage_proof_with_l1_contract() -> anyhow::Result<()> {
     tracing::info!(?contract_address, "deployed counter contract");
 
     let counter = CounterInstance::new(contract_address, tester.l2_provider.clone());
-    counter
+    let increment_receipt = counter
         .increment(U256::from(42))
         .send()
         .await?
         .expect_successful_receipt()
         .await?;
-    tracing::info!("incremented counter to 42");
+    let increment_block = increment_receipt
+        .block_number
+        .expect("no block for successful receipt");
+    tracing::info!(increment_block, "incremented counter to 42");
 
-    // Wait for batch 2 to be committed on L1
-    let batch_number = 2;
+    // Dynamically resolve the batch number from the block the increment landed in
+    let batch_number = tester
+        .l2_zk_provider
+        .wait_batch_number_by_block_number(increment_block)
+        .await?;
+    tracing::info!(batch_number, "resolved batch for increment tx");
     wait_for_batch_commitment(&tester, batch_number).await;
 
     let queried_keys = vec![B256::ZERO];
@@ -186,10 +193,17 @@ async fn verify_storage_proof_with_bridgehub_discovery() -> anyhow::Result<()> {
     let contract_address = deploy_tx_receipt
         .contract_address()
         .expect("no contract deployed");
-    tracing::info!(?contract_address, "deployed counter contract");
+    let deploy_block = deploy_tx_receipt
+        .block_number
+        .expect("no block for successful receipt");
+    tracing::info!(?contract_address, deploy_block, "deployed counter contract");
 
-    // Wait for batch 2 to be committed on L1
-    let batch_number = 2;
+    // Dynamically resolve the batch number from the block the deploy landed in
+    let batch_number = tester
+        .l2_zk_provider
+        .wait_batch_number_by_block_number(deploy_block)
+        .await?;
+    tracing::info!(batch_number, "resolved batch for deploy tx");
     wait_for_batch_commitment(&tester, batch_number).await;
 
     let queried_keys = vec![B256::ZERO];
@@ -251,9 +265,21 @@ async fn verify_storage_proof_empty_slot() -> anyhow::Result<()> {
     let contract_address = deploy_tx_receipt
         .contract_address()
         .expect("no contract deployed");
-    tracing::info!(?contract_address, "deployed counter contract (no writes)");
+    let deploy_block = deploy_tx_receipt
+        .block_number
+        .expect("no block for successful receipt");
+    tracing::info!(
+        ?contract_address,
+        deploy_block,
+        "deployed counter contract (no writes)"
+    );
 
-    let batch_number = 2;
+    // Dynamically resolve the batch number from the block the deploy landed in
+    let batch_number = tester
+        .l2_zk_provider
+        .wait_batch_number_by_block_number(deploy_block)
+        .await?;
+    tracing::info!(batch_number, "resolved batch for deploy tx");
     wait_for_batch_commitment(&tester, batch_number).await;
 
     let queried_keys = vec![B256::ZERO, B256::repeat_byte(0x1f)];
