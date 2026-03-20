@@ -10,7 +10,7 @@ use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion, ZkEnvelope,
+    BlockStartCursors, ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion, ZkEnvelope,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -24,10 +24,7 @@ use zksync_os_types::{
 ///  it doesn't tolerate jumps in L1 priority IDs.
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider<Subpool> {
-    next_l1_priority_id: u64,
-    next_interop_event_index: InteropRootsLogIndex,
-    next_migration_number: u64,
-    next_interop_fee_number: u64,
+    next_cursors: BlockStartCursors,
     pool: Pool<Subpool>,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
@@ -51,10 +48,7 @@ pub struct BlockContextProvider<Subpool> {
 impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        next_l1_priority_id: u64,
-        next_interop_event_index: InteropRootsLogIndex,
-        next_migration_number: u64,
-        next_interop_fee_number: u64,
+        next_cursors: BlockStartCursors,
         pool: Pool<Subpool>,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
@@ -72,10 +66,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         fee_provider: FeeProvider,
     ) -> Self {
         Self {
-            next_l1_priority_id,
-            next_interop_event_index,
-            next_migration_number,
-            next_interop_fee_number,
+            next_cursors,
             pool,
             block_hashes_for_next_block,
             previous_block_timestamp,
@@ -179,14 +170,11 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     ),
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "produce",
-                    starting_l1_priority_id: self.next_l1_priority_id,
                     protocol_version: self.protocol_version.clone(),
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages,
-                    starting_interop_event_index: self.next_interop_event_index.clone(),
-                    starting_migration_number: self.next_migration_number,
-                    starting_interop_fee_number: self.next_interop_fee_number,
+                    starting_cursors: self.next_cursors.clone(),
                     interop_roots_per_block: self.interop_roots_per_block,
                     strict_subpool_cleanup: true,
                 }
@@ -219,15 +207,12 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     tx_source: MarkingTxStream::unmarkable(futures::stream::iter(
                         record.transactions,
                     )),
-                    starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
                     protocol_version: record.protocol_version,
                     expected_block_output_hash: Some(record.block_output_hash),
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages: record.force_preimages,
-                    starting_interop_event_index: record.starting_interop_event_index.clone(),
-                    starting_migration_number: record.starting_migration_number,
-                    starting_interop_fee_number: record.starting_interop_fee_number,
+                    starting_cursors: record.starting_cursors,
                     interop_roots_per_block: self.interop_roots_per_block,
                     strict_subpool_cleanup: false,
                 }
@@ -280,7 +265,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     // In that case we shouldn't consider next L1 txs when rebuilding.
                     let filter_l1_txs =
                         if let Some(ZkEnvelope::L1(l1_tx)) = first_l1_tx.map(|tx| tx.envelope()) {
-                            l1_tx.priority_id() != self.next_l1_priority_id
+                            l1_tx.priority_id() != self.next_cursors.l1_priority_id
                         } else {
                             false
                         };
@@ -304,14 +289,11 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     },
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "rebuild",
-                    starting_l1_priority_id: self.next_l1_priority_id,
                     protocol_version,
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages: rebuild.replay_record.force_preimages,
-                    starting_interop_event_index: self.next_interop_event_index.clone(),
-                    starting_migration_number: self.next_migration_number,
-                    starting_interop_fee_number: self.next_interop_fee_number,
+                    starting_cursors: self.next_cursors.clone(),
                     interop_roots_per_block: self.interop_roots_per_block,
                     strict_subpool_cleanup: false,
                 }
@@ -341,24 +323,24 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             )
             .await;
         if let Some(last_l1_priority_id) = outcome.last_l1_priority_id {
-            self.next_l1_priority_id = last_l1_priority_id + 1;
+            self.next_cursors.l1_priority_id = last_l1_priority_id + 1;
             EXECUTION_METRICS
                 .next_l1_priority_id
-                .set(self.next_l1_priority_id);
+                .set(self.next_cursors.l1_priority_id);
         }
         if let Some(last_interop_log_index) = outcome.last_interop_log_index {
             self.next_interop_tx_allowed_after = Instant::now() + self.service_block_delay;
-            self.next_interop_event_index = InteropRootsLogIndex {
+            self.next_cursors.interop_event_index = InteropRootsLogIndex {
                 block_number: last_interop_log_index.block_number,
                 index_in_block: last_interop_log_index.index_in_block + 1,
             };
         }
 
         if let Some(last_migration_number) = outcome.last_migration_number {
-            self.next_migration_number = last_migration_number + 1;
+            self.next_cursors.migration_number = last_migration_number + 1;
         }
         if let Some(last_interop_fee_number) = outcome.last_interop_fee_number {
-            self.next_interop_fee_number = last_interop_fee_number + 1;
+            self.next_cursors.interop_fee_number = last_interop_fee_number + 1;
         }
 
         // We update protocol version here, so that we take into account replay records with protocol version bumps.

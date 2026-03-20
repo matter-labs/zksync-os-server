@@ -104,7 +104,7 @@ use zksync_os_storage_api::{
     WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
-    ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion, PubdataMode,
+    BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, PubdataMode,
     TransactionAcceptanceState, UpgradeInfo, UpgradeMetadata,
 };
 
@@ -472,22 +472,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "Unless it's a new chain, replay record must exist"
     );
 
-    let next_l1_priority_id = first_replay_record
+    let next_cursors = first_replay_record
         .as_ref()
-        .map_or(0, |record| record.starting_l1_priority_id);
-
-    let next_interop_event_index = first_replay_record
-        .as_ref()
-        .map_or(InteropRootsLogIndex::default(), |record| {
-            record.starting_interop_event_index.clone()
+        .map_or(BlockStartCursors::default(), |record| {
+            record.starting_cursors.clone()
         });
-
-    let next_migration_number = first_replay_record
-        .as_ref()
-        .map_or(0, |record| record.starting_migration_number);
-    let next_interop_fee_number = first_replay_record
-        .as_ref()
-        .map_or(0, |record| record.starting_interop_fee_number);
 
     let current_protocol_version = if let Some(record) = &first_replay_record {
         &record.protocol_version
@@ -512,7 +501,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
-    let interop_fee_subpool = InteropFeeSubpool::new(next_interop_fee_number);
+    let interop_fee_subpool = InteropFeeSubpool::new(next_cursors.interop_fee_number);
     let interop_roots_subpool = InteropRootsSubpool::new(
         // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
         1,
@@ -541,7 +530,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 chain_id,
                 node_startup_state.l1_state.l1_chain_id,
                 config.general_config.gateway_chain_id,
-                next_migration_number,
+                next_cursors.migration_number,
                 config.l1_watcher_config.clone().into(),
                 sl_chain_id_subpool.clone(),
             )
@@ -556,7 +545,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 InteropWatcher::create_watcher(
                     node_startup_state.l1_state.bridgehub_sl.clone(),
                     config.l1_watcher_config.clone().into(),
-                    next_interop_event_index.clone(),
+                    next_cursors.interop_event_index.clone(),
                     interop_roots_subpool.clone(),
                 )
                 .await
@@ -574,7 +563,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_l1.clone(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             l1_subpool.clone(),
-            next_l1_priority_id,
+            next_cursors.l1_priority_id,
         )
         .await
         .expect("failed to start L1 transaction watcher")
@@ -682,10 +671,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l2_subpool.clone(),
     );
     let block_context_provider = BlockContextProvider::new(
-        next_l1_priority_id,
-        next_interop_event_index,
-        next_migration_number,
-        next_interop_fee_number,
+        next_cursors,
         pool,
         block_hashes_for_next_block,
         previous_block_timestamp,

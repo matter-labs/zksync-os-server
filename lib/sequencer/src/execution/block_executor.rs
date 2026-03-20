@@ -105,7 +105,7 @@ where
                 block_number,
                 "Prepared context for block {block_number}. expected_block_output_hash: {:?}, starting_l1_priority_id: {}, timestamp: {}, execution_version: {}. Executing..",
                 prepared_command.expected_block_output_hash,
-                prepared_command.starting_l1_priority_id,
+                prepared_command.starting_cursors.l1_priority_id,
                 prepared_command.block_context.timestamp,
                 prepared_command.block_context.execution_version,
             );

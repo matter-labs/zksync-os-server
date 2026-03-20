@@ -17,7 +17,7 @@ impl<'a> fmt::Debug for PreparedBlockCommand<'a> {
         ds.field("seal_policy", &self.seal_policy);
         ds.field("invalid_tx_policy", &self.invalid_tx_policy);
         // ds.field("tx_source", &"<skipped>");
-        ds.field("starting_l1_priority_id", &self.starting_l1_priority_id);
+        ds.field("starting_cursors", &self.starting_cursors);
         ds.field("metrics_label", &self.metrics_label);
         ds.field(
             "expected_block_output_hash",

@@ -10,7 +10,7 @@ use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
-use zksync_os_types::{InteropRootsLogIndex, ProtocolSemanticVersion};
+use zksync_os_types::{BlockStartCursors, InteropRootsLogIndex, ProtocolSemanticVersion};
 
 /// A write-ahead log storing [`ReplayRecord`]s.
 ///
@@ -34,6 +34,11 @@ pub struct BlockReplayStorage {
 }
 
 /// Column families for storage of block replay commands.
+///
+/// TODO(RocksDB migration): The four `Starting*` column families below correspond to fields
+/// in [`BlockStartCursors`]. They are stored separately for historical reasons (each was added
+/// independently). A future migration should consolidate them into a single column family
+/// serializing the entire `BlockStartCursors` struct.
 #[derive(Copy, Clone, Debug)]
 pub enum BlockReplayColumnFamily {
     Context,
@@ -106,16 +111,13 @@ impl BlockReplayStorage {
             );
             let genesis_record = ReplayRecord {
                 block_context: *genesis_context,
-                starting_l1_priority_id: 0,
                 transactions: vec![],
                 previous_block_timestamp: 0,
                 node_version: NODE_SEMVER_VERSION.clone(),
                 protocol_version: genesis_tx.protocol_version.clone(),
                 block_output_hash: B256::ZERO,
                 force_preimages: genesis_tx.force_deploy_preimages.clone(),
-                starting_interop_event_index: InteropRootsLogIndex::default(),
-                starting_migration_number: 0,
-                starting_interop_fee_number: 0,
+                starting_cursors: BlockStartCursors::default(),
             };
             this.write_replay_unchecked(Sealed::new_unchecked(genesis_record, genesis_hash), true);
         }
@@ -134,11 +136,14 @@ impl BlockReplayStorage {
         let context_value =
             bincode::serde::encode_to_vec(record.block_context, bincode::config::standard())
                 .expect("Failed to serialize record.context");
+        // TODO(RocksDB migration): BlockStartCursors fields are stored in separate column families
+        // for historical reasons. A future migration should consolidate them into a single CF
+        // serializing the entire BlockStartCursors struct.
         let starting_l1_tx_id_value = bincode::serde::encode_to_vec(
-            record.starting_l1_priority_id,
+            record.starting_cursors.l1_priority_id,
             bincode::config::standard(),
         )
-        .expect("Failed to serialize record.last_processed_l1_tx_id");
+        .expect("Failed to serialize record.starting_cursors.l1_priority_id");
         let txs_value = bincode::encode_to_vec(&record.transactions, bincode::config::standard())
             .expect("Failed to serialize record.transactions");
         let node_version_value = record.node_version.to_string().as_bytes().to_vec();
@@ -194,10 +199,10 @@ impl BlockReplayStorage {
         );
 
         let starting_interop_event_index_value = bincode::serde::encode_to_vec(
-            &record.starting_interop_event_index,
+            &record.starting_cursors.interop_event_index,
             bincode::config::standard(),
         )
-        .expect("Failed to serialize record.starting_interop_event_index");
+        .expect("Failed to serialize record.starting_cursors.interop_event_index");
         batch.put_cf(
             BlockReplayColumnFamily::StartingInteropEventIndex,
             &db_key,
@@ -205,10 +210,10 @@ impl BlockReplayStorage {
         );
 
         let starting_migration_number_value = bincode::serde::encode_to_vec(
-            record.starting_migration_number,
+            record.starting_cursors.migration_number,
             bincode::config::standard(),
         )
-        .expect("Failed to serialize record.starting_migration_number");
+        .expect("Failed to serialize record.starting_cursors.migration_number");
         batch.put_cf(
             BlockReplayColumnFamily::StartingMigrationNumber,
             &db_key,
@@ -216,10 +221,10 @@ impl BlockReplayStorage {
         );
 
         let starting_interop_fee_number_value = bincode::serde::encode_to_vec(
-            record.starting_interop_fee_number,
+            record.starting_cursors.interop_fee_number,
             bincode::config::standard(),
         )
-        .expect("Failed to serialize record.starting_interop_fee_number");
+        .expect("Failed to serialize record.starting_cursors.interop_fee_number");
         batch.put_cf(
             BlockReplayColumnFamily::StartingInteropFeeNumber,
             &db_key,
@@ -430,15 +435,11 @@ impl ReadReplay for BlockReplayStorage {
             0
         };
 
+        // TODO(RocksDB migration): BlockStartCursors fields are reassembled from separate column
+        // families below. A future migration should read them from a single CF.
         Some(ReplayRecord {
             block_context: bincode::serde::decode_from_slice(
                 &block_context,
-                bincode::config::standard(),
-            )
-            .expect("Failed to deserialize context")
-            .0,
-            starting_l1_priority_id: bincode::serde::decode_from_slice(
-                &starting_l1_priority_id,
                 bincode::config::standard(),
             )
             .expect("Failed to deserialize context")
@@ -454,9 +455,17 @@ impl ReadReplay for BlockReplayStorage {
             protocol_version,
             block_output_hash: B256::from_slice(&block_output_hash),
             force_preimages,
-            starting_interop_event_index,
-            starting_migration_number,
-            starting_interop_fee_number,
+            starting_cursors: BlockStartCursors {
+                l1_priority_id: bincode::serde::decode_from_slice(
+                    &starting_l1_priority_id,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize starting_l1_priority_id")
+                .0,
+                interop_event_index: starting_interop_event_index,
+                migration_number: starting_migration_number,
+                interop_fee_number: starting_interop_fee_number,
+            },
         })
     }
 
