@@ -4,6 +4,7 @@ use alloy::consensus::Sealed;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 use zksync_os_interface::types::BlockOutput;
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReplayRecord, WriteReplay, WriteRepository, WriteState};
 
@@ -19,6 +20,7 @@ where
     pub replay: Replay,
     pub repositories: Repo,
     pub config: SequencerConfig,
+    pub health_reporter: ComponentHealthReporter,
 }
 
 #[async_trait]
@@ -40,6 +42,8 @@ where
         output: mpsc::Sender<Self::Output>,
     ) -> anyhow::Result<()> {
         loop {
+            self.health_reporter
+                .enter_state(GenericComponentState::WaitingRecv);
             let Some((block_output, executed_replay, cmd_type)) = input.recv().await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
@@ -52,6 +56,8 @@ where
                 _ => false,
             };
 
+            self.health_reporter
+                .enter_state(GenericComponentState::Processing);
             tracing::info!(block_number, "Persisting block {block_number}");
             self.replay.write(
                 Sealed::new_unchecked(executed_replay.clone(), block_output.header.hash()),
@@ -72,10 +78,13 @@ where
                 .populate(block_output.clone(), executed_replay.transactions.clone())
                 .await?;
 
+            self.health_reporter
+                .enter_state(GenericComponentState::WaitingSend);
             if output.send((block_output, executed_replay)).await.is_err() {
                 tracing::info!("outbound channel closed");
                 return Ok(());
             }
+            self.health_reporter.record_processed(block_number);
         }
     }
 }

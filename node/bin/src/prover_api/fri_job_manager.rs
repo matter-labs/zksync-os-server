@@ -29,9 +29,7 @@ use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     BatchMetadata, FriProof, ProverInput, RealFriProof, SignedBatchEnvelope,
 };
-use zksync_os_observability::{
-    ComponentStateHandle, ComponentStateReporter, GenericComponentState,
-};
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
 use zksync_os_types::ProvingVersion;
 
 #[derive(Error, Debug)]
@@ -87,7 +85,7 @@ pub struct FriJobManager {
     // == storage ==
     proof_storage: ProofStorage,
     // == metrics ==
-    latency_tracker: ComponentStateHandle<GenericComponentState>,
+    health_reporter: ComponentHealthReporter,
 }
 
 impl FriJobManager {
@@ -96,21 +94,19 @@ impl FriJobManager {
         proof_storage: ProofStorage,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
+        health_reporter: ComponentHealthReporter,
     ) -> Self {
         let jobs = ProverJobMap::<ProverInput>::new(
             assignment_timeout,
             max_assigned_batch_range,
             ProverStage::Fri,
         );
-        let latency_tracker = ComponentStateReporter::global().handle_for(
-            "fri_job_manager",
-            GenericComponentState::ProcessingOrWaitingRecv,
-        );
+        health_reporter.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
         Self {
             jobs,
             batches_with_proof_sender,
             proof_storage,
-            latency_tracker,
+            health_reporter,
         }
     }
 
@@ -204,6 +200,7 @@ impl FriJobManager {
         };
 
         // Prepare the envelope and send it downstream.
+        let last_block = removed_job.batch.last_block_number;
         let proof = RealFriProof::V2 {
             proof: proof_bytes,
             proving_execution_version: proving_version as u32,
@@ -213,6 +210,7 @@ impl FriJobManager {
             .with_stage(BatchExecutionStage::FriProvedReal);
 
         permit.send(envelope);
+        self.health_reporter.record_processed(last_block);
 
         Ok(())
     }
@@ -328,11 +326,13 @@ impl FriJobManager {
             None => return Err(SubmitError::UnknownJob(batch_number)),
         };
 
+        let last_block = assigned.batch.last_block_number;
         let envelope = assigned
             .with_data(FriProof::Fake)
             .with_stage(BatchExecutionStage::FriProvedFake);
 
         permit.send(envelope);
+        self.health_reporter.record_processed(last_block);
         Ok(())
     }
 
@@ -345,12 +345,12 @@ impl FriJobManager {
     ) -> Result<Permit<'_, SignedBatchEnvelope<FriProof>>, SubmitError> {
         Ok(match self.batches_with_proof_sender.try_reserve() {
             Ok(permit) => {
-                self.latency_tracker
+                self.health_reporter
                     .enter_state(GenericComponentState::ProcessingOrWaitingRecv);
                 permit
             }
             Err(TrySendError::Full(_)) => {
-                self.latency_tracker
+                self.health_reporter
                     .enter_state(GenericComponentState::WaitingSend);
                 return Err(SubmitError::Other("downstream backpressure".to_string()));
             }

@@ -9,9 +9,7 @@ use zksync_os_l1_sender::batcher_model::{
     FriProof, RealSnarkProof, SignedBatchEnvelope, SnarkProof,
 };
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_observability::{
-    ComponentStateHandle, ComponentStateReporter, GenericComponentState,
-};
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
 use zksync_os_types::ProvingVersion;
 
 /// Job manager for SNARK proving.
@@ -35,7 +33,7 @@ pub struct SnarkJobManager {
     // config
     max_fris_per_snark: usize,
     // metrics
-    latency_tracker: ComponentStateHandle<GenericComponentState>,
+    health_reporter: ComponentHealthReporter,
 }
 
 impl SnarkJobManager {
@@ -46,21 +44,19 @@ impl SnarkJobManager {
         max_fris_per_snark: usize,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
+        health_reporter: ComponentHealthReporter,
     ) -> Self {
         let jobs = ProverJobMap::<FriProof>::new(
             assignment_timeout,
             max_assigned_batch_range,
             ProverStage::Snark,
         );
-        let latency_tracker = ComponentStateReporter::global().handle_for(
-            "snark_job_manager",
-            GenericComponentState::ProcessingOrWaitingRecv,
-        );
+        health_reporter.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
         Self {
             jobs,
             prove_batches_sender,
             max_fris_per_snark,
-            latency_tracker,
+            health_reporter,
         }
     }
 
@@ -212,10 +208,13 @@ impl SnarkJobManager {
     }
 
     async fn send_downstream(&self, proof_command: ProofCommand) -> anyhow::Result<()> {
-        self.latency_tracker
+        self.health_reporter
             .enter_state(GenericComponentState::WaitingSend);
+        // Use last_block_number (not batch_number): the monitor lag computation is block-based.
+        let seq = proof_command.as_ref().last().unwrap().batch.last_block_number;
         self.prove_batches_sender.send(proof_command).await?;
-        self.latency_tracker
+        self.health_reporter.record_processed(seq);
+        self.health_reporter
             .enter_state(GenericComponentState::ProcessingOrWaitingRecv);
         Ok(())
     }

@@ -31,6 +31,16 @@ impl<C: SendToL1> L1SenderCommand<C> {
             Self::Passthrough(_) => 1,
         }
     }
+
+    /// Last block number in this command's final batch.
+    /// Use this (not first_batch_number) for record_processed — the monitor lag
+    /// computation is block-based, not batch-based.
+    pub fn last_block_number(&self) -> u64 {
+        match self {
+            Self::SendToL1(cmd) => cmd.as_ref().last().unwrap().batch.last_block_number,
+            Self::Passthrough(envelope) => envelope.batch.last_block_number,
+        }
+    }
 }
 
 pub trait SendToL1:

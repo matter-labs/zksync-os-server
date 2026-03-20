@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use std::collections::VecDeque;
 use tokio::sync::mpsc;
 use zksync_os_interface::types::BlockOutput;
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::ReplayRecord;
 
@@ -25,6 +26,7 @@ where
     /// Channel to send new canonized blocks to for the node to replay.
     /// They are sent to `NodeCommandSource` and then through the whole pipeline.
     pub canonized_blocks_for_execution: mpsc::Sender<ReplayRecord>,
+    pub health_reporter: ComponentHealthReporter,
 }
 
 #[async_trait]
@@ -97,6 +99,8 @@ where
             VecDeque::new();
 
         loop {
+            self.health_reporter
+                .enter_state(GenericComponentState::WaitingRecv);
             tokio::select! {
                 // Select arm that receives canonized blocks from Consensus.
                 // If this block was earlier proposed by this node - sends downstream.
@@ -121,7 +125,11 @@ where
                                 produced_replay.block_context.block_number
                             );
                         }
+                        let block_number = produced_replay.block_context.block_number;
+                        self.health_reporter
+                            .enter_state(GenericComponentState::WaitingSend);
                         output.send((block_output, produced_replay, cmd_type)).await?;
+                        self.health_reporter.record_processed(block_number);
                     } else {
                         tracing::info!(
                             "Received new block {} (block output hash: {}) from Consensus. \
@@ -148,9 +156,13 @@ where
                             replay_record.block_context.block_number,
                             replay_record.block_output_hash,
                         );
+                        let block_number = replay_record.block_context.block_number;
+                        self.health_reporter
+                            .enter_state(GenericComponentState::WaitingSend);
                         output
                             .send((block_output, replay_record, cmd_type))
                             .await?;
+                        self.health_reporter.record_processed(block_number);
                         }
                         BlockCommandType::Produce | BlockCommandType::Rebuild => {
                             tracing::info!(
@@ -160,6 +172,8 @@ where
                                 replay_record.block_context.block_number,
                                 replay_record.block_output_hash,
                             );
+                            self.health_reporter
+                                .enter_state(GenericComponentState::Processing);
                             let proposed = replay_record.clone();
                             self.consensus.propose(proposed).await?;
                             produced_queue.push_back((block_output, replay_record, cmd_type));

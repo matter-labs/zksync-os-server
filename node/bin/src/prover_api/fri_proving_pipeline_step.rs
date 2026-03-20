@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_l1_sender::batcher_model::{FriProof, ProverInput, SignedBatchEnvelope};
+use zksync_os_observability::ComponentHealthReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
 /// Pipeline step that waits for batches to be FRI proved.
@@ -31,6 +32,7 @@ impl FriProvingPipelineStep {
         last_proved_batch_number: u64,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
+        fri_health_reporter: ComponentHealthReporter,
     ) -> (Self, Arc<FriJobManager>) {
         // Create channel for completed proofs - between FriProveManager and GaplessCommitter
         let (batches_with_proof_sender, batches_with_proof_receiver) =
@@ -41,6 +43,7 @@ impl FriProvingPipelineStep {
             proof_storage,
             assignment_timeout,
             max_assigned_batch_range,
+            fri_health_reporter,
         ));
 
         let result = Self {

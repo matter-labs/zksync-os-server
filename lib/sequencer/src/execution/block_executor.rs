@@ -2,7 +2,7 @@ use crate::config::SequencerConfig;
 use crate::config::TxValidatorConfig;
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::execute_block_in_vm::execute_block_in_vm;
-use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
+use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::utils::save_dump;
 use crate::model::blocks::{BlockCommand, BlockCommandType};
 use anyhow::Context;
@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_mempool::subpools::l2::L2Subpool;
-use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{OverlayBuffer, ReadStateHistory, ReplayRecord, WriteState};
 use zksync_os_tx_validators::deployment_filter;
@@ -33,6 +33,7 @@ where
     /// Controls transaction acceptance state.
     /// When max_blocks_to_produce limit is reached, sequencer sends NotAccepting to stop RPC from accepting new txs.
     pub tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
+    pub health_reporter: ComponentHealthReporter,
 }
 
 #[async_trait]
@@ -61,9 +62,6 @@ where
         mut input: PeekableReceiver<Self::Input>, // PeekableReceiver<BlockCommand>
         output: mpsc::Sender<Self::Output>, // Sender<(BlockOutput, ReplayRecord, BlockCommandType)>
     ) -> anyhow::Result<()> {
-        let latency_tracker = ComponentStateReporter::global()
-            .handle_for("block_executor", SequencerState::WaitingForCommand);
-
         // Track how many Produce commands we've processed (for `sequencer_max_blocks_to_produce` config)
         let mut produced_blocks_count = 0u64;
 
@@ -74,7 +72,8 @@ where
         let mut state_overlay_buffer = OverlayBuffer::default();
 
         loop {
-            latency_tracker.enter_state(SequencerState::WaitingForCommand);
+            self.health_reporter
+                .enter_state(GenericComponentState::WaitingRecv);
 
             let Some(cmd) = input.recv().await else {
                 tracing::info!("inbound channel closed");
@@ -91,12 +90,13 @@ where
                     limit,
                     produced_blocks_count,
                     &self.tx_acceptance_state_sender,
-                    &latency_tracker,
+                    &self.health_reporter,
                 )
                 .await;
                 produced_blocks_count += 1;
             }
-            latency_tracker.enter_state(SequencerState::BlockContextTxs);
+            self.health_reporter
+                .enter_state(GenericComponentState::Processing);
 
             let prepared_command = self.block_context_provider.prepare_command(cmd).await?;
 
@@ -119,7 +119,6 @@ where
                 execute_block_in_vm(
                     prepared_command,
                     exec_view,
-                    &latency_tracker,
                     tracer,
                     validator,
                 )
@@ -144,8 +143,9 @@ where
             }
             last_processed_block_at = Some(Instant::now());
 
-            tracing::info!(block_number, "Executed. Updating mempools...");
-            latency_tracker.enter_state(SequencerState::UpdatingMempool);
+            tracing::debug!(block_number, "Executed. Updating mempools...");
+            self.health_reporter
+                .enter_state(GenericComponentState::Processing);
 
             self.block_context_provider
                 .on_canonical_state_change(&block_output, &replay_record, strict_subpool_cleanup)
@@ -170,7 +170,8 @@ where
                 .last_execution_version
                 .set(replay_record.block_context.execution_version as u64);
 
-            latency_tracker.enter_state(SequencerState::WaitingSend);
+            self.health_reporter
+                .enter_state(GenericComponentState::WaitingSend);
             if output
                 .send((block_output.clone(), replay_record.clone(), cmd_type))
                 .await
@@ -178,6 +179,7 @@ where
             {
                 anyhow::bail!("Outbound channel closed");
             }
+            self.health_reporter.record_processed(block_number);
         }
     }
 }
@@ -189,7 +191,7 @@ async fn check_block_production_limit(
     limit: u64,
     already_produced_blocks_count: u64,
     tx_acceptance_state_sender: &watch::Sender<TransactionAcceptanceState>,
-    latency_tracker: &ComponentStateHandle<SequencerState>,
+    health_reporter: &ComponentHealthReporter,
 ) {
     if already_produced_blocks_count >= limit {
         tracing::warn!(
@@ -203,7 +205,9 @@ async fn check_block_production_limit(
             NotAcceptingReason::BlockProductionDisabled,
         ));
 
-        latency_tracker.enter_state(SequencerState::ConfiguredBlockLimitReached);
+        // WaitingRecv: component is parked (not processing). Using Processing here would
+        // be misleading — the executor is idle by design, not actively doing work.
+        health_reporter.enter_state(GenericComponentState::WaitingRecv);
         std::future::pending::<()>().await;
     }
 }

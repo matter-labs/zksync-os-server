@@ -9,7 +9,7 @@ pub mod upgrade_gatekeeper;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
-use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
+use crate::metrics::L1_SENDER_METRICS;
 use alloy::consensus::BlobTransactionValidationError;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, Encodable2718};
@@ -25,7 +25,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
-use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_pipeline::PeekableReceiver;
 
@@ -71,9 +71,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
     >,
     config: L1SenderConfig<Input>,
     gateway: bool,
+    health_reporter: ComponentHealthReporter,
 ) -> anyhow::Result<()> {
-    let latency_tracker =
-        ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
     let command_name = Input::NAME;
 
     let operator_address =
@@ -84,7 +83,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
     if process_prepending_passthrough_commands(
         &mut inbound,
         &outbound,
-        &latency_tracker,
+        &health_reporter,
         command_name,
     )
     .await?
@@ -95,7 +94,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
     }
     // At this point, only actual SendToL1 commands are expected
     loop {
-        latency_tracker.enter_state(L1SenderState::WaitingRecv);
+        health_reporter.enter_state(GenericComponentState::WaitingRecv);
         // This sleeps until **at least one** command is received from the channel. Additionally,
         // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
         // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
@@ -122,7 +121,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
             tracing::info!("inbound channel closed");
             return Ok(());
         }
-        latency_tracker.enter_state(L1SenderState::SendingToL1);
+        health_reporter.enter_state(GenericComponentState::Processing);
         let range = Input::display_range(&commands); // Only for logging
         tracing::info!(command_name, range, "sending L1 transactions");
         L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
@@ -207,7 +206,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                 .try_collect::<Vec<_>>()
                 .await?;
         tracing::info!(command_name, range, "sent to L1, waiting for inclusion");
-        latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
+        health_reporter.enter_state(GenericComponentState::Processing);
 
         let mut completed_commands = Vec::with_capacity(pending_txs.len());
         for (receipt_fut, command) in pending_txs {
@@ -227,12 +226,21 @@ pub async fn run_l1_sender<Input: SendToL1>(
         );
         L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
         L1_SENDER_METRICS.nonce[&command_name].set(nonce);
-        latency_tracker.enter_state(L1SenderState::WaitingSend);
+        // Extract last_block BEFORE the send loop — command.into() moves each command.
+        // Commands are ordered; the last command's last envelope has the highest block number.
+        let last_block = completed_commands
+            .last()
+            .and_then(|cmd| cmd.as_ref().last())
+            .map(|e| e.batch.last_block_number);
+        health_reporter.enter_state(GenericComponentState::WaitingSend);
         for command in completed_commands {
             for mut output_envelope in command.into() {
                 output_envelope.set_stage(Input::MINED_STAGE);
                 outbound.send(output_envelope).await?;
             }
+        }
+        if let Some(lb) = last_block {
+            health_reporter.record_processed(lb);
         }
     }
 }
@@ -240,11 +248,11 @@ pub async fn run_l1_sender<Input: SendToL1>(
 async fn process_prepending_passthrough_commands<Input: SendToL1>(
     inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
     outbound: &Sender<SignedBatchEnvelope<FriProof>>,
-    latency_tracker: &ComponentStateHandle<L1SenderState>,
+    health_reporter: &ComponentHealthReporter,
     command_name: &str,
 ) -> anyhow::Result<Option<()>> {
     loop {
-        latency_tracker.enter_state(L1SenderState::WaitingRecv);
+        health_reporter.enter_state(GenericComponentState::WaitingRecv);
         match inbound
             .peek_recv(|command| matches!(command, L1SenderCommand::Passthrough(_)))
             .await
@@ -268,10 +276,13 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
                             batch_number = batch.batch_number(),
                             "Not actually sending to L1, just passing through"
                         );
-                        latency_tracker.enter_state(L1SenderState::WaitingSend);
+                        // Capture before with_stage() moves batch.
+                        let last_block = batch.batch.last_block_number;
+                        health_reporter.enter_state(GenericComponentState::WaitingSend);
                         outbound
                             .send((*batch).with_stage(Input::PASSTHROUGH_STAGE))
                             .await?;
+                        health_reporter.record_processed(last_block);
                     }
                 }
             }

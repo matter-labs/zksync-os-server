@@ -5,6 +5,7 @@ use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_watcher::CommittedBatchProvider;
+use zksync_os_observability::ComponentHealthReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_storage_api::{ReadFinality, ReadReplay};
@@ -21,6 +22,9 @@ use zksync_os_storage_api::{ReadFinality, ReadReplay};
 /// - `keep_caching` task: persists priority tree for executed batches
 pub struct PriorityTreePipelineStep<BlockStorage, Finality> {
     priority_tree_manager: PriorityTreeManager<BlockStorage, Finality>,
+    /// Registered with `PipelineHealthMonitor` externally via `make_reporter()`.
+    /// Passed into `PriorityTreeManager::prepare_execute_commands` to report progress.
+    pub health_reporter: ComponentHealthReporter,
 }
 
 impl<BlockStorage, Finality> PriorityTreePipelineStep<BlockStorage, Finality>
@@ -33,6 +37,7 @@ where
         db_path: &Path,
         finality: Finality,
         committed_batch_provider: CommittedBatchProvider,
+        health_reporter: ComponentHealthReporter,
     ) -> anyhow::Result<Self> {
         let priority_tree_manager = PriorityTreeManager::new(
             block_storage,
@@ -44,6 +49,7 @@ where
 
         Ok(Self {
             priority_tree_manager,
+            health_reporter,
         })
     }
 }
@@ -72,6 +78,7 @@ where
         // Clone what we need before moving into async blocks
         let priority_tree_manager_for_prepare = self.priority_tree_manager.clone();
         let priority_tree_manager_for_caching = self.priority_tree_manager;
+        let health_reporter = self.health_reporter;
 
         tokio::select! {
             result = priority_tree_manager_for_caching
@@ -80,7 +87,11 @@ where
                 Ok(())
             }
             result = priority_tree_manager_for_prepare
-                .prepare_execute_commands(Some((input, output)), priority_txs_internal_sender) => {
+                .prepare_execute_commands(
+                    Some((input, output)),
+                    priority_txs_internal_sender,
+                    health_reporter,
+                ) => {
                 result.expect("prepare_execute_commands");
                 Ok(())
             }
