@@ -5,7 +5,7 @@ use super::ProtocolSemanticVersion;
 /// Identifier of the MultiVM execution version that corresponds to a concrete state transition function.
 /// Generally this is depicted by the minor of the protocol version, e.g. it can (but not guaranteed to) only change
 /// if the minor of the protocol version changes.
-#[derive(Debug, Clone, Copy, TryFromPrimitive, PartialEq)]
+#[derive(Debug, Clone, Copy, TryFromPrimitive, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum ExecutionVersion {
     /// Historical version of zksync-os matching V3 STF. Kept for legacy reasons.

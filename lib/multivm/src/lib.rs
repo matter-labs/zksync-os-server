@@ -8,7 +8,7 @@ use zk_os_forward_system_0_1_2::run::RunBlockForward as RunBlockForwardV4;
 use zk_os_forward_system_0_2_8::run::RunBlockForward as RunBlockForwardV5Simulation;
 use zk_os_forward_system_dev::run::RunBlockForward as RunBlockForwardV6;
 use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::tracing::{AnyTracer, NopValidator};
+use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator, NopValidator};
 use zksync_os_interface::traits::{
     EncodedTx, PreimageSource, ReadStorage, RunBlock, SimulateTx, TxResultCallback, TxSource,
 };
@@ -27,6 +27,7 @@ pub fn run_block<
     TrSrc: TxSource,
     TrCallback: TxResultCallback,
     Tracer: AnyTracer,
+    Validator: AnyTxValidator,
 >(
     block_context: BlockContext,
     storage: Storage,
@@ -34,6 +35,7 @@ pub fn run_block<
     tx_source: TrSrc,
     tx_result_callback: TrCallback,
     tracer: &mut Tracer,
+    validator: &mut Validator,
 ) -> Result<BlockOutput, anyhow::Error> {
     let execution_version: ExecutionVersion = block_context
         .execution_version
@@ -51,7 +53,7 @@ pub fn run_block<
                     AbiTxSource::new(tx_source),
                     tx_result_callback,
                     tracer,
-                    &mut NopValidator,
+                    validator,
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
@@ -66,7 +68,7 @@ pub fn run_block<
                     tx_source,
                     tx_result_callback,
                     tracer,
-                    &mut NopValidator,
+                    validator,
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
@@ -87,7 +89,7 @@ pub fn run_block<
                     tx_source,
                     tx_result_callback,
                     tracer,
-                    &mut NopValidator,
+                    validator,
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
@@ -102,7 +104,7 @@ pub fn run_block<
                     tx_source,
                     tx_result_callback,
                     tracer,
-                    &mut NopValidator,
+                    validator,
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }

@@ -5,7 +5,7 @@ use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{
     AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer,
-    NopTracer,
+    NopTracer, NopValidator,
 };
 use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
 use zksync_os_interface::types::{BlockContext, TxOutput};
@@ -87,6 +87,7 @@ pub fn call_trace(
         tx_source,
         NoopTxCallback,
         &mut tracer,
+        &mut NopValidator,
     )?;
 
     Ok(tracer.transactions)

@@ -104,8 +104,8 @@ use zksync_os_storage_api::{
     WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
-    InteropRootsLogIndex, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
-    UpgradeInfo, UpgradeMetadata,
+    ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion, PubdataMode,
+    TransactionAcceptanceState, UpgradeInfo, UpgradeMetadata,
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -495,6 +495,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         &genesis.genesis_upgrade_tx().await.protocol_version
     };
 
+    if config
+        .sequencer_config
+        .tx_validator
+        .deployment_filter
+        .enabled
+    {
+        let exec_version = ExecutionVersion::try_from(current_protocol_version)
+            .expect("Cannot determine execution version");
+        assert!(
+            exec_version >= ExecutionVersion::V6,
+            "Deployment filter requires execution version V6 or later (protocol >= v31.0), \
+             but current protocol version {current_protocol_version} uses {exec_version:?}"
+        );
+    }
+
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
     let interop_fee_subpool = InteropFeeSubpool::new(next_interop_fee_number);
@@ -747,8 +762,20 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .external_price_api_client_config
             .clone()
             .expect("external_price_api_client config must be set for Main Node");
+        let gateway_diamond_proxy = if l1_state.l1_chain_id != l1_state.sl_chain_id {
+            Some(
+                l1_state
+                    .bridgehub_l1
+                    .zk_chain_by_chain_id(l1_state.sl_chain_id)
+                    .await
+                    .expect("Failed to get gateway_diamond_proxy"),
+            )
+        } else {
+            None
+        };
         let base_token_price_updater = BaseTokenPriceUpdater::new(
             l1_state.diamond_proxy_l1.clone(),
+            gateway_diamond_proxy,
             l1_provider.clone(),
             base_token_price_updater_config(
                 &config.base_token_price_updater_config,
@@ -1001,7 +1028,6 @@ async fn run_main_node_pipeline(
             maximum_in_flight_blocks: config
                 .prover_input_generator_config
                 .maximum_in_flight_blocks,
-            app_bin_base_path: config.general_config.rocks_db_path.join("app_bins").clone(),
             read_state: state.clone(),
             pubdata_mode,
             runtime: runtime.clone(),

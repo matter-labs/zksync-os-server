@@ -1,0 +1,18 @@
+[package]
+name = "zksync_os_tx_validators"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_interface.workspace = true
+zksync_os_evm_errors.workspace = true
+tracing.workspace = true
+alloy = { workspace = true, default-features = false, features = [
+    "consensus",
+] }

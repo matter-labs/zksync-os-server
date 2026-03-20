@@ -456,6 +456,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         block_context: BlockContext,
         mut storage_view: V,
     ) -> Result<U256, EthCallError> {
+        tracing::trace!("Estimating gas with block context {block_context:?}");
         // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
         // original geth logic. Source:
         // https://github.com/paradigmxyz/reth/blob/5bc8589162b6e23b07919d82a57eee14353f2862/crates/rpc/rpc-eth-api/src/helpers/estimate.rs
@@ -524,6 +525,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let mut res = execute(tx.clone(), block_context, storage_view.clone())
             .map_err(EthCallError::ForwardSubsystemError)?
             .map_err(EthCallError::InvalidTransaction)?;
+        tracing::trace!(
+            "Executed tx in estimate_gas with highest gas limit {}, result {res:?}",
+            tx.gas_limit(),
+        );
         match res.execution_result {
             ExecutionResult::Success(_) => {
                 // Transaction succeeded with the highest possible gas limit, we can proceed with
@@ -562,6 +567,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             res = execute(optimistic_tx, block_context, storage_view.clone())
                 .map_err(EthCallError::ForwardSubsystemError)?
                 .map_err(EthCallError::InvalidTransaction)?;
+            tracing::trace!(
+                "Executed tx in estimate_gas with optimistic gas limit {}, result {res:?}",
+                tx.gas_limit()
+            );
 
             // Update the gas used based on the new result.
             gas_used = res.gas_used;
@@ -602,8 +611,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             let mut mid_tx = tx.clone();
             set_gas_limit(&mut mid_tx, mid_gas_limit);
             tracing::trace!(
-                gas_limit = mid_tx.gas_limit(),
-                "trying to simulate transaction"
+                "trying to simulate transaction with gas_limit {}",
+                mid_tx.gas_limit()
             );
 
             // Execute transaction and handle potential gas errors, adjusting limits accordingly.
@@ -626,6 +635,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 ethres => {
                     // Unpack the result and environment if the transaction was successful.
                     res = ethres.map_err(EthCallError::InvalidTransaction)?;
+                    tracing::trace!(
+                        "Executed tx in estimate_gas with gas limit {}, result {res:?}",
+                        tx.gas_limit(),
+                    );
                     // Update the estimated gas range based on the transaction result.
                     update_estimated_gas_range(
                         res.execution_result,
@@ -639,6 +652,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             // New midpoint
             mid_gas_limit = ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64;
         }
+        tracing::trace!("Estimated gas limit: {highest_gas_limit}");
 
         Ok(U256::from(highest_gas_limit))
     }

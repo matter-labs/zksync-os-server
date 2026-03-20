@@ -15,7 +15,7 @@ fn parse_git_tag(package_id: &PackageId) -> anyhow::Result<String> {
 
 fn proving_version_from_tag(tag: &str) -> Option<String> {
     match tag {
-        "v0.2.8-interface-v0.0.14" => Some(String::from("V6")),
+        "v0.2.9-interface-v0.0.14" => Some(String::from("V6")),
         "dev-20260311" => Some(String::from("V7")),
         _ => None,
     }

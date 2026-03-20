@@ -17,7 +17,7 @@ use std::{cell::RefCell, collections::hash_map::Entry};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::tracing::{
     AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources,
-    EvmStackInterface, EvmTracer,
+    EvmStackInterface, EvmTracer, NopValidator,
 };
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
@@ -1024,6 +1024,7 @@ pub fn trace_block<V: ViewState + 'static>(
         tx_source,
         zksync_os_interface::traits::NoopTxCallback,
         &mut tracer,
+        &mut NopValidator,
     )?;
 
     if let Some(err) = tracer.take_error() {

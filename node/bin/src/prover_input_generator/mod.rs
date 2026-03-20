@@ -4,7 +4,6 @@ use futures::StreamExt;
 use futures::stream::FuturesOrdered;
 use reth_tasks::Runtime;
 use std::collections::VecDeque;
-use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -25,7 +24,6 @@ use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
 pub struct ProverInputGenerator<ReadState> {
     pub enable_logging: bool,
     pub maximum_in_flight_blocks: usize,
-    pub app_bin_base_path: PathBuf,
     pub read_state: ReadState,
     pub pubdata_mode: PubdataMode,
     pub runtime: Runtime,
@@ -119,7 +117,6 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
     ) -> oneshot::Receiver<(BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData)> {
         let (result_tx, result_rx) = oneshot::channel();
         let read_state = self.read_state.clone();
-        let app_bin_base_path = self.app_bin_base_path.clone();
         let enable_logging = self.enable_logging;
         let da_commitment_scheme = self
             .pubdata_mode
@@ -138,7 +135,6 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
                 read_state,
                 tree.block_start.clone(),
                 da_commitment_scheme,
-                app_bin_base_path,
                 enable_logging,
             );
             (block_output, replay_record, prover_input, tree)
@@ -168,7 +164,6 @@ fn compute_prover_input(
     state_handle: impl ReadStateHistory,
     tree_view: MerkleTreeVersion<RocksDBWrapper>,
     da_commitment_scheme: DACommitmentScheme,
-    app_bin_base_path: PathBuf,
     enable_logging: bool,
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
@@ -197,7 +192,7 @@ fn compute_prover_input(
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
             use zk_os_forward_system::run::{
-                StorageCommitment, convert::FromInterface, generate_proof_input,
+                StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
             };
 
             let initial_storage_commitment = StorageCommitment {
@@ -207,19 +202,17 @@ fn compute_prover_input(
 
             let list_source = TxListSource { transactions };
 
-            let bin_path = if enable_logging {
-                zksync_os_multivm::apps::v6::singleblock_batch_logging_enabled_path(
-                    &app_bin_base_path,
-                )
+            let bin_bytes = if enable_logging {
+                zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_LOGGING_ENABLED
             } else {
-                zksync_os_multivm::apps::v6::singleblock_batch_path(&app_bin_base_path)
+                zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_APP
             };
 
             let da_commitment_scheme = (da_commitment_scheme as u8)
                 .try_into()
                 .expect("Failed to convert DA commitment scheme");
-            generate_proof_input(
-                bin_path,
+            generate_proof_input_from_bytes(
+                bin_bytes,
                 BlockMetadataFromOracle::from_interface(replay_record.block_context),
                 ProofData {
                     state_root_view: initial_storage_commitment,
@@ -237,7 +230,7 @@ fn compute_prover_input(
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
             use zk_os_forward_system_dev::run::{
-                StorageCommitment, convert::FromInterface, generate_proof_input,
+                StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
             };
 
             let initial_storage_commitment = StorageCommitment {
@@ -247,19 +240,17 @@ fn compute_prover_input(
 
             let list_source = TxListSource { transactions };
 
-            let bin_path = if enable_logging {
-                zksync_os_multivm::apps::v7::singleblock_batch_logging_enabled_path(
-                    &app_bin_base_path,
-                )
+            let bin_bytes = if enable_logging {
+                zksync_os_multivm::apps::v7::SINGLEBLOCK_BATCH_LOGGING_ENABLED
             } else {
-                zksync_os_multivm::apps::v7::singleblock_batch_path(&app_bin_base_path)
+                zksync_os_multivm::apps::v7::SINGLEBLOCK_BATCH_APP
             };
 
             let da_commitment_scheme = (da_commitment_scheme as u8)
                 .try_into()
                 .expect("Failed to convert DA commitment scheme");
-            generate_proof_input(
-                bin_path,
+            generate_proof_input_from_bytes(
+                bin_bytes,
                 BlockMetadataFromOracle::from_interface(replay_record.block_context),
                 ProofData {
                     state_root_view: initial_storage_commitment,

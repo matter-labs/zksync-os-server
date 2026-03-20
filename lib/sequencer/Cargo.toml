@@ -17,6 +17,7 @@ zksync_os_pipeline.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_multivm.workspace = true
+zksync_os_tx_validators.workspace = true
 zksync_os_gas_adjuster.workspace = true
 zksync_os_metadata.workspace = true
 

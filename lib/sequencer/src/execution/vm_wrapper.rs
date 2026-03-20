@@ -6,7 +6,7 @@ use tokio::{
     task::{JoinHandle, spawn_blocking},
 };
 use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::tracing::NopTracer;
+use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::traits::{EncodedTx, NextTxResponse, TxResultCallback, TxSource};
 use zksync_os_interface::types::{BlockContext, BlockOutput, TxProcessingOutputOwned};
 use zksync_os_storage_api::ViewState;
@@ -22,7 +22,12 @@ pub struct VmWrapper {
 
 impl VmWrapper {
     /// Spawn the VM runner in a blocking task.
-    pub fn new(context: BlockContext, state_view: impl ViewState) -> Self {
+    pub fn new(
+        context: BlockContext,
+        state_view: impl ViewState,
+        mut tracer: impl AnyTracer + Send + 'static,
+        mut validator: impl AnyTxValidator + Send + 'static,
+    ) -> Self {
         // Channel for sending NextTxResponse (Tx bytes or SealBlock).
         let (tx_sender, tx_receiver) = channel(1);
         // Channel for receiving per‐tx execution results.
@@ -40,7 +45,8 @@ impl VmWrapper {
                 state_view,
                 tx_source,
                 tx_callback,
-                &mut NopTracer,
+                &mut tracer,
+                &mut validator,
             )
         });
 
