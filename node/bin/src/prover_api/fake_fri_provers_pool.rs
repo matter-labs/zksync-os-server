@@ -1,6 +1,6 @@
 use crate::prover_api::fri_job_manager::FriJobManager;
-use futures::future::try_join_all;
 use rand::Rng;
+use reth_tasks::Runtime;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
@@ -39,16 +39,15 @@ impl FakeFriProversPool {
         }
     }
 
-    /// Run the fake prover pool. Spawns `workers` tasks and waits for them.
-    pub async fn run(self) -> anyhow::Result<()> {
-        let mut joins = Vec::with_capacity(self.workers);
+    /// Run the fake prover pool. Spawns `workers` tasks and waits for stop signal.
+    pub fn spawn(self, runtime: &Runtime) {
         for _ in 0..self.workers {
             let jm = Arc::clone(&self.job_manager);
             let compute_time = self.compute_time;
             let min_age = self.min_inbound_age;
             let timeout_frequency = self.timeout_frequency;
 
-            let handle = tokio::spawn(async move {
+            runtime.spawn_critical_task("fake fri prover", async move {
                 loop {
                     // Only take inbound items whose age >= min_age.
                     match jm.pick_next_job(min_age, "fake_prover".to_string()).await {
@@ -92,10 +91,6 @@ impl FakeFriProversPool {
                     }
                 }
             });
-            joins.push(handle);
         }
-
-        try_join_all(joins).await?;
-        Ok(())
     }
 }

@@ -77,7 +77,8 @@ where
             latency_tracker.enter_state(SequencerState::WaitingForCommand);
 
             let Some(cmd) = input.recv().await else {
-                anyhow::bail!("inbound channel closed");
+                tracing::info!("inbound channel closed");
+                return Ok(());
             };
             tracing::debug!("Command {cmd} received by BlockExecutor");
             let cmd_type = cmd.command_type();

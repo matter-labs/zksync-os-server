@@ -52,7 +52,7 @@ impl RepositoryManager {
 
     // fixme: as this loop is not tied to state compacting, it can fall behind and result in
     //        unrecoverable state on restart
-    pub async fn run_persist_loop(&self) {
+    pub async fn run_persist_loop(self) {
         loop {
             if self.db_ready_to_process_blocks.load(Ordering::Relaxed) {
                 break;

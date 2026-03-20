@@ -16,10 +16,14 @@ async fn basic_transfers(tester: Tester) -> anyhow::Result<()> {
     let deposit_amount = U256::from(100);
     let mut pending_txs = vec![];
     let start = Instant::now();
+    // Give 10x buffer for gas price to ensure transactions do not get stuck in mempool in the
+    // middle of execution.
+    let gas_price = tester.l2_provider.get_gas_price().await? * 10;
     for _ in 0..100 {
         let tx = TransactionRequest::default()
             .with_to(Address::random())
-            .with_value(deposit_amount);
+            .with_value(deposit_amount)
+            .with_gas_price(gas_price);
         pending_txs.push(tester.l2_provider.send_transaction(tx).await?);
     }
     tracing::info!(elapsed = ?start.elapsed(), "submitted all tx requests");

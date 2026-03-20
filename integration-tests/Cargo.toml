@@ -21,6 +21,8 @@ zksync_os_multivm.workspace = true
 zksync_os_network.workspace = true
 zksync_os_integration_tests_macros.workspace = true
 
+reth-tasks.workspace = true
+
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 flate2.workspace = true

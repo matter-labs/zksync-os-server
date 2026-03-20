@@ -259,8 +259,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         }
     }
 
-    // `_stop_receiver` is currently unused.
-    pub async fn run(&mut self, _stop_receiver: watch::Receiver<bool>) -> anyhow::Result<()> {
+    pub async fn run(mut self) {
         let mut timer = tokio::time::interval(self.config.price_polling_interval);
 
         loop {

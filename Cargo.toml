@@ -241,6 +241,7 @@ reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
 reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
 reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
 reth-rpc-eth-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
+reth-tasks = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
 
 zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.0.4" }
 

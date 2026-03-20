@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use std::collections::HashSet;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_raft::{ConsensusRole, LeadershipSignal};
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
@@ -35,7 +35,6 @@ pub struct RebuildOptions {
 pub struct ExternalNodeCommandSource {
     pub up_to_block: Option<u64>,
     pub replays_for_sequencer: mpsc::Receiver<ReplayRecord>,
-    pub stop_receiver: watch::Receiver<bool>,
 }
 
 #[async_trait]
@@ -119,7 +118,8 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                 }
                 maybe_record = self.replays_to_execute.recv() => {
                     let Some(record) = maybe_record else {
-                        anyhow::bail!("inbound replay channel closed");
+                        tracing::info!("inbound channel closed");
+                        return Ok(());
                     };
                     tracing::info!(
                         block_number = record.block_context.block_number,
@@ -144,7 +144,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
             }
         }
 
-        anyhow::bail!("Execution loop in ConsensusNodeCommandSource ended unexpectedly");
+        Ok(())
     }
 
     async fn send_block_rebuilds(
@@ -207,7 +207,7 @@ impl PipelineComponent for ExternalNodeCommandSource {
                     up_to_block,
                     "Reached up_to_block, halting external command source"
                 );
-                let _ = self.stop_receiver.wait_for(|stop| *stop).await;
+                futures::future::pending::<()>().await;
             }
 
             if output.send(command).await.is_err() {
