@@ -82,8 +82,9 @@ use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_network::RecordOverride;
 use zksync_os_network::service::{NetworkService, ZksProtocolConfig};
-use zksync_os_observability::GENERAL_METRICS;
+use zksync_os_observability::{ComponentHealth, ComponentHealthReporter, GENERAL_METRICS};
 use zksync_os_pipeline::Pipeline;
+use zksync_os_pipeline_health::{ComponentId, PipelineHealthMonitor};
 use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, loopback_consensus,
 };
@@ -575,6 +576,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // External nodes: always accepts, but may be rejected on the main node side during forwarding
     let (tx_acceptance_state_sender, tx_acceptance_state_receiver) =
         watch::channel(TransactionAcceptanceState::Accepting);
+    let (stop_sender, stop_receiver) = watch::channel(false);
+    let stop_sender_for_shutdown = stop_sender.clone();
+    runtime.spawn_with_graceful_shutdown_signal(|shutdown| async move {
+        let _guard = shutdown.await;
+        let _ = stop_sender_for_shutdown.send(true);
+    });
 
     let main_node_provider = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
         Some(
@@ -811,7 +818,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    if node_role.is_main() {
+    let (pipeline_acceptance_rx, component_health) = if node_role.is_main() {
         // Main Node
         run_main_node_pipeline(
             &config,
@@ -831,8 +838,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_batch_provider.clone(),
             canonization_engine,
             leadership,
+            stop_receiver.clone(),
         )
-        .await;
+        .await
     } else {
         // External Node
         run_en_pipeline(
@@ -847,11 +855,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             tree_db,
             repositories.clone(),
             finality_storage.clone(),
+            stop_receiver.clone(),
             tx_acceptance_state_sender,
             chain_id,
         )
-        .await;
+        .await
     };
+
+    // Merge pipeline acceptance state (PipelineBackpressure) with tx_acceptance_state_receiver
+    // (BlockProductionDisabled) into a single combined receiver for the RPC server.
+    let combined_acceptance_rx =
+        merge_acceptance_receivers(tx_acceptance_state_receiver, pipeline_acceptance_rx, runtime);
 
     // ======== Start Status Server ========
     if config.status_server_config.enabled {
@@ -861,7 +875,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .parse()
             .expect("malformed `status_server.address`");
         runtime.spawn_critical_with_graceful_shutdown_signal("status server", |shutdown| {
-            run_status_server(addr, shutdown)
+            run_status_server(
+                addr,
+                shutdown,
+                stop_receiver.clone(),
+                combined_acceptance_rx.clone(),
+                component_health.clone(),
+            )
         });
     }
 
@@ -874,7 +894,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         rpc_storage,
         l2_subpool,
         genesis_input_source,
-        tx_acceptance_state_receiver,
+        combined_acceptance_rx,
         last_constructed_block_ctx_receiver,
         main_node_provider,
         gateway_provider.map(|p| p.erased()),
@@ -909,6 +929,10 @@ async fn run_main_node_pipeline(
     committed_batch_provider: CommittedBatchProvider,
     canonization_engine: BlockCanonizationEngine,
     leadership: LeadershipSignal,
+    stop_receiver: watch::Receiver<bool>,
+) -> (
+    watch::Receiver<TransactionAcceptanceState>,
+    Arc<Vec<(ComponentId, watch::Receiver<ComponentHealth>)>>,
 ) {
     let pubdata_mode = config
         .l1_sender_config
@@ -924,6 +948,113 @@ async fn run_main_node_pipeline(
             .rocks_db_path
             .join(INTERNAL_CONFIG_FILE_NAME),
     );
+
+    // ========== Create PipelineHealthMonitor and all reporters ==========
+    let (mut pipeline_monitor, pipeline_acceptance_rx) =
+        PipelineHealthMonitor::new(config.pipeline_health_config.clone(), stop_receiver);
+
+    let mut health_entries: Vec<(ComponentId, watch::Receiver<ComponentHealth>)> = vec![];
+
+    let (block_executor_reporter, block_executor_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::BlockExecutor,
+        "block_executor",
+    );
+    health_entries.push((ComponentId::BlockExecutor, block_executor_rx));
+    let (block_canonizer_reporter, block_canonizer_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::BlockCanonizer,
+        "block_canonizer",
+    );
+    health_entries.push((ComponentId::BlockCanonizer, block_canonizer_rx));
+    let (block_applier_reporter, block_applier_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::BlockApplier,
+        "block_applier",
+    );
+    health_entries.push((ComponentId::BlockApplier, block_applier_rx));
+    let (tree_manager_reporter, tree_manager_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::TreeManager,
+        "tree_manager",
+    );
+    health_entries.push((ComponentId::TreeManager, tree_manager_rx));
+    let (prover_input_generator_reporter, prover_input_generator_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::ProverInputGenerator,
+        "prover_input_generator",
+    );
+    health_entries.push((ComponentId::ProverInputGenerator, prover_input_generator_rx));
+    let (batcher_reporter, batcher_rx) =
+        make_reporter(&mut pipeline_monitor, ComponentId::Batcher, "batcher");
+    health_entries.push((ComponentId::Batcher, batcher_rx));
+    let (batch_verification_reporter, batch_verification_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::BatchVerification,
+        "batch_verification",
+    );
+    health_entries.push((ComponentId::BatchVerification, batch_verification_rx));
+    let (fri_job_manager_reporter, fri_job_manager_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::FriJobManager,
+        "fri_job_manager",
+    );
+    health_entries.push((ComponentId::FriJobManager, fri_job_manager_rx));
+    let (gapless_committer_reporter, gapless_committer_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::GaplessCommitter,
+        "gapless_committer",
+    );
+    health_entries.push((ComponentId::GaplessCommitter, gapless_committer_rx));
+    let (upgrade_gatekeeper_reporter, upgrade_gatekeeper_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::UpgradeGatekeeper,
+        "upgrade_gatekeeper",
+    );
+    health_entries.push((ComponentId::UpgradeGatekeeper, upgrade_gatekeeper_rx));
+    let (l1_sender_commit_reporter, l1_sender_commit_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::L1SenderCommit,
+        "l1_sender_commit",
+    );
+    health_entries.push((ComponentId::L1SenderCommit, l1_sender_commit_rx));
+    let (snark_job_manager_reporter, snark_job_manager_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::SnarkJobManager,
+        "snark_job_manager",
+    );
+    health_entries.push((ComponentId::SnarkJobManager, snark_job_manager_rx));
+    let (gapless_l1_proof_sender_reporter, gapless_l1_proof_sender_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::GaplessL1ProofSender,
+        "gapless_l1_proof_sender",
+    );
+    health_entries.push((
+        ComponentId::GaplessL1ProofSender,
+        gapless_l1_proof_sender_rx,
+    ));
+    let (l1_sender_prove_reporter, l1_sender_prove_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::L1SenderProve,
+        "l1_sender_prove",
+    );
+    health_entries.push((ComponentId::L1SenderProve, l1_sender_prove_rx));
+    let (priority_tree_reporter, priority_tree_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::PriorityTree,
+        "priority_tree",
+    );
+    health_entries.push((ComponentId::PriorityTree, priority_tree_rx));
+    let (l1_sender_execute_reporter, l1_sender_execute_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::L1SenderExecute,
+        "l1_sender_execute",
+    );
+    health_entries.push((ComponentId::L1SenderExecute, l1_sender_execute_rx));
+
+    let component_health = Arc::new(health_entries);
+
+    runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::channel(8);
 
@@ -944,16 +1075,19 @@ async fn run_main_node_pipeline(
             state: state.clone(),
             config: config.into(),
             tx_acceptance_state_sender,
+            health_reporter: block_executor_reporter,
         })
         .pipe(BlockCanonizer {
             consensus: canonization_engine,
             canonized_blocks_for_execution: replays_to_execute_sender,
+            health_reporter: block_canonizer_reporter,
         })
         .pipe(BlockApplier {
             state: state.clone(),
             replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             config: config.into(),
+            health_reporter: block_applier_reporter,
         })
         .pipe_opt(
             config
@@ -969,7 +1103,10 @@ async fn run_main_node_pipeline(
                     )
                 }),
         )
-        .pipe(TreeManager { tree: tree.clone() });
+        .pipe(TreeManager {
+            tree: tree.clone(),
+            health_reporter: tree_manager_reporter,
+        });
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
         .await
@@ -980,6 +1117,7 @@ async fn run_main_node_pipeline(
         node_state_on_startup.l1_state.last_proved_batch,
         config.prover_api_config.fri_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
+        fri_job_manager_reporter,
     );
 
     let (snark_proving_step, snark_job_manager) = SnarkProvingPipelineStep::new(
@@ -987,6 +1125,7 @@ async fn run_main_node_pipeline(
         node_state_on_startup.l1_state.last_proved_batch,
         config.prover_api_config.snark_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
+        snark_job_manager_reporter,
     );
 
     if config.prover_api_config.enabled {
@@ -1018,6 +1157,7 @@ async fn run_main_node_pipeline(
             read_state: state.clone(),
             pubdata_mode,
             runtime: runtime.clone(),
+            health_reporter: prover_input_generator_reporter,
         })
         .pipe(Batcher {
             startup_config: BatcherStartupConfig {
@@ -1034,11 +1174,13 @@ async fn run_main_node_pipeline(
             sidecar_sender,
             committed_batch_provider: committed_batch_provider.clone(),
             read_state: state.clone(),
+            health_reporter: batcher_reporter,
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.clone().into(),
             node_state_on_startup.l1_state.clone(),
             node_state_on_startup.l1_state.last_committed_batch,
+            batch_verification_reporter,
         ))
         .pipe(fri_proving_step)
         .pipe(GaplessCommitter {
@@ -1046,25 +1188,30 @@ async fn run_main_node_pipeline(
             last_committed_batch_number: node_state_on_startup.l1_state.last_committed_batch,
             proof_storage,
             batch_verification_l1_config: node_state_on_startup.l1_state.batch_verification.clone(),
+            health_reporter: gapless_committer_reporter,
         })
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy_sl.clone(),
+            upgrade_gatekeeper_reporter,
         ))
         .pipe(L1Sender::<_, _, CommitCommand> {
             provider: sl_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
+            health_reporter: l1_sender_commit_reporter,
         })
         .pipe(snark_proving_step)
         .pipe(GaplessL1ProofSender::new(
             node_state_on_startup.l1_state.last_executed_batch + 1,
+            gapless_l1_proof_sender_reporter,
         ))
         .pipe(L1Sender::<_, _, ProofCommand> {
             provider: sl_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
+            health_reporter: l1_sender_prove_reporter,
         })
         .pipe(
             PriorityTreePipelineStep::new(
@@ -1072,6 +1219,7 @@ async fn run_main_node_pipeline(
                 &priority_tree_db_path,
                 finality,
                 committed_batch_provider,
+                priority_tree_reporter,
             )
             .await
             .unwrap(),
@@ -1081,11 +1229,13 @@ async fn run_main_node_pipeline(
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
+            health_reporter: l1_sender_execute_reporter,
         })
         .pipe(BatchSink::new(internal_config_manager));
 
     tracing::info!("Launching pipeline");
     pipeline.spawn();
+    (pipeline_acceptance_rx, component_health)
 }
 
 /// Only for EN - we still populate channels destined for the batcher subsystem -
@@ -1103,8 +1253,12 @@ async fn run_en_pipeline(
     tree: MerkleTree<RocksDBWrapper>,
     repositories: impl WriteRepository + Clone,
     finality: impl ReadFinality + Clone,
+    stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
+) -> (
+    watch::Receiver<TransactionAcceptanceState>,
+    Arc<Vec<(ComponentId, watch::Receiver<ComponentHealth>)>>,
 ) {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
@@ -1112,6 +1266,52 @@ async fn run_en_pipeline(
             .rocks_db_path
             .join(INTERNAL_CONFIG_FILE_NAME),
     );
+
+    // ========== Create PipelineHealthMonitor and reporters for EN pipeline ==========
+    let (mut pipeline_monitor, pipeline_acceptance_rx) =
+        PipelineHealthMonitor::new(config.pipeline_health_config.clone(), stop_receiver.clone());
+
+    let mut health_entries: Vec<(ComponentId, watch::Receiver<ComponentHealth>)> = vec![];
+
+    let (block_executor_reporter, block_executor_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::BlockExecutor,
+        "block_executor",
+    );
+    health_entries.push((ComponentId::BlockExecutor, block_executor_rx));
+    let (block_applier_reporter, block_applier_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::BlockApplier,
+        "block_applier",
+    );
+    health_entries.push((ComponentId::BlockApplier, block_applier_rx));
+    let (tree_manager_reporter, tree_manager_rx) = make_reporter(
+        &mut pipeline_monitor,
+        ComponentId::TreeManager,
+        "tree_manager",
+    );
+    health_entries.push((ComponentId::TreeManager, tree_manager_rx));
+
+    // `batch_verification_client_reporter` is an `Option` so it can be created here (before the
+    // pipeline chain) and moved into `BatchVerificationClient::new` further below.
+    // It stays in scope through the entire pipeline chain construction — this is safe because
+    // Rust's ownership rules allow the `Option` to be consumed (`.unwrap()`) inside a non-async
+    // expression that is evaluated at build time, not inside a spawned task.
+    let batch_verification_client_reporter = if config.batch_verification_config.client_enabled {
+        let (reporter, rx) = make_reporter(
+            &mut pipeline_monitor,
+            ComponentId::BatchVerification,
+            "batch_verification_client",
+        );
+        health_entries.push((ComponentId::BatchVerification, rx));
+        Some(reporter)
+    } else {
+        None
+    };
+
+    let component_health = Arc::new(health_entries);
+
+    runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
 
     Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
@@ -1123,12 +1323,14 @@ async fn run_en_pipeline(
             state: state.clone(),
             config: config.into(),
             tx_acceptance_state_sender,
+            health_reporter: block_executor_reporter,
         })
         .pipe(BlockApplier {
             state: state.clone(),
             replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             config: config.into(),
+            health_reporter: block_applier_reporter,
         })
         .pipe_opt(
             config
@@ -1144,7 +1346,10 @@ async fn run_en_pipeline(
                     )
                 }),
         )
-        .pipe(TreeManager { tree: tree.clone() })
+        .pipe(TreeManager {
+            tree: tree.clone(),
+            health_reporter: tree_manager_reporter,
+        })
         .pipe_if(
             config.batch_verification_config.client_enabled,
             BatchVerificationClient::new(
@@ -1155,6 +1360,8 @@ async fn run_en_pipeline(
                 finality.clone(),
                 node_state_on_startup.l1_state.clone(),
                 state.clone(),
+                // Safe unwrap: reporter is Some when client_enabled = true (same condition as pipe_if above)
+                batch_verification_client_reporter.unwrap(),
             ),
             NoOpSink::new(),
         )
@@ -1182,6 +1389,7 @@ async fn run_en_pipeline(
         "clear failing block config",
         clear_failing_block_config_task(finality, internal_config_manager),
     );
+    (pipeline_acceptance_rx, component_health)
 }
 
 fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashes {
@@ -1194,6 +1402,56 @@ fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashe
     block_hashes
 }
 
+/// Creates a `ComponentHealthReporter` and registers its receiver with the `PipelineHealthMonitor`.
+/// Returns both the reporter (for the component) and a receiver clone (for the status server).
+fn make_reporter(
+    monitor: &mut PipelineHealthMonitor,
+    id: ComponentId,
+    name: &'static str,
+) -> (ComponentHealthReporter, watch::Receiver<ComponentHealth>) {
+    let (reporter, rx) = ComponentHealthReporter::new(name);
+    monitor.register(id, rx.clone());
+    (reporter, rx)
+}
+
+/// Merges two `TransactionAcceptanceState` receivers into one.
+///
+/// The combined receiver reflects `NotAccepting` if either source signals `NotAccepting`.
+/// `BlockProductionDisabled` takes priority over `PipelineBackpressure` in the combined signal.
+fn merge_acceptance_receivers(
+    mut block_production_rx: watch::Receiver<TransactionAcceptanceState>,
+    mut pipeline_rx: watch::Receiver<TransactionAcceptanceState>,
+    runtime: &Runtime,
+) -> watch::Receiver<TransactionAcceptanceState> {
+    let (combined_tx, combined_rx) = watch::channel(TransactionAcceptanceState::Accepting);
+    runtime.spawn_critical_task("merge acceptance receivers", async move {
+        loop {
+            let combined = {
+                let bp = block_production_rx.borrow().clone();
+                let pl = pipeline_rx.borrow().clone();
+                match (bp, pl) {
+                    (TransactionAcceptanceState::NotAccepting(r), _) => {
+                        TransactionAcceptanceState::NotAccepting(r)
+                    }
+                    (_, TransactionAcceptanceState::NotAccepting(r)) => {
+                        TransactionAcceptanceState::NotAccepting(r)
+                    }
+                    _ => TransactionAcceptanceState::Accepting,
+                }
+            };
+            let _ = combined_tx.send(combined);
+            tokio::select! {
+                result = block_production_rx.changed() => {
+                    if result.is_err() { return; }
+                }
+                result = pipeline_rx.changed() => {
+                    if result.is_err() { return; }
+                }
+            }
+        }
+    });
+    combined_rx
+}
 fn init_and_report_internal_config_manager(
     internal_config_path: std::path::PathBuf,
 ) -> InternalConfigManager {

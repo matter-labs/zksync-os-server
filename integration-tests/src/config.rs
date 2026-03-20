@@ -163,5 +163,6 @@ fn load_config_from_path(config_path: &Path) -> Config {
         interop_fee_updater_config: Default::default(),
         external_price_api_client_config: Some(config_repo.single().unwrap().parse().unwrap()),
         fee_config: Default::default(),
+        pipeline_health_config: Default::default(),
     }
 }
