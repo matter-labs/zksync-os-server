@@ -7,6 +7,8 @@ This directory contains configuration files for running ZKsync OS nodes locally.
 ```
 local-chains/
 ├── README.md                    # Top-level documentation for local chain configurations
+├── v30.1/                       # Protocol version v30.1
+│   ├── genesis.json             # Genesis configuration
 ├── v30.2/                       # Protocol version v30.2
 │   ├── default/                 # Default (single-chain) setup
 │   │   ├── README.md            # Scenario-specific documentation
