@@ -25,8 +25,11 @@ use zksync_os_operator_signer::SignerConfig;
 use zksync_os_tx_validators::deployment_filter;
 use zksync_os_types::{NodeRole, PubdataMode};
 
+mod build_external_config;
 mod cli;
 mod util;
+
+pub use build_external_config::{build_external_config, load_config_file_sources};
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
