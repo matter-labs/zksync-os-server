@@ -279,8 +279,8 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
 ///
 /// The test publishes a bytecode to the supplier before executing a patch upgrade,
 /// verifying that:
-/// 1. `EVMBytecodePublished` events on L1 are scanned and returned as force preimages.
-/// 2. The upgrade completes successfully even when the supplier is active.
+/// 1. `BytecodePublished` events on L1 are scanned without errors.
+/// 2. The upgrade completes successfully even when the supplier has published bytecodes.
 ///
 /// Since this is a patch-only upgrade (no force deployments), it focuses on confirming
 /// that the supplier scanning path does not interfere with the upgrade flow.
@@ -293,7 +293,7 @@ async fn upgrade_with_bytecodes_from_supplier() -> anyhow::Result<()> {
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
     // Publish a bytecode to the BytecodesSupplier contract on L1 before the upgrade.
-    // The server should scan `EVMBytecodePublished` events from the supplier
+    // The server should scan `BytecodePublished` events from the supplier
     // and return this bytecode as a force preimage when processing the upgrade.
     // The supplier requires bytecodes padded to 32 bytes with an odd number of words.
     let mut bytecode = SampleForceDeployment::DEPLOYED_BYTECODE.to_vec();

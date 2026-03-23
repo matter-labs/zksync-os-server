@@ -9,7 +9,8 @@ use alloy::primitives::{Address, B256, BlockNumber, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
-use blake2::{Blake2s256, Digest as BlakeDigest};
+use zk_os_api::helpers::set_properties_code;
+use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
 use zksync_os_contract_interface::ZkChain;
@@ -20,11 +21,18 @@ use zksync_os_types::{
 };
 
 alloy::sol! {
+    /// Matches the `BytecodePublished` event emitted by the `BytecodesSupplier` contract
+    /// in era-contracts (`l1-contracts/contracts/upgrades/BytecodesSupplier.sol`).
     #[derive(Debug)]
-    event EVMBytecodePublished(bytes32 indexed bytecodeHash, bytes bytecode);
+    event BytecodePublished(bytes32 indexed bytecodeHash, bytes bytecode);
 
     #[sol(rpc)]
     interface IChainTypeManagerBytecodeSupplier {
+        /// NOTE: `L1_BYTECODES_SUPPLIER()` does not exist on any deployed CTM yet.
+        /// This is future-facing: when the CTM exposes this getter, it will allow
+        /// the server to discover the supplier address dynamically instead of
+        /// relying on the configured fallback. Until then, every call will revert
+        /// and the code falls back to the configured `bytecode_supplier_address`.
         function L1_BYTECODES_SUPPLIER() external view returns (address);
     }
 }
@@ -41,14 +49,16 @@ const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 /// - **Gateway (SL)**: `NewUpgradeCutData` / `NewUpgradeCutHash` events from `ChainTypeManager`,
 ///   plus the full upgrade execution including the L2 upgrade transaction.
 /// - **L1**: The `BytecodesSupplier` publishes the factory dep bytecodes via
-///   `EVMBytecodePublished` events — these live on L1 regardless of settlement layer.
+///   `BytecodePublished` events — these live on L1 regardless of settlement layer.
 pub struct L1UpgradeTxWatcher {
     admin_contract_l1: Address,
 
     provider_l1: DynProvider,
     provider_sl: DynProvider,
-    /// Address of the bytecode supplier contract on L1 (used to scan EVMBytecodePublished events)
+    /// Address of the bytecode supplier contract on L1 (used to scan BytecodePublished events)
     bytecode_supplier_address: Address,
+    /// Address of the CTM contract on L1 (used to resolve the canonical bytecode supplier)
+    ctm_l1: Address,
     /// Address of the CTM contract on SL (used to scan NewUpgradeCutData events)
     ctm_sl: Address,
     current_protocol_version: ProtocolSemanticVersion,
@@ -78,8 +88,11 @@ impl L1UpgradeTxWatcher {
         let admin_l1 = zk_chain_l1.get_admin().await?;
         tracing::info!(admin_l1 = ?admin_l1, "resolved chain admin");
 
+        let ctm_l1 = zk_chain_l1.get_chain_type_manager().await?;
+        tracing::info!(ctm_l1 = ?ctm_l1, "resolved L1 chain type manager");
+
         let ctm_sl = zk_chain_sl.get_chain_type_manager().await?;
-        tracing::info!(ctm_sl = ?ctm_sl, "resolved chain type manager");
+        tracing::info!(ctm_sl = ?ctm_sl, "resolved SL chain type manager");
 
         let current_l1_block = zk_chain_l1.provider().get_block_number().await?;
         let last_l1_block = find_l1_block_by_protocol_version(zk_chain_l1.clone(), current_protocol_version.clone())
@@ -114,6 +127,7 @@ impl L1UpgradeTxWatcher {
             provider_l1: zk_chain_l1.provider().clone(),
             provider_sl: zk_chain_sl.provider().clone(),
             bytecode_supplier_address,
+            ctm_l1,
             ctm_sl,
             current_protocol_version,
             upgrade_subpool,
@@ -237,10 +251,17 @@ impl L1UpgradeTxWatcher {
         }
     }
 
-    async fn fetch_force_preimages(
-        &self,
-        _hashes: &[B256],
-    ) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
+    /// Fetches bytecodes published to the `BytecodesSupplier` on L1, filtered by the
+    /// requested `hashes` (the `factory_deps` from the upgrade tx).
+    ///
+    /// Returns `(blake2s_hash, full_preimage)` pairs suitable for injection into the
+    /// VM's `PreimageSource`. The blake2s hash is computed over `code + padding + artifacts`
+    /// via `set_properties_code`, matching the hash the VM will use for lookups.
+    async fn fetch_force_preimages(&self, hashes: &[B256]) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
+        if hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let active_supplier = self.resolve_active_bytecode_supplier().await;
 
         let mut current_block = self.provider_l1.get_block_number().await?;
@@ -258,23 +279,48 @@ impl L1UpgradeTxWatcher {
                 .from_block(from_block)
                 .to_block(current_block)
                 .address(active_supplier)
-                .event_signature(EVMBytecodePublished::SIGNATURE_HASH);
+                .event_signature(BytecodePublished::SIGNATURE_HASH);
             let logs = self.provider_l1.get_logs(&filter).await?;
 
             for log in logs {
-                let published = EVMBytecodePublished::decode_log(&log.inner)?.data;
-                let evm_hash = B256::from(published.bytecodeHash);
-                let zkos_hash = zkos_hash_from_bytecode(&published.bytecode);
-                let bytecode = published.bytecode.to_vec();
+                let published = BytecodePublished::decode_log(&log.inner)?.data;
+                let raw_bytecode = published.bytecode.to_vec();
 
-                by_hash.insert(evm_hash, bytecode.clone());
-                by_hash.insert(zkos_hash, bytecode);
+                // Compute the ZKOS bytecode hash and full preimage (code + padding + artifacts)
+                // via `set_properties_code`, which matches the hash the VM uses for lookups.
+                let mut props = AccountProperties::default();
+                let full_preimage = set_properties_code(&mut props, &raw_bytecode);
+                let zkos_hash = B256::from(props.bytecode_hash.as_u8_array());
+
+                if let Some(existing) = by_hash.get(&zkos_hash) {
+                    if existing != &full_preimage {
+                        tracing::warn!(
+                            hash = ?zkos_hash,
+                            "bytecode supplier emitted duplicate hash with different data; keeping first occurrence"
+                        );
+                    }
+                } else {
+                    by_hash.insert(zkos_hash, full_preimage);
+                }
             }
 
             if from_block == start_block {
                 break;
             }
             current_block = from_block.saturating_sub(1);
+        }
+
+        // Verify all requested hashes were found.
+        let missing: Vec<_> = hashes
+            .iter()
+            .filter(|h| !by_hash.contains_key(*h))
+            .collect();
+        if !missing.is_empty() {
+            tracing::warn!(
+                missing_count = missing.len(),
+                ?missing,
+                "some requested factory dep hashes were not found in the bytecode supplier"
+            );
         }
 
         tracing::info!(
@@ -286,49 +332,45 @@ impl L1UpgradeTxWatcher {
         Ok(by_hash.into_iter().collect())
     }
 
-    /// Queries the CTM on SL for the canonical `BytecodesSupplier` address.
+    /// Queries the CTM on L1 for the canonical `BytecodesSupplier` address.
     ///
     /// Falls back to the configured `bytecode_supplier_address` if the CTM does
-    /// not expose `L1_BYTECODES_SUPPLIER()` (e.g. V30 CTM).
+    /// not expose `L1_BYTECODES_SUPPLIER()`. This is expected today — no deployed
+    /// CTM exposes this getter yet. Once it does, this method will dynamically
+    /// discover the supplier address.
     async fn resolve_active_bytecode_supplier(&self) -> Address {
-        let ctm = IChainTypeManagerBytecodeSupplier::new(self.ctm_sl, self.provider_sl.clone());
+        let ctm = IChainTypeManagerBytecodeSupplier::new(self.ctm_l1, self.provider_l1.clone());
         match ctm.L1_BYTECODES_SUPPLIER().call().await {
             Ok(l1_address) if l1_address != Address::ZERO => {
                 if l1_address != self.bytecode_supplier_address {
                     tracing::warn!(
                         configured_supplier = ?self.bytecode_supplier_address,
                         l1_supplier = ?l1_address,
-                        ctm = ?self.ctm_sl,
+                        ctm = ?self.ctm_l1,
                         "bytecode supplier changed on L1; using L1 supplier for this fetch"
                     );
                 }
                 l1_address
             }
             Ok(_) => {
-                tracing::warn!(
+                tracing::info!(
                     configured_supplier = ?self.bytecode_supplier_address,
-                    ctm = ?self.ctm_sl,
-                    "CTM returned zero bytecode supplier; using configured supplier for this fetch"
+                    ctm = ?self.ctm_l1,
+                    "CTM returned zero bytecode supplier; using configured supplier"
                 );
                 self.bytecode_supplier_address
             }
-            Err(err) => {
-                tracing::warn!(
+            Err(_) => {
+                // Expected: no deployed CTM exposes L1_BYTECODES_SUPPLIER() yet.
+                tracing::info!(
                     configured_supplier = ?self.bytecode_supplier_address,
-                    ctm = ?self.ctm_sl,
-                    error = ?err,
-                    "failed to fetch bytecode supplier from CTM on L1; using configured supplier for this fetch"
+                    ctm = ?self.ctm_l1,
+                    "CTM does not expose L1_BYTECODES_SUPPLIER(); using configured supplier"
                 );
                 self.bytecode_supplier_address
             }
         }
     }
-}
-
-fn zkos_hash_from_bytecode(bytecode: &[u8]) -> B256 {
-    // Matches Utils.getZKOSBytecodeInfo -> blake2s256(bytecode)
-    let digest = Blake2s256::digest(bytecode);
-    B256::from_slice(digest.as_slice())
 }
 
 #[async_trait::async_trait]
@@ -451,26 +493,33 @@ async fn find_l1_block_by_protocol_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use blake2::{Blake2s256, Digest as BlakeDigest};
 
+    /// Golden-value test using a known externally-verifiable result.
+    /// `blake2s256(b"") = 69217a3079908094e11121d042354a7c1f55b6482ca1a51e1b250dfd1ed0eef9`
     #[test]
-    fn blake2s_hash_golden_value() {
-        let bytecode = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let result = zkos_hash_from_bytecode(&bytecode);
-        let expected = B256::from_slice(Blake2s256::digest(&bytecode).as_slice());
+    fn blake2s_empty_golden_value() {
+        let expected: B256 = "0x69217a3079908094e11121d042354a7c1f55b6482ca1a51e1b250dfd1ed0eef9"
+            .parse()
+            .unwrap();
+        let result = B256::from_slice(Blake2s256::digest([]).as_slice());
         assert_eq!(result, expected);
     }
 
     #[test]
-    fn blake2s_hash_empty_bytecode() {
-        let result = zkos_hash_from_bytecode(&[]);
-        let expected = B256::from_slice(Blake2s256::digest([]).as_slice());
-        assert_eq!(result, expected);
-    }
+    fn set_properties_code_produces_expected_hash() {
+        // Minimal EVM bytecode: PUSH1 0x42 PUSH0 MSTORE PUSH1 0x20 PUSH0 RETURN
+        // padded to an odd number of 32-byte words
+        let bytecode = vec![0x60, 0x42, 0x5F, 0x52, 0x60, 0x20, 0x5F, 0xF3];
 
-    #[test]
-    fn blake2s_hash_differs_for_different_bytecodes() {
-        let a = zkos_hash_from_bytecode(b"bytecode_a");
-        let b = zkos_hash_from_bytecode(b"bytecode_b");
-        assert_ne!(a, b);
+        let mut props = AccountProperties::default();
+        let full_preimage = set_properties_code(&mut props, &bytecode);
+        let hash = B256::from(props.bytecode_hash.as_u8_array());
+
+        // The full preimage should be longer than the raw bytecode (includes padding + artifacts).
+        assert!(full_preimage.len() > bytecode.len());
+        // The hash should be blake2s256 of the full preimage.
+        let expected_hash = B256::from_slice(Blake2s256::digest(&full_preimage).as_slice());
+        assert_eq!(hash, expected_hash);
     }
 }
