@@ -9,8 +9,8 @@ use time::UtcDateTime;
 use zksync_os_batch_types::{BatchInfo, BatchSignatureSet};
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_observability::LatencyDistributionTracker;
+use zksync_os_types::ProtocolSemanticVersion;
 use zksync_os_types::PubdataMode;
-use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion};
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
 
@@ -52,13 +52,16 @@ pub struct BatchMetadata {
 impl BatchMetadata {
     /// Gets batch metadata verification key hash.
     pub fn verification_key_hash(&self) -> anyhow::Result<&'static str> {
-        Ok(ProvingVersion::try_from(self.protocol_version.clone())
-            .context("Failed to get proving version from protocol version")?
-            .vk_hash())
+        zksync_os_types::protocol_config::vk_hash(&self.protocol_version)
+            .context("Failed to get VK hash from protocol version")
     }
 
-    pub fn proving_version(&self) -> anyhow::Result<ProvingVersion> {
-        Ok(ProvingVersion::try_from(self.protocol_version.clone())?)
+    /// Gets the L1 verifier version (u32) for wire format encoding.
+    ///
+    /// Deprecated: only used for encoding `proof[0]` in L1 proof submissions.
+    pub fn verifier_version_deprecated(&self) -> anyhow::Result<u32> {
+        zksync_os_types::protocol_config::verifier_version_deprecated(&self.protocol_version)
+            .context("Failed to get verifier version from protocol version")
     }
 }
 
@@ -191,30 +194,20 @@ pub enum FriProof {
     Real(RealFriProof),
 }
 
-// V1 can be dropped if there testnet-alpha will be regenerated from scratch.
+// V1/V2 variants exist for backward compatibility with older serialized data.
+// V1 can be dropped if testnet-alpha is regenerated from scratch.
+// V2 had a `proving_execution_version` field that is now derived from
+// `BatchMetadata.protocol_version`; serde ignores the extra field on deser.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RealFriProof {
     V1(Bytes),
-    V2 {
-        proof: Bytes,
-        proving_execution_version: u32,
-    },
+    V2 { proof: Bytes },
 }
 
 impl FriProof {
     pub fn is_fake(&self) -> bool {
         matches!(self, FriProof::Fake)
-    }
-
-    pub fn proving_execution_version(&self) -> Option<u32> {
-        match self {
-            FriProof::Real(RealFriProof::V2 {
-                proving_execution_version,
-                ..
-            }) => Some(*proving_execution_version),
-            _ => None,
-        }
     }
 
     pub fn proof(&self) -> Option<&[u8]> {
@@ -229,7 +222,7 @@ impl RealFriProof {
     pub fn proof(&self) -> &[u8] {
         match self {
             RealFriProof::V1(proof) => proof.as_ref(),
-            RealFriProof::V2 { proof, .. } => proof.as_ref(),
+            RealFriProof::V2 { proof } => proof.as_ref(),
         }
     }
 }
@@ -239,12 +232,7 @@ impl Debug for FriProof {
         match self {
             FriProof::Fake => write!(f, "Fake"),
             FriProof::AlreadySubmittedToL1 => write!(f, "AlreadySubmittedToL1"),
-            FriProof::Real(_) => write!(
-                f,
-                "Real(proving_execution_version={:?}, len: {:?})",
-                self.proving_execution_version(),
-                self.proof().unwrap().len()
-            ),
+            FriProof::Real(_) => write!(f, "Real(len: {:?})", self.proof().unwrap().len()),
         }
     }
 }
@@ -256,28 +244,16 @@ pub enum SnarkProof {
     Real(RealSnarkProof),
 }
 
-// V1 can be dropped if there testnet-alpha will be regenerated from scratch.
+// V1/V2 variants exist for backward compatibility with older serialized data.
+// V1 can be dropped if testnet-alpha is regenerated from scratch.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RealSnarkProof {
     V1(Vec<u8>),
-    V2 {
-        proof: Vec<u8>,
-        proving_execution_version: u32,
-    },
+    V2 { proof: Vec<u8> },
 }
 
 impl SnarkProof {
-    pub fn proving_execution_version(&self) -> Option<u32> {
-        match self {
-            SnarkProof::Real(RealSnarkProof::V2 {
-                proving_execution_version,
-                ..
-            }) => Some(*proving_execution_version),
-            _ => None,
-        }
-    }
-
     pub fn proof(&self) -> Option<&[u8]> {
         match self {
             SnarkProof::Real(real) => Some(real.proof()),
@@ -290,7 +266,7 @@ impl RealSnarkProof {
     pub fn proof(&self) -> &[u8] {
         match self {
             RealSnarkProof::V1(proof) => proof.as_slice(),
-            RealSnarkProof::V2 { proof, .. } => proof.as_slice(),
+            RealSnarkProof::V2 { proof } => proof.as_slice(),
         }
     }
 }
