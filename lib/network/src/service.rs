@@ -1,5 +1,4 @@
 use crate::config::NetworkConfig;
-use crate::metrics::ViseRecorder;
 use crate::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
 use crate::version::{ZksProtocolV1, ZksProtocolV2};
 use crate::wire::replays::RecordOverride;
@@ -50,6 +49,10 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
     ) -> Result<Self, NetworkError> {
+        // Install ViseRecorder before creating the NetworkManager so that reth-network metrics
+        // are captured. This must happen before `NetworkManager::builder()` because that is where
+        // reth initializes its metric handles (via `Default::default()` on each metrics struct).
+        crate::metrics::install_recorder();
         match NatResolver::Any.external_addr().await {
             None => {
                 tracing::info!("could not resolve external IP (STUN)");
@@ -124,13 +127,8 @@ impl NetworkService {
         tracing::debug!(?net_cfg, "starting p2p network service");
         // Create network manager. We are not interested in `txpool` because transaction gossip is
         // disabled. `request_handler` is also unused as it is specific to `eth` protocol.
-        //
-        // Use `ViseRecorder` during network manager initialization to register metrics. This will
-        // make sure reth network metrics are propagated to `vise` collector. Only code inside the
-        // closure is affected.
-        let builder = NetworkManager::builder(net_cfg).await?;
         let (network_manager, _txpool, _request_handler) =
-            ::metrics::with_local_recorder(&ViseRecorder, || builder.split());
+            NetworkManager::builder(net_cfg).await?.split();
 
         Ok(Self {
             network_manager,

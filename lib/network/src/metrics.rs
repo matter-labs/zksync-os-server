@@ -202,6 +202,21 @@ pub struct OutboundDisconnectMetrics {
     pub(crate) subprotocol_specific: Counter,
 }
 
+/// Installs [`ViseRecorder`] as the global recorder for the `metrics` crate.
+///
+/// This bridges reth-network metrics (which use the `metrics` crate) to the `vise` collector.
+/// Must be called before [`reth_network::NetworkManager`] is created, since that is when reth
+/// registers its metric handles. If a global recorder is already set (e.g., from a prior call),
+/// the error is logged and ignored — metrics may not be reported in that case.
+///
+/// Note: [`metrics::with_local_recorder`] (used by the mempool) takes priority over the global
+/// recorder, so calling this does not interfere with other crates that use local recorders.
+pub(crate) fn install_recorder() {
+    if let Err(err) = ::metrics::set_global_recorder(ViseRecorder) {
+        tracing::warn!(%err, "failed to install network metrics recorder; metrics may not be reported");
+    }
+}
+
 #[vise::register]
 pub(crate) static NETWORK_METRICS: vise::Global<NetworkMetrics> = vise::Global::new();
 #[vise::register]
