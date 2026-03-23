@@ -2,8 +2,8 @@ use crate::config::NetworkConfig;
 use crate::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
 use crate::version::{ZksProtocolV1, ZksProtocolV2};
 use crate::wire::replays::RecordOverride;
-use alloy::eips::eip2124::{ForkHash, ForkId};
-use alloy::primitives::{B256, BlockNumber, U256};
+use alloy::eips::eip2124::Head;
+use alloy::primitives::BlockNumber;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, Hardforks};
 use reth_discv5::discv5;
 use reth_eth_wire::HelloMessageWithProtocols;
@@ -59,11 +59,16 @@ impl NetworkService {
             }
         };
         let rlpx_address = SocketAddr::V4(SocketAddrV4::new(config.address, config.port));
-        let chain_id = client.chain_spec().chain_id();
-        let fork_id = ForkId {
-            hash: ForkHash::from(B256::from(U256::from(chain_id))),
-            next: chain_id,
+        let chain_spec = client.chain_spec();
+        let genesis = Head {
+            hash: chain_spec.genesis_hash(),
+            number: 0,
+            timestamp: chain_spec.genesis().timestamp,
+            difficulty: chain_spec.genesis().difficulty,
+            total_difficulty: chain_spec.genesis().difficulty,
         };
+        let fork_id = chain_spec.fork_id(&genesis);
+        tracing::info!(?genesis, ?fork_id, "initializing p2p network service");
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
         let cfg_builder = RethNetworkConfig::builder(config.secret_key)
             .boot_nodes(config.boot_nodes.clone())
@@ -128,7 +133,9 @@ impl NetworkService {
             // Do not require any block hashes in `eth` RLPx protocol as it is unused
             .required_block_hashes(vec![])
             // Set network id to ZKsync OS chain's id, otherwise we might connect to unrelated peers
-            .network_id(Some(client.chain_spec().chain_id()));
+            .network_id(Some(chain_spec.chain_id()))
+            // Use genesis as chain head
+            .set_head(genesis);
         let net_cfg =
             Self::register_rlpx_sub_protocols(cfg_builder, zks_config, replay, protocol_tx)
                 .build(client);

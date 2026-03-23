@@ -1,7 +1,9 @@
 use alloy::consensus::transaction::TransactionMeta;
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumHash, BlockNumberOrTag};
+use alloy::genesis::{ChainConfig, Genesis};
 use alloy::primitives::{
-    Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, TxHash, TxNumber,
+    Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, TxHash, TxNumber, U256,
+    keccak256,
 };
 use reth_chainspec::{Chain, ChainInfo, ChainSpec, ChainSpecBuilder, ChainSpecProvider};
 use reth_db_models::StoredBlockBodyIndices;
@@ -37,17 +39,44 @@ pub struct ZkProviderFactory<State, Repository> {
 
 impl<State: ReadStateHistory, Repository: ReadRepository> ZkProviderFactory<State, Repository> {
     pub fn new(state: State, repository: Repository, chain_id: u64) -> Self {
+        let (genesis, genesis_hash) = repository
+            .get_block_by_number(0)
+            .expect("failed to read repository")
+            .expect("genesis missing from repository")
+            .into_parts();
         let builder = ChainSpecBuilder::default()
             .chain(Chain::from(chain_id))
             // Activate everything up to Cancun
             // todo: does it make sense to active Cancun if we do not support 4844 transactions?
             //       maybe drop down to Shanghai?
             .cancun_activated()
-            // todo: genesis is not used currently but wouldn't hurt to provide the real one
-            //       once we can
-            .genesis(Default::default());
+            .genesis(Genesis {
+                // todo: evaluate whether genesis config needs to be tweaked
+                config: ChainConfig::default(),
+                // todo: does not seem to be used in zksync-os; tbc
+                nonce: 0,
+                timestamp: genesis.timestamp,
+                // todo: does not seem to be used in zksync-os; tbc
+                extra_data: Default::default(),
+                gas_limit: genesis.gas_limit,
+                difficulty: genesis.difficulty,
+                mix_hash: genesis.mix_hash,
+                coinbase: genesis.beneficiary,
+                // todo: set real initial account state
+                alloc: Default::default(),
+                base_fee_per_gas: None,
+                excess_blob_gas: None,
+                blob_gas_used: None,
+                number: None,
+                parent_hash: None,
+            });
+        let mut chain_spec = builder.build();
+        // Patch genesis header to take chain id into account. Needed to give our chains different
+        // genesis hash that is otherwise identical.
+        let genesis_hash = keccak256([genesis_hash, B256::from(U256::from(chain_id))].concat());
+        chain_spec.genesis_header = SealedHeader::new(genesis.header, genesis_hash);
         Self {
-            chain_spec: Arc::new(builder.build()),
+            chain_spec: Arc::new(chain_spec),
             state,
             repository,
         }

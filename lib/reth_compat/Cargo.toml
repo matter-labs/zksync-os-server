@@ -23,4 +23,4 @@ reth-trie-common = { workspace = true }
 reth-primitives-traits = { workspace = true }
 reth-revm = { workspace = true }
 
-alloy = { workspace = true, default-features = false }
+alloy = { workspace = true, default-features = false, features = ["genesis"] }
