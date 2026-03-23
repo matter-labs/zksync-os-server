@@ -99,9 +99,8 @@ pub fn call_trace(
         &mut NopValidator,
     )?;
 
-    debug_assert_eq!(
-        tracer.transactions.len(),
-        block_output.tx_results.len(),
+    anyhow::ensure!(
+        tracer.transactions.len() == block_output.tx_results.len(),
         "tracer recorded {} frames but VM returned {} results",
         tracer.transactions.len(),
         block_output.tx_results.len(),
@@ -145,10 +144,10 @@ fn reconcile_trace_with_output(frame: &mut CallFrame, tx_output: &TxOutput) {
             frame.gas_used = U256::from(tx_output.gas_used);
             frame.output = Some(Bytes::copy_from_slice(revert_bytes));
             frame.revert_reason = maybe_revert_reason(revert_bytes);
-            frame.error = Some(format!(
-                "{RESOURCE_EXHAUSTION_ERROR} \
-                 (gas_used: {}, pubdata_used: {} bytes, native_used: {})",
-                tx_output.gas_used, tx_output.pubdata_used, tx_output.native_used,
+            frame.error = Some(format_resource_exhaustion_error(
+                tx_output.gas_used,
+                tx_output.pubdata_used,
+                tx_output.native_used,
             ));
         }
         _ => {}
@@ -557,6 +556,17 @@ pub(crate) fn format_post_execution_revert_error(
 ) -> String {
     format!(
         "execution reverted: insufficient gas to cover pubdata cost \
+         (gas_used: {gas_used}, pubdata_used: {pubdata_used} bytes, native_used: {native_used})"
+    )
+}
+
+pub(crate) fn format_resource_exhaustion_error(
+    gas_used: u64,
+    pubdata_used: u64,
+    native_used: u64,
+) -> String {
+    format!(
+        "{RESOURCE_EXHAUSTION_ERROR} \
          (gas_used: {gas_used}, pubdata_used: {pubdata_used} bytes, native_used: {native_used})"
     )
 }
