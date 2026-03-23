@@ -37,7 +37,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     ),
     BlockDump,
 > {
-    tracing::debug!(command = ?command, block_number=command.block_context.block_number, "Executing command");
+    tracing::info!(command = ?command, block_number=command.block_context.block_number, "Executing command");
     latency_tracker.enter_state(SequencerState::InitializingVm);
     let ctx = command.block_context;
 
@@ -79,7 +79,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                 },
                 if deadline.is_some()
             => {
-                tracing::debug!(block_number = ctx.block_number,
+                tracing::info!(block_number = ctx.block_number,
                                txs = executed_txs.len(),
                                "deadline reached → sealing");
                 break SealReason::Timeout;                                     // leave the loop ⇒ seal
@@ -89,7 +89,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
             maybe_tx = command.tx_source.stream.next() => {
                 latency_tracker.enter_state(SequencerState::Execution);
                 let Some(tx) = maybe_tx else {
-                    tracing::debug!(
+                    tracing::info!(
                         block_number = ctx.block_number,
                         txs = executed_txs.len(),
                         "stream exhausted → sealing"
@@ -98,11 +98,11 @@ pub async fn execute_block_in_vm<V: ViewState>(
                 };
 
                 if let Some(reason) = should_exclude_and_seal(&ctx, cumulative_gas_used, interop_roots_count, command.interop_roots_per_block, &tx) {
-                    tracing::debug!(block_number = ctx.block_number, "sealing block as next tx cannot be included");
+                    tracing::info!(block_number = ctx.block_number, "sealing block as next tx cannot be included");
                     break reason;
                 }
 
-                tracing::debug!(
+                tracing::info!(
                     block_number=command.block_context.block_number,
                     tx_hash=?tx.hash(),
                     tx_index_in_block=executed_txs.len(),
@@ -143,7 +143,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         EXECUTION_METRICS.transaction_pubdata_used.observe(res.pubdata_used);
                         let status_str = if res.status  {"success"} else {"failure"};
                         EXECUTION_METRICS.transaction_status[&status_str].inc();
-                        tracing::debug!(
+                        tracing::info!(
                             block_number=command.block_context.block_number,
                             output=?res,
                             "Transaction executed"
@@ -173,7 +173,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                             }
                             match &command.seal_policy {
                                 SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
-                                    tracing::debug!(block_number = ctx.block_number, "sealing block as upgrade tx was executed");
+                                    tracing::info!(block_number = ctx.block_number, "sealing block as upgrade tx was executed");
                                     break SealReason::UpgradeTx;
                                 }
                                 SealPolicy::UntilExhausted { allowed_to_finish_early: false } => {
@@ -187,7 +187,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         if let Some(SystemTxType::SetSLChainId(_)) = executed_txs.last().unwrap().as_system_tx_type() {
                             match &command.seal_policy {
                                 SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
-                                    tracing::debug!(block_number = ctx.block_number, "sealing block as chain id update tx was executed");
+                                    tracing::info!(block_number = ctx.block_number, "sealing block as chain id update tx was executed");
                                     break SealReason::SLChainIdUpdateTx;
                                 }
                                 SealPolicy::UntilExhausted { allowed_to_finish_early: false } => {
@@ -199,7 +199,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
                         match command.seal_policy {
                             SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
-                                tracing::debug!(block_number = ctx.block_number,
+                                tracing::info!(block_number = ctx.block_number,
                                                txs = executed_txs.len(),
                                                "tx limit reached → sealing");
                                 break SealReason::TxCountLimit
@@ -253,7 +253,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                                         );
                                     }
                                     (TxRejectionMethod::SealBlock(reason), _, _) => {
-                                        tracing::debug!(tx_hash = %tx.hash(), block_number = ctx.block_number, ?e, ?reason, "sealing block by criterion");
+                                        tracing::info!(tx_hash = %tx.hash(), block_number = ctx.block_number, ?e, ?reason, "sealing block by criterion");
                                         break reason;
                                     }
                                 }
@@ -353,7 +353,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         "Block sealed in block executor"
     );
 
-    tracing::debug!(
+    tracing::info!(
         output = ?BlockOutputDebug(&output),
         block_number = output.header.number,
         "Block output"
