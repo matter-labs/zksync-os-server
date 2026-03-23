@@ -28,13 +28,14 @@ pub struct BackpressureCause {
 /// The condition that triggered backpressure for a component
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackpressureTrigger {
-    /// A downstream send has been blocked for too long
-    WaitingSendTooLong {
+    /// The number of unprocessed blocks exceeds the threshold
+    BlockLagTooHigh { threshold: u64, actual: u64 },
+    /// The block-timestamp difference between head and this component exceeds the threshold.
+    /// Only evaluated when both head and component timestamps are non-zero.
+    TimeLagTooHigh {
         threshold: Duration,
         actual: Duration,
     },
-    /// The number of unprocessed blocks exceeds the threshold
-    BlockLagTooHigh { threshold: u64, actual: u64 },
 }
 
 #[cfg(test)]
@@ -65,14 +66,11 @@ mod tests {
     }
 
     #[test]
-    fn waiting_send_too_long_trigger() {
-        let trigger = BackpressureTrigger::WaitingSendTooLong {
-            threshold: Duration::from_secs(3600),
-            actual: Duration::from_secs(4215),
+    fn time_lag_too_high_trigger() {
+        let trigger = BackpressureTrigger::TimeLagTooHigh {
+            threshold: Duration::from_secs(30),
+            actual: Duration::from_secs(45),
         };
-        assert!(matches!(
-            trigger,
-            BackpressureTrigger::WaitingSendTooLong { .. }
-        ));
+        assert!(matches!(trigger, BackpressureTrigger::TimeLagTooHigh { .. }));
     }
 }
