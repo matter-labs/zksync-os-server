@@ -23,6 +23,8 @@ pub const ERGS_PER_GAS: u64 = 256;
 /// and the reconciliation logic to avoid fragile string matching.
 pub(crate) const RESOURCE_EXHAUSTION_ERROR: &str =
     "ZKsync OS: out of execution resources or pubdata";
+pub(crate) const POST_EXECUTION_PUBDATA_ERROR: &str =
+    "execution reverted: insufficient gas to cover pubdata cost";
 
 pub fn execute(
     tx: ZkTransaction,
@@ -67,8 +69,13 @@ pub fn call_trace_simulate(
         .transactions
         .last_mut()
         .expect("no transaction traced");
+    let top_level_execution_succeeded = tracer
+        .top_level_execution_succeeded
+        .last()
+        .copied()
+        .unwrap_or(false);
     if let Ok(tx_output) = tx_result {
-        reconcile_trace_with_output(frame, &tx_output);
+        reconcile_trace_with_output(frame, &tx_output, top_level_execution_succeeded);
     }
 
     Ok(std::mem::take(frame))
@@ -105,13 +112,20 @@ pub fn call_trace(
         tracer.transactions.len(),
         block_output.tx_results.len(),
     );
-    for (frame, tx_result) in tracer
+    anyhow::ensure!(
+        tracer.transactions.len() == tracer.top_level_execution_succeeded.len(),
+        "tracer recorded {} frames but tracked {} top-level execution results",
+        tracer.transactions.len(),
+        tracer.top_level_execution_succeeded.len(),
+    );
+    for ((frame, tx_result), top_level_execution_succeeded) in tracer
         .transactions
         .iter_mut()
         .zip(block_output.tx_results.iter())
+        .zip(tracer.top_level_execution_succeeded.iter().copied())
     {
         if let Ok(tx_output) = tx_result {
-            reconcile_trace_with_output(frame, tx_output);
+            reconcile_trace_with_output(frame, tx_output, top_level_execution_succeeded);
         }
     }
 
@@ -123,34 +137,18 @@ pub fn call_trace(
 /// The tracer sees the EVM execution step but misses post-execution checks done by the
 /// bootloader (e.g. pubdata cost verification). This function patches the trace when
 /// the VM reports a revert that the tracer did not observe.
-fn reconcile_trace_with_output(frame: &mut CallFrame, tx_output: &TxOutput) {
-    match &tx_output.execution_result {
-        ExecutionResult::Revert(revert_bytes) if frame.error.is_none() => {
-            frame.gas_used = U256::from(tx_output.gas_used);
-            frame.error = Some(format_post_execution_revert_error(
-                tx_output.gas_used,
-                tx_output.pubdata_used,
-                tx_output.native_used,
-            ));
-            frame.output = Some(Bytes::copy_from_slice(revert_bytes));
-            frame.revert_reason = maybe_revert_reason(revert_bytes);
-        }
-        ExecutionResult::Revert(revert_bytes)
-            if frame
-                .error
-                .as_ref()
-                .is_some_and(|error| error.contains(RESOURCE_EXHAUSTION_ERROR)) =>
-        {
-            frame.gas_used = U256::from(tx_output.gas_used);
-            frame.output = Some(Bytes::copy_from_slice(revert_bytes));
-            frame.revert_reason = maybe_revert_reason(revert_bytes);
-            frame.error = Some(format_resource_exhaustion_error(
-                tx_output.gas_used,
-                tx_output.pubdata_used,
-                tx_output.native_used,
-            ));
-        }
-        _ => {}
+fn reconcile_trace_with_output(
+    frame: &mut CallFrame,
+    tx_output: &TxOutput,
+    top_level_execution_succeeded: bool,
+) {
+    if top_level_execution_succeeded
+        && let ExecutionResult::Revert(revert_bytes) = &tx_output.execution_result
+    {
+        frame.gas_used = U256::from(tx_output.gas_used);
+        frame.error = Some(format_post_execution_revert_error());
+        frame.output = Some(Bytes::copy_from_slice(revert_bytes));
+        frame.revert_reason = maybe_revert_reason(revert_bytes);
     }
 }
 
@@ -158,9 +156,11 @@ fn reconcile_trace_with_output(frame: &mut CallFrame, tx_output: &TxOutput) {
 pub struct CallTracer {
     input_transactions: Vec<ZkTransaction>,
     transactions: Vec<CallFrame>,
+    top_level_execution_succeeded: Vec<bool>,
     unfinished_calls: Vec<CallFrame>,
     finished_calls: Vec<CallFrame>,
     current_call_depth: usize,
+    current_tx_top_level_execution_succeeded: bool,
     collect_logs: bool,
     only_top_call: bool,
 
@@ -182,9 +182,11 @@ impl CallTracer {
         Self {
             input_transactions,
             transactions: vec![],
+            top_level_execution_succeeded: vec![],
             unfinished_calls: vec![],
             finished_calls: vec![],
             current_call_depth: 0,
+            current_tx_top_level_execution_succeeded: false,
             collect_logs,
             only_top_call,
             create_operation_requested: None,
@@ -261,6 +263,9 @@ impl EvmTracer for CallTracer {
 
     fn after_execution_frame_completed(&mut self, result: Option<(EvmResources, CallResult)>) {
         assert_ne!(self.current_call_depth, 0);
+        let is_top_level_frame = self.current_call_depth == 1;
+        let top_level_execution_succeeded =
+            matches!(&result, Some((_, CallResult::Successful { .. })));
 
         if !self.only_top_call || self.current_call_depth == 1 {
             let mut finished_call = self.unfinished_calls.pop().expect("Should exist");
@@ -309,6 +314,10 @@ impl EvmTracer for CallTracer {
                     }
                 }
             }
+
+            if is_top_level_frame {
+                self.current_tx_top_level_execution_succeeded = top_level_execution_succeeded;
+            }
             if let Some(parent_call) = self.unfinished_calls.last_mut() {
                 parent_call.calls.push(finished_call);
             } else {
@@ -326,6 +335,7 @@ impl EvmTracer for CallTracer {
 
     fn begin_tx(&mut self, _calldata: &[u8]) {
         self.current_call_depth = 0;
+        self.current_tx_top_level_execution_succeeded = false;
 
         // Sanity check
         assert!(self.create_operation_requested.is_none());
@@ -340,6 +350,8 @@ impl EvmTracer for CallTracer {
 
         if let Some(top_level_call) = self.finished_calls.pop() {
             self.transactions.push(top_level_call);
+            self.top_level_execution_succeeded
+                .push(self.current_tx_top_level_execution_succeeded);
         } else {
             // We can have some edge cases when tx fails before any call frame is created
             // In this case currently we populate minimal call frame info from the input tx data
@@ -363,6 +375,7 @@ impl EvmTracer for CallTracer {
                         "CREATE".to_string()
                     },
                 });
+                self.top_level_execution_succeeded.push(false);
             }
         }
     }
@@ -549,26 +562,8 @@ pub(crate) fn maybe_revert_reason(output: &[u8]) -> Option<String> {
     }
 }
 
-pub(crate) fn format_post_execution_revert_error(
-    gas_used: u64,
-    pubdata_used: u64,
-    native_used: u64,
-) -> String {
-    format!(
-        "execution reverted: insufficient gas to cover pubdata cost \
-         (gas_used: {gas_used}, pubdata_used: {pubdata_used} bytes, native_used: {native_used})"
-    )
-}
-
-pub(crate) fn format_resource_exhaustion_error(
-    gas_used: u64,
-    pubdata_used: u64,
-    native_used: u64,
-) -> String {
-    format!(
-        "{RESOURCE_EXHAUSTION_ERROR} \
-         (gas_used: {gas_used}, pubdata_used: {pubdata_used} bytes, native_used: {native_used})"
-    )
+pub(crate) fn format_post_execution_revert_error() -> String {
+    POST_EXECUTION_PUBDATA_ERROR.to_string()
 }
 
 /// Converts [`EvmError`] to a geth-style error message (if possible).
@@ -647,13 +642,10 @@ mod tests {
         let tx_output = make_tx_output(ExecutionResult::Revert(vec![0x08, 0xc3, 0x79, 0xa0]));
         let mut frame = make_empty_call_frame();
 
-        reconcile_trace_with_output(&mut frame, &tx_output);
+        reconcile_trace_with_output(&mut frame, &tx_output, true);
 
         let error = frame.error.expect("missing patched error");
-        assert!(error.contains("insufficient gas to cover pubdata cost"));
-        assert!(error.contains("gas_used: 50000"));
-        assert!(error.contains("pubdata_used: 300 bytes"));
-        assert!(error.contains("native_used: 200"));
+        assert_eq!(error, POST_EXECUTION_PUBDATA_ERROR);
         assert_eq!(frame.gas_used, U256::from(50_000));
         assert_eq!(
             frame.output,
@@ -662,19 +654,17 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_enriches_generic_resource_exhaustion_error() {
+    fn reconcile_no_op_when_top_level_execution_failed() {
         let tx_output = make_tx_output(ExecutionResult::Revert(vec![]));
         let mut frame = make_empty_call_frame();
-        frame.error = Some(RESOURCE_EXHAUSTION_ERROR.to_string());
+        frame.error = Some("execution reverted".to_string());
+        frame.output = Some(Bytes::new());
 
-        reconcile_trace_with_output(&mut frame, &tx_output);
+        reconcile_trace_with_output(&mut frame, &tx_output, false);
 
-        let error = frame.error.expect("missing enriched error");
-        assert!(error.starts_with(RESOURCE_EXHAUSTION_ERROR));
-        assert!(error.contains("gas_used: 50000"));
-        assert!(error.contains("pubdata_used: 300 bytes"));
-        assert!(error.contains("native_used: 200"));
-        assert_eq!(frame.gas_used, U256::from(50_000));
+        let error = frame.error.expect("missing preserved error");
+        assert_eq!(error, "execution reverted");
+        assert_eq!(frame.gas_used, U256::ZERO);
         assert_eq!(frame.output, Some(Bytes::new()));
         assert!(frame.revert_reason.is_none());
     }
@@ -687,7 +677,7 @@ mod tests {
         let mut frame = make_empty_call_frame();
         let original_output = frame.output.clone();
 
-        reconcile_trace_with_output(&mut frame, &tx_output);
+        reconcile_trace_with_output(&mut frame, &tx_output, true);
 
         assert!(frame.error.is_none());
         assert_eq!(frame.output, original_output);
@@ -700,7 +690,7 @@ mod tests {
         let mut frame = make_empty_call_frame();
         frame.error = Some("execution reverted".to_string());
 
-        reconcile_trace_with_output(&mut frame, &tx_output);
+        reconcile_trace_with_output(&mut frame, &tx_output, false);
 
         assert_eq!(frame.error.as_deref(), Some("execution reverted"));
         assert_eq!(frame.output, Some(Bytes::from(vec![0xaa, 0xbb])));
