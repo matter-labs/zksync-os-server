@@ -1,5 +1,5 @@
 [package]
-name = "zksync_os_status_server"
+name = "zksync_os_consensus_types"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -10,11 +10,6 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-axum.workspace = true
-tokio.workspace = true
-serde.workspace = true
-anyhow.workspace = true
-tracing.workspace = true
-
-reth-tasks.workspace = true
-zksync_os_raft.workspace = true
+openraft.workspace = true
+reth-network-peers.workspace = true
+zksync_os_storage_api.workspace = true

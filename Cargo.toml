@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "lib/contract_interface",
+    "lib/consensus_types",
     "lib/crypto",
     "lib/genesis",
     "lib/l1_sender",
@@ -192,6 +193,7 @@ num_cpus = "1.17.0"
 rocksdb = "0.24.0"
 thread_local = "1.1.9"
 pin-project = "1.1.10"
+openraft = { version = "0.9.21", features = ["serde", "generic-snapshot-data", "storage-v2"] }
 assert_matches = "1.5"
 serde_yaml = "0.9"
 secrecy = "0.10.3"
@@ -248,6 +250,7 @@ zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = 
 
 # "Local" dependencies
 zksync_os_contract_interface = { version = "=0.17.1", path = "lib/contract_interface" }
+zksync_os_consensus_types = { version = "=0.17.1", path = "lib/consensus_types" }
 zksync_os_crypto = { version = "=0.17.1", path = "lib/crypto" }
 zksync_os_l1_sender = { version = "=0.17.1", path = "lib/l1_sender" }
 zksync_os_l1_watcher = { version = "=0.17.1", path = "lib/l1_watcher" }

@@ -1,5 +1,6 @@
 use crate::config::NetworkConfig;
 use crate::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
+use crate::raft::protocol::RaftProtocolHandler;
 use crate::version::{ZksProtocolV1, ZksProtocolV2};
 use crate::wire::replays::RecordOverride;
 use alloy::primitives::BlockNumber;
@@ -48,6 +49,7 @@ impl NetworkService {
         zks_config: ZksProtocolConfig,
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
+        raft_handler: Option<RaftProtocolHandler>,
     ) -> Result<Self, NetworkError> {
         match NatResolver::Any.external_addr().await {
             None => {
@@ -117,9 +119,12 @@ impl NetworkService {
             .required_block_hashes(vec![])
             // Set network id to ZKsync OS chain's id, otherwise we might connect to unrelated peers
             .network_id(Some(client.chain_spec().chain_id()));
-        let net_cfg =
-            Self::register_rlpx_sub_protocols(cfg_builder, zks_config, replay, protocol_tx)
-                .build(client);
+        let mut net_cfg =
+            Self::register_rlpx_sub_protocols(cfg_builder, zks_config, replay, protocol_tx);
+        if let Some(raft_handler) = raft_handler {
+            net_cfg = net_cfg.add_rlpx_sub_protocol(raft_handler);
+        }
+        let net_cfg = net_cfg.build(client);
         tracing::debug!(?net_cfg, "starting p2p network service");
         // Create network manager. We are not interested in `txpool` because transaction gossip is
         // disabled. `request_handler` is also unused as it is specific to `eth` protocol.

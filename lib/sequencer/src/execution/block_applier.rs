@@ -52,7 +52,7 @@ where
                 _ => false,
             };
 
-            tracing::info!(block_number, "Persisting block {block_number}");
+            tracing::info!(block_number, "Received canonized block {block_number}. Saving to disc.");
             self.replay.write(
                 Sealed::new_unchecked(executed_replay.clone(), block_output.header.hash()),
                 override_allowed,

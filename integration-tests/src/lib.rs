@@ -36,6 +36,7 @@ use zksync_os_server::default_protocol_version::{
     NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
 };
 use zksync_os_state_full_diffs::FullDiffsState;
+use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
 };
@@ -44,6 +45,7 @@ pub mod assert_traits;
 pub mod config;
 pub mod contracts;
 pub mod dyn_wallet_provider;
+pub mod multi_node;
 mod network;
 mod prover_tester;
 pub mod provider;
@@ -148,6 +150,7 @@ pub struct Tester {
     node_record: NodeRecord,
     l2_rpc_address: String,
     batch_verification_url: String,
+    status_server_url: String,
     gateway_rpc_url: Option<String>,
     sl_provider: EthDynProvider,
     chain_layout: ChainLayout<'static>,
@@ -197,6 +200,25 @@ impl Tester {
 
     pub fn l2_rpc_url(&self) -> &str {
         &self.l2_rpc_address
+    }
+
+    pub async fn status(&self) -> anyhow::Result<StatusResponse> {
+        let response = reqwest::get(format!("{}/status", self.status_server_url))
+            .await?
+            .error_for_status()?;
+        Ok(response.json::<StatusResponse>().await?)
+    }
+
+    /// Gracefully shut down the node and release its resources.
+    pub async fn shutdown(self) -> anyhow::Result<()> {
+        // Drop all fields that might rely on the node staying alive (e.g. RPC-backed providers)
+        // before initiating graceful runtime shutdown.
+        let Self { runtime, .. } = self;
+        anyhow::ensure!(
+            runtime.graceful_shutdown_with_timeout(NODE_SHUTDOWN_TIMEOUT),
+            "node failed to shutdown in time"
+        );
+        Ok(())
     }
 
     pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
@@ -252,9 +274,10 @@ impl Tester {
             chain_layout,
             ..
         } = self;
-        if !runtime.graceful_shutdown_with_timeout(NODE_SHUTDOWN_TIMEOUT) {
-            panic!("node failed to shutdown in time");
-        }
+        anyhow::ensure!(
+            runtime.graceful_shutdown_with_timeout(NODE_SHUTDOWN_TIMEOUT),
+            "node failed to shutdown in time"
+        );
         Self::launch_node_inner(l1, false, None::<fn(&mut Config)>, tempdir, chain_layout).await
     }
 
@@ -342,7 +365,7 @@ impl Tester {
 
         let status_server_config = StatusServerConfig {
             enabled: true,
-            address: status_address,
+            address: status_address.clone(),
         };
 
         let network_secret_key = zksync_os_network::rng_secret_key();
@@ -361,6 +384,7 @@ impl Tester {
         let mut config = Config {
             general_config,
             network_config,
+            consensus_config: Default::default(),
             genesis_config: default_config.genesis_config.clone(),
             rpc_config,
             mempool_config: Default::default(),
@@ -529,6 +553,7 @@ impl Tester {
             runtime,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             batch_verification_url,
+            status_server_url: status_address.replace("0.0.0.0:", "http://localhost:"),
             gateway_rpc_url,
             sl_provider,
             node_record,

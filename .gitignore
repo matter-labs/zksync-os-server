@@ -11,7 +11,4 @@ markers.bench
 
 lcov.info
 setup_compact.key
-
-# Decompressed L1 state produced by integration-tests build.rs
-local-chains/*/l1-state.json
-local-chains/*/l1-state.json.sha256
+l1-state.json

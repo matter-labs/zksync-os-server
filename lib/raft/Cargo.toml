@@ -11,9 +11,25 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+openraft.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
+bincode.workspace = true
+dashmap.workspace = true
 futures.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tracing.workspace = true
+
+zksync_os_consensus_types.workspace = true
+zksync_os_network.workspace = true
+zksync_os_rocksdb.workspace = true
 zksync_os_sequencer.workspace = true
 zksync_os_storage_api.workspace = true
+zksync_os_types.workspace = true
+reth-network-peers.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -15,6 +15,7 @@ zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_metadata.workspace = true
 zksync_os_reth_compat.workspace = true
+zksync_os_consensus_types.workspace = true
 
 zksync_os_interface.workspace = true
 
@@ -26,6 +27,12 @@ alloy = { workspace = true, default-features = false, features = [
     "rand",
 ] }
 alloy-rlp.workspace = true
+bincode.workspace = true
+dashmap.workspace = true
+openraft.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+async-trait.workspace = true
 futures.workspace = true
 semver.workspace = true
 tokio.workspace = true

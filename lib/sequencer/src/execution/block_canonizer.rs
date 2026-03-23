@@ -35,13 +35,13 @@ pub trait BlockCanonization: Send + 'static {
 
 /// Degenerate consensus implementation - just an async channel to itself.
 pub struct NoopCanonization {
-    pub sender: mpsc::UnboundedSender<ReplayRecord>,
-    pub receiver: mpsc::UnboundedReceiver<ReplayRecord>,
+    pub sender: mpsc::Sender<ReplayRecord>,
+    pub receiver: mpsc::Receiver<ReplayRecord>,
 }
 
 impl NoopCanonization {
     pub fn new() -> Self {
-        let (sender, receiver) = mpsc::unbounded_channel();
+        let (sender, receiver) = mpsc::channel(1);
         Self { sender, receiver }
     }
 }
@@ -55,7 +55,7 @@ impl Default for NoopCanonization {
 #[async_trait]
 impl BlockCanonization for NoopCanonization {
     async fn propose(&self, record: ReplayRecord) -> anyhow::Result<()> {
-        self.sender.send(record)?;
+        self.sender.send(record).await?;
         Ok(())
     }
 

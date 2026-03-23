@@ -147,6 +147,7 @@ fn load_config_from_path(config_path: &Path) -> Config {
         l1_sender_config: config_repo.single().unwrap().parse().unwrap(),
         general_config: config_repo.single().unwrap().parse().unwrap(),
         network_config: Default::default(),
+        consensus_config: Default::default(),
         rpc_config: Default::default(),
         mempool_config: Default::default(),
         tx_validator_config: Default::default(),
