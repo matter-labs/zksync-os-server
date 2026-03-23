@@ -285,7 +285,7 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
 /// Since this is a patch-only upgrade (no force deployments), it focuses on confirming
 /// that the supplier scanning path does not interfere with the upgrade flow.
 #[test_log::test(tokio::test)]
-async fn upgrade_with_bytecodes_from_supplier() -> anyhow::Result<()> {
+async fn upgrade_patch_with_bytecodes_from_supplier() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(0);
     let deadline = U256::MAX;
 
@@ -327,6 +327,97 @@ async fn upgrade_with_bytecodes_from_supplier() -> anyhow::Result<()> {
             Vec::new(),
         )
         .await?;
+
+    Ok(())
+}
+
+/// Performs a minor protocol upgrade where the force deployment bytecodes are
+/// published to the `BytecodesSupplier` contract on L1. This exercises the
+/// `fetch_force_preimages` code path end-to-end: the server must scan
+/// `BytecodePublished` events from the supplier, compute the correct zkOS
+/// bytecode hashes via `set_properties_code`, and inject them as preimages
+/// for the upgrade transaction.
+#[test_log::test(tokio::test)]
+async fn upgrade_minor_with_bytecodes_from_supplier() -> anyhow::Result<()> {
+    let upgrade_timestamp = U256::from(0);
+    let deadline = U256::MAX;
+
+    let sample_force_deployment_address: Address = "0x000000000000000000000000000000000000dead"
+        .parse()
+        .unwrap();
+
+    let force_deployments: BTreeMap<Address, Bytes> = [(
+        sample_force_deployment_address,
+        SampleForceDeployment::DEPLOYED_BYTECODE.clone(),
+    )]
+    .into_iter()
+    .collect();
+
+    let tester = Tester::setup().await?;
+    let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+
+    // Publish via L2 deploy (existing path — ensures preimages exist in state as fallback).
+    upgrade_tester
+        .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
+        .await?;
+
+    // Also publish to the L1 BytecodesSupplier so `fetch_force_preimages` discovers
+    // the bytecode via `BytecodePublished` events.
+    // The supplier requires bytecodes padded to 32-byte boundaries with an odd number
+    // of 32-byte words (ZKsync bytecode convention).
+    let mut supplier_bytecode = SampleForceDeployment::DEPLOYED_BYTECODE.to_vec();
+    let padding = (32 - supplier_bytecode.len() % 32) % 32;
+    supplier_bytecode.extend(vec![0u8; padding]);
+    if (supplier_bytecode.len() / 32).is_multiple_of(2) {
+        supplier_bytecode.extend([0u8; 32]);
+    }
+    upgrade_tester
+        .publish_bytecodes_to_l1_supplier([Bytes::from(supplier_bytecode)])
+        .await?;
+
+    // Prepare a minor protocol upgrade with force deployments.
+    let protocol_upgrade = upgrade_tester
+        .protocol_upgrade_builder()
+        .await?
+        .bump_minor(1)
+        .with_force_deployments(force_deployments)
+        .with_timestamp(upgrade_timestamp)
+        .build();
+
+    // Deploy new CommitterFacet (required for minor version upgrades).
+    let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
+    let committer_facet = CommitterFacetV31::deploy(
+        upgrade_tester.tester.l1_provider().clone(),
+        U256::from(l1_chain_id),
+    )
+    .await?;
+
+    let facet_cut = FacetCut {
+        facet: *committer_facet.address(),
+        action: Action::Replace,
+        isFreezable: true,
+        selectors: vec![FixedBytes(
+            CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR,
+        )],
+    };
+
+    upgrade_tester
+        .execute_default_upgrade(
+            &protocol_upgrade,
+            deadline,
+            upgrade_timestamp,
+            false,
+            vec![facet_cut],
+        )
+        .await?;
+
+    // Verify the force-deployed contract is callable.
+    let force_deployed_contract = SampleForceDeployment::new(
+        sample_force_deployment_address,
+        upgrade_tester.tester.l2_provider.clone(),
+    );
+    let stored_value = force_deployed_contract.return42().call().await?;
+    assert_eq!(stored_value, U256::from(42));
 
     Ok(())
 }
