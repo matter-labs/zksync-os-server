@@ -377,6 +377,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .storage
             .state_at_block_number_or_latest(execution_env.block_context.block_number)?;
 
+        // Only successfully simulated transactions produce a JS trace result. If simulation
+        // fails or the tx is invalid, the RPC returns that error directly and there is no
+        // pending tracer state to finalize.
         let mut tracer_output = match state_overrides {
             Some(overrides) => {
                 let view = OverriddenStateView::with_state_overrides(storage_view, overrides);

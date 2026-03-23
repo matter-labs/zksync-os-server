@@ -110,11 +110,21 @@ fn assert_pubdata_exhaustion_call_frame(call_frame: &CallFrame) {
 fn pubdata_exhaustion_js_tracer() -> String {
     r#"
         {
+            exits: [],
+            exit: function(frame) {
+                this.exits.push({
+                    error: frame.getError(),
+                    gasUsed: frame.getGasUsed()
+                });
+            },
             result: function(ctx, db) {
+                let topExit = this.exits[this.exits.length - 1] || null;
                 return {
                     error: ctx.error,
                     gasUsed: ctx.gasUsed,
-                    output: ctx.output
+                    output: ctx.output,
+                    exitError: topExit ? topExit.error : null,
+                    exitGasUsed: topExit ? topExit.gasUsed : null
                 };
             }
         }
@@ -128,9 +138,18 @@ fn assert_pubdata_exhaustion_js_result(value: &JsonValue) {
         .and_then(|obj| obj.get("error"))
         .and_then(JsonValue::as_str)
         .expect("trace should contain a top-level JS error");
+    let exit_error = value
+        .as_object()
+        .and_then(|obj| obj.get("exitError"))
+        .and_then(JsonValue::as_str)
+        .expect("trace should contain a top-level JS exit error");
     assert!(
         error.contains("insufficient gas to cover pubdata cost"),
         "expected pubdata exhaustion error, got: {error}"
+    );
+    assert_eq!(
+        error, exit_error,
+        "top-level exit error should match result ctx.error"
     );
     assert!(
         error.contains("pubdata_used:"),
@@ -139,6 +158,18 @@ fn assert_pubdata_exhaustion_js_result(value: &JsonValue) {
     assert!(
         error.contains("native_used:"),
         "expected native usage diagnostics in error, got: {error}"
+    );
+    let gas_used = value
+        .as_object()
+        .and_then(|obj| obj.get("gasUsed"))
+        .expect("trace should contain top-level gasUsed");
+    let exit_gas_used = value
+        .as_object()
+        .and_then(|obj| obj.get("exitGasUsed"))
+        .expect("trace should contain top-level exit gasUsed");
+    assert_eq!(
+        gas_used, exit_gas_used,
+        "top-level exit gasUsed should match result ctx.gasUsed"
     );
 }
 

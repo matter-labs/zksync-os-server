@@ -8,7 +8,8 @@ use crate::js_tracer::{
     utils::{extract_js_source_and_config, gas_used_from_resources, wrap_js_invocation},
 };
 use crate::sandbox::{
-    ERGS_PER_GAS, fmt_error_msg, format_post_execution_revert_error, maybe_revert_reason,
+    ERGS_PER_GAS, RESOURCE_EXHAUSTION_ERROR, fmt_error_msg, format_post_execution_revert_error,
+    format_resource_exhaustion_error, maybe_revert_reason,
 };
 use alloy::hex::ToHexExt;
 use alloy::primitives::{Address, B256, Bytes, U256};
@@ -608,6 +609,14 @@ impl JsTracer {
         Ok(serde_json::from_str::<JsonValue>(&out).unwrap_or(JsonValue::Null))
     }
 
+    fn exit_payload(ctx: &TxContext) -> JsonValue {
+        serde_json::json!({
+            "gasUsed": ctx.gas_used,
+            "output": ctx.output.as_ref().map(|output| output.encode_hex()),
+            "error": ctx.error,
+        })
+    }
+
     fn reset_tx_state(&mut self) {
         self.pending_step = None;
         self.pending_create_type = None;
@@ -655,14 +664,12 @@ impl JsTracer {
             }
         };
 
-        if !authoritative.status && pending.ctx.error.is_none() {
-            pending.ctx.gas_used = Some(U256::from(authoritative.gas_used));
-            pending.ctx.output = Some(Bytes::copy_from_slice(authoritative.output));
-            pending.ctx.error = Some(format_post_execution_revert_error(
-                authoritative.gas_used,
-                authoritative.pubdata_used,
-                authoritative.native_used,
-            ));
+        reconcile_authoritative_tx_context(&mut pending.ctx, pending.tx_failed, &authoritative);
+
+        self.invoke_method(TracerMethod::Exit, &Self::exit_payload(&pending.ctx));
+        if self.error.is_some() {
+            self.rollback_and_reset_tx_state();
+            return;
         }
 
         let tx_failed = pending.tx_failed || !authoritative.status;
@@ -901,22 +908,31 @@ impl EvmTracer for JsTracer {
         };
 
         let frame_failed = matches!(result, Some((_, CallResult::Failed { .. })) | None);
+        let is_top_level_frame = self.frame_stack.len() == 1;
 
         if let Some(mut frame_state) = self.frame_stack.pop() {
             let ctx = &mut frame_state.ctx;
             ctx.gas_used = Some(gas_used);
-            ctx.output = output.clone();
-            ctx.error = revert_reason.clone();
+            ctx.output = output;
+            ctx.error = revert_reason;
 
             if frame_failed {
                 self.revert_overlays_to_checkpoint(frame_state.checkpoint);
             }
 
-            if self.frame_stack.is_empty() && frame_failed {
+            if is_top_level_frame && frame_failed {
                 self.tx_failed = true;
+                if result.is_none() {
+                    ctx.error = Some(RESOURCE_EXHAUSTION_ERROR.to_string());
+                }
             }
 
-            self.last_finished_frame = Some(frame_state.ctx);
+            let finished_ctx = frame_state.ctx;
+            let exit_obj = Self::exit_payload(&finished_ctx);
+            self.last_finished_frame = Some(finished_ctx);
+            if !is_top_level_frame {
+                self.invoke_method(TracerMethod::Exit, &exit_obj);
+            }
         } else {
             tracing::error!("Execution frame completed but no frame context found");
         }
@@ -924,13 +940,6 @@ impl EvmTracer for JsTracer {
         if self.current_depth > 0 {
             self.current_depth -= 1;
         }
-
-        let obj = serde_json::json!({
-            "gasUsed": gas_used,
-            "output": output.map(|o| o.encode_hex()),
-            "error": revert_reason
-        });
-        self.invoke_method(TracerMethod::Exit, &obj);
     }
 
     /// This method only performs a sanity check that the values in the overlay match the ones
@@ -1065,7 +1074,7 @@ impl EvmTracer for JsTracer {
         };
         self.pending_step = None;
         self.pending_finalization = Some(PendingTxFinalization {
-            tx_failed: self.tx_failed || ctx.error.is_some(),
+            tx_failed: self.tx_failed,
             ctx,
         });
         self.last_finished_frame = None;
@@ -1178,6 +1187,41 @@ impl EvmTracer for JsTracer {
     }
 }
 
+fn reconcile_authoritative_tx_context(
+    ctx: &mut TxContext,
+    tx_failed: bool,
+    authoritative: &AuthoritativeTxOutcome<'_>,
+) {
+    if authoritative.status {
+        return;
+    }
+
+    if !tx_failed {
+        ctx.gas_used = Some(U256::from(authoritative.gas_used));
+        ctx.output = Some(Bytes::copy_from_slice(authoritative.output));
+        ctx.error = Some(format_post_execution_revert_error(
+            authoritative.gas_used,
+            authoritative.pubdata_used,
+            authoritative.native_used,
+        ));
+        return;
+    }
+
+    if ctx
+        .error
+        .as_ref()
+        .is_some_and(|error| error.contains(RESOURCE_EXHAUSTION_ERROR))
+    {
+        ctx.gas_used = Some(U256::from(authoritative.gas_used));
+        ctx.output = Some(Bytes::copy_from_slice(authoritative.output));
+        ctx.error = Some(format_resource_exhaustion_error(
+            authoritative.gas_used,
+            authoritative.pubdata_used,
+            authoritative.native_used,
+        ));
+    }
+}
+
 pub fn trace_block<V: ViewState + 'static>(
     txs: Vec<ZkTransaction>,
     block_context: zksync_os_interface::types::BlockContext,
@@ -1206,4 +1250,78 @@ pub fn trace_block<V: ViewState + 'static>(
     }
 
     Ok(tracer.take_results())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AuthoritativeTxOutcome, reconcile_authoritative_tx_context};
+    use crate::js_tracer::types::TxContext;
+    use crate::sandbox::RESOURCE_EXHAUSTION_ERROR;
+    use alloy::primitives::{Address, Bytes, U256};
+
+    fn make_context() -> TxContext {
+        TxContext {
+            typ: "CALL".to_string(),
+            from: Address::ZERO,
+            to: Address::ZERO,
+            input: Bytes::new(),
+            gas: U256::from(100_000u64),
+            value: U256::ZERO,
+            gas_used: Some(U256::from(21_000u64)),
+            output: Some(Bytes::from(vec![0xaa])),
+            error: None,
+        }
+    }
+
+    fn make_outcome<'a>(status: bool, output: &'a [u8]) -> AuthoritativeTxOutcome<'a> {
+        AuthoritativeTxOutcome {
+            status,
+            output,
+            gas_used: 50_000,
+            native_used: 200,
+            pubdata_used: 300,
+        }
+    }
+
+    #[test]
+    fn reconcile_authoritative_tx_context_marks_post_execution_revert() {
+        let mut ctx = make_context();
+
+        reconcile_authoritative_tx_context(&mut ctx, false, &make_outcome(false, &[0xde, 0xad]));
+
+        let error = ctx.error.expect("missing pubdata exhaustion error");
+        assert!(error.contains("insufficient gas to cover pubdata cost"));
+        assert_eq!(ctx.gas_used, Some(U256::from(50_000u64)));
+        assert_eq!(ctx.output, Some(Bytes::from(vec![0xde, 0xad])));
+    }
+
+    #[test]
+    fn reconcile_authoritative_tx_context_keeps_execution_reverts_generic() {
+        let mut ctx = make_context();
+        ctx.error = Some("execution reverted".to_string());
+
+        reconcile_authoritative_tx_context(&mut ctx, true, &make_outcome(false, &[0xbe, 0xef]));
+
+        assert_eq!(ctx.error.as_deref(), Some("execution reverted"));
+        assert_eq!(ctx.gas_used, Some(U256::from(21_000u64)));
+        assert_eq!(ctx.output, Some(Bytes::from(vec![0xaa])));
+    }
+
+    #[test]
+    fn reconcile_authoritative_tx_context_enriches_resource_exhaustion() {
+        let mut ctx = make_context();
+        ctx.error = Some(RESOURCE_EXHAUSTION_ERROR.to_string());
+        ctx.gas_used = Some(U256::ZERO);
+        ctx.output = None;
+
+        reconcile_authoritative_tx_context(&mut ctx, true, &make_outcome(false, &[]));
+
+        let error = ctx
+            .error
+            .expect("missing enriched resource exhaustion error");
+        assert!(error.starts_with(RESOURCE_EXHAUSTION_ERROR));
+        assert!(error.contains("pubdata_used: 300 bytes"));
+        assert_eq!(ctx.gas_used, Some(U256::from(50_000u64)));
+        assert_eq!(ctx.output, Some(Bytes::new()));
+    }
 }
