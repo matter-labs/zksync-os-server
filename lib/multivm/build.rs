@@ -127,7 +127,6 @@ fn main() {
             std::fs::create_dir_all(&dir).expect("failed to create directory");
             for variant in [
                 "multiblock_batch",
-                "multiblock_batch_logging_enabled",
                 "singleblock_batch",
                 "singleblock_batch_logging_enabled",
             ] {

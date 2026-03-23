@@ -30,9 +30,4 @@ pub mod v7 {
         env!("ZKSYNC_OS_V7_SOURCE_PATH"),
         "/multiblock_batch.bin"
     ));
-
-    pub const MULTIBLOCK_BATCH_LOGGING_ENABLED: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_V7_SOURCE_PATH"),
-        "/multiblock_batch_logging_enabled.bin"
-    ));
 }

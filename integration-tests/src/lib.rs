@@ -516,7 +516,7 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
         PROTOCOL_VERSION_V31_0 => utils::materialize_multiblock_batch_bin(
             &tester.tempdir.path().join("app_bins"),
             "v7",
-            zksync_os_multivm::apps::v7::MULTIBLOCK_BATCH_LOGGING_ENABLED,
+            zksync_os_multivm::apps::v7::MULTIBLOCK_BATCH,
         ),
         _ => panic!("unsupported protocol version for prover tests"),
     };
