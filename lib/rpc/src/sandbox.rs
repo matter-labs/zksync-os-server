@@ -23,6 +23,11 @@ pub const ERGS_PER_GAS: u64 = 256;
 /// and the reconciliation logic to avoid fragile string matching.
 pub(crate) const RESOURCE_EXHAUSTION_ERROR: &str =
     "ZKsync OS: out of execution resources or pubdata";
+/// This message is used only for transactions whose top-level EVM execution succeeded,
+/// but whose final tx result was flipped to revert by a post-execution bootloader check.
+/// In the current bootloader implementation, that path is specific to pubdata charging.
+/// If additional post-execution success-to-revert paths are introduced, this message and
+/// the reconciliation logic must be revisited.
 pub(crate) const POST_EXECUTION_PUBDATA_ERROR: &str =
     "execution reverted: insufficient gas to cover pubdata cost";
 
@@ -135,8 +140,12 @@ pub fn call_trace(
 /// Reconciles the tracer's view of a transaction with the actual execution result.
 ///
 /// The tracer sees the EVM execution step but misses post-execution checks done by the
-/// bootloader (e.g. pubdata cost verification). This function patches the trace when
-/// the VM reports a revert that the tracer did not observe.
+/// bootloader (e.g. pubdata cost verification). This function patches the trace only
+/// when the top-level frame itself succeeded, but the final tx result is revert.
+///
+/// The error message below intentionally relies on the current bootloader invariant:
+/// the only known post-execution success-to-revert transition is the pubdata charge
+/// check. If that stops being true, this logic needs to be generalized.
 fn reconcile_trace_with_output(
     frame: &mut CallFrame,
     tx_output: &TxOutput,
