@@ -137,16 +137,19 @@ fn compute_prover_input(
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
+    use zksync_os_types::protocol_config::ExecutionVersion;
+
     let execution_version =
         zksync_os_types::protocol_config::execution_version(&replay_record.protocol_version)
             .expect("invalid protocol version");
     let prover_input = match execution_version {
-        1..=4 => {
-            panic!(
-                "computing prover input for execution version {execution_version} (v1-v4) is not supported"
-            );
+        ExecutionVersion::V1
+        | ExecutionVersion::V2
+        | ExecutionVersion::V3
+        | ExecutionVersion::V4 => {
+            panic!("computing prover input for {execution_version} is not supported");
         }
-        5 => {
+        ExecutionVersion::V5 => {
             let bin_path = if enable_logging {
                 zksync_os_multivm::apps::v5::singleblock_batch_logging_enabled_path(
                     &app_bin_base_path,
@@ -185,7 +188,7 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
-        6 => {
+        ExecutionVersion::V6 => {
             let bin_path = if enable_logging {
                 zksync_os_multivm::apps::v6::singleblock_batch_logging_enabled_path(
                     &app_bin_base_path,
@@ -224,7 +227,6 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
-        _ => panic!("unsupported execution version: {execution_version}"),
     };
     let latency = prover_input_generation_latency.observe();
 

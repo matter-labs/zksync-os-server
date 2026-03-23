@@ -126,9 +126,15 @@ pub fn zk_tx_into_revm_tx(
 }
 
 pub fn zk_spec_version(execution_version: u32) -> Option<ZkSpecId> {
-    match execution_version {
-        1..=3 => Some(ZkSpecId::AtlasV1),
-        4..=6 => Some(ZkSpecId::AtlasV2),
-        _ => None,
+    use zksync_os_types::protocol_config::ExecutionVersion;
+
+    let version = ExecutionVersion::try_from(execution_version).ok()?;
+    match version {
+        ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
+            Some(ZkSpecId::AtlasV1)
+        }
+        ExecutionVersion::V4 | ExecutionVersion::V5 | ExecutionVersion::V6 => {
+            Some(ZkSpecId::AtlasV2)
+        }
     }
 }

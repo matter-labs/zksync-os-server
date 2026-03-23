@@ -2,7 +2,8 @@
 /// `protocol_config_generated.rs` with version lookup functions.
 ///
 /// The generated file contains:
-/// - `execution_version_impl(minor, patch) -> Option<u32>`
+/// - `ExecutionVersion` enum with `TryFrom<u32>` and `Into<u32>`
+/// - `execution_version_impl(minor, patch) -> Option<ExecutionVersion>`
 /// - `vk_hash_impl(minor, patch) -> Option<&'static str>`
 /// - `verifier_version_impl(minor, patch) -> Option<u32>`
 /// - `app_bin_tag_impl(minor, patch) -> Option<&'static str>`
@@ -34,9 +35,9 @@ fn main() {
     let contents = std::fs::read_to_string(&versions_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", versions_path.display()));
 
-    let (entries, historical_vk_hashes) = parse_toml(&contents);
+    let (entries, historical_vk_hashes, exec_version_ids) = parse_toml(&contents);
 
-    let generated = generate_code(&entries, &historical_vk_hashes);
+    let generated = generate_code(&entries, &historical_vk_hashes, &exec_version_ids);
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let out_path = std::path::Path::new(&out_dir).join("protocol_config_generated.rs");
@@ -52,7 +53,7 @@ fn parse_version_key(key: &str) -> u32 {
         .unwrap_or_else(|e| panic!("invalid version number in {key:?}: {e}"))
 }
 
-fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
+fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>, Vec<u32>) {
     let root: Value = contents
         .parse()
         .unwrap_or_else(|e| panic!("failed to parse protocol-versions.toml: {e}"));
@@ -63,9 +64,10 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
         .and_then(Value::as_table)
         .expect("missing [execution_version] sections");
 
-    // Build a map from "vN" → app_bin_tag (if present).
+    // Build a map from "vN" → app_bin_tag (if present), and collect all version IDs.
     let mut exec_version_app_tags: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
+    let mut exec_version_ids: BTreeSet<u32> = BTreeSet::new();
     for (key, section) in exec_versions {
         let section = section
             .as_table()
@@ -75,6 +77,7 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
             .and_then(Value::as_str)
             .map(String::from);
         exec_version_app_tags.insert(key.clone(), app_bin_tag);
+        exec_version_ids.insert(parse_version_key(key));
     }
 
     // Parse [protocol."M.m.p"] sections.
@@ -147,10 +150,18 @@ fn parse_toml(contents: &str) -> (Vec<ProtocolEntry>, Vec<String>) {
         }
     }
 
-    (entries, historical_vk_hashes)
+    (
+        entries,
+        historical_vk_hashes,
+        exec_version_ids.into_iter().collect(),
+    )
 }
 
-fn generate_code(entries: &[ProtocolEntry], historical_vk_hashes: &[String]) -> String {
+fn generate_code(
+    entries: &[ProtocolEntry],
+    historical_vk_hashes: &[String],
+    exec_version_ids: &[u32],
+) -> String {
     let mut code = String::new();
     writeln!(
         code,
@@ -159,17 +170,67 @@ fn generate_code(entries: &[ProtocolEntry], historical_vk_hashes: &[String]) -> 
     .unwrap();
     writeln!(code).unwrap();
 
-    // execution_version_impl
+    // ExecutionVersion enum
+    writeln!(code, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]").unwrap();
+    writeln!(code, "#[repr(u32)]").unwrap();
+    writeln!(code, "pub enum ExecutionVersion {{").unwrap();
+    for &id in exec_version_ids {
+        writeln!(code, "    V{id} = {id},").unwrap();
+    }
+    writeln!(code, "}}").unwrap();
+    writeln!(code).unwrap();
+
+    // Display impl
+    writeln!(code, "impl std::fmt::Display for ExecutionVersion {{").unwrap();
     writeln!(
         code,
-        "fn execution_version_impl(minor: u64, patch: u64) -> Option<u32> {{"
+        "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{"
+    )
+    .unwrap();
+    writeln!(code, "        write!(f, \"v{{}}\", *self as u32)").unwrap();
+    writeln!(code, "    }}").unwrap();
+    writeln!(code, "}}").unwrap();
+    writeln!(code).unwrap();
+
+    // TryFrom<u32>
+    writeln!(code, "impl TryFrom<u32> for ExecutionVersion {{").unwrap();
+    writeln!(code, "    type Error = u32;").unwrap();
+    writeln!(
+        code,
+        "    fn try_from(value: u32) -> Result<Self, Self::Error> {{"
+    )
+    .unwrap();
+    writeln!(code, "        match value {{").unwrap();
+    for &id in exec_version_ids {
+        writeln!(code, "            {id} => Ok(Self::V{id}),").unwrap();
+    }
+    writeln!(code, "            _ => Err(value),").unwrap();
+    writeln!(code, "        }}").unwrap();
+    writeln!(code, "    }}").unwrap();
+    writeln!(code, "}}").unwrap();
+    writeln!(code).unwrap();
+
+    // From<ExecutionVersion> for u32
+    writeln!(code, "impl From<ExecutionVersion> for u32 {{").unwrap();
+    writeln!(
+        code,
+        "    fn from(v: ExecutionVersion) -> Self {{ v as u32 }}"
+    )
+    .unwrap();
+    writeln!(code, "}}").unwrap();
+    writeln!(code).unwrap();
+
+    // execution_version_impl — returns ExecutionVersion
+    writeln!(
+        code,
+        "fn execution_version_impl(minor: u64, patch: u64) -> Option<ExecutionVersion> {{"
     )
     .unwrap();
     writeln!(code, "    match (minor, patch) {{").unwrap();
     for e in entries {
         writeln!(
             code,
-            "        ({}, {}) => Some({}),",
+            "        ({}, {}) => Some(ExecutionVersion::V{}),",
             e.minor, e.patch, e.execution_version
         )
         .unwrap();

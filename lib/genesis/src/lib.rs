@@ -216,12 +216,15 @@ async fn build_genesis(
     protocol_version: &ProtocolSemanticVersion,
 ) -> anyhow::Result<GenesisState> {
     let genesis_input = genesis_input_source.genesis_input().await?;
-    let execution_version = zksync_os_types::protocol_config::execution_version(protocol_version)
-        .with_context(|| {
+    let execution_version: u32 = zksync_os_types::protocol_config::execution_version(
+        protocol_version,
+    )
+    .with_context(|| {
         format!(
             "Cannot determine execution version for genesis protocol version {protocol_version}"
         )
-    })?;
+    })?
+    .into();
 
     // BTreeMap is used to ensure that the storage logs are sorted by key, so that the order is deterministic
     // which is important for tree.

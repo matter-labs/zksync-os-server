@@ -3,6 +3,7 @@ use zk_ee::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_storage_api::ReplayRecord;
+use zksync_os_types::protocol_config::ExecutionVersion;
 use zksync_os_types::{ProtocolSemanticVersion, SystemTxType, ZkTxType};
 
 #[derive(Default, Clone)]
@@ -18,7 +19,7 @@ pub(crate) struct BatchInfoAccumulator {
     pub should_seal_for_gateway_migration: bool,
 
     pub protocol_versions: HashSet<ProtocolSemanticVersion>,
-    pub execution_versions: HashSet<u32>,
+    pub execution_versions: HashSet<ExecutionVersion>,
 
     // Limits
     pub blocks_per_batch_limit: u64,
@@ -53,8 +54,10 @@ impl BatchInfoAccumulator {
             .sum::<usize>() as u64;
         self.block_count += 1;
         self.tx_count += replay_record.transactions.len() as u64;
-        self.execution_versions
-            .insert(replay_record.block_context.execution_version);
+        self.execution_versions.insert(
+            ExecutionVersion::try_from(replay_record.block_context.execution_version)
+                .expect("unsupported execution version in block context"),
+        );
         self.protocol_versions
             .insert(replay_record.protocol_version.clone());
         self.interop_roots_count += replay_record

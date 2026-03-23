@@ -222,16 +222,19 @@ impl FriJobManager {
         batch_number: u64,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
+        use zksync_os_types::protocol_config::ExecutionVersion;
+
         let exec_version =
             zksync_os_types::protocol_config::execution_version(&batch_metadata.protocol_version)
                 .expect("invalid protocol version");
         let result = match exec_version {
-            1..=4 => {
-                panic!(
-                    "proof verification for execution version {exec_version} (v1-v4) is not supported"
-                )
+            ExecutionVersion::V1
+            | ExecutionVersion::V2
+            | ExecutionVersion::V3
+            | ExecutionVersion::V4 => {
+                panic!("proof verification for {exec_version} is not supported")
             }
-            5 => {
+            ExecutionVersion::V5 => {
                 tracing::debug!("Using fri proof verifier for batch {}", batch_number);
                 let program_proof =
                     bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
@@ -249,10 +252,9 @@ impl FriJobManager {
                     program_proof,
                 )
             }
-            6 => {
+            ExecutionVersion::V6 => {
                 todo!("verifying v6 proofs is unsupported for now")
             }
-            _ => panic!("unsupported execution version: {exec_version}"),
         };
 
         if let Err(SubmitError::FriProofVerificationError {

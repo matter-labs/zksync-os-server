@@ -1,12 +1,15 @@
 use super::ProtocolSemanticVersion;
 
-// Include generated match-arm functions and VK hash list from protocol-versions.toml.
+// Include generated enum, match-arm functions, and VK hash list from protocol-versions.toml.
+// This brings `ExecutionVersion` into scope as a `pub enum`.
 include!(concat!(env!("OUT_DIR"), "/protocol_config_generated.rs"));
 
-/// Look up the execution version (u32) for a given protocol version.
-/// This value is stored in `BlockContext.execution_version` and used by multivm
+/// Look up the execution version for a given protocol version.
+/// This value corresponds to `BlockContext.execution_version` and is used by multivm
 /// to dispatch to the correct forward_system crate.
-pub fn execution_version(version: &ProtocolSemanticVersion) -> Result<u32, ProtocolConfigError> {
+pub fn execution_version(
+    version: &ProtocolSemanticVersion,
+) -> Result<ExecutionVersion, ProtocolConfigError> {
     execution_version_impl(version.minor, version.patch)
         .ok_or_else(|| ProtocolConfigError::UnsupportedVersion(version.clone()))
 }
@@ -83,14 +86,16 @@ mod tests {
 
     #[test]
     fn execution_version_mapping() {
+        use ExecutionVersion::*;
+
         let test_vector = [
-            ((0, 29, 0), 4),
-            ((0, 29, 1), 4),
-            ((0, 30, 0), 5),
-            ((0, 30, 1), 5),
-            ((0, 31, 0), 6),
-            ((0, 31, 1), 6),
-            ((0, 32, 0), 6),
+            ((0, 29, 0), V4),
+            ((0, 29, 1), V4),
+            ((0, 30, 0), V5),
+            ((0, 30, 1), V5),
+            ((0, 31, 0), V6),
+            ((0, 31, 1), V6),
+            ((0, 32, 0), V6),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
@@ -105,6 +110,16 @@ mod tests {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
             assert!(execution_version(&version).is_err());
         }
+    }
+
+    #[test]
+    fn execution_version_u32_roundtrip() {
+        for id in [1u32, 2, 3, 4, 5, 6] {
+            let ev = ExecutionVersion::try_from(id).unwrap();
+            assert_eq!(u32::from(ev), id);
+        }
+        assert!(ExecutionVersion::try_from(0u32).is_err());
+        assert!(ExecutionVersion::try_from(99u32).is_err());
     }
 
     #[test]

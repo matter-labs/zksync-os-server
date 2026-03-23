@@ -13,6 +13,7 @@ use zksync_os_interface::traits::{
 };
 use zksync_os_interface::types::BlockContext;
 use zksync_os_interface::types::{BlockOutput, TxOutput};
+use zksync_os_types::protocol_config::ExecutionVersion;
 
 mod adapter;
 pub mod apps;
@@ -33,9 +34,10 @@ pub fn run_block<
     tx_result_callback: TrCallback,
     tracer: &mut Tracer,
 ) -> Result<BlockOutput, anyhow::Error> {
-    match block_context.execution_version {
-        // V1/V2/V3: v0.0.x release branch of zksync-os
-        1..=3 => {
+    let version = ExecutionVersion::try_from(block_context.execution_version)
+        .unwrap_or_else(|v| panic!("Unsupported ZKsync OS execution version: {v}"));
+    match version {
+        ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
             let object = RunBlockForwardV3 {};
             object
                 .run_block(
@@ -50,8 +52,7 @@ pub fn run_block<
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        // V4: v0.1.x release branch
-        4 => {
+        ExecutionVersion::V4 => {
             let object = RunBlockForwardV4 {};
             object
                 .run_block(
@@ -66,8 +67,7 @@ pub fn run_block<
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        // V5: v0.2.x release branch
-        5 => {
+        ExecutionVersion::V5 => {
             // We use two different versions of zksync-os for execution and simulation:
             // * v0.2.5 is used to forward-run and prove blocks
             // * v0.2.6-simulation-only is used for simulation
@@ -88,8 +88,7 @@ pub fn run_block<
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        // V6: dev branch
-        6 => {
+        ExecutionVersion::V6 => {
             let object = RunBlockForwardV6 {};
             object
                 .run_block(
@@ -104,7 +103,6 @@ pub fn run_block<
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        v => panic!("Unsupported ZKsync OS execution version: {v}"),
     }
 }
 
@@ -115,8 +113,10 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
     preimage_source: PreimgSrc,
     tracer: &mut Tracer,
 ) -> Result<Result<TxOutput, InvalidTransaction>, anyhow::Error> {
-    match block_context.execution_version {
-        1..=3 => {
+    let version = ExecutionVersion::try_from(block_context.execution_version)
+        .unwrap_or_else(|v| panic!("Unsupported ZKsync OS execution version: {v}"));
+    match version {
+        ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
             let object = RunBlockForwardV3 {};
             object
                 .simulate_tx(
@@ -130,7 +130,7 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        4 => {
+        ExecutionVersion::V4 => {
             let object = RunBlockForwardV4 {};
             object
                 .simulate_tx(
@@ -144,7 +144,7 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        5 => {
+        ExecutionVersion::V5 => {
             // We use two different versions of zksync-os for execution and simulation:
             // * v0.2.5 is used to forward-run and prove blocks
             // * v0.2.6-simulation-only is used for simulation
@@ -164,7 +164,7 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        6 => {
+        ExecutionVersion::V6 => {
             let object = RunBlockForwardV6 {};
             object
                 .simulate_tx(
@@ -178,6 +178,5 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
-        v => panic!("Unsupported ZKsync OS execution version: {v}"),
     }
 }

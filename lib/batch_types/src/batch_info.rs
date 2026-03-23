@@ -271,58 +271,61 @@ fn calculate_da_fields(
     pubdata_mode: PubdataMode,
     batch_execution_version: u32,
 ) -> DAFields {
-    let (da_commitment, operator_da_input, blob_sidecar) =
-        match (pubdata_mode, batch_execution_version) {
-            (PubdataMode::Calldata | PubdataMode::RelayedL2Calldata, _)
-            | (PubdataMode::Validium, 4) => {
-                let mut operator_da_input = Vec::with_capacity(32 * 3 + 1 + pubdata.len() + 1 + 32);
+    use zksync_os_types::protocol_config::ExecutionVersion;
 
-                // reference for this header is taken from zk_ee: https://github.com/matter-labs/zk_ee/blob/ad-aggregation-program/aggregator/src/aggregation/da_commitment.rs#L27
-                // consider reusing that code instead:
-                //
-                // hasher.update([0u8; 32]); // we don't have to validate state diffs hash
-                // hasher.update(Keccak256::digest(&pubdata)); // full pubdata keccak
-                // hasher.update([1u8]); // with calldata we should provide 1 blob
-                // hasher.update([0u8; 32]); // its hash will be ignored on the settlement layer
-                // Ok(hasher.finalize().into())
+    let exec_version = ExecutionVersion::try_from(batch_execution_version)
+        .unwrap_or_else(|v| panic!("unsupported execution version: {v}"));
+    let (da_commitment, operator_da_input, blob_sidecar) = match (pubdata_mode, exec_version) {
+        (PubdataMode::Calldata | PubdataMode::RelayedL2Calldata, _)
+        | (PubdataMode::Validium, ExecutionVersion::V4) => {
+            let mut operator_da_input = Vec::with_capacity(32 * 3 + 1 + pubdata.len() + 1 + 32);
 
-                operator_da_input.extend(B256::ZERO.as_slice());
-                operator_da_input.extend(keccak256(pubdata));
-                operator_da_input.push(1);
-                operator_da_input.extend(B256::ZERO.as_slice());
+            // reference for this header is taken from zk_ee: https://github.com/matter-labs/zk_ee/blob/ad-aggregation-program/aggregator/src/aggregation/da_commitment.rs#L27
+            // consider reusing that code instead:
+            //
+            // hasher.update([0u8; 32]); // we don't have to validate state diffs hash
+            // hasher.update(Keccak256::digest(&pubdata)); // full pubdata keccak
+            // hasher.update([1u8]); // with calldata we should provide 1 blob
+            // hasher.update([0u8; 32]); // its hash will be ignored on the settlement layer
+            // Ok(hasher.finalize().into())
 
-                //     bytes32 daCommitment; - we compute hash of the first part of the operator_da_input (see above)
-                let da_commitment = keccak256(&operator_da_input);
+            operator_da_input.extend(B256::ZERO.as_slice());
+            operator_da_input.extend(keccak256(pubdata));
+            operator_da_input.push(1);
+            operator_da_input.extend(B256::ZERO.as_slice());
 
-                operator_da_input.extend([PUBDATA_SOURCE_CALLDATA]);
-                operator_da_input.extend(pubdata);
-                // blob_commitment should be set to zero in ZK OS
-                operator_da_input.extend(B256::ZERO.as_slice());
+            //     bytes32 daCommitment; - we compute hash of the first part of the operator_da_input (see above)
+            let da_commitment = keccak256(&operator_da_input);
 
-                if pubdata_mode == PubdataMode::Validium {
-                    operator_da_input = U256::ZERO.to_be_bytes_vec();
-                }
+            operator_da_input.extend([PUBDATA_SOURCE_CALLDATA]);
+            operator_da_input.extend(pubdata);
+            // blob_commitment should be set to zero in ZK OS
+            operator_da_input.extend(B256::ZERO.as_slice());
 
-                (da_commitment, operator_da_input, None)
+            if pubdata_mode == PubdataMode::Validium {
+                operator_da_input = U256::ZERO.to_be_bytes_vec();
             }
-            (PubdataMode::Validium, _) => (B256::ZERO, vec![0u8; 32], None),
-            (PubdataMode::Blobs, _) => {
-                // returns error in case of internal error during sidecar calculation
-                let blob_sidecar: BlobTransactionSidecar =
-                    SidecarBuilder::<SimpleCoder>::from_slice(pubdata)
-                        .build()
-                        .unwrap();
-                let versioned_hashes: Vec<u8> = blob_sidecar
-                    .versioned_hashes()
-                    .flat_map(|hash| hash.0.to_vec())
-                    .collect();
-                let da_commitment = keccak256(&versioned_hashes);
 
-                // we place zeroes into da input to publish blobs with commit transaction
-                let operator_da_input = vec![0u8; versioned_hashes.len()];
-                (da_commitment, operator_da_input, Some(blob_sidecar))
-            }
-        };
+            (da_commitment, operator_da_input, None)
+        }
+        (PubdataMode::Validium, _) => (B256::ZERO, vec![0u8; 32], None),
+        (PubdataMode::Blobs, _) => {
+            // returns error in case of internal error during sidecar calculation
+            let blob_sidecar: BlobTransactionSidecar =
+                SidecarBuilder::<SimpleCoder>::from_slice(pubdata)
+                    .build()
+                    .unwrap();
+            let versioned_hashes: Vec<u8> = blob_sidecar
+                .versioned_hashes()
+                .flat_map(|hash| hash.0.to_vec())
+                .collect();
+            let da_commitment = keccak256(&versioned_hashes);
+
+            // we place zeroes into da input to publish blobs with commit transaction
+            let operator_da_input = vec![0u8; versioned_hashes.len()];
+            (da_commitment, operator_da_input, Some(blob_sidecar))
+        }
+    };
     DAFields {
         da_commitment,
         operator_da_input,

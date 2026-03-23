@@ -141,9 +141,10 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     Vec::new()
                 };
 
-                let execution_version =
+                let execution_version: u32 =
                     zksync_os_types::protocol_config::execution_version(&self.protocol_version)
-                        .context("Cannot instantiate a block for unsupported execution version")?;
+                        .context("Cannot instantiate a block for unsupported execution version")?
+                        .into();
 
                 let FeeParams {
                     eip1559_basefee,
