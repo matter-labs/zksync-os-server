@@ -1,7 +1,12 @@
 use crate::config::{ComponentId, PipelineHealthConfig};
-use crate::metrics::{ComponentLabel, MONITOR_METRICS};
+use crate::metrics::{ComponentLabel, DirectionLabel, MONITOR_METRICS};
+use futures::stream::{select_all, StreamExt};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::watch;
-use tokio::time::{Instant, MissedTickBehavior};
+use tokio::time::MissedTickBehavior;
+use tokio_stream::wrappers::WatchStream;
 use zksync_os_observability::{ComponentHealth, GenericComponentState};
 use zksync_os_types::{
     BackpressureCause, BackpressureTrigger, NotAcceptingReason, TransactionAcceptanceState,
@@ -10,6 +15,7 @@ use zksync_os_types::{
 pub struct PipelineHealthMonitor {
     config: PipelineHealthConfig,
     components: Vec<(ComponentId, watch::Receiver<ComponentHealth>)>,
+    queue_depths: Vec<(ComponentId, Arc<AtomicUsize>)>,
     acceptance_tx: watch::Sender<TransactionAcceptanceState>,
     stop_receiver: watch::Receiver<bool>,
 }
@@ -20,14 +26,15 @@ impl PipelineHealthMonitor {
         stop_receiver: watch::Receiver<bool>,
     ) -> (Self, watch::Receiver<TransactionAcceptanceState>) {
         assert!(
-            config.eval_interval > std::time::Duration::ZERO,
-            "PipelineHealthConfig::eval_interval must be > 0"
+            config.metrics_interval > Duration::ZERO,
+            "PipelineHealthConfig::metrics_interval must be > 0"
         );
         let (acceptance_tx, acceptance_rx) = watch::channel(TransactionAcceptanceState::Accepting);
         (
             Self {
                 config,
                 components: vec![],
+                queue_depths: vec![],
                 acceptance_tx,
                 stop_receiver,
             },
@@ -39,12 +46,39 @@ impl PipelineHealthMonitor {
         self.components.push((id, receiver));
     }
 
+    pub fn register_queue_depth(&mut self, id: ComponentId, depth: Arc<AtomicUsize>) {
+        self.queue_depths.push((id, depth));
+    }
+
     pub async fn run(mut self) {
-        let mut interval = tokio::time::interval(self.config.eval_interval);
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        // Prometheus metrics timer — independent of health evaluation.
+        let mut metrics_tick = tokio::time::interval(self.config.metrics_interval);
+        metrics_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        if self.components.is_empty() {
+            // No components registered — just wait for stop.
+            // NOTE: If a component stalls entirely (stops calling record_processed), the monitor
+            // will only be woken by OTHER components' updates. The frozen component's lag will be
+            // detected at the next wake-up. In a fully idle pipeline with no other components
+            // active, the metrics_tick provides the safety net. A future improvement is heartbeat
+            // updates from components. See: Option C decision in design discussion.
+            let _ = self.stop_receiver.changed().await;
+            return;
+        }
+
+        // Build a merged stream of all component health changes.
+        // WatchStream::from_changes only yields on actual changes (not initial values).
+        let streams = self
+            .components
+            .iter()
+            .map(|(_, rx)| WatchStream::from_changes(rx.clone()))
+            .collect::<Vec<_>>();
+        let mut combined = select_all(streams);
+
         loop {
             tokio::select! {
-                _ = interval.tick() => self.evaluate_and_update(),
+                Some(_) = combined.next() => self.evaluate_and_update(),
+                _ = metrics_tick.tick() => self.emit_metrics(),
                 _ = self.stop_receiver.changed() => {
                     tracing::info!("PipelineHealthMonitor: stop signal received");
                     return;
@@ -53,29 +87,30 @@ impl PipelineHealthMonitor {
         }
     }
 
-    fn head_seq(&self) -> u64 {
+    fn head_state(&self) -> (u64, u64) {
         self.components
             .iter()
             .find(|(id, _)| *id == ComponentId::BlockExecutor)
-            .map(|(_, rx)| rx.borrow().last_processed_seq)
-            .unwrap_or(0)
+            .map(|(_, rx)| {
+                let h = rx.borrow();
+                (h.last_processed_seq, h.last_processed_block_timestamp)
+            })
+            .unwrap_or((0, 0))
     }
 
     fn evaluate_and_update(&self) {
-        let head_seq = self.head_seq();
-        self.evaluate_and_update_with_head(head_seq);
+        let (head_seq, head_ts) = self.head_state();
+        self.evaluate_and_update_with_head(head_seq, head_ts);
     }
 
-    pub(crate) fn evaluate_and_update_with_head(&self, head_seq: u64) {
+    pub(crate) fn evaluate_and_update_with_head(&self, head_seq: u64, head_ts: u64) {
         let mut active_causes: Vec<BackpressureCause> = self
             .components
             .iter()
-            .filter_map(|(id, rx)| self.evaluate(*id, &rx.borrow(), head_seq))
+            .filter_map(|(id, rx)| self.evaluate(*id, &rx.borrow(), head_seq, head_ts))
             .collect();
 
         active_causes.sort_by_key(|c| c.component);
-
-        self.emit_metrics(&active_causes, head_seq);
 
         let new_state = if active_causes.is_empty() {
             TransactionAcceptanceState::Accepting
@@ -95,11 +130,19 @@ impl PipelineHealthMonitor {
                         ?reason,
                         "pipeline backpressure: stopping transaction acceptance"
                     );
+                    MONITOR_METRICS.acceptance_state_changes[&DirectionLabel {
+                        direction: "open",
+                    }]
+                    .inc();
                 }
                 TransactionAcceptanceState::Accepting => {
                     tracing::info!(
                         "pipeline backpressure cleared: resuming transaction acceptance"
                     );
+                    MONITOR_METRICS.acceptance_state_changes[&DirectionLabel {
+                        direction: "cleared",
+                    }]
+                    .inc();
                 }
             }
             *current = new_state.clone();
@@ -112,42 +155,9 @@ impl PipelineHealthMonitor {
         id: ComponentId,
         health: &ComponentHealth,
         head_seq: u64,
+        head_ts: u64,
     ) -> Option<BackpressureCause> {
         let condition = self.config.condition_for(id);
-        let now = Instant::now();
-
-        if id.is_reactive() {
-            if let Some(max_lag) = condition.max_block_lag {
-                let lag = head_seq.saturating_sub(health.last_processed_seq);
-                if lag > max_lag {
-                    return Some(BackpressureCause {
-                        component: id.as_str(),
-                        trigger: BackpressureTrigger::BlockLagTooHigh {
-                            threshold: max_lag,
-                            actual: lag,
-                        },
-                    });
-                }
-            }
-            return None;
-        }
-
-        if health.state != GenericComponentState::WaitingSend {
-            return None;
-        }
-
-        if let Some(max_duration) = condition.max_waiting_send_duration {
-            let elapsed = now.duration_since(health.state_entered_at);
-            if elapsed > max_duration {
-                return Some(BackpressureCause {
-                    component: id.as_str(),
-                    trigger: BackpressureTrigger::WaitingSendTooLong {
-                        threshold: max_duration,
-                        actual: elapsed,
-                    },
-                });
-            }
-        }
 
         if let Some(max_lag) = condition.max_block_lag {
             let lag = head_seq.saturating_sub(health.last_processed_seq);
@@ -162,42 +172,70 @@ impl PipelineHealthMonitor {
             }
         }
 
+        if let Some(max_time_lag) = condition.max_time_lag {
+            let comp_ts = health.last_processed_block_timestamp;
+            // Only evaluate if both timestamps are available (non-zero).
+            if comp_ts > 0 && head_ts > 0 {
+                let lag_secs = head_ts.saturating_sub(comp_ts);
+                let actual = Duration::from_secs(lag_secs);
+                if actual > max_time_lag {
+                    return Some(BackpressureCause {
+                        component: id.as_str(),
+                        trigger: BackpressureTrigger::TimeLagTooHigh {
+                            threshold: max_time_lag,
+                            actual,
+                        },
+                    });
+                }
+            }
+        }
+
         None
     }
 
-    fn emit_metrics(&self, active_causes: &[BackpressureCause], head_seq: u64) {
+    pub(crate) fn emit_metrics(&self) {
+        let (head_seq, head_ts) = self.head_state();
+
+        // Recompute active causes for metric labelling.
+        let active_components: std::collections::HashSet<&'static str> = self
+            .components
+            .iter()
+            .filter_map(|(id, rx)| self.evaluate(*id, &rx.borrow(), head_seq, head_ts))
+            .map(|c| c.component)
+            .collect();
+
         for (id, rx) in &self.components {
             let health = rx.borrow();
             let label = ComponentLabel::from(*id);
-            let is_active = active_causes.iter().any(|c| c.component == id.as_str());
-            MONITOR_METRICS.backpressure_active[&label].set(is_active as u64);
 
-            let (lag, waiting_send_secs) = if id.is_reactive() {
-                (head_seq.saturating_sub(health.last_processed_seq), 0.0_f64)
-            } else if health.state == GenericComponentState::WaitingSend {
-                let lag = head_seq.saturating_sub(health.last_processed_seq);
-                let secs = Instant::now()
-                    .duration_since(health.state_entered_at)
-                    .as_secs_f64();
-                (lag, secs)
-            } else {
-                (0, 0.0)
-            };
+            MONITOR_METRICS.backpressure_active[&label]
+                .set(active_components.contains(id.as_str()) as u64);
+            MONITOR_METRICS.component_last_processed_block[&label]
+                .set(health.last_processed_seq);
+            MONITOR_METRICS.component_block_lag[&label]
+                .set(head_seq.saturating_sub(health.last_processed_seq));
 
-            MONITOR_METRICS.component_block_lag[&label].set(lag);
-            MONITOR_METRICS.component_waiting_send_seconds[&label].set(waiting_send_secs);
+            let time_lag =
+                if health.last_processed_block_timestamp > 0 && head_ts > 0 {
+                    head_ts.saturating_sub(health.last_processed_block_timestamp) as f64
+                } else {
+                    0.0
+                };
+            MONITOR_METRICS.component_time_lag_seconds[&label].set(time_lag);
+        }
+
+        for (id, depth) in &self.queue_depths {
+            let label = ComponentLabel::from(*id);
+            MONITOR_METRICS.channel_queue_depth[&label]
+                .set(depth.load(Ordering::Relaxed) as u64);
         }
     }
 
     #[cfg(test)]
-    pub fn force_health_for_test(&mut self, id: ComponentId, health: ComponentHealth) {
-        let (tx, rx) = watch::channel(health);
-        std::mem::forget(tx);
-        if let Some(entry) = self.components.iter_mut().find(|(cid, _)| *cid == id) {
-            entry.1 = rx;
-        } else {
-            self.components.push((id, rx));
-        }
+    pub(crate) fn make_test_monitor(config: PipelineHealthConfig) -> Self {
+        let (_tx, rx) = watch::channel(false);
+        let (monitor, _) = Self::new(config, rx);
+        monitor
     }
 }
 
@@ -206,326 +244,127 @@ mod tests {
     use super::*;
     use crate::config::{BackpressureCondition, ComponentId, PipelineHealthConfig};
     use std::time::Duration;
-    use tokio::sync::watch;
     use tokio::time::Instant;
-    use zksync_os_observability::{ComponentHealth, GenericComponentState};
-    use zksync_os_types::{BackpressureTrigger, NotAcceptingReason, TransactionAcceptanceState};
+    use zksync_os_observability::GenericComponentState;
+    use zksync_os_types::BackpressureTrigger;
 
-    fn make_health(
-        state: GenericComponentState,
-        secs_in_state: u64,
-        last_seq: u64,
-    ) -> ComponentHealth {
+    fn make_health(seq: u64, ts: u64) -> ComponentHealth {
         ComponentHealth {
-            state,
-            state_entered_at: Instant::now() - Duration::from_secs(secs_in_state),
-            last_processed_seq: last_seq,
+            state: GenericComponentState::Processing,
+            state_entered_at: Instant::now(),
+            last_processed_seq: seq,
+            last_processed_block_timestamp: ts,
         }
     }
 
-    fn monitor_with(condition: BackpressureCondition, id: ComponentId) -> PipelineHealthMonitor {
-        let (stop_tx, stop_rx) = watch::channel(false);
-        std::mem::forget(stop_tx);
+    fn config_with_block_lag(id: ComponentId, max_lag: u64) -> PipelineHealthConfig {
         let mut config = PipelineHealthConfig::default();
+        let cond = BackpressureCondition {
+            max_block_lag: Some(max_lag),
+            max_time_lag: None,
+        };
         match id {
-            ComponentId::BlockExecutor => config.block_executor = condition,
-            ComponentId::FriJobManager => config.fri_job_manager = condition,
-            ComponentId::L1SenderCommit => config.l1_sender_commit = condition,
-            ComponentId::SnarkJobManager => config.snark_job_manager = condition,
+            ComponentId::BlockApplier => config.block_applier = cond,
+            ComponentId::BlockExecutor => config.block_executor = cond,
+            ComponentId::FriJobManager => config.fri_job_manager = cond,
             _ => {}
         }
-        let (monitor, _rx) = PipelineHealthMonitor::new(config, stop_rx);
-        monitor
+        config
+    }
+
+    fn config_with_time_lag(id: ComponentId, max_lag: Duration) -> PipelineHealthConfig {
+        let mut config = PipelineHealthConfig::default();
+        let cond = BackpressureCondition {
+            max_block_lag: None,
+            max_time_lag: Some(max_lag),
+        };
+        match id {
+            ComponentId::BlockApplier => config.block_applier = cond,
+            _ => {}
+        }
+        config
     }
 
     #[test]
-    fn pipeline_loop_waiting_recv_no_trigger() {
-        let m = monitor_with(
-            BackpressureCondition {
-                max_block_lag: Some(5),
-                ..Default::default()
-            },
-            ComponentId::L1SenderCommit,
-        );
-        let health = make_health(GenericComponentState::WaitingRecv, 0, 0);
-        assert!(
-            m.evaluate(ComponentId::L1SenderCommit, &health, 100)
-                .is_none()
-        );
+    fn below_lag_threshold_no_trigger() {
+        let config = config_with_block_lag(ComponentId::BlockApplier, 10);
+        let monitor = PipelineHealthMonitor::make_test_monitor(config);
+        // head=100, applier=95, lag=5 < 10
+        let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(95, 0), 100, 0);
+        assert!(result.is_none());
     }
 
     #[test]
-    fn pipeline_loop_processing_no_trigger() {
-        let m = monitor_with(
-            BackpressureCondition {
-                max_block_lag: Some(5),
-                ..Default::default()
-            },
-            ComponentId::L1SenderCommit,
-        );
-        let health = make_health(GenericComponentState::Processing, 0, 0);
-        assert!(
-            m.evaluate(ComponentId::L1SenderCommit, &health, 100)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn pipeline_loop_waiting_send_duration_exceeded() {
-        let m = monitor_with(
-            BackpressureCondition {
-                max_waiting_send_duration: Some(Duration::from_secs(10)),
-                ..Default::default()
-            },
-            ComponentId::L1SenderCommit,
-        );
-        let health = make_health(GenericComponentState::WaitingSend, 20, 0);
-        let cause = m.evaluate(ComponentId::L1SenderCommit, &health, 0).unwrap();
-        assert_eq!(cause.component, "l1_sender_commit");
+    fn above_lag_threshold_triggers() {
+        let config = config_with_block_lag(ComponentId::BlockApplier, 10);
+        let monitor = PipelineHealthMonitor::make_test_monitor(config);
+        // head=100, applier=85, lag=15 > 10
+        let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(85, 0), 100, 0);
         assert!(matches!(
-            cause.trigger,
-            BackpressureTrigger::WaitingSendTooLong { .. }
-        ));
-    }
-
-    #[test]
-    fn pipeline_loop_waiting_send_lag_exceeded() {
-        let m = monitor_with(
-            BackpressureCondition {
-                max_block_lag: Some(10),
-                ..Default::default()
-            },
-            ComponentId::L1SenderCommit,
-        );
-        let health = make_health(GenericComponentState::WaitingSend, 0, 80);
-        let cause = m
-            .evaluate(ComponentId::L1SenderCommit, &health, 100)
-            .unwrap();
-        assert_eq!(cause.component, "l1_sender_commit");
-        assert!(matches!(
-            cause.trigger,
-            BackpressureTrigger::BlockLagTooHigh {
+            result.map(|c| c.trigger),
+            Some(BackpressureTrigger::BlockLagTooHigh {
                 threshold: 10,
-                actual: 20
-            }
+                actual: 15
+            })
         ));
     }
 
     #[test]
-    fn pipeline_loop_both_exceeded_duration_wins() {
-        let m = monitor_with(
-            BackpressureCondition {
-                max_waiting_send_duration: Some(Duration::from_secs(10)),
-                max_block_lag: Some(5),
-            },
-            ComponentId::L1SenderCommit,
-        );
-        let health = make_health(GenericComponentState::WaitingSend, 20, 80);
-        let cause = m
-            .evaluate(ComponentId::L1SenderCommit, &health, 100)
-            .unwrap();
+    fn at_exact_threshold_no_trigger() {
+        let config = config_with_block_lag(ComponentId::BlockApplier, 10);
+        let monitor = PipelineHealthMonitor::make_test_monitor(config);
+        // lag == threshold: should NOT trigger (strictly greater than)
+        let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(90, 0), 100, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn time_lag_triggers_when_exceeded() {
+        let config = config_with_time_lag(ComponentId::BlockApplier, Duration::from_secs(30));
+        let monitor = PipelineHealthMonitor::make_test_monitor(config);
+        // head_ts=1000, applier_ts=960, lag=40s > 30s
+        let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(90, 960), 100, 1000);
         assert!(matches!(
-            cause.trigger,
-            BackpressureTrigger::WaitingSendTooLong { .. }
+            result.map(|c| c.trigger),
+            Some(BackpressureTrigger::TimeLagTooHigh { .. })
         ));
     }
 
     #[test]
-    fn pipeline_loop_waiting_send_below_threshold() {
-        let m = monitor_with(
-            BackpressureCondition {
-                max_waiting_send_duration: Some(Duration::from_secs(30)),
-                max_block_lag: Some(50),
-            },
-            ComponentId::L1SenderCommit,
-        );
-        let health = make_health(GenericComponentState::WaitingSend, 5, 95);
-        assert!(
-            m.evaluate(ComponentId::L1SenderCommit, &health, 100)
-                .is_none()
-        );
+    fn time_lag_skipped_when_component_timestamp_zero() {
+        let config = config_with_time_lag(ComponentId::BlockApplier, Duration::from_secs(1));
+        let monitor = PipelineHealthMonitor::make_test_monitor(config);
+        // component timestamp = 0 → unavailable, must not trigger
+        let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(90, 0), 100, 1000);
+        assert!(result.is_none());
     }
 
     #[test]
-    fn reactive_lag_exceeded_regardless_of_state() {
-        let m = monitor_with(
-            BackpressureCondition {
-                max_block_lag: Some(10),
-                ..Default::default()
-            },
-            ComponentId::FriJobManager,
-        );
-        for state in [
-            GenericComponentState::WaitingRecv,
-            GenericComponentState::Processing,
-            GenericComponentState::ProcessingOrWaitingRecv,
-        ] {
-            let health = make_health(state, 0, 80);
-            let cause = m
-                .evaluate(ComponentId::FriJobManager, &health, 100)
-                .unwrap();
-            assert!(matches!(
-                cause.trigger,
-                BackpressureTrigger::BlockLagTooHigh { .. }
-            ));
-        }
+    fn time_lag_skipped_when_head_timestamp_zero() {
+        let config = config_with_time_lag(ComponentId::BlockApplier, Duration::from_secs(1));
+        let monitor = PipelineHealthMonitor::make_test_monitor(config);
+        // head timestamp = 0 → unavailable, must not trigger
+        let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(90, 900), 100, 0);
+        assert!(result.is_none());
     }
 
     #[test]
-    fn reactive_lag_not_exceeded() {
-        let m = monitor_with(
-            BackpressureCondition {
-                max_block_lag: Some(50),
-                ..Default::default()
-            },
-            ComponentId::FriJobManager,
-        );
-        let health = make_health(GenericComponentState::ProcessingOrWaitingRecv, 0, 95);
-        assert!(
-            m.evaluate(ComponentId::FriJobManager, &health, 100)
-                .is_none()
-        );
+    fn no_condition_set_never_triggers() {
+        let config = PipelineHealthConfig::default();
+        let monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let result =
+            monitor.evaluate(ComponentId::BlockApplier, &make_health(0, 0), 10_000, 999_999);
+        assert!(result.is_none());
     }
 
-    #[tokio::test]
-    async fn two_causes_both_in_acceptance_state() {
-        let (stop_tx, stop_rx) = watch::channel(false);
-        std::mem::forget(stop_tx);
-        let config = PipelineHealthConfig {
-            fri_job_manager: BackpressureCondition {
-                max_block_lag: Some(5),
-                ..Default::default()
-            },
-            l1_sender_commit: BackpressureCondition {
-                max_waiting_send_duration: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let (mut monitor, acceptance_rx) = PipelineHealthMonitor::new(config, stop_rx);
-
-        let (_, fri_rx) = zksync_os_observability::ComponentHealthReporter::new("fri_job_manager");
-        let (_, l1_rx) = zksync_os_observability::ComponentHealthReporter::new("l1_sender_commit");
-        monitor.register(ComponentId::FriJobManager, fri_rx);
-        monitor.register(ComponentId::L1SenderCommit, l1_rx);
-        monitor.force_health_for_test(
-            ComponentId::FriJobManager,
-            make_health(GenericComponentState::ProcessingOrWaitingRecv, 0, 80),
-        );
-        monitor.force_health_for_test(
-            ComponentId::L1SenderCommit,
-            make_health(GenericComponentState::WaitingSend, 20, 90),
-        );
-        monitor.evaluate_and_update_with_head(100);
-
-        let state = acceptance_rx.borrow().clone();
-        if let TransactionAcceptanceState::NotAccepting(
-            NotAcceptingReason::PipelineBackpressure { causes },
-        ) = state
-        {
-            assert_eq!(causes.len(), 2);
-        } else {
-            panic!("expected NotAccepting(PipelineBackpressure)");
-        }
-    }
-
-    #[tokio::test]
-    async fn one_cause_clears_other_remains_not_accepting() {
-        let (stop_tx, stop_rx) = watch::channel(false);
-        std::mem::forget(stop_tx);
-        let config = PipelineHealthConfig {
-            fri_job_manager: BackpressureCondition {
-                max_block_lag: Some(5),
-                ..Default::default()
-            },
-            l1_sender_commit: BackpressureCondition {
-                max_block_lag: Some(5),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let (mut monitor, acceptance_rx) = PipelineHealthMonitor::new(config, stop_rx);
-        monitor.force_health_for_test(
-            ComponentId::FriJobManager,
-            make_health(GenericComponentState::ProcessingOrWaitingRecv, 0, 80),
-        );
-        monitor.force_health_for_test(
-            ComponentId::L1SenderCommit,
-            make_health(GenericComponentState::WaitingSend, 0, 80),
-        );
-        monitor.evaluate_and_update_with_head(100);
-        assert!(matches!(
-            acceptance_rx.borrow().clone(),
-            TransactionAcceptanceState::NotAccepting(
-                NotAcceptingReason::PipelineBackpressure { .. }
-            )
-        ));
-
-        monitor.force_health_for_test(
-            ComponentId::FriJobManager,
-            make_health(GenericComponentState::ProcessingOrWaitingRecv, 0, 98),
-        );
-        monitor.evaluate_and_update_with_head(100);
-        let state = acceptance_rx.borrow().clone();
-        if let TransactionAcceptanceState::NotAccepting(
-            NotAcceptingReason::PipelineBackpressure { causes },
-        ) = state
-        {
-            assert_eq!(causes.len(), 1);
-            assert_eq!(causes[0].component, "l1_sender_commit");
-        } else {
-            panic!("expected NotAccepting with 1 remaining cause");
-        }
-    }
-
-    #[tokio::test]
-    async fn all_causes_clear_becomes_accepting() {
-        let (stop_tx, stop_rx) = watch::channel(false);
-        std::mem::forget(stop_tx);
-        let config = PipelineHealthConfig {
-            l1_sender_commit: BackpressureCondition {
-                max_block_lag: Some(5),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let (mut monitor, acceptance_rx) = PipelineHealthMonitor::new(config, stop_rx);
-        monitor.force_health_for_test(
-            ComponentId::L1SenderCommit,
-            make_health(GenericComponentState::WaitingSend, 0, 80),
-        );
-        monitor.evaluate_and_update_with_head(100);
-        assert!(matches!(
-            acceptance_rx.borrow().clone(),
-            TransactionAcceptanceState::NotAccepting(_)
-        ));
-
-        monitor.force_health_for_test(
-            ComponentId::L1SenderCommit,
-            make_health(GenericComponentState::WaitingSend, 0, 98),
-        );
-        monitor.evaluate_and_update_with_head(100);
+    #[test]
+    fn evaluate_and_update_sets_accepting_when_no_causes() {
+        let config = PipelineHealthConfig::default();
+        let monitor = PipelineHealthMonitor::make_test_monitor(config);
+        monitor.evaluate_and_update_with_head(100, 0);
         assert_eq!(
-            *acceptance_rx.borrow(),
+            *monitor.acceptance_tx.borrow(),
             TransactionAcceptanceState::Accepting
         );
-    }
-
-    #[tokio::test]
-    async fn metrics_zero_for_idle_nonzero_for_waiting_send() {
-        let (stop_tx, stop_rx) = watch::channel(false);
-        std::mem::forget(stop_tx);
-        let config = PipelineHealthConfig::default();
-        let (mut monitor, _) = PipelineHealthMonitor::new(config, stop_rx);
-        monitor.force_health_for_test(
-            ComponentId::BlockApplier,
-            make_health(GenericComponentState::WaitingRecv, 0, 50),
-        );
-        monitor.force_health_for_test(
-            ComponentId::L1SenderCommit,
-            make_health(GenericComponentState::WaitingSend, 5, 50),
-        );
-        monitor.evaluate_and_update_with_head(100);
-        // Smoke test: verify it runs without panicking
     }
 }
