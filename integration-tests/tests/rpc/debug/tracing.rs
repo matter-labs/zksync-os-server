@@ -224,6 +224,51 @@ async fn call_trace_transaction_reports_pubdata_exhaustion(
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
+async fn call_trace_transaction_reports_pubdata_exhaustion_with_only_top_call(
+    builder: TesterBuilder,
+) -> anyhow::Result<()> {
+    let tester = builder
+        .fee_config(pubdata_exhaustion_fee_config())
+        .build()
+        .await?;
+    let counter = Counter::deploy(tester.l2_provider.clone()).await?;
+
+    let receipt = counter
+        .increment(U256::from(1))
+        .gas(100_000)
+        .send()
+        .await?
+        .with_timeout(Some(DEFAULT_TIMEOUT))
+        .get_receipt()
+        .await?;
+    assert!(
+        !receipt.status(),
+        "transaction should revert after execution"
+    );
+
+    let trace = tester
+        .l2_provider
+        .debug_trace_transaction(
+            receipt.transaction_hash(),
+            GethDebugTracingOptions::call_tracer(CallConfig {
+                only_top_call: Some(true),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let call_frame = trace
+        .try_into_call_frame()
+        .expect("expected call tracer result");
+    assert!(
+        call_frame.calls.is_empty(),
+        "only_top_call traces should not include nested calls"
+    );
+    assert_pubdata_exhaustion_call_frame(&call_frame);
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
 async fn call_trace_block_reports_pubdata_exhaustion(builder: TesterBuilder) -> anyhow::Result<()> {
     let tester = builder
         .fee_config(pubdata_exhaustion_fee_config())
