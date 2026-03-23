@@ -9,6 +9,9 @@ pub struct ComponentHealth {
     pub state_entered_at: Instant,
     /// Block number of the last item successfully sent downstream.
     pub last_processed_seq: u64,
+    /// Block timestamp (from block_context.timestamp) of the last processed block.
+    /// 0 if not yet processed or unavailable (e.g. batch-level components).
+    pub last_processed_block_timestamp: u64,
 }
 
 /// Uses `watch::Sender` — updates are infallible, no background task, no global state.
@@ -25,6 +28,7 @@ impl ComponentHealthReporter {
             state: GenericComponentState::WaitingRecv,
             state_entered_at: Instant::now(),
             last_processed_seq: 0,
+            last_processed_block_timestamp: 0,
         };
         let (sender, receiver) = watch::channel(initial);
         (Self { sender, component }, receiver)
@@ -44,10 +48,13 @@ impl ComponentHealthReporter {
         });
     }
 
-    /// Record the block number of the last item successfully sent downstream.
-    pub fn record_processed(&self, block_seq: u64) {
+    /// Record the block number and timestamp of the last item successfully processed.
+    /// Use `block_timestamp = 0` for batch-level components where block timestamps
+    /// are not readily available. Time-lag evaluation is skipped for those.
+    pub fn record_processed(&self, block_seq: u64, block_timestamp: u64) {
         self.sender.send_modify(|health| {
             health.last_processed_seq = block_seq;
+            health.last_processed_block_timestamp = block_timestamp;
         });
     }
 }
@@ -65,6 +72,7 @@ mod tests {
         let health = rx.borrow().clone();
         assert_eq!(health.state, GenericComponentState::WaitingRecv);
         assert_eq!(health.last_processed_seq, 0);
+        assert_eq!(health.last_processed_block_timestamp, 0);
         drop(reporter);
     }
 
@@ -77,12 +85,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_processed_updates_seq() {
+    async fn record_processed_updates_seq_and_timestamp() {
         let (reporter, rx) = ComponentHealthReporter::new("test_component");
-        reporter.record_processed(42);
+        reporter.record_processed(42, 1_700_000_000);
         assert_eq!(rx.borrow().last_processed_seq, 42);
-        reporter.record_processed(100);
+        assert_eq!(rx.borrow().last_processed_block_timestamp, 1_700_000_000);
+        reporter.record_processed(100, 1_700_000_100);
         assert_eq!(rx.borrow().last_processed_seq, 100);
+        assert_eq!(rx.borrow().last_processed_block_timestamp, 1_700_000_100);
     }
 
     #[tokio::test]
@@ -99,8 +109,8 @@ mod tests {
     async fn multiple_reporters_independent() {
         let (r1, rx1) = ComponentHealthReporter::new("c1");
         let (r2, rx2) = ComponentHealthReporter::new("c2");
-        r1.record_processed(10);
-        r2.record_processed(20);
+        r1.record_processed(10, 0);
+        r2.record_processed(20, 0);
         assert_eq!(rx1.borrow().last_processed_seq, 10);
         assert_eq!(rx2.borrow().last_processed_seq, 20);
     }
