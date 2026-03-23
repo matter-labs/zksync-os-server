@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_l1_sender::batcher_model::{FriProof, ProverInput, SignedBatchEnvelope};
 use zksync_os_observability::ComponentHealthReporter;
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 
 /// Pipeline step that waits for batches to be FRI proved.
 ///
@@ -62,12 +62,11 @@ impl PipelineComponent for FriProvingPipelineStep {
     type Output = SignedBatchEnvelope<FriProof>;
 
     const NAME: &'static str = "fri_proving";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
         mut self,
-        mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         // Forward batches: pipeline input → FriJobManager (add_job) → pipeline output (via proofs channel)
         // Two concurrent tasks handle the bidirectional flow
@@ -84,7 +83,7 @@ impl PipelineComponent for FriProvingPipelineStep {
                     } else {
                         // Already proven - send with fake proof to pass through the pipeline
                         let batch_with_fake_proof = batch.with_data(FriProof::AlreadySubmittedToL1);
-                        let _ = output.send(batch_with_fake_proof).await;
+                        let _ = output.send(batch_with_fake_proof);
                     }
                 }
                 Ok::<(), anyhow::Error>(())
@@ -99,7 +98,7 @@ impl PipelineComponent for FriProvingPipelineStep {
                         "Received batch after FRI proving: {:?}",
                         proof.batch_number()
                     );
-                    let _ = output.send(proof).await;
+                    let _ = output.send(proof);
                 }
             } => {
                 tracing::info!("outbound channel closed");

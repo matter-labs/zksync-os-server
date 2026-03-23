@@ -7,9 +7,8 @@ use alloy::primitives::Address;
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, WalletProvider};
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 use zksync_os_observability::ComponentHealthReporter;
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 
 /// Generic L1 Sender pipeline component
 /// Can be used for commit, prove, or execute operations
@@ -32,12 +31,11 @@ where
     type Output = SignedBatchEnvelope<FriProof>;
 
     const NAME: &'static str = C::NAME;
-    const OUTPUT_BUFFER_SIZE: usize = 1;
 
     async fn run(
         self,
-        input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         run_l1_sender(
             input,

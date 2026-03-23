@@ -9,12 +9,12 @@ use anyhow::Context;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use tokio::time::Instant;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_storage_api::{OverlayBuffer, ReadStateHistory, ReplayRecord, WriteState};
 use zksync_os_tx_validators::deployment_filter;
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
@@ -51,16 +51,10 @@ where
 
     const NAME: &'static str = "block_executor";
 
-    /// We don't need much buffer before `BlockCanonizer`,
-    /// because `BlockCanonizer` has a buffer within (see `produced_queue`).
-    /// This still allows us to be producing block `X+2`, while block `X+1` is in the buffer,
-    /// and block `X` is being canonized.
-    const OUTPUT_BUFFER_SIZE: usize = 1;
-
     async fn run(
         mut self,
-        mut input: PeekableReceiver<Self::Input>, // PeekableReceiver<BlockCommand>
-        output: mpsc::Sender<Self::Output>, // Sender<(BlockOutput, ReplayRecord, BlockCommandType)>
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         // Track how many Produce commands we've processed (for `sequencer_max_blocks_to_produce` config)
         let mut produced_blocks_count = 0u64;
@@ -163,16 +157,14 @@ where
                 .last_execution_version
                 .set(replay_record.block_context.execution_version as u64);
 
-            self.health_reporter
-                .enter_state(GenericComponentState::WaitingSend);
             if output
                 .send((block_output.clone(), replay_record.clone(), cmd_type))
-                .await
                 .is_err()
             {
                 anyhow::bail!("Outbound channel closed");
             }
-            self.health_reporter.record_processed(block_number);
+            self.health_reporter
+                .record_processed(block_number, replay_record.block_context.timestamp);
         }
     }
 }

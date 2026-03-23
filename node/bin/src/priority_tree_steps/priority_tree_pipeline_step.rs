@@ -6,7 +6,7 @@ use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_observability::ComponentHealthReporter;
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_storage_api::{ReadFinality, ReadReplay};
 
@@ -64,12 +64,11 @@ where
     type Output = L1SenderCommand<ExecuteCommand>;
 
     const NAME: &'static str = "priority_tree";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
         self,
-        input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         // Internal channels for priority tree manager
         let (priority_txs_internal_sender, priority_txs_internal_receiver) =

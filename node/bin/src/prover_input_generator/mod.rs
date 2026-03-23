@@ -1,11 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::FuturesOrdered;
 use reth_tasks::Runtime;
 use std::collections::VecDeque;
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
@@ -15,7 +14,7 @@ use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
 
@@ -37,7 +36,6 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     type Output = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
 
     const NAME: &'static str = "prover_input_generator";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     /// Works on multiple blocks in parallel, up to [Self::maximum_in_flight_blocks].
     /// Each computation runs on the blocking pool and is tracked as a graceful task so
@@ -45,8 +43,8 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     /// [graceful_shutdown_with_timeout] returns.
     async fn run(
         self,
-        mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> Result<()> {
         let health_reporter = &self.health_reporter;
         health_reporter.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
@@ -59,13 +57,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         };
         let result = self.spawn_computation(first_item).await?;
         let first_block_number = result.0.header.number;
-        health_reporter.enter_state(GenericComponentState::WaitingSend);
+        let first_block_ts = result.1.block_context.timestamp;
         tracing::debug!(
             block_number = first_block_number,
             "sending block with prover input to batcher",
         );
-        output.send(result).await?;
-        health_reporter.record_processed(first_block_number);
+        output.send(result).ok().context("outbound channel closed")?;
+        health_reporter.record_processed(first_block_number, first_block_ts);
         health_reporter.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
 
         // Process remaining items with up to `maximum_in_flight_blocks` in parallel.
@@ -92,13 +90,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 Some(result) = pending.next(), if !pending.is_empty() => {
                     let item = result.map_err(|_| anyhow::anyhow!("prover input computation task dropped sender"))?;
                     let block_number = item.0.header.number;
-                    health_reporter.enter_state(GenericComponentState::WaitingSend);
+                    let block_ts = item.1.block_context.timestamp;
                     tracing::debug!(
                         block_number,
                         "sending block with prover input to batcher",
                     );
-                    output.send(item).await?;
-                    health_reporter.record_processed(block_number);
+                    output.send(item).ok().context("outbound channel closed")?;
+                    health_reporter.record_processed(block_number, block_ts);
                     health_reporter.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
                 }
             }

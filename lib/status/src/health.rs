@@ -1,7 +1,6 @@
 use crate::AppState;
 use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
-use zksync_os_observability::GenericComponentState;
 use zksync_os_pipeline_health::ComponentId;
 use zksync_os_types::{BackpressureTrigger, NotAcceptingReason, TransactionAcceptanceState};
 
@@ -33,7 +32,7 @@ pub struct ComponentSnapshot {
     pub state_duration_secs: f64,
     pub last_processed_block: u64,
     pub block_lag: u64,
-    pub waiting_send_secs: f64,
+    pub time_lag_secs: f64,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -62,6 +61,13 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
         .map(|(_, rx)| rx.borrow().last_processed_seq)
         .unwrap_or(0);
 
+    let head_ts = state
+        .component_health
+        .iter()
+        .find(|(id, _)| *id == ComponentId::BlockExecutor)
+        .map(|(_, rx)| rx.borrow().last_processed_block_timestamp)
+        .unwrap_or(0);
+
     let now = tokio::time::Instant::now();
     let components: Vec<ComponentEntry> = state
         .component_health
@@ -70,24 +76,20 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
             let h = rx.borrow();
             let elapsed = now.duration_since(h.state_entered_at).as_secs_f64();
             let lag = head_block.saturating_sub(h.last_processed_seq);
-            let waiting_send_secs = if h.state == GenericComponentState::WaitingSend {
-                elapsed
-            } else {
-                0.0
-            };
-            let block_lag = if id.is_reactive() || h.state == GenericComponentState::WaitingSend {
-                lag
-            } else {
-                0
-            };
+            let time_lag_secs =
+                if h.last_processed_block_timestamp > 0 && head_ts > h.last_processed_block_timestamp {
+                    (head_ts - h.last_processed_block_timestamp) as f64
+                } else {
+                    0.0
+                };
             ComponentEntry {
                 name: id.as_str(),
                 snapshot: ComponentSnapshot {
                     state: h.state.as_str(),
                     state_duration_secs: elapsed,
                     last_processed_block: h.last_processed_seq,
-                    block_lag,
-                    waiting_send_secs,
+                    block_lag: lag,
+                    time_lag_secs,
                 },
             }
         })
@@ -99,10 +101,10 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
         }) => causes
             .iter()
             .map(|c| match &c.trigger {
-                BackpressureTrigger::WaitingSendTooLong { threshold, actual } => {
+                BackpressureTrigger::TimeLagTooHigh { threshold, actual } => {
                     BackpressureCauseJson {
                         component: c.component,
-                        trigger: "waiting_send_too_long",
+                        trigger: "time_lag_too_high",
                         threshold_secs: Some(threshold.as_secs_f64()),
                         actual_secs: Some(actual.as_secs_f64()),
                         threshold_blocks: None,
@@ -160,7 +162,7 @@ mod tests {
         let (_stop_tx, stop_rx) = watch::channel(false);
         let (_accept_tx, accept_rx) = watch::channel(TransactionAcceptanceState::Accepting);
         let (reporter, health_rx) = ComponentHealthReporter::new("block_executor");
-        reporter.record_processed(12345);
+        reporter.record_processed(12345, 0);
         AppState {
             stop_receiver: stop_rx,
             acceptance_state: accept_rx,
@@ -214,5 +216,30 @@ mod tests {
         assert_eq!(body.backpressure_causes[0].trigger, "block_lag_too_high");
         assert_eq!(body.backpressure_causes[0].threshold_blocks, Some(500));
         assert_eq!(body.backpressure_causes[0].actual_blocks, Some(782));
+    }
+
+    #[tokio::test]
+    async fn time_lag_backpressure_serializes_correctly() {
+        use std::time::Duration;
+        use zksync_os_types::{BackpressureCause, BackpressureTrigger, NotAcceptingReason};
+        let mut state = make_state();
+        let cause = BackpressureCause {
+            component: "block_applier",
+            trigger: BackpressureTrigger::TimeLagTooHigh {
+                threshold: Duration::from_secs(30),
+                actual: Duration::from_secs(45),
+            },
+        };
+        let (_tx, rx) = watch::channel(TransactionAcceptanceState::NotAccepting(
+            NotAcceptingReason::PipelineBackpressure {
+                causes: vec![cause],
+            },
+        ));
+        state.acceptance_state = rx;
+        let (status, Json(body)) = health(State(state)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.backpressure_causes[0].trigger, "time_lag_too_high");
+        assert_eq!(body.backpressure_causes[0].threshold_secs, Some(30.0));
+        assert_eq!(body.backpressure_causes[0].actual_secs, Some(45.0));
     }
 }

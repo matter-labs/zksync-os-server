@@ -18,7 +18,7 @@ use zksync_os_l1_sender::batcher_model::{
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::PubdataMode;
 
@@ -63,14 +63,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 
     const NAME: &'static str = "batcher";
 
-    // The next component is `FriProvingPipelineStep` which contains an internal queue for FRI jobs.
-    // We don't want to add additional buffers - as soon as the queue is full, we want to halt batching.
-    const OUTPUT_BUFFER_SIZE: usize = 1;
-
     async fn run(
         mut self,
-        mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         // We use last executed batch as the starting point. Next immediate batch we process will be
         // `last_executed_batch + 1`.
@@ -192,8 +188,6 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 "Batch da_input",
             );
 
-            self.health_reporter
-                .enter_state(GenericComponentState::WaitingSend);
             if let Some(sidecar) = batch_envelope.batch.batch_info.blob_sidecar.clone() {
                 self.sidecar_sender
                     .send(sidecar)
@@ -201,11 +195,11 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
             }
             let last_block_number = batch_envelope.batch.last_block_number;
-            if output.send(batch_envelope).await.is_err() {
+            if output.send(batch_envelope).is_err() {
                 tracing::info!("outbound channel closed");
                 return Ok(());
             }
-            self.health_reporter.record_processed(last_block_number);
+            self.health_reporter.record_processed(last_block_number, 0);
         }
     }
 }
@@ -213,7 +207,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
     async fn create_batch(
         &mut self,
-        block_receiver: &mut PeekableReceiver<(
+        block_receiver: &mut TrackedUnboundedReceiver<(
             BlockOutput,
             ReplayRecord,
             ProverInput,
@@ -335,7 +329,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
 
     async fn recreate_existing_batch(
         &mut self,
-        block_receiver: &mut PeekableReceiver<(
+        block_receiver: &mut TrackedUnboundedReceiver<(
             BlockOutput,
             ReplayRecord,
             ProverInput,

@@ -24,10 +24,9 @@ use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Duration;
-use tokio::sync::mpsc::Sender;
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
 use zksync_os_operator_signer::SignerConfig;
-use zksync_os_pipeline::PeekableReceiver;
+use zksync_os_pipeline::{TrackedUnboundedReceiver, TrackedUnboundedSender};
 
 /// Maximum time to wait for a transaction to be included on L1.
 ///
@@ -58,8 +57,8 @@ type TransactionReceiptFuture =
 /// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
 pub async fn run_l1_sender<Input: SendToL1>(
     // == plumbing ==
-    mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
-    outbound: Sender<SignedBatchEnvelope<FriProof>>,
+    mut inbound: TrackedUnboundedReceiver<L1SenderCommand<Input>>,
+    outbound: TrackedUnboundedSender<SignedBatchEnvelope<FriProof>>,
 
     // == command-specific settings ==
     to_address: Address,
@@ -232,22 +231,24 @@ pub async fn run_l1_sender<Input: SendToL1>(
             .last()
             .and_then(|cmd| cmd.as_ref().last())
             .map(|e| e.batch.last_block_number);
-        health_reporter.enter_state(GenericComponentState::WaitingSend);
         for command in completed_commands {
             for mut output_envelope in command.into() {
                 output_envelope.set_stage(Input::MINED_STAGE);
-                outbound.send(output_envelope).await?;
+                outbound
+                    .send(output_envelope)
+                    .ok()
+                    .context("outbound channel closed")?;
             }
         }
         if let Some(lb) = last_block {
-            health_reporter.record_processed(lb);
+            health_reporter.record_processed(lb, 0);
         }
     }
 }
 
 async fn process_prepending_passthrough_commands<Input: SendToL1>(
-    inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
-    outbound: &Sender<SignedBatchEnvelope<FriProof>>,
+    inbound: &mut TrackedUnboundedReceiver<L1SenderCommand<Input>>,
+    outbound: &TrackedUnboundedSender<SignedBatchEnvelope<FriProof>>,
     health_reporter: &ComponentHealthReporter,
     command_name: &str,
 ) -> anyhow::Result<Option<()>> {
@@ -278,11 +279,11 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
                         );
                         // Capture before with_stage() moves batch.
                         let last_block = batch.batch.last_block_number;
-                        health_reporter.enter_state(GenericComponentState::WaitingSend);
                         outbound
                             .send((*batch).with_stage(Input::PASSTHROUGH_STAGE))
-                            .await?;
-                        health_reporter.record_processed(last_block);
+                            .ok()
+                            .context("outbound channel closed")?;
+                        health_reporter.record_processed(last_block, 0);
                     }
                 }
             }

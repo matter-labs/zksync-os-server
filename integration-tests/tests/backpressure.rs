@@ -85,8 +85,8 @@ async fn health_endpoint_returns_pipeline_snapshot() {
             "Component entry missing 'block_lag' field; entry: {entry}"
         );
         assert!(
-            entry.get("waiting_send_secs").is_some(),
-            "Component entry missing 'waiting_send_secs' field; entry: {entry}"
+            entry.get("time_lag_secs").is_some(),
+            "Component entry missing 'time_lag_secs' field; entry: {entry}"
         );
     }
 

@@ -24,7 +24,7 @@ use zksync_os_types::ProvingVersion;
 ///     but if jobs are not picked within a timeout (`max_batch_age`), it releases it to a fake prover
 ///
 ///
-/// `ComponentStateLatencyTracker`: Only tracks `Processing` / `WaitingSend` states
+/// `ComponentStateLatencyTracker`: Only tracks `Processing` / `WaitingRecv` states
 pub struct SnarkJobManager {
     // == state ==
     jobs: ProverJobMap<FriProof>,
@@ -208,8 +208,6 @@ impl SnarkJobManager {
     }
 
     async fn send_downstream(&self, proof_command: ProofCommand) -> anyhow::Result<()> {
-        self.health_reporter
-            .enter_state(GenericComponentState::WaitingSend);
         // Use last_block_number (not batch_number): the monitor lag computation is block-based.
         let seq = proof_command
             .as_ref()
@@ -218,7 +216,7 @@ impl SnarkJobManager {
             .batch
             .last_block_number;
         self.prove_batches_sender.send(proof_command).await?;
-        self.health_reporter.record_processed(seq);
+        self.health_reporter.record_processed(seq, 0);
         self.health_reporter
             .enter_state(GenericComponentState::ProcessingOrWaitingRecv);
         Ok(())

@@ -4,11 +4,10 @@ use reth_revm::ExecuteCommitEvm;
 use reth_revm::context::{Context, ContextTr};
 use reth_revm::db::CacheDB;
 use std::collections::HashSet;
-use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_revm::{DefaultZk, ZkBuilder};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ExecutionVersion;
@@ -85,12 +84,11 @@ where
     type Output = (BlockOutput, ReplayRecord);
 
     const NAME: &'static str = "revm_consistency_checker";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
         mut self,
-        mut input: PeekableReceiver<Self::Input>, // PeekableReceiver<(BlockOutput, ReplayRecord)>
-        output: Sender<Self::Output>,             // Sender<(BlockOutput, ReplayRecord)>
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         // NOTE: RevmConsistencyChecker has no ComponentId and is not registered with
         // PipelineHealthMonitor, but we still use ComponentHealthReporter for metrics benefits.
@@ -186,15 +184,14 @@ where
             }
 
             let block_number = replay_record.block_context.block_number;
-            health_reporter.enter_state(GenericComponentState::WaitingSend);
+            let block_ts = replay_record.block_context.timestamp;
             if output
                 .send((block_output.clone(), replay_record.clone()))
-                .await
                 .is_err()
             {
                 anyhow::bail!("Outbound channel closed");
             }
-            health_reporter.record_processed(block_number);
+            health_reporter.record_processed(block_number, block_ts);
         }
     }
 }

@@ -210,7 +210,7 @@ impl FriJobManager {
             .with_stage(BatchExecutionStage::FriProvedReal);
 
         permit.send(envelope);
-        self.health_reporter.record_processed(last_block);
+        self.health_reporter.record_processed(last_block, 0);
 
         Ok(())
     }
@@ -332,7 +332,7 @@ impl FriJobManager {
             .with_stage(BatchExecutionStage::FriProvedFake);
 
         permit.send(envelope);
-        self.health_reporter.record_processed(last_block);
+        self.health_reporter.record_processed(last_block, 0);
         Ok(())
     }
 
@@ -350,8 +350,6 @@ impl FriJobManager {
                 permit
             }
             Err(TrySendError::Full(_)) => {
-                self.health_reporter
-                    .enter_state(GenericComponentState::WaitingSend);
                 return Err(SubmitError::Other("downstream backpressure".to_string()));
             }
             Err(TrySendError::Closed(_)) => {

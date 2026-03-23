@@ -14448,8 +14448,10 @@ dependencies = [
 name = "zksync_os_pipeline_health"
 version = "0.17.1"
 dependencies = [
+ "futures",
  "smart-config",
  "tokio",
+ "tokio-stream",
  "tracing",
  "vise",
  "zksync_os_observability",

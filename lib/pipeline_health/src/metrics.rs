@@ -1,5 +1,5 @@
 use crate::config::ComponentId;
-use vise::{EncodeLabelSet, Family, Gauge, Metrics};
+use vise::{Counter, EncodeLabelSet, Family, Gauge, Metrics};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EncodeLabelSet)]
 pub struct ComponentLabel {
@@ -14,15 +14,28 @@ impl From<ComponentId> for ComponentLabel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EncodeLabelSet)]
+pub struct DirectionLabel {
+    /// "open" when backpressure starts, "cleared" when it ends.
+    pub direction: &'static str,
+}
+
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "pipeline")]
 pub struct MonitorMetrics {
     /// 1 if this component is currently an active backpressure cause, else 0.
     pub backpressure_active: Family<ComponentLabel, Gauge<u64>>,
-    /// Blocks behind pipeline head. 0 when component is idle (WaitingRecv/Processing).
+    /// Blocks behind pipeline head.
     pub component_block_lag: Family<ComponentLabel, Gauge<u64>>,
-    /// Seconds the component has been in WaitingSend. 0 when not in WaitingSend.
-    pub component_waiting_send_seconds: Family<ComponentLabel, Gauge<f64>>,
+    /// Block-timestamp lag in seconds (0 if timestamp unavailable for head or component).
+    pub component_time_lag_seconds: Family<ComponentLabel, Gauge<f64>>,
+    /// Last block number successfully processed by this component.
+    pub component_last_processed_block: Family<ComponentLabel, Gauge<u64>>,
+    /// Number of items queued in this component's output channel.
+    pub channel_queue_depth: Family<ComponentLabel, Gauge<u64>>,
+    /// Counts transitions into "not accepting" (direction="open") and back to accepting (direction="cleared").
+    /// vise appends _total automatically for Counter types.
+    pub acceptance_state_changes: Family<DirectionLabel, Counter<u64>>,
 }
 
 #[vise::register]

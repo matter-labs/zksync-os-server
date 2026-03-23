@@ -1057,8 +1057,6 @@ async fn run_main_node_pipeline(
 
     let component_health = Arc::new(health_entries);
 
-    runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
-
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::channel(8);
 
     let pipeline = Pipeline::new(runtime.clone())
@@ -1237,6 +1235,34 @@ async fn run_main_node_pipeline(
         .pipe(BatchSink::new(internal_config_manager));
 
     tracing::info!("Launching pipeline");
+    {
+        use std::collections::HashMap;
+        let name_to_id: HashMap<&'static str, ComponentId> = [
+            ("block_executor", ComponentId::BlockExecutor),
+            ("block_canonizer", ComponentId::BlockCanonizer),
+            ("block_applier", ComponentId::BlockApplier),
+            ("merkle_tree", ComponentId::TreeManager),
+            ("prover_input_generator", ComponentId::ProverInputGenerator),
+            ("batcher", ComponentId::Batcher),
+            ("batch_verification", ComponentId::BatchVerification),
+            ("fri_proving", ComponentId::FriJobManager),
+            ("gapless_committer", ComponentId::GaplessCommitter),
+            ("upgrade_gatekeeper", ComponentId::UpgradeGatekeeper),
+            ("commit", ComponentId::L1SenderCommit),
+            ("snark_proving", ComponentId::SnarkJobManager),
+            ("gapless_l1_proof_sender", ComponentId::GaplessL1ProofSender),
+            ("prove", ComponentId::L1SenderProve),
+            ("priority_tree", ComponentId::PriorityTree),
+            ("execute", ComponentId::L1SenderExecute),
+        ]
+        .into();
+        for (name, depth) in &pipeline.channel_depths {
+            if let Some(&id) = name_to_id.get(*name) {
+                pipeline_monitor.register_queue_depth(id, depth.clone());
+            }
+        }
+    }
+    runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
     pipeline.spawn();
     (pipeline_acceptance_rx, component_health)
 }
@@ -1309,8 +1335,6 @@ async fn run_en_pipeline(
 
     let component_health = Arc::new(health_entries);
 
-    runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
-
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
             replays_for_sequencer,
@@ -1365,6 +1389,22 @@ async fn run_en_pipeline(
         pipeline.pipe(NoOpSink::new())
     };
 
+    {
+        use std::collections::HashMap;
+        let name_to_id: HashMap<&'static str, ComponentId> = [
+            ("block_executor", ComponentId::BlockExecutor),
+            ("block_applier", ComponentId::BlockApplier),
+            ("merkle_tree", ComponentId::TreeManager),
+            ("batch_verification", ComponentId::BatchVerification),
+        ]
+        .into();
+        for (name, depth) in &pipeline.channel_depths {
+            if let Some(&id) = name_to_id.get(*name) {
+                pipeline_monitor.register_queue_depth(id, depth.clone());
+            }
+        }
+    }
+    runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
     pipeline.spawn();
 
     // Run Priority Tree tasks for EN - not part of the pipeline.

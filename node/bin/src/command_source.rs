@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_raft::{ConsensusRole, LeadershipSignal};
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand, RebuildCommand};
@@ -43,12 +43,11 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
     type Output = BlockCommand;
 
     const NAME: &'static str = "consensus_node_command_source";
-    const OUTPUT_BUFFER_SIZE: usize = 1;
 
     async fn run(
         mut self,
-        _input: PeekableReceiver<()>,
-        output: mpsc::Sender<BlockCommand>,
+        _input: TrackedUnboundedReceiver<()>,
+        output: TrackedUnboundedSender<BlockCommand>,
     ) -> anyhow::Result<()> {
         let last_block_in_wal = self.block_replay_storage.latest_record();
 
@@ -99,7 +98,7 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
     /// This method kicks in after all local canonized Replayed Records (WAL) are replayed.
     /// Produces `Produce` commands only when the node is the leader.
-    async fn run_loop(mut self, output: mpsc::Sender<BlockCommand>) -> anyhow::Result<()> {
+    async fn run_loop(mut self, output: TrackedUnboundedSender<BlockCommand>) -> anyhow::Result<()> {
         let mut leadership = self.leadership.clone();
         let mut role = leadership.current_role();
         tracing::info!(?role, "Consensus role initialized");
@@ -128,14 +127,13 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                     );
                     if output
                         .send(BlockCommand::Replay(Box::new(record)))
-                        .await
                         .is_err()
                     {
                         tracing::warn!("Command output channel closed, stopping source");
                         break;
                     }
                 }
-                send_res = output.send(BlockCommand::Produce(ProduceCommand)), if role == ConsensusRole::Leader => {
+                send_res = async { output.send(BlockCommand::Produce(ProduceCommand)) }, if role == ConsensusRole::Leader => {
                     if send_res.is_err() {
                         tracing::warn!("Command output channel closed, stopping source");
                         break;
@@ -151,7 +149,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
         &self,
         rebuild_options: &RebuildOptions,
         last_block_in_wal: u64,
-        output: &mpsc::Sender<BlockCommand>,
+        output: &TrackedUnboundedSender<BlockCommand>,
     ) -> anyhow::Result<()> {
         tracing::warn!(
             "Starting block rebuilds! {rebuild_options:?}, last_block_in_wal: {last_block_in_wal}"
@@ -173,7 +171,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                 replay_record,
                 make_empty,
             }));
-            if output.send(command).await.is_err() {
+            if output.send(command).is_err() {
                 tracing::warn!("Command output channel closed, stopping source");
                 break;
             }
@@ -188,12 +186,11 @@ impl PipelineComponent for ExternalNodeCommandSource {
     type Output = BlockCommand;
 
     const NAME: &'static str = "external_node_command_source";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
         mut self,
-        _input: PeekableReceiver<()>,
-        output: mpsc::Sender<BlockCommand>,
+        _input: TrackedUnboundedReceiver<()>,
+        output: TrackedUnboundedSender<BlockCommand>,
     ) -> anyhow::Result<()> {
         while let Some(record) = self.replays_for_sequencer.recv().await {
             let block_number = record.block_context.block_number;
@@ -210,7 +207,7 @@ impl PipelineComponent for ExternalNodeCommandSource {
                 futures::future::pending::<()>().await;
             }
 
-            if output.send(command).await.is_err() {
+            if output.send(command).is_err() {
                 tracing::warn!("Command output channel closed, stopping source");
                 break;
             }

@@ -3,10 +3,9 @@ use alloy::{eips::BlockId, providers::DynProvider};
 use anyhow::Context as _;
 use async_trait::async_trait;
 use std::cmp::Ordering;
-use tokio::sync::mpsc;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_types::ProtocolSemanticVersion;
 
 /// Receives Batches with proofs - potentially with incompatible protocol version.
@@ -90,12 +89,11 @@ impl PipelineComponent for UpgradeGatekeeper {
     type Output = L1SenderCommand<CommitCommand>;
 
     const NAME: &'static str = "upgrade_gatekeeper";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
         self,
-        mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         let UpgradeGatekeeper {
             zk_chain_sl,
@@ -118,10 +116,11 @@ impl PipelineComponent for UpgradeGatekeeper {
                 wait_until_protocol_version(&zk_chain_sl, &batch_protocol_version).await?;
             }
 
-            health_reporter.enter_state(GenericComponentState::WaitingSend);
             let last_block = command.last_block_number();
-            output.send(command).await?;
-            health_reporter.record_processed(last_block);
+            if output.send(command).is_err() {
+                anyhow::bail!("Outbound channel closed");
+            }
+            health_reporter.record_processed(last_block, 0);
         }
     }
 }

@@ -35,7 +35,7 @@ use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::ComponentHealthReporter;
 use zksync_os_observability::GenericComponentState;
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
 use zksync_os_storage_api::{ReplayRecord, StateError, read_multichain_root};
 
@@ -107,7 +107,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
 
     async fn connect_and_handle(
         &mut self,
-        input: &mut PeekableReceiver<VerificationInput>,
+        input: &mut TrackedUnboundedReceiver<VerificationInput>,
     ) -> anyhow::Result<()> {
         // Create channel for sending request data
         let (tx, rx) = mpsc::channel::<Result<Frame<Bytes>, io::Error>>(128);
@@ -191,7 +191,6 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                             let request_id = message.request_id;
                             let verification_result = self.handle_verification_request(message).await;
 
-                            self.health_reporter.enter_state(GenericComponentState::WaitingSend);
                             match verification_result {
                                 Ok(signature) => {
                                     tracing::info!(batch_number, request_id, address, "Approved batch verification request");
@@ -204,7 +203,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                                     writer.send(BatchVerificationResponse { request_id, batch_number, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
                                 },
                             }
-                            self.health_reporter.record_processed(last_block);
+                            self.health_reporter.record_processed(last_block, 0);
                         }
                         Some(Err(parsing_err)) =>
                         {
@@ -308,12 +307,11 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
     type Output = ();
 
     const NAME: &'static str = "batch_verification_client";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
         mut self,
-        mut input: PeekableReceiver<Self::Input>,
-        _output: mpsc::Sender<Self::Output>,
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        _output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         // Start in WaitingRecv to represent "connecting" state
         self.health_reporter

@@ -14,12 +14,12 @@ use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::PeekableReceiver;
+use zksync_os_pipeline::{TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_storage_api::{ReadFinality, ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
 
-type InputChannel = PeekableReceiver<SignedBatchEnvelope<FriProof>>;
-type OutputChannel = mpsc::Sender<L1SenderCommand<ExecuteCommand>>;
+type InputChannel = TrackedUnboundedReceiver<SignedBatchEnvelope<FriProof>>;
+type OutputChannel = TrackedUnboundedSender<L1SenderCommand<ExecuteCommand>>;
 
 mod db;
 
@@ -99,8 +99,8 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
             main_node_channels.unzip();
         let mut last_processed_batch = self.last_executed_batch_on_init;
 
-        async fn take_n<T>(
-            receiver: &mut PeekableReceiver<T>,
+        async fn take_n<T: Send + 'static>(
+            receiver: &mut TrackedUnboundedReceiver<T>,
             n: usize,
         ) -> anyhow::Result<Option<Vec<T>>> {
             let mut out = Vec::default();
@@ -131,11 +131,11 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                             batch_number = envelope.batch_number(),
                             "Passing through batch that was already executed"
                         );
-                        health_reporter.enter_state(GenericComponentState::WaitingSend);
                         if let Some(sender) = &execute_batches_sender {
                             sender
                                 .send(L1SenderCommand::Passthrough(Box::new(envelope)))
-                                .await?;
+                                .ok()
+                                .context("execute_batches channel closed")?;
                         }
 
                         continue;
@@ -216,7 +216,6 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                     "Processing batch in priority tree manager"
                 );
 
-                health_reporter.enter_state(GenericComponentState::WaitingSend);
                 priority_ops_internal_sender
                     .send((
                         batch_number,
@@ -265,15 +264,15 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
             drop(merkle_tree);
             // Record progress unconditionally — both main-node and EN paths processed this batch.
             let last_block = *batch_ranges.last().unwrap().1.end();
-            health_reporter.record_processed(last_block);
+            health_reporter.record_processed(last_block, 0);
             if let Some(s) = &execute_batches_sender {
-                health_reporter.enter_state(GenericComponentState::WaitingSend);
                 s.send(L1SenderCommand::SendToL1(ExecuteCommand::new(
                     batch_envelopes.unwrap(),
                     priority_ops,
                     interop_roots,
                 )))
-                .await?;
+                .ok()
+                .context("execute_batches channel closed")?;
             }
             last_processed_batch = batch_ranges.last().unwrap().0;
         }

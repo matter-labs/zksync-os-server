@@ -101,6 +101,17 @@ impl<T> TrackedUnboundedReceiver<T> {
         }
     }
 
+    /// Consume the buffered item placed by a prior `peek_recv` / `peek_with` call.
+    /// Returns `None` if the buffer is empty.
+    /// Decrements the depth counter since the item is now consumed.
+    pub fn pop_buffer(&mut self) -> Option<T> {
+        let item = self.buf.pop_front();
+        if item.is_some() {
+            self.depth.fetch_sub(1, Ordering::Relaxed);
+        }
+        item
+    }
+
     /// Non-consuming peek: loads one item into local buffer via `try_recv`.
     /// Does NOT decrement depth (item is still "in transit" until consumed).
     /// Returns `None` if the channel is currently empty.
