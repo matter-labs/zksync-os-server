@@ -243,6 +243,18 @@ alloy::sol! {
         function getBaseToken() external view returns (address);
     }
 
+    // `IValidatorTimelock.sol`
+    #[sol(rpc)]
+    interface IValidatorTimelock {
+        function UPGRADER_ROLE() external view returns (bytes32);
+        function hasRole(address _chainAddress, bytes32 _role, address _address) external view returns (bool);
+        function upgradeChainFromVersion(
+            address _chainAddress,
+            uint256 _oldProtocolVersion,
+            IChainTypeManager.DiamondCutData calldata _diamondCut
+        ) external;
+    }
+
     // Taken from `common/Config.sol`
     enum L2DACommitmentScheme {
         NONE,

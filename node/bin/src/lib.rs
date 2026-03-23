@@ -1047,7 +1047,17 @@ async fn run_main_node_pipeline(
             batch_verification_l1_config: node_state_on_startup.l1_state.batch_verification.clone(),
         })
         .pipe(UpgradeGatekeeper::new(
-            node_state_on_startup.l1_state.diamond_proxy_sl.clone(),
+            sl_provider.clone(),
+            node_state_on_startup.l1_state.diamond_proxy_address_sl(),
+            node_state_on_startup.l1_state.validator_timelock_sl,
+            config
+                .l1_sender_config
+                .operator_execute_sk
+                .clone()
+                .expect("operator_execute_sk must be set on the Main Node"),
+            config.l1_sender_config.max_fee_per_gas.0,
+            config.l1_sender_config.max_priority_fee_per_gas.0,
+            config.l1_sender_config.poll_interval,
         ))
         .pipe(L1Sender::<_, _, CommitCommand> {
             provider: sl_provider.clone(),
