@@ -1,29 +1,34 @@
 use crate::PipelineComponent;
-use crate::peekable_receiver::PeekableReceiver;
+use crate::tracked_channel::{TrackedUnboundedReceiver, tracked_unbounded_channel};
 use reth_tasks::Runtime;
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tokio::sync::mpsc;
 
 /// Pipeline with an active output stream that can be piped to more components
 pub struct Pipeline<Output: Send + 'static> {
-    receiver: PeekableReceiver<Output>,
+    receiver: TrackedUnboundedReceiver<Output>,
     runtime: Runtime,
-
     spawned_tasks: HashSet<&'static str>,
     shutdown_sender: mpsc::Sender<&'static str>,
     shutdown_receiver: mpsc::Receiver<&'static str>,
+    /// Live queue depth counters indexed by the producing component's NAME.
+    /// Each entry is the depth of that component's output channel.
+    pub channel_depths: Vec<(&'static str, Arc<AtomicUsize>)>,
 }
 
 impl Pipeline<()> {
     pub fn new(runtime: Runtime) -> Self {
-        let (_sender, receiver) = mpsc::channel(1);
+        let (_sender, receiver) = tracked_unbounded_channel::<()>();
         let (shutdown_sender, shutdown_receiver) = mpsc::channel(16);
         Self {
-            receiver: PeekableReceiver::new(receiver),
+            receiver,
             runtime,
             spawned_tasks: HashSet::default(),
             shutdown_sender,
             shutdown_receiver,
+            channel_depths: vec![],
         }
     }
 
@@ -71,7 +76,8 @@ impl<Output: Send + 'static> Pipeline<Output> {
     where
         C: PipelineComponent<Input = Output>,
     {
-        let (output_sender, output_receiver) = mpsc::channel(C::OUTPUT_BUFFER_SIZE);
+        let (output_sender, output_receiver) = tracked_unbounded_channel::<C::Output>();
+        let depth = output_sender.depth();
         let input_receiver = self.receiver;
 
         let shutdown_sender = self.shutdown_sender.clone();
@@ -95,12 +101,16 @@ impl<Output: Send + 'static> Pipeline<Output> {
             });
         self.spawned_tasks.insert(C::NAME);
 
+        let mut channel_depths = self.channel_depths;
+        channel_depths.push((C::NAME, depth));
+
         Pipeline {
-            receiver: PeekableReceiver::new(output_receiver),
+            receiver: output_receiver,
             runtime: self.runtime,
             spawned_tasks: self.spawned_tasks,
             shutdown_sender: self.shutdown_sender,
             shutdown_receiver: self.shutdown_receiver,
+            channel_depths,
         }
     }
 
