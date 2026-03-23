@@ -741,7 +741,8 @@ mod tests {
             Some(CreateType::Create)
         ));
 
-        tracer.create_operation_requested = None;
+        // Use a fresh tracer for the CREATE2 case instead of mutating internal state.
+        let mut tracer = CallTracer::default();
 
         tracer.on_create_request(true);
         assert!(matches!(
