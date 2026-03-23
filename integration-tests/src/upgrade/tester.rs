@@ -447,7 +447,7 @@ impl UpgradeTester {
     }
 
     /// Publishes bytecodes to the `BytecodesSupplier` contract on L1.
-    /// The server scans `EVMBytecodePublished` events from this contract
+    /// The server scans `BytecodePublished` events from this contract
     /// to discover force preimages needed during protocol upgrades.
     pub async fn publish_bytecodes_to_l1_supplier<I: IntoIterator<Item = Bytes>>(
         &self,
