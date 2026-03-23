@@ -148,7 +148,10 @@ fn reconcile_trace_with_output(
         frame.gas_used = U256::from(tx_output.gas_used);
         frame.error = Some(format_post_execution_revert_error());
         frame.output = Some(Bytes::copy_from_slice(revert_bytes));
-        frame.revert_reason = maybe_revert_reason(revert_bytes);
+        frame.revert_reason = None;
+        if frame.typ == "CREATE" || frame.typ == "CREATE2" {
+            frame.to = None;
+        }
     }
 }
 
@@ -603,6 +606,7 @@ pub(crate) fn fmt_error_msg(error: &EvmError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::sol_types::{Revert, SolError};
     use zksync_os_interface::types::ExecutionOutput;
 
     fn make_tx_output(execution_result: ExecutionResult) -> TxOutput {
@@ -637,9 +641,20 @@ mod tests {
         }
     }
 
+    fn make_create_call_frame() -> CallFrame {
+        CallFrame {
+            to: Some(Address::from([0x11; 20])),
+            typ: "CREATE".to_string(),
+            output: Some(Bytes::from(vec![0xca, 0xfe])),
+            ..make_empty_call_frame()
+        }
+    }
+
     #[test]
     fn reconcile_patches_frame_when_tracer_missed_revert() {
-        let tx_output = make_tx_output(ExecutionResult::Revert(vec![0x08, 0xc3, 0x79, 0xa0]));
+        let tx_output = make_tx_output(ExecutionResult::Revert(
+            Revert::from("coincidental success bytes").abi_encode(),
+        ));
         let mut frame = make_empty_call_frame();
 
         reconcile_trace_with_output(&mut frame, &tx_output, true);
@@ -649,8 +664,11 @@ mod tests {
         assert_eq!(frame.gas_used, U256::from(50_000));
         assert_eq!(
             frame.output,
-            Some(Bytes::from(vec![0x08, 0xc3, 0x79, 0xa0]))
+            Some(Bytes::from(
+                Revert::from("coincidental success bytes").abi_encode()
+            ))
         );
+        assert!(frame.revert_reason.is_none());
     }
 
     #[test]
@@ -695,5 +713,16 @@ mod tests {
         assert_eq!(frame.error.as_deref(), Some("execution reverted"));
         assert_eq!(frame.output, Some(Bytes::from(vec![0xaa, 0xbb])));
         assert_eq!(frame.gas_used, U256::ZERO);
+    }
+
+    #[test]
+    fn reconcile_clears_created_address_for_post_execution_revert() {
+        let tx_output = make_tx_output(ExecutionResult::Revert(vec![]));
+        let mut frame = make_create_call_frame();
+
+        reconcile_trace_with_output(&mut frame, &tx_output, true);
+
+        assert_eq!(frame.error.as_deref(), Some(POST_EXECUTION_PUBDATA_ERROR));
+        assert!(frame.to.is_none());
     }
 }
