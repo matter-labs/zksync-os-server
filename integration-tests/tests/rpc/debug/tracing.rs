@@ -92,6 +92,8 @@ fn assert_pubdata_exhaustion_call_frame(call_frame: &CallFrame) {
         call_frame.error.as_deref(),
         Some("execution reverted: insufficient gas to cover pubdata cost")
     );
+    assert!(call_frame.gas_used > U256::ZERO);
+    assert!(call_frame.output.is_some());
     assert!(
         call_frame.revert_reason.is_none(),
         "post-execution revert should not invent a revert reason"

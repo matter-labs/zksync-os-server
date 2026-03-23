@@ -19,8 +19,7 @@ pub const STACK_SIZE: usize = 1024;
 pub const ERGS_PER_GAS: u64 = 256;
 
 /// Error message used when the VM terminates a transaction due to resource exhaustion
-/// (out of native resources or pubdata limit exceeded). Shared between the tracer
-/// and the reconciliation logic to avoid fragile string matching.
+/// (out of native resources or pubdata limit exceeded).
 pub(crate) const RESOURCE_EXHAUSTION_ERROR: &str =
     "ZKsync OS: out of execution resources or pubdata";
 /// This message is used only for transactions whose top-level EVM execution succeeded,
@@ -155,7 +154,7 @@ fn reconcile_trace_with_output(
         && let ExecutionResult::Revert(revert_bytes) = &tx_output.execution_result
     {
         frame.gas_used = U256::from(tx_output.gas_used);
-        frame.error = Some(format_post_execution_revert_error());
+        frame.error = Some(POST_EXECUTION_PUBDATA_ERROR.to_string());
         frame.output = Some(Bytes::copy_from_slice(revert_bytes));
         frame.revert_reason = None;
         if frame.typ == "CREATE" || frame.typ == "CREATE2" {
@@ -572,10 +571,6 @@ pub(crate) fn maybe_revert_reason(output: &[u8]) -> Option<String> {
     } else {
         Some(reason)
     }
-}
-
-pub(crate) fn format_post_execution_revert_error() -> String {
-    POST_EXECUTION_PUBDATA_ERROR.to_string()
 }
 
 /// Converts [`EvmError`] to a geth-style error message (if possible).
