@@ -87,6 +87,10 @@ fn pubdata_exhaustion_fee_config() -> FeeConfig {
     }
 }
 
+/// This limit is high enough for validation to pass under `pubdata_exhaustion_fee_config()`,
+/// but low enough for the tx to run out of resources when paying for execution pubdata.
+const PUBDATA_EXHAUSTION_GAS_LIMIT: u64 = 580_000;
+
 fn assert_pubdata_exhaustion_call_frame(call_frame: &CallFrame) {
     assert_eq!(
         call_frame.error.as_deref(),
@@ -197,7 +201,7 @@ async fn call_trace_transaction_reports_pubdata_exhaustion(
 
     let receipt = counter
         .increment(U256::from(1))
-        .gas(100_000)
+        .gas(PUBDATA_EXHAUSTION_GAS_LIMIT)
         .send()
         .await?
         .with_timeout(Some(DEFAULT_TIMEOUT))
@@ -235,7 +239,7 @@ async fn call_trace_transaction_reports_pubdata_exhaustion_with_only_top_call(
 
     let receipt = counter
         .increment(U256::from(1))
-        .gas(100_000)
+        .gas(PUBDATA_EXHAUSTION_GAS_LIMIT)
         .send()
         .await?
         .with_timeout(Some(DEFAULT_TIMEOUT))
@@ -278,7 +282,7 @@ async fn call_trace_block_reports_pubdata_exhaustion(builder: TesterBuilder) -> 
 
     let receipt = counter
         .increment(U256::from(1))
-        .gas(100_000)
+        .gas(PUBDATA_EXHAUSTION_GAS_LIMIT)
         .send()
         .await?
         .with_timeout(Some(DEFAULT_TIMEOUT))
