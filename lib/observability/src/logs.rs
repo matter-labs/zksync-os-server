@@ -55,33 +55,31 @@ impl Logs {
 
     /// Builds a filter for the logs.
     ///
-    /// Unless `disable_default_logs` was set, uses `zksync=info` as a default which is then merged
+    /// Unless `disable_default_logs` was set, uses `INFO` as a default which is then merged
     /// with user-defined directives. Provided directives can extend/override the default value.
-    ///
-    /// The provided default enables `debug` level logging for all the crates with a name starting with `zksync`
-    /// (per `tracing` [documentation][1]), and `info` for everything else, which is a good enough default for any project.
     ///
     /// If `log_directives` are provided via `with_log_directives`, they will be used.
     /// Otherwise, the value will be parsed from the environment variable `RUST_LOG`.
-    ///
-    /// [1]: https://docs.rs/tracing-subscriber/0.3.18/tracing_subscriber/filter/targets/struct.Targets.html#filtering-with-targets
     pub(super) fn build_filter(&self) -> EnvFilter {
         let mut directives = if self.disable_default_logs {
             "".to_string()
         } else {
-            "INFO,\
-            zksync_os_server=DEBUG,\
-            zksync_os_sequencer=DEBUG,\
-            zksync_os_priority_tree=DEBUG,\
-            zksync_os_merkle_tree=DEBUG,\
-            zksync_os_revm_consistency_checker=DEBUG,\
-            "
-            .to_string()
+            "INFO".to_string()
+        };
+        let mut append_directives = |value: &str| {
+            let value = value.trim();
+            if value.is_empty() {
+                return;
+            }
+            if !directives.is_empty() && !value.starts_with(',') {
+                directives.push(',');
+            }
+            directives.push_str(value);
         };
         if let Some(log_directives) = &self.log_directives {
-            directives.push_str(log_directives);
+            append_directives(log_directives);
         } else if let Ok(env_directives) = std::env::var(EnvFilter::DEFAULT_ENV) {
-            directives.push_str(&env_directives);
+            append_directives(&env_directives);
         };
         EnvFilter::new(directives)
     }

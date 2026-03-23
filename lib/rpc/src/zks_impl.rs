@@ -17,8 +17,8 @@ use zksync_os_merkle_tree_api::flat::StorageSlotProof;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_rpc_api::{
     types::{
-        AddressScopedKey, BatchStorageProof, BlockMetadata, L2ToL1LogProof, LogProofTarget,
-        StateCommitmentPreimage,
+        AddressScopedKey, BatchStorageProof, BlockMetadata, L1VerificationData, L2ToL1LogProof,
+        LogProofTarget, StateCommitmentPreimage,
     },
     zks::ZksApiServer,
 };
@@ -386,10 +386,20 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             return Err(err.into());
         }
 
+        let l1_verification_data = L1VerificationData {
+            batch_number,
+            number_of_layer1_txs: batch.batch_info.number_of_layer1_txs,
+            priority_operations_hash: batch.batch_info.priority_operations_hash,
+            dependency_roots_rolling_hash: batch.batch_info.dependency_roots_rolling_hash,
+            l2_to_l1_logs_root_hash: batch.batch_info.l2_to_l1_logs_root_hash,
+            commitment: batch.batch_info.commitment,
+        };
+
         Ok(Some(BatchStorageProof {
             address,
             state_commitment_preimage,
             storage_proofs,
+            l1_verification_data,
         }))
     }
 }
