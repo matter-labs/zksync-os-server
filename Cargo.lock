@@ -14147,12 +14147,14 @@ dependencies = [
  "zksync_os_api",
  "zksync_os_contract_interface",
  "zksync_os_integration_tests_macros",
+ "zksync_os_merkle_tree_api",
  "zksync_os_multivm",
  "zksync_os_network",
  "zksync_os_rpc_api",
  "zksync_os_server",
  "zksync_os_state_full_diffs",
  "zksync_os_types",
+ "zksync_os_verify_storage_proof",
 ]
 
 [[package]]
@@ -14899,6 +14901,20 @@ dependencies = [
  "thiserror 2.0.17",
  "zksync_os_contract_interface",
  "zksync_os_interface",
+]
+
+[[package]]
+name = "zksync_os_verify_storage_proof"
+version = "0.17.1"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "clap",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.22",
+ "zksync_os_merkle_tree_api",
+ "zksync_os_rpc_api",
 ]
 
 [[package]]
