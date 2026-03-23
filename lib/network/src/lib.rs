@@ -1,4 +1,5 @@
 pub mod config;
+pub(crate) mod metrics;
 pub mod protocol;
 pub mod service;
 pub mod version;

@@ -32,6 +32,8 @@ tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 secrecy.workspace = true
+vise.workspace = true
+metrics.workspace = true
 
 reth-network.workspace = true
 reth-network-peers.workspace = true
