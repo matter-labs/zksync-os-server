@@ -446,6 +446,22 @@ impl UpgradeTester {
         Ok(())
     }
 
+    /// Publishes bytecodes to the `BytecodesSupplier` contract on L1.
+    /// The server scans `EVMBytecodePublished` events from this contract
+    /// to discover force preimages needed during protocol upgrades.
+    pub async fn publish_bytecodes_to_l1_supplier<I: IntoIterator<Item = Bytes>>(
+        &self,
+        bytecodes: I,
+    ) -> anyhow::Result<()> {
+        self.bytecode_supplier
+            .publishBytecodes(bytecodes.into_iter().collect())
+            .send()
+            .await?
+            .expect_successful_receipt()
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_new_version_on_ctm(
         &self,
         upgrade_data: interfaces::DiamondCutData,

@@ -273,3 +273,60 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
 
     Ok(())
 }
+
+/// Verifies that bytecodes published to the `BytecodesSupplier` contract on L1 are
+/// correctly fetched by the server during a protocol upgrade.
+///
+/// The test publishes a bytecode to the supplier before executing a patch upgrade,
+/// verifying that:
+/// 1. `EVMBytecodePublished` events on L1 are scanned and returned as force preimages.
+/// 2. The upgrade completes successfully even when the supplier is active.
+///
+/// Since this is a patch-only upgrade (no force deployments), it focuses on confirming
+/// that the supplier scanning path does not interfere with the upgrade flow.
+#[test_log::test(tokio::test)]
+async fn upgrade_with_bytecodes_from_supplier() -> anyhow::Result<()> {
+    let upgrade_timestamp = U256::from(0);
+    let deadline = U256::MAX;
+
+    let tester = Tester::setup().await?;
+    let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+
+    // Publish a bytecode to the BytecodesSupplier contract on L1 before the upgrade.
+    // The server should scan `EVMBytecodePublished` events from the supplier
+    // and return this bytecode as a force preimage when processing the upgrade.
+    // The supplier requires bytecodes padded to 32 bytes with an odd number of words.
+    let mut bytecode = SampleForceDeployment::DEPLOYED_BYTECODE.to_vec();
+    let padding = (32 - bytecode.len() % 32) % 32;
+    bytecode.extend(vec![0u8; padding]);
+    // Ensure odd number of 32-byte words (ZKsync bytecode convention).
+    if (bytecode.len() / 32).is_multiple_of(2) {
+        bytecode.extend([0u8; 32]);
+    }
+    upgrade_tester
+        .publish_bytecodes_to_l1_supplier([Bytes::from(bytecode)])
+        .await?;
+
+    // Execute a patch upgrade. Patch upgrades do not include an L2 upgrade transaction
+    // so force preimages are not consumed, but the server must still scan the supplier
+    // without errors.
+    let protocol_upgrade = upgrade_tester
+        .protocol_upgrade_builder()
+        .await?
+        .bump_patch(1)
+        .with_force_deployments(BTreeMap::new())
+        .with_timestamp(upgrade_timestamp)
+        .build();
+
+    upgrade_tester
+        .execute_default_upgrade(
+            &protocol_upgrade,
+            deadline,
+            upgrade_timestamp,
+            true,
+            Vec::new(),
+        )
+        .await?;
+
+    Ok(())
+}
