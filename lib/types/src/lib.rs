@@ -34,6 +34,7 @@ pub use node::NodeRole;
 pub mod protocol;
 pub use protocol::{
     ProtocolSemanticVersion, ProtocolSemanticVersionError, config as protocol_config,
+    config::ExecutionVersion,
 };
 
 mod token_price;

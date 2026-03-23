@@ -8,7 +8,6 @@ use std::ops::{Deref, DerefMut};
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
-use zksync_os_types::protocol_config::ExecutionVersion;
 use zksync_os_types::{
     L2_TO_L1_TREE_SIZE, L2ToL1Log, ProtocolSemanticVersion, PubdataMode, ZkEnvelope, ZkTransaction,
 };
@@ -130,9 +129,11 @@ impl BatchInfo {
         };
 
         /* ---------- operator DA input ---------- */
-        let exec_version = ExecutionVersion::try_from(last_block_context.execution_version)
-            .expect("unsupported execution version in block context");
-        let da_fields = calculate_da_fields(&total_pubdata, pubdata_mode, exec_version);
+        let da_fields = calculate_da_fields(
+            &total_pubdata,
+            pubdata_mode,
+            last_block_context.execution_version,
+        );
 
         /* ---------- new state commitment ---------- */
         // FIXME: extract to a type common batch types?
@@ -268,8 +269,12 @@ struct DAFields {
 fn calculate_da_fields(
     pubdata: &[u8],
     pubdata_mode: PubdataMode,
-    exec_version: ExecutionVersion,
+    batch_execution_version: u32,
 ) -> DAFields {
+    use zksync_os_types::protocol_config::ExecutionVersion;
+
+    let exec_version = ExecutionVersion::try_from(batch_execution_version)
+        .unwrap_or_else(|v| panic!("unsupported execution version: {v}"));
     let (da_commitment, operator_da_input, blob_sidecar) = match (pubdata_mode, exec_version) {
         (PubdataMode::Calldata | PubdataMode::RelayedL2Calldata, _)
         | (PubdataMode::Validium, ExecutionVersion::V4) => {
