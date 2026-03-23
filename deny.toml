@@ -8,10 +8,6 @@ feature-depth = 1
 
 [advisories]
 ignore = [
-    "RUSTSEC-2025-0137",
-    # Unsoundness in lru <0.16.3. Waiting for:
-    #  * alloy-provider to upgrade (https://github.com/alloy-rs/alloy/pull/3460)
-    "RUSTSEC-2026-0002",
 ]
 
 [bans]
