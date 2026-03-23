@@ -392,6 +392,9 @@ impl EvmTracer for CallTracer {
     }
 
     fn on_event(&mut self, address: Address, topics: Vec<B256>, data: &[u8]) {
+        if self.only_top_call && self.current_call_depth > 1 {
+            return;
+        }
         if self.collect_logs {
             let call = self.unfinished_calls.last_mut().expect("Should exist");
             call.logs.push(CallLogFrame {
@@ -442,6 +445,9 @@ impl EvmTracer for CallTracer {
         _new_internal_bytecode_hash: B256,
         new_observable_bytecode_length: u32,
     ) {
+        if self.only_top_call && self.current_call_depth > 1 {
+            return;
+        }
         let call = self.unfinished_calls.last_mut().expect("Should exist");
 
         if call.typ == "CREATE" || call.typ == "CREATE2" {
@@ -513,6 +519,9 @@ impl EvmTracer for CallTracer {
         token_value: U256,
         frame_state: impl EvmFrameInterface,
     ) {
+        if self.only_top_call && self.current_call_depth > 1 {
+            return;
+        }
         // Following Geth implementation: https://github.com/ethereum/go-ethereum/blob/2dbb580f51b61d7ff78fceb44b06835827704110/core/vm/instructions.go#L894
         //
         // It's debatable whether post-Cancun SELFDESTRUCT invocation should create a "SELFDESTURCT"

@@ -12,7 +12,7 @@ use alloy::sol_types::{Revert, SolCall, SolError};
 use std::collections::HashMap;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert, ReceiptsAssert};
 use zksync_os_integration_tests::contracts::{
-    Counter, EventEmitter, TracingPrimary, TracingSecondary,
+    Counter, EventEmitter, NestedCreateFactory, NestedSelfdestructCaller, TracingPrimary, TracingSecondary,
 };
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
 use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, TesterBuilder, test_multisetup};
@@ -784,6 +784,194 @@ async fn debug_trace_call_stack(tester: Tester) -> anyhow::Result<()> {
         )
         .to_lowercase(),
         "stored value must match the expected one"
+    );
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+async fn call_trace_only_top_call(tester: Tester) -> anyhow::Result<()> {
+    let alice = tester.l2_wallet.default_signer().address();
+    let secondary_data = U256::from(42);
+    let calculate_value = U256::from(24);
+
+    let secondary_contract =
+        TracingSecondary::deploy(tester.l2_provider.clone(), secondary_data).await?;
+    let primary_contract =
+        TracingPrimary::deploy(tester.l2_provider.clone(), *secondary_contract.address()).await?;
+
+    let receipt = primary_contract
+        .calculate(calculate_value)
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    let call_config = CallConfig {
+        only_top_call: Some(true),
+        with_log: Some(false),
+    };
+    let trace = tester
+        .l2_provider
+        .debug_trace_transaction(
+            receipt.transaction_hash,
+            GethDebugTracingOptions::call_tracer(call_config),
+        )
+        .await?;
+    let call_frame = trace.try_into_call_frame().expect("not a call frame");
+
+    assert_eq!(call_frame.from, alice);
+    assert_eq!(call_frame.to, Some(*primary_contract.address()));
+    assert_eq!(call_frame.typ, "CALL");
+    assert!(
+        call_frame.calls.is_empty(),
+        "only_top_call should produce no subcalls, got {}",
+        call_frame.calls.len()
+    );
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+async fn call_trace_only_top_call_with_logs(tester: Tester) -> anyhow::Result<()> {
+    let secondary_data = U256::from(42);
+    let calculate_value = U256::from(24);
+    let expected_value = secondary_data * calculate_value;
+
+    let secondary_contract =
+        TracingSecondary::deploy(tester.l2_provider.clone(), secondary_data).await?;
+    let primary_contract =
+        TracingPrimary::deploy(tester.l2_provider.clone(), *secondary_contract.address()).await?;
+
+    let mut call_request = primary_contract
+        .calculate(calculate_value)
+        .into_transaction_request();
+    call_request.max_priority_fee_per_gas = Some(1);
+    call_request.max_fee_per_gas = Some(u128::MAX);
+    call_request.set_from(tester.l2_wallet.default_signer().address());
+
+    let call_config = CallConfig {
+        only_top_call: Some(true),
+        with_log: Some(true),
+    };
+    let opts = GethDebugTracingCallOptions {
+        tracing_options: GethDebugTracingOptions::call_tracer(call_config),
+        ..Default::default()
+    };
+    let trace = tester
+        .l2_provider
+        .debug_trace_call(call_request, BlockId::latest(), opts)
+        .await?;
+    let call_frame = trace.try_into_call_frame().expect("not a call frame");
+
+    assert!(
+        call_frame.calls.is_empty(),
+        "only_top_call should produce no subcalls, got {}",
+        call_frame.calls.len()
+    );
+
+    // TracingPrimary::calculate emits exactly one `CalculationDone` event.
+    // The CalculationDone event has signature: CalculationDone(uint256 indexed input, uint256 indexed result)
+    // Its topic0 is keccak256("CalculationDone(uint256,uint256)")
+    assert_eq!(
+        call_frame.logs.len(),
+        1,
+        "expected exactly 1 log from top-level contract, got {}",
+        call_frame.logs.len()
+    );
+    let log = &call_frame.logs[0];
+    let topics = log.topics.as_ref().expect("log should have topics");
+    // topic[1] is the indexed `input` parameter
+    assert_eq!(
+        topics[1],
+        alloy::primitives::B256::from(calculate_value),
+        "log topic[1] should be the calculate input value"
+    );
+    // topic[2] is the indexed `result` parameter
+    assert_eq!(
+        topics[2],
+        alloy::primitives::B256::from(expected_value),
+        "log topic[2] should be the calculation result"
+    );
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+async fn call_trace_only_top_call_nested_create(tester: Tester) -> anyhow::Result<()> {
+    let alice = tester.l2_wallet.default_signer().address();
+    let init_value = U256::from(99);
+
+    let receipt = NestedCreateFactory::deploy_builder(tester.l2_provider.clone(), init_value)
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    let call_config = CallConfig {
+        only_top_call: Some(true),
+        with_log: Some(false),
+    };
+    let trace = tester
+        .l2_provider
+        .debug_trace_transaction(
+            receipt.transaction_hash,
+            GethDebugTracingOptions::call_tracer(call_config),
+        )
+        .await?;
+    let call_frame = trace.try_into_call_frame().expect("not a call frame");
+
+    assert_eq!(call_frame.from, alice);
+    assert_eq!(call_frame.typ, "CREATE");
+    assert!(
+        call_frame.calls.is_empty(),
+        "only_top_call should produce no subcalls, got {}",
+        call_frame.calls.len()
+    );
+    assert!(
+        call_frame.to.is_some(),
+        "CREATE frame should have `to` populated with deployed address"
+    );
+    assert!(
+        call_frame.output.is_some(),
+        "successful CREATE frame should have `output` (deployed bytecode)"
+    );
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+async fn call_trace_only_top_call_nested_selfdestruct(tester: Tester) -> anyhow::Result<()> {
+    let alice = tester.l2_wallet.default_signer().address();
+
+    let contract = NestedSelfdestructCaller::deploy(tester.l2_provider.clone()).await?;
+    let receipt = contract
+        .trigger(alice)
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    let call_config = CallConfig {
+        only_top_call: Some(true),
+        with_log: Some(false),
+    };
+    let trace = tester
+        .l2_provider
+        .debug_trace_transaction(
+            receipt.transaction_hash,
+            GethDebugTracingOptions::call_tracer(call_config),
+        )
+        .await?;
+    let call_frame = trace.try_into_call_frame().expect("not a call frame");
+
+    assert_eq!(call_frame.from, alice);
+    assert_eq!(call_frame.to, Some(*contract.address()));
+    assert_eq!(call_frame.typ, "CALL");
+    assert!(
+        call_frame.calls.is_empty(),
+        "only_top_call should omit nested selfdestruct frames, got {}",
+        call_frame.calls.len()
     );
 
     Ok(())

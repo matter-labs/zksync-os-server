@@ -57,6 +57,20 @@ alloy::sol!(
 );
 
 alloy::sol!(
+    /// Factory whose constructor deploys a child contract (nested CREATE).
+    #[sol(rpc)]
+    NestedCreateFactory,
+    "test-contracts/out/NestedCreateFactory.sol/NestedCreateFactory.json"
+);
+
+alloy::sol!(
+    /// Contract that triggers nested SELFDESTRUCT through a child call.
+    #[sol(rpc)]
+    NestedSelfdestructCaller,
+    "test-contracts/out/NestedSelfdestructCaller.sol/NestedSelfdestructCaller.json"
+);
+
+alloy::sol!(
     /// Simple contract with storage state.
     #[sol(rpc)]
     Counter,
