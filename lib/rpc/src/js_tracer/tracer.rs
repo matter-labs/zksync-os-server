@@ -7,18 +7,27 @@ use crate::js_tracer::{
     },
     utils::{extract_js_source_and_config, gas_used_from_resources, wrap_js_invocation},
 };
-use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
+use crate::sandbox::{
+    ERGS_PER_GAS, fmt_error_msg, format_post_execution_revert_error, maybe_revert_reason,
+};
 use alloy::hex::ToHexExt;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use boa_engine::{Context as BoaContext, Source};
 use serde_json::Value as JsonValue;
 use std::ops::Not;
-use std::{cell::RefCell, collections::hash_map::Entry};
+use std::{
+    cell::RefCell,
+    collections::{VecDeque, hash_map::Entry},
+    rc::Rc,
+};
 use zksync_os_evm_errors::EvmError;
+use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{
     AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources,
     EvmStackInterface, EvmTracer, NopValidator,
 };
+use zksync_os_interface::traits::TxResultCallback;
+use zksync_os_interface::types::{TxOutput, TxProcessingOutputOwned};
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
@@ -69,9 +78,63 @@ pub struct JsTracer {
 
     frame_stack: Vec<FrameState>,
     last_finished_frame: Option<TxContext>,
+    pending_finalization: Option<PendingTxFinalization>,
+    queued_tx_results: Rc<RefCell<VecDeque<Result<TxProcessingOutputOwned, InvalidTransaction>>>>,
     tx_failed: bool,
 
     error: Option<anyhow::Error>,
+}
+
+struct PendingTxFinalization {
+    ctx: TxContext,
+    tx_failed: bool,
+}
+
+struct AuthoritativeTxOutcome<'a> {
+    status: bool,
+    output: &'a [u8],
+    gas_used: u64,
+    native_used: u64,
+    pubdata_used: u64,
+}
+
+impl<'a> From<&'a TxOutput> for AuthoritativeTxOutcome<'a> {
+    fn from(value: &'a TxOutput) -> Self {
+        Self {
+            status: value.is_success(),
+            output: value.as_returned_bytes(),
+            gas_used: value.gas_used,
+            native_used: value.native_used,
+            pubdata_used: value.pubdata_used,
+        }
+    }
+}
+
+impl<'a> From<&'a TxProcessingOutputOwned> for AuthoritativeTxOutcome<'a> {
+    fn from(value: &'a TxProcessingOutputOwned) -> Self {
+        Self {
+            status: value.status,
+            output: &value.output,
+            gas_used: value.gas_used,
+            native_used: value.native_used,
+            pubdata_used: value.pubdata_used,
+        }
+    }
+}
+
+struct JsTxResultCallback {
+    queued_tx_results: Rc<RefCell<VecDeque<Result<TxProcessingOutputOwned, InvalidTransaction>>>>,
+}
+
+impl TxResultCallback for JsTxResultCallback {
+    fn tx_executed(
+        &mut self,
+        tx_execution_result: Result<TxProcessingOutputOwned, InvalidTransaction>,
+    ) {
+        self.queued_tx_results
+            .borrow_mut()
+            .push_back(tx_execution_result);
+    }
 }
 
 impl JsTracer {
@@ -115,8 +178,52 @@ impl JsTracer {
             error: None,
             frame_stack: Vec::new(),
             last_finished_frame: None,
+            pending_finalization: None,
+            queued_tx_results: Rc::new(RefCell::new(VecDeque::new())),
             tx_failed: false,
         })
+    }
+
+    pub(crate) fn take_last_result(&mut self) -> Option<JsonValue> {
+        self.results.pop()
+    }
+
+    pub(crate) fn take_results(&mut self) -> Vec<JsonValue> {
+        std::mem::take(&mut self.results)
+    }
+
+    fn tx_result_callback(&self) -> JsTxResultCallback {
+        JsTxResultCallback {
+            queued_tx_results: Rc::clone(&self.queued_tx_results),
+        }
+    }
+
+    pub(crate) fn finalize_simulated_tx(&mut self, tx_output: &TxOutput) {
+        self.finalize_pending_tx(Ok(AuthoritativeTxOutcome::from(tx_output)));
+    }
+
+    pub(crate) fn flush_pending_tx_results(&mut self) {
+        if self.error.is_some() {
+            self.pending_finalization = None;
+            self.queued_tx_results.borrow_mut().clear();
+            return;
+        }
+
+        if self.pending_finalization.is_some() {
+            let tx_result = self.queued_tx_results.borrow_mut().pop_front();
+            match tx_result {
+                Some(tx_result) => self.finalize_pending_tx_owned(tx_result),
+                None => self.handle_missing_authoritative_result(),
+            }
+        }
+
+        if self.pending_finalization.is_none() && !self.queued_tx_results.borrow().is_empty() {
+            self.record_error(
+                TracerMethod::Result,
+                anyhow::anyhow!("Received authoritative tx result without pending tracer state"),
+            );
+            self.queued_tx_results.borrow_mut().clear();
+        }
     }
 
     /// `call_method` invokes a method on the JS tracer object with the given argument.
@@ -501,6 +608,93 @@ impl JsTracer {
         Ok(serde_json::from_str::<JsonValue>(&out).unwrap_or(JsonValue::Null))
     }
 
+    fn reset_tx_state(&mut self) {
+        self.pending_step = None;
+        self.pending_create_type = None;
+        self.frame_stack.clear();
+        self.last_finished_frame = None;
+        self.pending_finalization = None;
+        self.tx_failed = false;
+    }
+
+    fn rollback_and_reset_tx_state(&mut self) {
+        self.rollback_overlays();
+        self.clear_overlay_journals();
+        self.reset_tx_state();
+    }
+
+    fn handle_missing_authoritative_result(&mut self) {
+        self.record_error(
+            TracerMethod::Result,
+            anyhow::anyhow!("Missing authoritative transaction result for JS tracer"),
+        );
+        self.rollback_and_reset_tx_state();
+    }
+
+    fn finalize_pending_tx(
+        &mut self,
+        tx_result: Result<AuthoritativeTxOutcome<'_>, InvalidTransaction>,
+    ) {
+        let Some(mut pending) = self.pending_finalization.take() else {
+            self.record_error(
+                TracerMethod::Result,
+                anyhow::anyhow!("No pending JS tracer transaction to finalize"),
+            );
+            return;
+        };
+
+        let authoritative = match tx_result {
+            Ok(tx_result) => tx_result,
+            Err(err) => {
+                self.record_error(
+                    TracerMethod::Result,
+                    anyhow::anyhow!("Failed to finalize JS tracer transaction: {err}"),
+                );
+                self.rollback_and_reset_tx_state();
+                return;
+            }
+        };
+
+        if !authoritative.status && pending.ctx.error.is_none() {
+            pending.ctx.gas_used = Some(U256::from(authoritative.gas_used));
+            pending.ctx.output = Some(Bytes::copy_from_slice(authoritative.output));
+            pending.ctx.error = Some(format_post_execution_revert_error(
+                authoritative.gas_used,
+                authoritative.pubdata_used,
+                authoritative.native_used,
+            ));
+        }
+
+        let tx_failed = pending.tx_failed || !authoritative.status;
+        if tx_failed {
+            self.rollback_overlays();
+        } else {
+            self.apply_pending_selfdestructs();
+            self.commit_overlays();
+        }
+
+        match self.call_result(&pending.ctx) {
+            Ok(val) => self.results.push(val),
+            Err(err) => self.record_error(TracerMethod::Result, err),
+        }
+
+        self.clear_overlay_journals();
+        self.reset_tx_state();
+    }
+
+    fn finalize_pending_tx_owned(
+        &mut self,
+        tx_result: Result<TxProcessingOutputOwned, InvalidTransaction>,
+    ) {
+        match tx_result {
+            Ok(tx_result) => {
+                let outcome = AuthoritativeTxOutcome::from(&tx_result);
+                self.finalize_pending_tx(Ok(outcome));
+            }
+            Err(err) => self.finalize_pending_tx(Err(err)),
+        }
+    }
+
     fn consume_call_type(&mut self, modifier: CallModifier) -> String {
         let typ = match modifier {
             CallModifier::NoModifier => "CALL".to_string(),
@@ -837,6 +1031,7 @@ impl EvmTracer for JsTracer {
     fn on_event(&mut self, _: Address, _: Vec<B256>, _: &[u8]) {}
 
     fn begin_tx(&mut self, _calldata: &[u8]) {
+        self.flush_pending_tx_results();
         self.tx_failed = false;
         self.current_depth = 0;
         self.pending_step = None;
@@ -851,11 +1046,7 @@ impl EvmTracer for JsTracer {
 
     fn finish_tx(&mut self) {
         if self.error.is_some() {
-            self.rollback_overlays();
-            self.clear_overlay_journals();
-            self.frame_stack.clear();
-            self.tx_failed = false;
-            self.last_finished_frame = None;
+            self.rollback_and_reset_tx_state();
             return;
         }
 
@@ -867,38 +1058,19 @@ impl EvmTracer for JsTracer {
                     TracerMethod::Result,
                     anyhow::anyhow!("No finished frame found at transaction end"),
                 );
-                self.rollback_overlays();
-                self.clear_overlay_journals();
-                self.frame_stack.clear();
-                self.tx_failed = false;
-                self.last_finished_frame = None;
+                self.rollback_and_reset_tx_state();
 
                 return;
             }
         };
         self.pending_step = None;
-
-        let mut tx_failed = self.tx_failed || ctx.error.is_some();
-
-        match self.call_result(&ctx) {
-            Ok(val) => self.results.push(val),
-            Err(err) => {
-                tx_failed = true;
-                self.record_error(TracerMethod::Result, err);
-            }
-        }
-
-        if tx_failed {
-            self.rollback_overlays();
-        } else {
-            self.apply_pending_selfdestructs();
-            self.commit_overlays();
-        }
-
-        self.clear_overlay_journals();
+        self.pending_finalization = Some(PendingTxFinalization {
+            tx_failed: self.tx_failed || ctx.error.is_some(),
+            ctx,
+        });
+        self.last_finished_frame = None;
         self.frame_stack.clear();
         self.tx_failed = false;
-        self.last_finished_frame = None;
     }
 
     fn before_evm_interpreter_execution_step(
@@ -1013,6 +1185,7 @@ pub fn trace_block<V: ViewState + 'static>(
     js_tracer_config: String,
 ) -> anyhow::Result<Vec<JsonValue>> {
     let mut tracer = JsTracer::new(state_view.clone(), js_tracer_config)?;
+    let tx_result_callback = tracer.tx_result_callback();
 
     let tx_source = zksync_os_interface::traits::TxListSource {
         transactions: txs.into_iter().map(|tx| tx.encode()).collect(),
@@ -1022,14 +1195,15 @@ pub fn trace_block<V: ViewState + 'static>(
         state_view.clone(),
         state_view,
         tx_source,
-        zksync_os_interface::traits::NoopTxCallback,
+        tx_result_callback,
         &mut tracer,
         &mut NopValidator,
     )?;
+    tracer.flush_pending_tx_results();
 
     if let Some(err) = tracer.take_error() {
         return Err(err);
     }
 
-    Ok(tracer.results)
+    Ok(tracer.take_results())
 }

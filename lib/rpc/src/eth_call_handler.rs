@@ -383,7 +383,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 let mut tracer = js_tracer::tracer::JsTracer::new(view.clone(), js_cfg)
                     .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))?;
 
-                zksync_os_multivm::simulate_tx(
+                let tx_output = zksync_os_multivm::simulate_tx(
                     execution_env.transaction.encode(),
                     execution_env.block_context,
                     view.clone(),
@@ -392,6 +392,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 )
                 .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))
                 .and_then(|inner| inner.map_err(EthCallError::InvalidTransaction))?;
+                tracer.finalize_simulated_tx(&tx_output);
 
                 tracer
             }
@@ -399,7 +400,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 let mut tracer = js_tracer::tracer::JsTracer::new(storage_view.clone(), js_cfg)
                     .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))?;
 
-                zksync_os_multivm::simulate_tx(
+                let tx_output = zksync_os_multivm::simulate_tx(
                     execution_env.transaction.encode(),
                     execution_env.block_context,
                     storage_view.clone(),
@@ -408,6 +409,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 )
                 .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))
                 .and_then(|inner| inner.map_err(EthCallError::InvalidTransaction))?;
+                tracer.finalize_simulated_tx(&tx_output);
 
                 tracer
             }
@@ -417,7 +419,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             return Err(EthCallError::CallTracerError(err));
         }
 
-        Ok(tracer_output.results.pop().unwrap_or(JsonValue::Null))
+        Ok(tracer_output.take_last_result().unwrap_or(JsonValue::Null))
     }
 
     pub fn estimate_gas_impl(
