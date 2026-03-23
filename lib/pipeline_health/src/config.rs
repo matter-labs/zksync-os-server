@@ -45,25 +45,25 @@ impl ComponentId {
             Self::L1SenderExecute => "l1_sender_execute",
         }
     }
-
-    /// Whether this component is reactive (never holds WaitingSend for measurable duration).
-    /// Only FriJobManager uses try_reserve instead of blocking .await in WaitingSend.
-    pub fn is_reactive(self) -> bool {
-        matches!(self, Self::FriJobManager)
-    }
 }
 
+/// Per-component backpressure thresholds.
+/// Both conditions are independent — either can trigger backpressure.
 #[derive(DescribeConfig, DeserializeConfig, Default, Clone, Debug)]
 pub struct BackpressureCondition {
-    pub max_waiting_send_duration: Option<Duration>,
+    /// Trigger backpressure when this component is more than N blocks behind BlockExecutor.
     pub max_block_lag: Option<u64>,
+    /// Trigger backpressure when block-timestamp lag exceeds this duration.
+    /// Only evaluated when last_processed_block_timestamp > 0 for both head and component.
+    pub max_time_lag: Option<Duration>,
 }
 
+/// Per-component backpressure config.
+/// No eval_interval — the monitor is event-driven via watch channel changes.
+/// A separate metrics_interval controls how often Prometheus gauges are refreshed.
 #[derive(DescribeConfig, DeserializeConfig, Clone, Debug)]
 #[config(derive(Default))]
 pub struct PipelineHealthConfig {
-    #[config(default_t = Duration::from_secs(1))]
-    pub eval_interval: Duration,
     #[config(nest, default)]
     pub block_executor: BackpressureCondition,
     #[config(nest, default)]
@@ -96,6 +96,10 @@ pub struct PipelineHealthConfig {
     pub priority_tree: BackpressureCondition,
     #[config(nest, default)]
     pub l1_sender_execute: BackpressureCondition,
+    /// How often to refresh Prometheus metrics regardless of health change events.
+    /// Default: 5 seconds.
+    #[config(default_t = Duration::from_secs(5))]
+    pub metrics_interval: Duration,
 }
 
 impl PipelineHealthConfig {
@@ -124,20 +128,13 @@ impl PipelineHealthConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-
-    #[test]
-    fn default_config_has_one_second_interval() {
-        let config = PipelineHealthConfig::default();
-        assert_eq!(config.eval_interval, Duration::from_secs(1));
-    }
 
     #[test]
     fn default_conditions_are_all_none() {
         let config = PipelineHealthConfig::default();
         let cond = config.condition_for(ComponentId::BlockExecutor);
-        assert!(cond.max_waiting_send_duration.is_none());
         assert!(cond.max_block_lag.is_none());
+        assert!(cond.max_time_lag.is_none());
     }
 
     #[test]
@@ -167,14 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn fri_job_manager_is_reactive_others_are_not() {
-        assert!(ComponentId::FriJobManager.is_reactive());
-        assert!(!ComponentId::BlockExecutor.is_reactive());
-        assert!(!ComponentId::SnarkJobManager.is_reactive());
-        assert!(!ComponentId::L1SenderCommit.is_reactive());
-    }
-
-    #[test]
     fn as_str_returns_snake_case() {
         assert_eq!(ComponentId::BlockExecutor.as_str(), "block_executor");
         assert_eq!(ComponentId::FriJobManager.as_str(), "fri_job_manager");
@@ -182,5 +171,11 @@ mod tests {
             ComponentId::GaplessL1ProofSender.as_str(),
             "gapless_l1_proof_sender"
         );
+    }
+
+    #[test]
+    fn metrics_interval_default_is_five_seconds() {
+        let config = PipelineHealthConfig::default();
+        assert_eq!(config.metrics_interval, Duration::from_secs(5));
     }
 }
