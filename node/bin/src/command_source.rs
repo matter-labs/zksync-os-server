@@ -5,7 +5,7 @@ use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnb
 use zksync_os_raft::{ConsensusRole, LeadershipSignal};
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand, RebuildCommand};
-use zksync_os_storage_api::{ReadReplay, ReadReplayExt, ReplayRecord};
+use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 
 /// Command source for consensus-enabled main node.
 /// Replays local WAL starting from `starting_block` and then produces new blocks when leader.
@@ -75,14 +75,15 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
             replay_until
         );
 
-        self.block_replay_storage
-            .forward_range_with(
-                self.starting_block,
-                replay_until,
-                output.clone(),
-                |record| BlockCommand::Replay(Box::new(record)),
-            )
-            .await?;
+        for block_number in self.starting_block..=replay_until {
+            let Some(record) = self.block_replay_storage.get_replay_record(block_number) else {
+                anyhow::bail!("Missing replay record for block {block_number}");
+            };
+            if output.send(BlockCommand::Replay(Box::new(record))).is_err() {
+                tracing::warn!("Command output channel closed, stopping replay forwarder");
+                return Ok(());
+            }
+        }
 
         if let Some(rebuild_options) = &self.rebuild_options {
             self.send_block_rebuilds(rebuild_options, last_block_in_wal, &output)

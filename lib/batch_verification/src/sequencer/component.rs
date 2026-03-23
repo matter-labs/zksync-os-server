@@ -503,7 +503,6 @@ mod tests {
     use alloy::primitives::Address;
     use alloy::signers::local::PrivateKeySigner;
     use secrecy::SecretString;
-    use tokio::sync::mpsc;
     use zksync_os_batch_types::{BatchSignature, ValidatedBatchSignature};
     use zksync_os_l1_sender::batcher_model::{
         BatchForSigning, BatchSignatureData, SignedBatchEnvelope,

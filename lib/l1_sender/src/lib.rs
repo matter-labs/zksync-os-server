@@ -10,6 +10,7 @@ use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::metrics::L1_SENDER_METRICS;
+use anyhow::Context;
 use alloy::consensus::BlobTransactionValidationError;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, Encodable2718};

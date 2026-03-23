@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::wrappers::WatchStream;
-use zksync_os_observability::{ComponentHealth, GenericComponentState};
+use zksync_os_observability::ComponentHealth;
 use zksync_os_types::{
     BackpressureCause, BackpressureTrigger, NotAcceptingReason, TransactionAcceptanceState,
 };
