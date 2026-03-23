@@ -12,8 +12,12 @@
 
 pub mod builder;
 pub mod peekable_receiver;
+pub mod tracked_channel;
 pub mod traits;
 
 pub use builder::Pipeline;
 pub use peekable_receiver::PeekableReceiver;
+pub use tracked_channel::{
+    tracked_unbounded_channel, TrackedUnboundedReceiver, TrackedUnboundedSender,
+};
 pub use traits::PipelineComponent;
