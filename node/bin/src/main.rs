@@ -57,11 +57,14 @@ fn load_config_defaults(config_sources: &mut ConfigSources, config_paths: Option
         .unwrap_or_else(|| {
             let shared_path = "./local-chains/local_dev.yaml".to_string();
             let default_path = format!("./local-chains/{PROTOCOL_VERSION}/default/config.yaml");
-            if Path::new(&default_path).exists() {
-                vec![shared_path, default_path]
-            } else {
-                vec![]
+            let mut paths = vec![];
+            if Path::new(&shared_path).exists() {
+                paths.push(shared_path);
             }
+            if Path::new(&default_path).exists() {
+                paths.push(default_path);
+            }
+            paths
         });
 
     for config_path in &config_paths {

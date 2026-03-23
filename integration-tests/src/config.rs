@@ -121,8 +121,9 @@ fn load_config_from_paths(config_paths: &[PathBuf]) -> Config {
     let mut config_sources = ConfigSources::default();
 
     for config_path in config_paths {
-        let config_contents = std::fs::read_to_string(config_path)
-            .unwrap_or_else(|e| panic!("Failed to read config file {}: {e}", config_path.display()));
+        let config_contents = std::fs::read_to_string(config_path).unwrap_or_else(|e| {
+            panic!("Failed to read config file {}: {e}", config_path.display())
+        });
         let source_name = config_path.to_string_lossy();
 
         match ConfigFormat::from_path(config_path) {

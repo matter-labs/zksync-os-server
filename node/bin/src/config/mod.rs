@@ -990,8 +990,6 @@ pub struct FeeConfig {
     /// Note:
     /// - has no effect if `pubdata_price_override` is set.
     /// - if pubdata cap is reached, chain operator may operate at a loss.
-    ///
-    #[config(default_t = Some(U128::from(10_000_000_000_000u64)))]
     pub pubdata_price_cap: Option<U128>,
     /// Override for native price (in base token units).
     /// If set, native price will be constant and equal to this value.
