@@ -7,19 +7,16 @@ use crate::types::QueryLimits;
 mod pending;
 use pending::{FullTransactionsReceiver, PendingTransactionKind, PendingTransactionsReceiver};
 mod registry;
-use registry::{ActiveFilter, FilterKind};
+use registry::{FilterKind, FilterRegistry};
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::{B256, BlockNumber, U128};
+use alloy::primitives::{B256, BlockNumber};
 use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
     Transaction,
 };
 use async_trait::async_trait;
-use dashmap::DashMap;
 use jsonrpsee::core::RpcResult;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::time::MissedTickBehavior;
+use std::time::Instant;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_storage_api::{RepositoryBlock, RepositoryError, StoredTxData};
@@ -29,40 +26,28 @@ use zksync_os_types::L2Envelope;
 pub struct EthFilterNamespace<RpcStorage, Mempool> {
     storage: RpcStorage,
     query_limits: QueryLimits,
-    /// Duration since the last filter poll, after which the filter is considered stale
-    stale_filter_ttl: Duration,
     mempool: Mempool,
-    active_filters: Arc<DashMap<FilterId, ActiveFilter>>,
+    registry: FilterRegistry,
 }
 
 impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStorage, Mempool> {
     pub fn new(config: RpcConfig, storage: RpcStorage, mempool: Mempool) -> Self {
-        let query_limits =
-            QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
         Self {
             storage,
-            query_limits,
-            stale_filter_ttl: config.stale_filter_ttl,
+            query_limits: QueryLimits::new(
+                config.max_blocks_per_filter,
+                config.max_logs_per_response,
+            ),
             mempool,
-            active_filters: Arc::new(DashMap::new()),
+            registry: FilterRegistry::new(config.stale_filter_ttl),
         }
     }
 }
 
 impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStorage, Mempool> {
     fn install_filter(&self, kind: FilterKind) -> RpcResult<FilterId> {
-        let last_poll_block_number = self.storage.repository().get_latest_block();
-        let id = FilterId::Str(format!("0x{:x}", U128::random()));
-
-        self.active_filters.insert(
-            id.clone(),
-            ActiveFilter {
-                block: last_poll_block_number,
-                last_poll_timestamp: Instant::now(),
-                kind,
-            },
-        );
-        Ok(id)
+        let latest_block = self.storage.repository().get_latest_block();
+        Ok(self.registry.install(kind, latest_block))
     }
 
     async fn filter_changes_impl(
@@ -72,26 +57,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         let latest_block = self.storage.repository().get_latest_block();
 
         // start_block is the block from which we should start fetching changes, the next block from
-        // the last time changes were polled, in other words the best block at last poll + 1
-        let (start_block, kind) = {
-            let mut filter = self
-                .active_filters
-                .get_mut(&id)
-                .ok_or(EthFilterError::FilterNotFound(id))?;
-
-            if filter.block > latest_block {
-                // no new blocks since the last poll
-                return Ok(FilterChanges::Empty);
-            }
-
-            // update filter
-            // we fetch all changes from [filter.block..best_block], so we advance the filter's
-            // block to `best_block +1`, the next from which we should start fetching changes again
-            let mut block = latest_block + 1;
-            std::mem::swap(&mut filter.block, &mut block);
-            filter.last_poll_timestamp = Instant::now();
-
-            (block, filter.kind.clone())
+        // the last time changes were polled, in other words the best block at last poll + 1.
+        // Returns None when there are no new blocks since the last poll.
+        let Some((start_block, kind)) = self.registry.advance(id, latest_block)? else {
+            return Ok(FilterChanges::Empty);
         };
 
         match kind {
@@ -131,16 +100,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
     }
 
     fn filter_logs_impl(&self, id: FilterId) -> EthFilterResult<Vec<Log>> {
-        let active_filter = self
-            .active_filters
-            .get(&id)
-            .ok_or_else(|| EthFilterError::FilterNotFound(id.clone()))?;
-        let filter = active_filter
-            .kind
-            .as_log_filter()
-            .ok_or(EthFilterError::FilterNotFound(id))?
-            .clone();
-
+        let filter = self.registry.get_log_filter(&id)?;
         self.logs_impl(filter)
     }
 
@@ -255,32 +215,15 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         Ok(logs)
     }
 
-    /// Endless future that [`Self::clear_stale_filters`] every `stale_filter_ttl` interval.
-    /// Nonetheless, this endless future frees the thread at every await point.
+    /// Endless future that calls [`Self::clear_stale_filters`] every `stale_filter_ttl` interval.
     pub(crate) async fn watch_and_clear_stale_filters(&self) {
-        let mut interval = tokio::time::interval_at(
-            tokio::time::Instant::now() + self.stale_filter_ttl,
-            self.stale_filter_ttl,
-        );
-        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        loop {
-            interval.tick().await;
-            self.clear_stale_filters(Instant::now()).await;
-        }
+        self.registry.watch_and_clear_stale().await
     }
 
     /// Clears all filters that have not been polled for longer than the configured
     /// `stale_filter_ttl` at the given instant.
     pub async fn clear_stale_filters(&self, now: Instant) {
-        self.active_filters.retain(|id, filter| {
-            let is_valid = (now - filter.last_poll_timestamp) < self.stale_filter_ttl;
-
-            if !is_valid {
-                tracing::trace!(?id, "evicting stale filter");
-            }
-
-            is_valid
-        })
+        self.registry.clear_stale(now)
     }
 
     fn resolve_range(
@@ -346,11 +289,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterApiServer
     }
 
     async fn uninstall_filter(&self, id: FilterId) -> RpcResult<bool> {
-        if self.active_filters.remove(&id).is_some() {
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        Ok(self.registry.uninstall(&id))
     }
 
     async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
