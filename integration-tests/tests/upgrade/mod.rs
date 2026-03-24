@@ -261,9 +261,12 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
         .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
         .await?;
 
-    // NOTE: We don't publish to the L1 BytecodesSupplier here because the
-    // gateway Anvil state (v31.0) uses a different BytecodesSupplier deployment.
-    // The L1-to-L1 supplier flow is covered by `upgrade_to_v31_with_deployments`.
+    // Also publish to the L1 BytecodesSupplier so `fetch_force_preimages` discovers
+    // the bytecode via `BytecodePublished` events.
+    let supplier_bytecode = pad_bytecode_for_supplier(&SampleForceDeployment::DEPLOYED_BYTECODE);
+    upgrade_tester
+        .publish_bytecodes_to_l1_supplier([supplier_bytecode])
+        .await?;
 
     // Prepare protocol upgrade
     let protocol_upgrade = upgrade_tester
