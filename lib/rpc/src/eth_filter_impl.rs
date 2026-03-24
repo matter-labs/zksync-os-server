@@ -180,10 +180,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         }
 
         let is_multi_block_range = from != to;
-        let total_scanned_blocks = to - from + 1;
-        let mut tp_scanned_blocks = 0u64;
-        let mut fp_scanned_blocks = 0u64;
-        let mut negative_scanned_blocks = 0u64;
+        let mut stats = BlockScanStats::new(to - from + 1);
         let mut logs = Vec::new();
         for number in from..=to {
             let Some(block) = self.storage.repository().get_block_by_number(number)? else {
@@ -208,7 +205,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
                             .ok_or(EthFilterError::BlockNotFound(number.into()))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let mut at_least_one_log_added = false;
+                let logs_before = logs.len();
                 for tx in stored_txs {
                     for inner_log in tx.receipt.logs() {
                         if filter.matches(inner_log) {
@@ -218,15 +215,14 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
                                 tx.meta.clone(),
                                 log_index_in_block - tx.meta.number_of_logs_before_this_tx,
                             ));
-                            at_least_one_log_added = true;
                         }
                         log_index_in_block += 1;
                     }
                 }
-                if at_least_one_log_added {
-                    tp_scanned_blocks += 1;
+                if logs.len() > logs_before {
+                    stats.true_positive += 1;
                 } else {
-                    fp_scanned_blocks += 1;
+                    stats.false_positive += 1;
                 }
 
                 // size check but only if range is multiple blocks, so we always return all
@@ -243,14 +239,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
                     });
                 }
             } else {
-                negative_scanned_blocks += 1;
+                stats.negative += 1;
             }
         }
-
-        API_METRICS.get_logs_scanned_blocks[&"total"].observe(total_scanned_blocks);
-        API_METRICS.get_logs_scanned_blocks[&"true_positive"].observe(tp_scanned_blocks);
-        API_METRICS.get_logs_scanned_blocks[&"false_positive"].observe(fp_scanned_blocks);
-        API_METRICS.get_logs_scanned_blocks[&"negative"].observe(negative_scanned_blocks);
 
         Ok(logs)
     }
@@ -454,6 +445,35 @@ impl FullTransactionsReceiver {
 }
 
 type EthFilterResult<T> = Result<T, EthFilterError>;
+
+/// Tracks bloom filter scan statistics for a single `eth_getLogs` call.
+/// Observes Prometheus metrics when dropped, ensuring they are recorded on all exit paths.
+struct BlockScanStats {
+    total: u64,
+    true_positive: u64,
+    false_positive: u64,
+    negative: u64,
+}
+
+impl BlockScanStats {
+    fn new(total: u64) -> Self {
+        Self {
+            total,
+            true_positive: 0,
+            false_positive: 0,
+            negative: 0,
+        }
+    }
+}
+
+impl Drop for BlockScanStats {
+    fn drop(&mut self) {
+        API_METRICS.get_logs_scanned_blocks[&"total"].observe(self.total);
+        API_METRICS.get_logs_scanned_blocks[&"true_positive"].observe(self.true_positive);
+        API_METRICS.get_logs_scanned_blocks[&"false_positive"].observe(self.false_positive);
+        API_METRICS.get_logs_scanned_blocks[&"negative"].observe(self.negative);
+    }
+}
 
 /// Errors that can occur in the handler implementation
 #[derive(Debug, thiserror::Error)]
