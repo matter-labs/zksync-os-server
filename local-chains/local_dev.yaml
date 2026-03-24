@@ -1,6 +1,6 @@
 # Generic local development configuration.
 # Overrides production defaults to make local development faster and more convenient.
-# Loaded by run_local.sh before any chain-specific config file.
+# Loaded by run_local.sh (and auto-loaded by `cargo run`) before any chain-specific config file.
 
 l1_watcher:
   poll_interval: 100ms
