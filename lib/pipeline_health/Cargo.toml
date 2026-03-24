@@ -1,0 +1,23 @@
+[package]
+name = "zksync_os_pipeline_health"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_observability = { path = "../observability" }
+zksync_os_types         = { path = "../types" }
+tokio                   = { workspace = true, features = ["time", "sync", "macros", "rt"] }
+tokio-stream            = { workspace = true }
+futures                 = { workspace = true }
+vise                    = { workspace = true }
+tracing                 = { workspace = true }
+smart-config            = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

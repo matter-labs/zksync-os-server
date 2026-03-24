@@ -41,6 +41,7 @@ members = [
     "lib/operator_signer",
     "lib/raft",
     "lib/tx_validators",
+    "lib/pipeline_health",
 ]
 resolver = "3"
 default-members = ["node/bin"]
