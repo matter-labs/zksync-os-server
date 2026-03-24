@@ -611,10 +611,6 @@ pub struct BatcherConfig {
     #[config(default_t = 60 * TimeUnit::Seconds)]
     pub batch_timeout: Duration,
 
-    /// Max number of blocks per batch.
-    #[config(default_t = 1000)]
-    pub blocks_per_batch_limit: u64,
-
     /// Max number of transactions per batch
     #[config(default_t = 10000)]
     pub tx_per_batch_limit: u64,
