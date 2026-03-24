@@ -7,7 +7,6 @@ use pending::{FullTransactionsReceiver, PendingTransactionKind, PendingTransacti
 mod registry;
 use registry::{FilterKind, FilterRegistry};
 mod scan;
-use scan::scan_logs;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::{B256, BlockNumber};
 use alloy::rpc::types::{
@@ -16,7 +15,7 @@ use alloy::rpc::types::{
 };
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
-use std::time::Instant;
+use scan::scan_logs;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_storage_api::RepositoryError;
@@ -144,15 +143,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         )
     }
 
-    /// Endless future that calls [`Self::clear_stale_filters`] every `stale_filter_ttl` interval.
+    /// Endless future that evicts stale filters every `stale_filter_ttl` interval.
     pub(crate) async fn watch_and_clear_stale_filters(&self) {
         self.registry.watch_and_clear_stale().await
-    }
-
-    /// Clears all filters that have not been polled for longer than the configured
-    /// `stale_filter_ttl` at the given instant.
-    pub async fn clear_stale_filters(&self, now: Instant) {
-        self.registry.clear_stale(now)
     }
 
     fn resolve_range(
