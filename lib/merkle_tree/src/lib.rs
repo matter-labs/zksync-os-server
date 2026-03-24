@@ -137,7 +137,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
             depth: P::TREE_DEPTH.into(),
             internal_node_depth: P::INTERNAL_NODE_DEPTH.into(),
         };
-        tracing::debug!(?info, manifest = ?maybe_manifest, "initialized Merkle tree");
+        tracing::info!(?info, manifest = ?maybe_manifest, "initialized Merkle tree");
         METRICS.info.set(info).ok();
 
         Ok(Self { db, hasher })

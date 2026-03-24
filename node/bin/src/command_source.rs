@@ -198,7 +198,7 @@ impl PipelineComponent for ExternalNodeCommandSource {
         while let Some(record) = self.replays_for_sequencer.recv().await {
             let block_number = record.block_context.block_number;
             let command = BlockCommand::Replay(Box::new(record));
-            tracing::debug!(?command, "Received block command from main node");
+            tracing::info!(?command, "Received block command from main node");
 
             if let Some(up_to_block) = self.up_to_block
                 && block_number > up_to_block

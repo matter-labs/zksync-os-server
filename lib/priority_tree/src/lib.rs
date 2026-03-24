@@ -51,7 +51,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
             finality_state.last_executed_block,
         );
 
-        tracing::debug!(
+        tracing::info!(
             persisted_up_to = initial_block_number,
             last_executed_block = last_executed_block,
             "adding missing blocks to priority tree"
@@ -212,7 +212,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                     }
                 }
                 interop_roots.push(batch_interop_roots);
-                tracing::debug!(
+                tracing::info!(
                     batch_number,
                     last_block_number,
                     priority_op_count,
@@ -313,7 +313,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                 self.db
                     .cache_tree(&tree, last_block_number)
                     .context("failed to cache tree")?;
-                tracing::debug!(batch_number, "cached priority tree");
+                tracing::info!(batch_number, "cached priority tree");
             }
         }
     }
