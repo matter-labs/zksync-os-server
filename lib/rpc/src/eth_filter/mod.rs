@@ -4,9 +4,10 @@ use crate::metrics::API_METRICS;
 use crate::result::ToRpcResult;
 use crate::rpc_storage::ReadRpcStorage;
 use crate::types::QueryLimits;
-use alloy::consensus::transaction::{Recovered, TransactionInfo};
+mod pending;
+use pending::{FullTransactionsReceiver, PendingTransactionKind, PendingTransactionsReceiver};
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::{B256, BlockNumber, TxHash, U128};
+use alloy::primitives::{B256, BlockNumber, U128};
 use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
     Transaction,
@@ -16,10 +17,8 @@ use dashmap::DashMap;
 use jsonrpsee::core::RpcResult;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
 use zksync_os_mempool::subpools::l2::L2Subpool;
-use zksync_os_mempool::{L2PooledTransaction, NewSubpoolTransactionStream};
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_storage_api::{RepositoryBlock, RepositoryError, StoredTxData};
 use zksync_os_types::L2Envelope;
@@ -382,83 +381,6 @@ impl FilterKind {
         } else {
             None
         }
-    }
-}
-
-/// Represents the kind of pending transaction data that can be retrieved.
-///
-/// This enum differentiates between two kinds of pending transaction data:
-/// - Just the transaction hashes.
-/// - Full transaction details.
-#[derive(Debug, Clone)]
-enum PendingTransactionKind {
-    Hashes(PendingTransactionsReceiver),
-    FullTransaction(FullTransactionsReceiver),
-}
-
-impl PendingTransactionKind {
-    async fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
-        match self {
-            Self::Hashes(receiver) => receiver.drain().await,
-            Self::FullTransaction(receiver) => receiver.drain().await,
-        }
-    }
-}
-
-/// A receiver for pending transactions that returns all new transactions since the last poll.
-#[derive(Debug, Clone)]
-struct PendingTransactionsReceiver {
-    receiver: Arc<Mutex<mpsc::Receiver<TxHash>>>,
-}
-
-impl PendingTransactionsReceiver {
-    fn new(receiver: mpsc::Receiver<TxHash>) -> Self {
-        Self {
-            receiver: Arc::new(Mutex::new(receiver)),
-        }
-    }
-
-    /// Returns all new pending transactions received since the last poll.
-    async fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
-        let mut pending_txs = Vec::new();
-        let mut prepared_stream = self.receiver.lock().await;
-
-        while let Ok(tx_hash) = prepared_stream.try_recv() {
-            pending_txs.push(tx_hash);
-        }
-
-        // Convert the vector of hashes into FilterChanges::Hashes
-        FilterChanges::Hashes(pending_txs)
-    }
-}
-
-/// A structure to manage and provide access to a stream of full transaction details.
-#[derive(Debug, Clone)]
-struct FullTransactionsReceiver {
-    txs_stream: Arc<Mutex<NewSubpoolTransactionStream<L2PooledTransaction>>>,
-}
-
-impl FullTransactionsReceiver {
-    fn new(txs_stream: NewSubpoolTransactionStream<L2PooledTransaction>) -> Self {
-        Self {
-            txs_stream: Arc::new(Mutex::new(txs_stream)),
-        }
-    }
-
-    /// Returns all new pending transactions received since the last poll.
-    async fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
-        let mut pending_txs = Vec::new();
-        let mut prepared_stream = self.txs_stream.lock().await;
-
-        while let Ok(tx) = prepared_stream.try_recv() {
-            let (tx, signer) = tx.transaction.to_consensus().into_parts();
-            let tx = L2Envelope::from(tx);
-            pending_txs.push(Transaction::from_transaction(
-                Recovered::new_unchecked(tx, signer),
-                TransactionInfo::default(),
-            ));
-        }
-        FilterChanges::Transactions(pending_txs)
     }
 }
 
