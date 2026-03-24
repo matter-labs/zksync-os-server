@@ -161,6 +161,23 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         self.get_logs_in_block_range(filter, from, to)
     }
 
+    fn collect_matching_logs(filter: &Filter, stored_txs: Vec<StoredTxData>, out: &mut Vec<Log>) {
+        let mut log_index_in_block = 0u64;
+        for tx in stored_txs {
+            for inner_log in tx.receipt.logs() {
+                if filter.matches(inner_log) {
+                    out.push(build_api_log(
+                        *tx.tx.hash(),
+                        inner_log.clone(),
+                        tx.meta.clone(),
+                        log_index_in_block - tx.meta.number_of_logs_before_this_tx,
+                    ));
+                }
+                log_index_in_block += 1;
+            }
+        }
+    }
+
     fn get_block_transactions(
         &self,
         block: RepositoryBlock,
@@ -201,7 +218,6 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
             let Some(block) = self.storage.repository().get_block_by_number(number)? else {
                 return Err(EthFilterError::BlockNotFound(number.into()));
             };
-            let mut log_index_in_block = 0u64;
             if filter.matches_bloom(block.header.logs_bloom) {
                 tracing::trace!(
                     number,
@@ -210,19 +226,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
                 );
                 let stored_txs = self.get_block_transactions(block, number)?;
                 let logs_before = logs.len();
-                for tx in stored_txs {
-                    for inner_log in tx.receipt.logs() {
-                        if filter.matches(inner_log) {
-                            logs.push(build_api_log(
-                                *tx.tx.hash(),
-                                inner_log.clone(),
-                                tx.meta.clone(),
-                                log_index_in_block - tx.meta.number_of_logs_before_this_tx,
-                            ));
-                        }
-                        log_index_in_block += 1;
-                    }
-                }
+                Self::collect_matching_logs(&filter, stored_txs, &mut logs);
                 if logs.len() > logs_before {
                     stats.true_positive += 1;
                 } else {
