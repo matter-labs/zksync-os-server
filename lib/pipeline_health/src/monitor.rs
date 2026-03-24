@@ -273,9 +273,8 @@ mod tests {
             max_block_lag: None,
             max_time_lag: Some(max_lag),
         };
-        match id {
-            ComponentId::BlockApplier => config.block_applier = cond,
-            _ => {}
+        if id == ComponentId::BlockApplier {
+            config.block_applier = cond;
         }
         config
     }
