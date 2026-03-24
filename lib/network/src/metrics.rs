@@ -271,12 +271,8 @@ impl Recorder for ViseRecorder {
                 &SESSION_MANAGER_METRICS.total_outgoing_peer_messages_dropped
             }
             // BackedOffPeersMetrics counters
-            "network.backed_off_peers.too_many_peers" => {
-                &BACKED_OFF_PEERS_METRICS.too_many_peers
-            }
-            "network.backed_off_peers.graceful_close" => {
-                &BACKED_OFF_PEERS_METRICS.graceful_close
-            }
+            "network.backed_off_peers.too_many_peers" => &BACKED_OFF_PEERS_METRICS.too_many_peers,
+            "network.backed_off_peers.graceful_close" => &BACKED_OFF_PEERS_METRICS.graceful_close,
             "network.backed_off_peers.connection_error" => {
                 &BACKED_OFF_PEERS_METRICS.connection_error
             }
@@ -360,9 +356,7 @@ impl Recorder for ViseRecorder {
             "network.outbound.protocol_breach" => &OUTBOUND_DISCONNECT_METRICS.protocol_breach,
             "network.outbound.useless_peer" => &OUTBOUND_DISCONNECT_METRICS.useless_peer,
             "network.outbound.too_many_peers" => &OUTBOUND_DISCONNECT_METRICS.too_many_peers,
-            "network.outbound.already_connected" => {
-                &OUTBOUND_DISCONNECT_METRICS.already_connected
-            }
+            "network.outbound.already_connected" => &OUTBOUND_DISCONNECT_METRICS.already_connected,
             "network.outbound.incompatible" => &OUTBOUND_DISCONNECT_METRICS.incompatible,
             "network.outbound.null_node_identity" => {
                 &OUTBOUND_DISCONNECT_METRICS.null_node_identity
