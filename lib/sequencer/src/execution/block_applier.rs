@@ -81,7 +81,8 @@ where
                 tracing::info!("outbound channel closed");
                 return Ok(());
             }
-            self.health_reporter.record_processed(block_number, block_ts);
+            self.health_reporter
+                .record_processed(block_number, block_ts);
         }
     }
 }

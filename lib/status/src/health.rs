@@ -76,12 +76,13 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
             let h = rx.borrow();
             let elapsed = now.duration_since(h.state_entered_at).as_secs_f64();
             let lag = head_block.saturating_sub(h.last_processed_seq);
-            let time_lag_secs =
-                if h.last_processed_block_timestamp > 0 && head_ts > h.last_processed_block_timestamp {
-                    (head_ts - h.last_processed_block_timestamp) as f64
-                } else {
-                    0.0
-                };
+            let time_lag_secs = if h.last_processed_block_timestamp > 0
+                && head_ts > h.last_processed_block_timestamp
+            {
+                (head_ts - h.last_processed_block_timestamp) as f64
+            } else {
+                0.0
+            };
             ComponentEntry {
                 name: id.as_str(),
                 snapshot: ComponentSnapshot {

@@ -1,8 +1,8 @@
 use crate::config::{ComponentId, PipelineHealthConfig};
 use crate::metrics::{ComponentLabel, DirectionLabel, MONITOR_METRICS};
-use futures::stream::{select_all, StreamExt};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use futures::stream::{StreamExt, select_all};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -130,10 +130,8 @@ impl PipelineHealthMonitor {
                         ?reason,
                         "pipeline backpressure: stopping transaction acceptance"
                     );
-                    MONITOR_METRICS.acceptance_state_changes[&DirectionLabel {
-                        direction: "open",
-                    }]
-                    .inc();
+                    MONITOR_METRICS.acceptance_state_changes[&DirectionLabel { direction: "open" }]
+                        .inc();
                 }
                 TransactionAcceptanceState::Accepting => {
                     tracing::info!(
@@ -142,7 +140,7 @@ impl PipelineHealthMonitor {
                     MONITOR_METRICS.acceptance_state_changes[&DirectionLabel {
                         direction: "cleared",
                     }]
-                    .inc();
+                        .inc();
                 }
             }
             *current = new_state.clone();
@@ -210,24 +208,21 @@ impl PipelineHealthMonitor {
 
             MONITOR_METRICS.backpressure_active[&label]
                 .set(active_components.contains(id.as_str()) as u64);
-            MONITOR_METRICS.component_last_processed_block[&label]
-                .set(health.last_processed_seq);
+            MONITOR_METRICS.component_last_processed_block[&label].set(health.last_processed_seq);
             MONITOR_METRICS.component_block_lag[&label]
                 .set(head_seq.saturating_sub(health.last_processed_seq));
 
-            let time_lag =
-                if health.last_processed_block_timestamp > 0 && head_ts > 0 {
-                    head_ts.saturating_sub(health.last_processed_block_timestamp) as f64
-                } else {
-                    0.0
-                };
+            let time_lag = if health.last_processed_block_timestamp > 0 && head_ts > 0 {
+                head_ts.saturating_sub(health.last_processed_block_timestamp) as f64
+            } else {
+                0.0
+            };
             MONITOR_METRICS.component_time_lag_seconds[&label].set(time_lag);
         }
 
         for (id, depth) in &self.queue_depths {
             let label = ComponentLabel::from(*id);
-            MONITOR_METRICS.channel_queue_depth[&label]
-                .set(depth.load(Ordering::Relaxed) as u64);
+            MONITOR_METRICS.channel_queue_depth[&label].set(depth.load(Ordering::Relaxed) as u64);
         }
     }
 
@@ -352,8 +347,12 @@ mod tests {
     fn no_condition_set_never_triggers() {
         let config = PipelineHealthConfig::default();
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
-        let result =
-            monitor.evaluate(ComponentId::BlockApplier, &make_health(0, 0), 10_000, 999_999);
+        let result = monitor.evaluate(
+            ComponentId::BlockApplier,
+            &make_health(0, 0),
+            10_000,
+            999_999,
+        );
         assert!(result.is_none());
     }
 

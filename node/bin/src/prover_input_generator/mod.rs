@@ -62,7 +62,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             block_number = first_block_number,
             "sending block with prover input to batcher",
         );
-        output.send(result).ok().context("outbound channel closed")?;
+        output
+            .send(result)
+            .ok()
+            .context("outbound channel closed")?;
         health_reporter.record_processed(first_block_number, first_block_ts);
         health_reporter.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
 

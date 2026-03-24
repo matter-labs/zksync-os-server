@@ -99,7 +99,10 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
     /// This method kicks in after all local canonized Replayed Records (WAL) are replayed.
     /// Produces `Produce` commands only when the node is the leader.
-    async fn run_loop(mut self, output: TrackedUnboundedSender<BlockCommand>) -> anyhow::Result<()> {
+    async fn run_loop(
+        mut self,
+        output: TrackedUnboundedSender<BlockCommand>,
+    ) -> anyhow::Result<()> {
         let mut leadership = self.leadership.clone();
         let mut role = leadership.current_role();
         tracing::info!(?role, "Consensus role initialized");

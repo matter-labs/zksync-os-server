@@ -71,6 +71,9 @@ mod tests {
             threshold: Duration::from_secs(30),
             actual: Duration::from_secs(45),
         };
-        assert!(matches!(trigger, BackpressureTrigger::TimeLagTooHigh { .. }));
+        assert!(matches!(
+            trigger,
+            BackpressureTrigger::TimeLagTooHigh { .. }
+        ));
     }
 }

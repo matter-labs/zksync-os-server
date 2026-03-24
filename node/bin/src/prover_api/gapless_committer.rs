@@ -86,7 +86,10 @@ impl PipelineComponent for GaplessCommitter {
                                 .map(L1SenderCommand::SendToL1)
                                 .context("Committer batch signature failure")?
                             };
-                            output.send(result).ok().context("outbound channel closed")?;
+                            output
+                                .send(result)
+                                .ok()
+                                .context("outbound channel closed")?;
                             let _ = batch_number; // suppress unused warning
                             health_reporter.record_processed(last_block, 0);
                             health_reporter.enter_state(GenericComponentState::Processing);
