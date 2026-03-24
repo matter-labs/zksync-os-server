@@ -31,34 +31,52 @@ pub struct PriorityTreeManager<ReplayStorage, Finality> {
     finality: Finality,
     committed_batch_provider: CommittedBatchProvider,
     last_executed_batch_on_init: u64,
+    initial_block_number: u64,
 }
 
 impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
     PriorityTreeManager<ReplayStorage, Finality>
 {
-    pub async fn new(
+    pub fn new(
         replay_storage: ReplayStorage,
         db_path: &Path,
         finality: Finality,
         committed_batch_provider: CommittedBatchProvider,
     ) -> anyhow::Result<Self> {
-        let started_at = Instant::now();
         let db = PriorityTreeDB::new(db_path);
-        let (initial_block_number, mut merkle_tree) = db.init_tree()?;
-        let finality_state = finality.get_finality_status();
+        let (initial_block_number, merkle_tree) = db.init_tree()?;
+
+        Ok(Self {
+            merkle_tree: Arc::new(Mutex::new(merkle_tree)),
+            replay_storage,
+            db,
+            finality,
+            committed_batch_provider,
+            last_executed_batch_on_init: 0,
+            initial_block_number,
+        })
+    }
+
+    /// Performs the async initialization: replays any blocks that are already executed on L1
+    /// but not yet reflected in the persisted priority tree. Must be called before any other
+    /// method that depends on `last_executed_batch_on_init`.
+    pub async fn init(&mut self) -> anyhow::Result<()> {
+        let started_at = Instant::now();
+        let finality_state = self.finality.get_finality_status();
         let (last_executed_batch, last_executed_block) = (
             finality_state.last_executed_batch,
             finality_state.last_executed_block,
         );
 
         tracing::info!(
-            persisted_up_to = initial_block_number,
+            persisted_up_to = self.initial_block_number,
             last_executed_block = last_executed_block,
             "adding missing blocks to priority tree"
         );
 
-        for block_number in (initial_block_number + 1)..=last_executed_block {
-            let record = Self::wait_for_replay_record(&replay_storage, block_number).await;
+        let mut merkle_tree = self.merkle_tree.lock().await;
+        for block_number in (self.initial_block_number + 1)..=last_executed_block {
+            let record = Self::wait_for_replay_record(&self.replay_storage, block_number).await;
             for tx in record.transactions {
                 if let ZkEnvelope::L1(l1_tx) = tx.into_envelope() {
                     merkle_tree.push_hash(*l1_tx.hash());
@@ -72,15 +90,10 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
             time_taken = ?started_at.elapsed(),
             "re-built priority tree"
         );
+        drop(merkle_tree);
 
-        Ok(Self {
-            merkle_tree: Arc::new(Mutex::new(merkle_tree)),
-            replay_storage,
-            db,
-            finality,
-            committed_batch_provider,
-            last_executed_batch_on_init: last_executed_batch,
-        })
+        self.last_executed_batch_on_init = last_executed_batch;
+        Ok(())
     }
 
     /// Keeps building the tree by adding new transactions to the priority tree.

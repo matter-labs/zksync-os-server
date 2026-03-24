@@ -1072,7 +1072,6 @@ async fn run_main_node_pipeline(
                 finality,
                 committed_batch_provider,
             )
-            .await
             .unwrap(),
         )
         .pipe(L1Sender {
@@ -1172,7 +1171,6 @@ async fn run_en_pipeline(
             finality.clone(),
             committed_batch_provider,
         )
-        .await
         .unwrap();
 
         priority_tree_en_step.spawn(runtime);
