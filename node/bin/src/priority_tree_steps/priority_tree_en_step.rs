@@ -26,8 +26,12 @@ where
         finality: Finality,
         committed_batch_provider: CommittedBatchProvider,
     ) -> anyhow::Result<Self> {
-        let priority_tree_manager =
-            PriorityTreeManager::new(block_storage, db_path, finality.clone(), committed_batch_provider)?;
+        let priority_tree_manager = PriorityTreeManager::new(
+            block_storage,
+            db_path,
+            finality.clone(),
+            committed_batch_provider,
+        )?;
 
         Ok(Self {
             priority_tree_manager,
