@@ -86,11 +86,17 @@ impl BatchInfoAccumulator {
                 .iter()
                 .any(|tx| tx.tx_type() == ZkTxType::Upgrade)
         {
-            // Sanity check: upgrade tx must be the only tx in the block.
-            assert_eq!(
-                replay_record.transactions.len(),
-                1,
-                "upgrade tx must be the only tx in the block: {replay_record:?}"
+            // Sanity check: upgrade tx must be either the only tx in the block,
+            // or followed by exactly one SetSLChainId tx (only for the v31 upgrade).
+            assert!(
+                replay_record.transactions.len() == 1
+                    || (replay_record.transactions.len() == 2
+                        && replay_record.protocol_version.minor == 31
+                        && matches!(
+                            replay_record.transactions[1].as_system_tx_type(),
+                            Some(SystemTxType::SetSLChainId(u64::MAX))
+                        )),
+                "upgrade tx must be the only tx in the block (or followed by a single SetSLChainId tx for v31): {replay_record:?}"
             );
             self.has_upgrade_tx = true;
         }

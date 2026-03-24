@@ -51,7 +51,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
             finality_state.last_executed_block,
         );
 
-        tracing::debug!(
+        tracing::info!(
             persisted_up_to = initial_block_number,
             last_executed_block = last_executed_block,
             "adding missing blocks to priority tree"
@@ -102,15 +102,18 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
             main_node_channels.unzip();
         let mut last_processed_batch = self.last_executed_batch_on_init;
 
-        async fn take_n<T>(receiver: &mut PeekableReceiver<T>, n: usize) -> anyhow::Result<Vec<T>> {
+        async fn take_n<T>(
+            receiver: &mut PeekableReceiver<T>,
+            n: usize,
+        ) -> anyhow::Result<Option<Vec<T>>> {
             let mut out = Vec::default();
             while out.len() < n {
                 match receiver.recv().await {
                     Some(v) => out.push(v),
-                    None => anyhow::bail!("channel closed"),
+                    None => return Ok(None),
                 }
             }
-            Ok(out)
+            Ok(Some(out))
         }
 
         loop {
@@ -121,7 +124,11 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                     //             aggregation seal criteria yet.
                     //             Addressing this includes reworking L1SenderCommand::Passthrough logic -
                     //             Aggregation is only possible AFTER the last_executed_batch_on_init.
-                    let envelope = take_n(r, 1).await?.pop().unwrap();
+                    let Some(mut envelopes) = take_n(r, 1).await? else {
+                        tracing::info!("inbound channel closed");
+                        return Ok(());
+                    };
+                    let envelope = envelopes.pop().unwrap();
                     if envelope.batch_number() <= self.last_executed_batch_on_init {
                         tracing::info!(
                             batch_number = envelope.batch_number(),
@@ -205,7 +212,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                     }
                 }
                 interop_roots.push(batch_interop_roots);
-                tracing::debug!(
+                tracing::info!(
                     batch_number,
                     last_block_number,
                     priority_op_count,
@@ -285,11 +292,12 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
 
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
-            let (batch_number, last_block_number, last_priority_op_id) =
-                priority_ops_internal_receiver
-                    .recv()
-                    .await
-                    .context("`priority_ops_internal_receiver` closed")?;
+            let Some((batch_number, last_block_number, last_priority_op_id)) =
+                priority_ops_internal_receiver.recv().await
+            else {
+                // Sender was dropped (graceful shutdown), exit cleanly.
+                return Ok(());
+            };
             finality_receiver
                 .wait_for(|f| last_block_number <= f.last_executed_block)
                 .await
@@ -305,7 +313,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                 self.db
                     .cache_tree(&tree, last_block_number)
                     .context("failed to cache tree")?;
-                tracing::debug!(batch_number, "cached priority tree");
+                tracing::info!(batch_number, "cached priority tree");
             }
         }
     }

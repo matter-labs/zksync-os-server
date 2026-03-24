@@ -11,7 +11,7 @@ use zksync_os_interface::types::BlockContext as InterfaceBlockContext;
 use zksync_os_interface::types::BlockHashes as InterfaceBlockHashes;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_storage_api::ReplayRecord as StorageReplayRecord;
-use zksync_os_types::{InteropRootsLogIndex, ProtocolSemanticVersion};
+use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
 // ==================================================
 // | Implementations for protocol version 0 (Dummy) |
@@ -41,16 +41,13 @@ impl TryFrom<v0::ReplayRecord> for StorageReplayRecord {
         };
         Ok(Self {
             block_context,
-            starting_l1_priority_id: 0,
             transactions: vec![],
             previous_block_timestamp: 0,
             node_version: semver::Version::new(0, 0, 0),
             protocol_version: ProtocolSemanticVersion::new(0, 0, 0),
             block_output_hash: Default::default(),
             force_preimages: vec![],
-            starting_interop_event_index: InteropRootsLogIndex::default(),
-            starting_migration_number: 0,
-            starting_interop_fee_number: 0,
+            starting_cursors: BlockStartCursors::default(),
         })
     }
 }
@@ -89,7 +86,7 @@ impl From<StorageReplayRecord> for v1::ReplayRecord {
     fn from(value: StorageReplayRecord) -> Self {
         Self {
             block_context: value.block_context.into(),
-            starting_l1_priority_id: value.starting_l1_priority_id,
+            starting_l1_priority_id: value.starting_cursors.l1_priority_id,
             transactions: value
                 .transactions
                 .into_iter()
@@ -106,7 +103,7 @@ impl From<StorageReplayRecord> for v1::ReplayRecord {
                     preimage: Bytes::from(preimage),
                 })
                 .collect(),
-            starting_interop_event_index: value.starting_interop_event_index,
+            starting_interop_event_index: value.starting_cursors.interop_event_index,
         }
     }
 }
@@ -137,7 +134,6 @@ impl TryFrom<v1::ReplayRecord> for StorageReplayRecord {
     fn try_from(value: v1::ReplayRecord) -> Result<Self, Self::Error> {
         Ok(Self {
             block_context: value.block_context.into(),
-            starting_l1_priority_id: value.starting_l1_priority_id,
             transactions: value
                 .transactions
                 .into_iter()
@@ -153,9 +149,12 @@ impl TryFrom<v1::ReplayRecord> for StorageReplayRecord {
                 .into_iter()
                 .map(|p| (p.hash, p.preimage.into()))
                 .collect(),
-            starting_interop_event_index: value.starting_interop_event_index,
-            starting_migration_number: 0,
-            starting_interop_fee_number: 0,
+            starting_cursors: BlockStartCursors {
+                l1_priority_id: value.starting_l1_priority_id,
+                interop_event_index: value.starting_interop_event_index,
+                migration_number: 0,
+                interop_fee_number: 0,
+            },
         })
     }
 }
@@ -194,7 +193,7 @@ impl From<StorageReplayRecord> for v2::ReplayRecord {
     fn from(value: StorageReplayRecord) -> Self {
         Self {
             block_context: value.block_context.into(),
-            starting_l1_priority_id: value.starting_l1_priority_id,
+            starting_l1_priority_id: value.starting_cursors.l1_priority_id,
             transactions: value
                 .transactions
                 .into_iter()
@@ -211,9 +210,9 @@ impl From<StorageReplayRecord> for v2::ReplayRecord {
                     preimage: Bytes::from(preimage),
                 })
                 .collect(),
-            starting_interop_event_index: value.starting_interop_event_index,
-            starting_migration_number: value.starting_migration_number,
-            starting_interop_fee_number: value.starting_interop_fee_number,
+            starting_interop_event_index: value.starting_cursors.interop_event_index,
+            starting_migration_number: value.starting_cursors.migration_number,
+            starting_interop_fee_number: value.starting_cursors.interop_fee_number,
         }
     }
 }
@@ -244,7 +243,6 @@ impl TryFrom<v2::ReplayRecord> for StorageReplayRecord {
     fn try_from(value: v2::ReplayRecord) -> Result<Self, Self::Error> {
         Ok(Self {
             block_context: value.block_context.into(),
-            starting_l1_priority_id: value.starting_l1_priority_id,
             transactions: value
                 .transactions
                 .into_iter()
@@ -260,9 +258,12 @@ impl TryFrom<v2::ReplayRecord> for StorageReplayRecord {
                 .into_iter()
                 .map(|p| (p.hash, p.preimage.into()))
                 .collect(),
-            starting_interop_event_index: value.starting_interop_event_index,
-            starting_migration_number: value.starting_migration_number,
-            starting_interop_fee_number: value.starting_interop_fee_number,
+            starting_cursors: BlockStartCursors {
+                l1_priority_id: value.starting_l1_priority_id,
+                interop_event_index: value.starting_interop_event_index,
+                migration_number: value.starting_migration_number,
+                interop_fee_number: value.starting_interop_fee_number,
+            },
         })
     }
 }

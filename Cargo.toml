@@ -22,6 +22,7 @@ members = [
     "integration-tests",
     "integration-tests-macros",
     "tools/generate-deposit",
+    "tools/verify-storage-proof",
     "lib/observability",
     "lib/state_full_diffs",
     "lib/status",
@@ -141,12 +142,12 @@ full_statement_verifier = { git = "https://github.com/matter-labs/zksync-airbend
 #
 # Can be updated at any time and changing it does not count as a breaking change.
 
-zk_os_forward_system_dev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260311", features = [
+zk_os_forward_system_dev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260320-1", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_ee_dev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260311" }
-zk_os_basic_system_dev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260311" }
+zk_ee_dev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260320-1" }
+zk_os_basic_system_dev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260320-1" }
 
 # Other dependencies.
 
@@ -241,6 +242,7 @@ reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
 reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
 reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
 reth-rpc-eth-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
+reth-tasks = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
 
 zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.0.4" }
 

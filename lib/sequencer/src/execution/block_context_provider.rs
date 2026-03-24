@@ -3,6 +3,7 @@ use crate::execution::metrics::EXECUTION_METRICS;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use alloy::primitives::{Address, TxHash, U256};
 use anyhow::Context as _;
+use futures::StreamExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, time::Instant};
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
@@ -10,7 +11,8 @@ use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion, ZkEnvelope,
+    BlockStartCursors, ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion,
+    SystemTxEnvelope, SystemTxType, ZkEnvelope, ZkTransaction,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -24,10 +26,7 @@ use zksync_os_types::{
 ///  it doesn't tolerate jumps in L1 priority IDs.
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider<Subpool> {
-    next_l1_priority_id: u64,
-    next_interop_event_index: InteropRootsLogIndex,
-    next_migration_number: u64,
-    next_interop_fee_number: u64,
+    next_cursors: BlockStartCursors,
     pool: Pool<Subpool>,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
@@ -43,6 +42,13 @@ pub struct BlockContextProvider<Subpool> {
     /// Protocol version to be used for the next produced block.
     /// Can change in runtime in case of upgrades.
     protocol_version: ProtocolSemanticVersion,
+    sl_chain_id_at_startup: u64,
+    /// Whether the one-time `SetSLChainId` system transaction has already been included.
+    /// Initialized to `true` on restart when already at v31+, since it must have been
+    /// included in a prior run. Also set to `true` during replay when a v31 block is
+    /// encountered. Only `false` on fresh v31 genesis or pre-v31 chains that haven't
+    /// upgraded yet.
+    sl_chain_id_set: bool,
     fee_collector_address: Address,
     last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
     fee_provider: FeeProvider,
@@ -51,10 +57,7 @@ pub struct BlockContextProvider<Subpool> {
 impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        next_l1_priority_id: u64,
-        next_interop_event_index: InteropRootsLogIndex,
-        next_migration_number: u64,
-        next_interop_fee_number: u64,
+        next_cursors: BlockStartCursors,
         pool: Pool<Subpool>,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
@@ -67,15 +70,18 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         interop_roots_per_block: u64,
         service_block_delay: Duration,
         protocol_version: ProtocolSemanticVersion,
+        sl_chain_id_at_startup: u64,
         fee_collector_address: Address,
         last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
         fee_provider: FeeProvider,
     ) -> Self {
+        // If we're already past v31 and not on the very first block, the SetSLChainId tx
+        // must have been included in a previous run. For v31 itself at block > 1, it was also
+        // already included (either via upgrade or genesis). This flag may also be updated
+        // during replay in `apply_block_output`.
+        let sl_chain_id_set = protocol_version.minor >= 31 && next_block_number > 1;
         Self {
-            next_l1_priority_id,
-            next_interop_event_index,
-            next_migration_number,
-            next_interop_fee_number,
+            next_cursors,
             pool,
             block_hashes_for_next_block,
             previous_block_timestamp,
@@ -89,6 +95,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             service_block_delay,
             next_interop_tx_allowed_after: Instant::now(),
             protocol_version,
+            sl_chain_id_at_startup,
+            sl_chain_id_set,
             fee_collector_address,
             last_constructed_block_ctx_sender,
             fee_provider,
@@ -147,6 +155,27 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     .try_into()
                     .context("Cannot instantiate a block for unsupported execution version")?;
 
+                // Append a SetSLChainId system transaction exactly once: when the protocol
+                // version is v31 (either via upgrade from v30, or on the first block of a
+                // fresh v31 chain). After it fires once, `sl_chain_id_set` prevents it from
+                // ever triggering again.
+                let (tx_source, expect_sl_chain_id_tx_after_upgrade) = if !self.sl_chain_id_set
+                    && self.protocol_version.minor == 31
+                {
+                    self.sl_chain_id_set = true;
+                    let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
+                        self.sl_chain_id_at_startup,
+                        // We use `u64::MAX` as a placeholder, since it is not an actual migration
+                        u64::MAX,
+                    );
+                    let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
+                        futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
+                    ));
+                    (tx_source, true)
+                } else {
+                    (best_txs.stream, false)
+                };
+
                 let FeeParams {
                     eip1559_basefee,
                     native_price,
@@ -172,21 +201,19 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     .send_replace(Some(block_context));
                 PreparedBlockCommand {
                     block_context,
-                    tx_source: best_txs.stream,
+                    tx_source,
                     seal_policy: SealPolicy::Decide(
                         self.block_time,
                         self.max_transactions_in_block,
                     ),
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "produce",
-                    starting_l1_priority_id: self.next_l1_priority_id,
                     protocol_version: self.protocol_version.clone(),
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages,
-                    starting_interop_event_index: self.next_interop_event_index.clone(),
-                    starting_migration_number: self.next_migration_number,
-                    starting_interop_fee_number: self.next_interop_fee_number,
+                    expect_sl_chain_id_tx_after_upgrade,
+                    starting_cursors: self.next_cursors.clone(),
                     interop_roots_per_block: self.interop_roots_per_block,
                     strict_subpool_cleanup: true,
                 }
@@ -210,6 +237,19 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     self.previous_block_timestamp,
                     record.previous_block_timestamp
                 );
+
+                let expect_sl_chain_id_tx_after_upgrade = record
+                    .transactions
+                    .windows(2)
+                    .find(|window| {
+                        matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
+                            && matches!(
+                                window[1].as_system_tx_type(),
+                                Some(SystemTxType::SetSLChainId(_))
+                            )
+                    })
+                    .is_some();
+
                 PreparedBlockCommand {
                     block_context: record.block_context,
                     seal_policy: SealPolicy::UntilExhausted {
@@ -219,15 +259,13 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     tx_source: MarkingTxStream::unmarkable(futures::stream::iter(
                         record.transactions,
                     )),
-                    starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
                     protocol_version: record.protocol_version,
                     expected_block_output_hash: Some(record.block_output_hash),
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages: record.force_preimages,
-                    starting_interop_event_index: record.starting_interop_event_index.clone(),
-                    starting_migration_number: record.starting_migration_number,
-                    starting_interop_fee_number: record.starting_interop_fee_number,
+                    expect_sl_chain_id_tx_after_upgrade,
+                    starting_cursors: record.starting_cursors,
                     interop_roots_per_block: self.interop_roots_per_block,
                     strict_subpool_cleanup: false,
                 }
@@ -280,7 +318,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     // In that case we shouldn't consider next L1 txs when rebuilding.
                     let filter_l1_txs =
                         if let Some(ZkEnvelope::L1(l1_tx)) = first_l1_tx.map(|tx| tx.envelope()) {
-                            l1_tx.priority_id() != self.next_l1_priority_id
+                            l1_tx.priority_id() != self.next_cursors.l1_priority_id
                         } else {
                             false
                         };
@@ -296,7 +334,19 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     }
                 };
 
+                let expect_sl_chain_id_tx_after_upgrade = txs
+                    .windows(2)
+                    .find(|window| {
+                        matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
+                            && matches!(
+                                window[1].as_system_tx_type(),
+                                Some(SystemTxType::SetSLChainId(_))
+                            )
+                    })
+                    .is_some();
+
                 PreparedBlockCommand {
+                    expect_sl_chain_id_tx_after_upgrade,
                     block_context,
                     tx_source: MarkingTxStream::unmarkable(futures::stream::iter(txs)),
                     seal_policy: SealPolicy::UntilExhausted {
@@ -304,14 +354,11 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     },
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "rebuild",
-                    starting_l1_priority_id: self.next_l1_priority_id,
                     protocol_version,
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages: rebuild.replay_record.force_preimages,
-                    starting_interop_event_index: self.next_interop_event_index.clone(),
-                    starting_migration_number: self.next_migration_number,
-                    starting_interop_fee_number: self.next_interop_fee_number,
+                    starting_cursors: self.next_cursors.clone(),
                     interop_roots_per_block: self.interop_roots_per_block,
                     strict_subpool_cleanup: false,
                 }
@@ -341,28 +388,33 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             )
             .await;
         if let Some(last_l1_priority_id) = outcome.last_l1_priority_id {
-            self.next_l1_priority_id = last_l1_priority_id + 1;
+            self.next_cursors.l1_priority_id = last_l1_priority_id + 1;
             EXECUTION_METRICS
                 .next_l1_priority_id
-                .set(self.next_l1_priority_id);
+                .set(self.next_cursors.l1_priority_id);
         }
         if let Some(last_interop_log_index) = outcome.last_interop_log_index {
             self.next_interop_tx_allowed_after = Instant::now() + self.service_block_delay;
-            self.next_interop_event_index = InteropRootsLogIndex {
+            self.next_cursors.interop_event_index = InteropRootsLogIndex {
                 block_number: last_interop_log_index.block_number,
                 index_in_block: last_interop_log_index.index_in_block + 1,
             };
         }
 
         if let Some(last_migration_number) = outcome.last_migration_number {
-            self.next_migration_number = last_migration_number + 1;
+            self.next_cursors.migration_number = last_migration_number + 1;
         }
         if let Some(last_interop_fee_number) = outcome.last_interop_fee_number {
-            self.next_interop_fee_number = last_interop_fee_number + 1;
+            self.next_cursors.interop_fee_number = last_interop_fee_number + 1;
         }
 
         // We update protocol version here, so that we take into account replay records with protocol version bumps.
         self.protocol_version = replay_record.protocol_version.clone();
+        // If a replayed block is at v31, the SetSLChainId tx was already included — mark it as done
+        // to prevent the produce path from inserting a duplicate.
+        if self.protocol_version.minor == 31 {
+            self.sl_chain_id_set = true;
+        }
 
         // Advance `block_hashes_for_next_block`.
         let last_block_hash = block_output.header.hash();

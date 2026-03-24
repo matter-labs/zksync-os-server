@@ -60,6 +60,8 @@ zksync_os_interface.workspace = true
 execution_utils.workspace = true
 full_statement_verifier.workspace = true
 
+reth-tasks.workspace = true
+
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false, features = [
     "rlp",

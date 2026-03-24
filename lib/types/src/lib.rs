@@ -37,5 +37,8 @@ pub use protocol::{
     ProvingVersion, ProvingVersionError,
 };
 
+mod block_start_cursors;
+pub use block_start_cursors::BlockStartCursors;
+
 mod token_price;
 pub use token_price::{TokenApiRatio, TokenPricesForFees};

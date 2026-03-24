@@ -87,7 +87,8 @@ impl PipelineComponent for FriProvingPipelineStep {
                 Ok::<(), anyhow::Error>(())
             } => {
                 result?;
-                anyhow::bail!("FRI proving input stream ended unexpectedly")
+                tracing::info!("inbound channel closed");
+                return Ok(());
             },
             _ = async {
                 while let Some(proof) = self.batches_with_proof_receiver.recv().await {
@@ -97,7 +98,10 @@ impl PipelineComponent for FriProvingPipelineStep {
                     );
                     let _ = output.send(proof).await;
                 }
-            } => anyhow::bail!("FRI proving output stream ended unexpectedly"),
+            } => {
+                tracing::info!("outbound channel closed");
+                return Ok(());
+            },
         }
     }
 }

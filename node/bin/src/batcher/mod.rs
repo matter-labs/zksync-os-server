@@ -93,10 +93,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         // We might receive some blocks that belong to already executed batches. We can skip these
         // as there is no need to perform any L1 operations on them.
         loop {
-            let next_block_number = input
+            let Some(next_block_number) = input
                 .peek_recv(|(_, replay_record, _, _)| replay_record.block_context.block_number)
                 .await
-                .context("batcher inbound channel unexpectedly closed")?;
+            else {
+                tracing::info!("inbound channel closed");
+                return Ok(());
+            };
             if next_block_number >= first_expected_block {
                 break;
             }
@@ -117,10 +120,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
 
             // Peek at the next block to decide whether to recreate or create anew.
-            let next_block_number = input
+            let Some(next_block_number) = input
                 .peek_recv(|(_, replay_record, _, _)| replay_record.block_context.block_number)
                 .await
-                .context("batcher inbound channel unexpectedly closed")?;
+            else {
+                tracing::info!("inbound channel closed");
+                return Ok(());
+            };
             latency_tracker.enter_state(GenericComponentState::Processing);
 
             let batch_envelope;
@@ -202,10 +208,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
             }
-            output
-                .send(batch_envelope)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to send batch data: {e}"))?;
+            if output.send(batch_envelope).await.is_err() {
+                tracing::info!("outbound channel closed");
+                return Ok(());
+            }
         }
     }
 }

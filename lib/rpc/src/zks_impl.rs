@@ -17,8 +17,8 @@ use zksync_os_merkle_tree_api::flat::StorageSlotProof;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_rpc_api::{
     types::{
-        AddressScopedKey, BatchStorageProof, BlockMetadata, L2ToL1LogProof, LogProofTarget,
-        StateCommitmentPreimage,
+        AddressScopedKey, BatchStorageProof, BlockMetadata, L1VerificationData, L2ToL1LogProof,
+        LogProofTarget, StateCommitmentPreimage,
     },
     zks::ZksApiServer,
 };
@@ -127,7 +127,9 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             .chain(std::iter::once(multichain_root))
             .collect::<Vec<_>>();
 
-        let (batch_proof_len, batch_chain_proof, is_final_node) = match &self.gateway_provider {
+        let (batch_proof_len, batch_chain_proof, is_final_node, gateway_block_number) = match &self
+            .gateway_provider
+        {
             Some(gateway_provider) => {
                 let execute_sl_block_number = batch
                     .execute_sl_block_number
@@ -197,7 +199,12 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
 
                         batch_chain_proof.extend(chain_proof_vector);
 
-                        (batch_proof_len, batch_chain_proof, false)
+                        (
+                            batch_proof_len,
+                            batch_chain_proof,
+                            false,
+                            Some(execute_sl_block_number),
+                        )
                     }
                     LogProofTarget::MessageRoot => {
                         // For the "until msg root" format the chain proof is taken at the specific
@@ -244,11 +251,16 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
 
                         batch_chain_proof.extend(chain_proof_vector);
 
-                        (batch_proof_len, batch_chain_proof, false)
+                        (
+                            batch_proof_len,
+                            batch_chain_proof,
+                            false,
+                            Some(execute_sl_block_number),
+                        )
                     }
                 }
             }
-            None => (0, Vec::<B256>::new(), true),
+            None => (0, Vec::<B256>::new(), true, None),
         };
 
         let proof = {
@@ -271,6 +283,7 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             proof,
             root,
             id: l1_log_index as u32,
+            gateway_block_number,
         }))
     }
 
@@ -386,10 +399,20 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             return Err(err.into());
         }
 
+        let l1_verification_data = L1VerificationData {
+            batch_number,
+            number_of_layer1_txs: batch.batch_info.number_of_layer1_txs,
+            priority_operations_hash: batch.batch_info.priority_operations_hash,
+            dependency_roots_rolling_hash: batch.batch_info.dependency_roots_rolling_hash,
+            l2_to_l1_logs_root_hash: batch.batch_info.l2_to_l1_logs_root_hash,
+            commitment: batch.batch_info.commitment,
+        };
+
         Ok(Some(BatchStorageProof {
             address,
             state_commitment_preimage,
             storage_proofs,
+            l1_verification_data,
         }))
     }
 }

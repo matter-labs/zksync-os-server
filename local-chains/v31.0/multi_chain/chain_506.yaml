@@ -2,15 +2,15 @@ general:
   ephemeral: true
   ephemeral_state: ./local-chains/v31.0/gateway-db.tar.gz
 genesis:
-  bridgehub_address: '0x589cd43f17f3d2fc803a2c6b413b48c42dadc2ee'
-  bytecode_supplier_address: '0x1b47ccd40a68f47698aca71cc84fb0525794cba7'
+  bridgehub_address: '0x52890e1e831b5c24af44016f0c05615c260109c4'
+  bytecode_supplier_address: '0xc7150c775c27049eefc1a321383a51371e24249d'
   genesis_input_path: ./local-chains/v31.0/genesis.json
   chain_id: 506
 l1_sender:
   pubdata_mode: Blobs
-  operator_commit_sk: '0x4004d243114dbed5c228e0dfcfd6266c94f65b9dfcf0843b99b7036a281195db'
-  operator_prove_sk: '0x1d25c21af4cd33291175e1a2a88fba4ddee4853a0ec4fabed509d214ece50b86'
-  operator_execute_sk: '0x8e16afc65094b0a6c9b45693c0650c03988056894ee20aa6ca213972c3ab2f82'
+  operator_commit_sk: '0x59bc09b5adc54b14b21ddfec33465b883a5155f62e9e017ff028ffa051b71416'
+  operator_prove_sk: '0x891a87e258d66c5f81d46ccae5f8116e6f275ba82c562a92d3170d8a7465a5db'
+  operator_execute_sk: '0x9c763aa1a517d343b37d75d5a929be2d15a42aec6fe89387c4252aca0e7a6a98'
 rpc:
   address: 0.0.0.0:3052
 external_price_api_client:

@@ -53,7 +53,7 @@ async fn upgrade_patch_no_deployments_gateway() -> anyhow::Result<()> {
     // Test that we can deposit L2 funds from a rich L1 account
     let gateway_tester = GatewayTester::builder()
         .protocol_version(NEXT_PROTOCOL_VERSION)
-        .num_chains(1)
+        .num_chains(0)
         .build()
         .await?;
     let tester = gateway_tester.into_gateway();
@@ -67,8 +67,6 @@ async fn upgrade_patch_no_deployments_gateway() -> anyhow::Result<()> {
         .with_force_deployments(BTreeMap::new())
         .with_timestamp(upgrade_timestamp)
         .build();
-
-    tracing::warn!("upgrade was built");
 
     upgrade_tester
         .execute_default_upgrade(

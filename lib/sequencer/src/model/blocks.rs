@@ -4,7 +4,7 @@ use std::time::Duration;
 use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::MarkingTxStream;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{InteropRootsLogIndex, L1TxSerialId, ProtocolSemanticVersion};
+use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
 /// `BlockCommand`s drive the sequencer execution.
 /// Produced by `CommandProducer` - first blocks are `Replay`ed from block replay storage
@@ -59,7 +59,7 @@ impl Display for BlockCommand {
                 "Replay block {} ({} txs); starting l1 priority id: {}",
                 record.block_context.block_number,
                 record.transactions.len(),
-                record.starting_l1_priority_id,
+                record.starting_cursors.l1_priority_id,
             ),
             BlockCommand::Produce(_) => write!(f, "Produce block"),
             BlockCommand::Rebuild(command) => write!(
@@ -85,9 +85,6 @@ pub struct PreparedBlockCommand<'a> {
     pub seal_policy: SealPolicy,
     pub invalid_tx_policy: InvalidTxPolicy,
     pub tx_source: MarkingTxStream<'a>,
-    /// L1 transaction serial id expected at the beginning of this block.
-    /// Not used in execution directly, but required to construct ReplayRecord
-    pub starting_l1_priority_id: L1TxSerialId,
     pub metrics_label: &'static str,
     pub protocol_version: ProtocolSemanticVersion,
     /// Expected hash of the block output (missing for command generated from `BlockCommand::Produce`)
@@ -96,9 +93,11 @@ pub struct PreparedBlockCommand<'a> {
     /// Contract preimages to be included before the block execution.
     /// Can be non-empty e.g. when processing upgrade transactions.
     pub force_preimages: Vec<(B256, Vec<u8>)>,
-    pub starting_interop_event_index: InteropRootsLogIndex,
-    pub starting_migration_number: u64,
-    pub starting_interop_fee_number: u64,
+    /// Whether the sequencer expects exactly one `SetSLChainId` system tx to execute immediately
+    /// after an upgrade tx before the block is sealed.
+    pub expect_sl_chain_id_tx_after_upgrade: bool,
+    /// L1 watcher cursors at the start of this block.
+    pub starting_cursors: BlockStartCursors,
     pub interop_roots_per_block: u64,
     /// Whether canonical state transition should strictly consume executed txs from live subpools.
     /// `true` for produced blocks, `false` for replay/rebuild.
