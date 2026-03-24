@@ -186,63 +186,64 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         let mut negative_scanned_blocks = 0u64;
         let mut logs = Vec::new();
         for number in from..=to {
-            if let Some(block) = self.storage.repository().get_block_by_number(number)? {
-                let mut log_index_in_block = 0u64;
-                if filter.matches_bloom(block.header.logs_bloom) {
-                    tracing::trace!(
-                        number,
-                        ?filter,
-                        "Block matches bloom filter, scanning receipts",
-                    );
-                    let stored_txs = block
-                        .unseal()
-                        .body
-                        .transactions
-                        .into_iter()
-                        .map(|hash| {
-                            self.storage
-                                .repository()
-                                .get_stored_transaction(hash)?
-                                .ok_or(EthFilterError::BlockNotFound(number.into()))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let mut at_least_one_log_added = false;
-                    for tx in stored_txs {
-                        for inner_log in tx.receipt.logs() {
-                            if filter.matches(inner_log) {
-                                logs.push(build_api_log(
-                                    *tx.tx.hash(),
-                                    inner_log.clone(),
-                                    tx.meta.clone(),
-                                    log_index_in_block - tx.meta.number_of_logs_before_this_tx,
-                                ));
-                                at_least_one_log_added = true;
-                            }
-                            log_index_in_block += 1;
+            let Some(block) = self.storage.repository().get_block_by_number(number)? else {
+                return Err(EthFilterError::BlockNotFound(number.into()));
+            };
+            let mut log_index_in_block = 0u64;
+            if filter.matches_bloom(block.header.logs_bloom) {
+                tracing::trace!(
+                    number,
+                    ?filter,
+                    "Block matches bloom filter, scanning receipts",
+                );
+                let stored_txs = block
+                    .unseal()
+                    .body
+                    .transactions
+                    .into_iter()
+                    .map(|hash| {
+                        self.storage
+                            .repository()
+                            .get_stored_transaction(hash)?
+                            .ok_or(EthFilterError::BlockNotFound(number.into()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut at_least_one_log_added = false;
+                for tx in stored_txs {
+                    for inner_log in tx.receipt.logs() {
+                        if filter.matches(inner_log) {
+                            logs.push(build_api_log(
+                                *tx.tx.hash(),
+                                inner_log.clone(),
+                                tx.meta.clone(),
+                                log_index_in_block - tx.meta.number_of_logs_before_this_tx,
+                            ));
+                            at_least_one_log_added = true;
                         }
+                        log_index_in_block += 1;
                     }
-                    if at_least_one_log_added {
-                        tp_scanned_blocks += 1;
-                    } else {
-                        fp_scanned_blocks += 1;
-                    }
-
-                    // size check but only if range is multiple blocks, so we always return all
-                    // logs of a single block
-                    if let Some(max_logs_per_response) = self.query_limits.max_logs_per_response
-                        && is_multi_block_range
-                        && logs.len() > max_logs_per_response
-                    {
-                        let suggested_to = number.saturating_sub(1);
-                        return Err(EthFilterError::QueryExceedsMaxResults {
-                            max_logs: max_logs_per_response,
-                            from_block: from,
-                            to_block: suggested_to,
-                        });
-                    }
-                } else {
-                    negative_scanned_blocks += 1;
                 }
+                if at_least_one_log_added {
+                    tp_scanned_blocks += 1;
+                } else {
+                    fp_scanned_blocks += 1;
+                }
+
+                // size check but only if range is multiple blocks, so we always return all
+                // logs of a single block
+                if let Some(max_logs_per_response) = self.query_limits.max_logs_per_response
+                    && is_multi_block_range
+                    && logs.len() > max_logs_per_response
+                {
+                    let suggested_to = number.saturating_sub(1);
+                    return Err(EthFilterError::QueryExceedsMaxResults {
+                        max_logs: max_logs_per_response,
+                        from_block: from,
+                        to_block: suggested_to,
+                    });
+                }
+            } else {
+                negative_scanned_blocks += 1;
             }
         }
 
