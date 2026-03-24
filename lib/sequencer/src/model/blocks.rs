@@ -93,6 +93,9 @@ pub struct PreparedBlockCommand<'a> {
     /// Contract preimages to be included before the block execution.
     /// Can be non-empty e.g. when processing upgrade transactions.
     pub force_preimages: Vec<(B256, Vec<u8>)>,
+    /// Whether the sequencer expects exactly one `SetSLChainId` system tx to execute immediately
+    /// after an upgrade tx before the block is sealed.
+    pub expect_sl_chain_id_tx_after_upgrade: bool,
     /// L1 watcher cursors at the start of this block.
     pub starting_cursors: BlockStartCursors,
     pub interop_roots_per_block: u64,

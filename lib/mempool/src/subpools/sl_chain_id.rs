@@ -85,6 +85,13 @@ impl SlChainIdSubpool {
         let mut last_migration_number = None;
 
         for tx in txs {
+            if matches!(tx.system_subtype(), SystemTxType::SetSLChainId(u64::MAX)) {
+                // If we received a transaction with migration number `u64::MAX`, it means
+                // that this is the transaction we executed along with upgrade, so it is not present in the subpool and we should not expect it from the stream.
+                // The migration number should not be updated then, so we need to just skip the transaction.
+                continue;
+            }
+
             let pending_tx = self.pop_wait().await;
             assert_eq!(tx, &pending_tx);
 
