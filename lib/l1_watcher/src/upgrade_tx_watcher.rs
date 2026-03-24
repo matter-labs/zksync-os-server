@@ -28,11 +28,10 @@ alloy::sol! {
 
     #[sol(rpc)]
     interface IChainTypeManagerBytecodeSupplier {
-        /// NOTE: `L1_BYTECODES_SUPPLIER()` does not exist on any deployed CTM yet.
-        /// This is future-facing: when the CTM exposes this getter, it will allow
-        /// the server to discover the supplier address dynamically instead of
-        /// relying on the configured fallback. Until then, every call will revert
-        /// and the code falls back to the configured `bytecode_supplier_address`.
+        /// Public immutable on `ChainTypeManagerBase` (era-contracts draft-v31+).
+        /// Returns the canonical `BytecodesSupplier` address on L1.
+        /// Falls back to the configured `bytecode_supplier_address` if the CTM
+        /// does not expose this getter (pre-v31 deployments).
         function L1_BYTECODES_SUPPLIER() external view returns (address);
     }
 }
@@ -109,8 +108,9 @@ impl L1UpgradeTxWatcher {
                     Ok(0)
                 }
             })?;
-        // Right now, bytecodes supplied address is provided as a configuration, since it's not discoverable from L1
-        // Sanity check: make sure that the value provided for this config is correct.
+        // The configured bytecode supplier address is used as fallback for pre-v31 CTMs.
+        // On v31+ CTMs, `resolve_active_bytecode_supplier` discovers the address dynamically.
+        // Sanity check: make sure the fallback address has code deployed.
         anyhow::ensure!(
             !zk_chain_l1
                 .provider()
@@ -332,9 +332,7 @@ impl L1UpgradeTxWatcher {
     /// Queries the CTM on L1 for the canonical `BytecodesSupplier` address.
     ///
     /// Falls back to the configured `bytecode_supplier_address` if the CTM does
-    /// not expose `L1_BYTECODES_SUPPLIER()`. This is expected today — no deployed
-    /// CTM exposes this getter yet. Once it does, this method will dynamically
-    /// discover the supplier address.
+    /// not expose `L1_BYTECODES_SUPPLIER()` (pre-v31 deployments).
     async fn resolve_active_bytecode_supplier(&self) -> Address {
         let ctm = IChainTypeManagerBytecodeSupplier::new(self.ctm_l1, self.provider_l1.clone());
         match ctm.L1_BYTECODES_SUPPLIER().call().await {
@@ -358,7 +356,7 @@ impl L1UpgradeTxWatcher {
                 self.bytecode_supplier_address
             }
             Err(_) => {
-                // Expected: no deployed CTM exposes L1_BYTECODES_SUPPLIER() yet.
+                // Expected for pre-v31 CTM deployments.
                 tracing::info!(
                     configured_supplier = ?self.bytecode_supplier_address,
                     ctm = ?self.ctm_l1,
