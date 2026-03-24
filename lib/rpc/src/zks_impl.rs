@@ -127,7 +127,9 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             .chain(std::iter::once(multichain_root))
             .collect::<Vec<_>>();
 
-        let (batch_proof_len, batch_chain_proof, is_final_node, gateway_block_number) = match &self.gateway_provider {
+        let (batch_proof_len, batch_chain_proof, is_final_node, gateway_block_number) = match &self
+            .gateway_provider
+        {
             Some(gateway_provider) => {
                 let execute_sl_block_number = batch
                     .execute_sl_block_number
@@ -197,7 +199,12 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
 
                         batch_chain_proof.extend(chain_proof_vector);
 
-                        (batch_proof_len, batch_chain_proof, false, Some(execute_sl_block_number))
+                        (
+                            batch_proof_len,
+                            batch_chain_proof,
+                            false,
+                            Some(execute_sl_block_number),
+                        )
                     }
                     LogProofTarget::MessageRoot => {
                         // For the "until msg root" format the chain proof is taken at the specific
@@ -244,7 +251,12 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
 
                         batch_chain_proof.extend(chain_proof_vector);
 
-                        (batch_proof_len, batch_chain_proof, false, Some(execute_sl_block_number))
+                        (
+                            batch_proof_len,
+                            batch_chain_proof,
+                            false,
+                            Some(execute_sl_block_number),
+                        )
                     }
                 }
             }
