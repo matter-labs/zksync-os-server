@@ -130,7 +130,7 @@ where
             }
             last_processed_block_at = Some(Instant::now());
 
-            tracing::debug!(block_number, "Executed. Updating mempools...");
+            tracing::info!(block_number, "Executed. Updating mempools...");
             self.health_reporter
                 .enter_state(GenericComponentState::Processing);
 

@@ -35,7 +35,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     ),
     BlockDump,
 > {
-    tracing::debug!(command = ?command, block_number=command.block_context.block_number, "Executing command");
+    tracing::info!(command = ?command, block_number=command.block_context.block_number, "Executing command");
     let ctx = command.block_context;
 
     /* ---------- VM & state ----------------------------------------- */

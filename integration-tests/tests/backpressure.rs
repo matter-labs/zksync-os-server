@@ -3,11 +3,6 @@ use zksync_os_integration_tests::TesterBuilder;
 
 /// Verifies that the /status/health endpoint is reachable and returns a well-formed JSON
 /// response containing all expected top-level fields and a valid pipeline snapshot.
-///
-/// This test validates the end-to-end wiring added in Tasks 8, 9, and 10:
-///   - PipelineHealthMonitor is started and wired into the node (Task 8)
-///   - PipelineHealthConfig is part of the node Config struct (Task 9)
-///   - The /status/health route returns a PipelineSnapshot (Task 10)
 #[tokio::test]
 async fn health_endpoint_returns_pipeline_snapshot() {
     let node = TesterBuilder::default()

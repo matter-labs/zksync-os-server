@@ -190,6 +190,43 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
     }
 }
 
+#[async_trait]
+impl PipelineComponent for ExternalNodeCommandSource {
+    type Input = ();
+    type Output = BlockCommand;
+
+    const NAME: &'static str = "external_node_command_source";
+
+    async fn run(
+        mut self,
+        _input: TrackedUnboundedReceiver<()>,
+        output: TrackedUnboundedSender<BlockCommand>,
+    ) -> anyhow::Result<()> {
+        while let Some(record) = self.replays_for_sequencer.recv().await {
+            let block_number = record.block_context.block_number;
+            let command = BlockCommand::Replay(Box::new(record));
+            tracing::info!(?command, "Received block command from main node");
+
+            if let Some(up_to_block) = self.up_to_block
+                && block_number > up_to_block
+            {
+                tracing::info!(
+                    up_to_block,
+                    "Reached up_to_block, halting external command source"
+                );
+                futures::future::pending::<()>().await;
+            }
+
+            if output.send(command).is_err() {
+                tracing::warn!("Command output channel closed, stopping source");
+                break;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,7 +238,10 @@ mod tests {
     struct DummyReplay;
 
     impl ReadReplay for DummyReplay {
-        fn get_context(&self, _block_number: u64) -> Option<zksync_os_interface::types::BlockContext> {
+        fn get_context(
+            &self,
+            _block_number: u64,
+        ) -> Option<zksync_os_interface::types::BlockContext> {
             None
         }
 
@@ -251,43 +291,9 @@ mod tests {
 
         drop(receiver);
         let result = task.await.expect("source task should join");
-        assert!(result.is_ok(), "source should stop cleanly when receiver drops");
-    }
-}
-
-#[async_trait]
-impl PipelineComponent for ExternalNodeCommandSource {
-    type Input = ();
-    type Output = BlockCommand;
-
-    const NAME: &'static str = "external_node_command_source";
-
-    async fn run(
-        mut self,
-        _input: TrackedUnboundedReceiver<()>,
-        output: TrackedUnboundedSender<BlockCommand>,
-    ) -> anyhow::Result<()> {
-        while let Some(record) = self.replays_for_sequencer.recv().await {
-            let block_number = record.block_context.block_number;
-            let command = BlockCommand::Replay(Box::new(record));
-            tracing::info!(?command, "Received block command from main node");
-
-            if let Some(up_to_block) = self.up_to_block
-                && block_number > up_to_block
-            {
-                tracing::info!(
-                    up_to_block,
-                    "Reached up_to_block, halting external command source"
-                );
-                futures::future::pending::<()>().await;
-            }
-
-            if output.send(command).is_err() {
-                tracing::warn!("Command output channel closed, stopping source");
-                break;
-            }
-        }
-
-        Ok(())
+        assert!(
+            result.is_ok(),
+            "source should stop cleanly when receiver drops"
+        );
     }
 }
