@@ -21,7 +21,7 @@ use tokio::time::MissedTickBehavior;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{L2PooledTransaction, NewSubpoolTransactionStream};
 use zksync_os_rpc_api::filter::EthFilterApiServer;
-use zksync_os_storage_api::RepositoryError;
+use zksync_os_storage_api::{RepositoryBlock, RepositoryError, StoredTxData};
 use zksync_os_types::L2Envelope;
 
 #[derive(Clone)]
@@ -161,6 +161,25 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         self.get_logs_in_block_range(filter, from, to)
     }
 
+    fn get_block_transactions(
+        &self,
+        block: RepositoryBlock,
+        block_number: u64,
+    ) -> EthFilterResult<Vec<StoredTxData>> {
+        block
+            .unseal()
+            .body
+            .transactions
+            .into_iter()
+            .map(|hash| {
+                self.storage
+                    .repository()
+                    .get_stored_transaction(hash)?
+                    .ok_or(EthFilterError::BlockNotFound(block_number.into()))
+            })
+            .collect()
+    }
+
     fn get_logs_in_block_range(
         &self,
         filter: Filter,
@@ -189,18 +208,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
                     ?filter,
                     "Block matches bloom filter, scanning receipts",
                 );
-                let stored_txs = block
-                    .unseal()
-                    .body
-                    .transactions
-                    .into_iter()
-                    .map(|hash| {
-                        self.storage
-                            .repository()
-                            .get_stored_transaction(hash)?
-                            .ok_or(EthFilterError::BlockNotFound(number.into()))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let stored_txs = self.get_block_transactions(block, number)?;
                 let logs_before = logs.len();
                 for tx in stored_txs {
                     for inner_log in tx.receipt.logs() {
