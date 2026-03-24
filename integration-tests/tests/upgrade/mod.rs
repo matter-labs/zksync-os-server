@@ -7,6 +7,18 @@ use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV31, FacetCut, 
 use zksync_os_integration_tests::{GatewayTester, Tester};
 use zksync_os_server::default_protocol_version::NEXT_PROTOCOL_VERSION;
 
+/// Pads a bytecode to meet `BytecodesSupplier` requirements:
+/// 32-byte aligned with an odd number of 32-byte words.
+fn pad_bytecode_for_supplier(raw: &[u8]) -> Bytes {
+    let mut bytecode = raw.to_vec();
+    let padding = (32 - bytecode.len() % 32) % 32;
+    bytecode.extend(vec![0u8; padding]);
+    if (bytecode.len() / 32).is_multiple_of(2) {
+        bytecode.extend([0u8; 32]);
+    }
+    Bytes::from(bytecode)
+}
+
 /// Executes the simplest patch protocol upgrade:
 /// - no contracts are deployed
 /// - patch version is bumped by 1
@@ -19,9 +31,16 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
-    // Test that we can deposit L2 funds from a rich L1 account
     let tester = Tester::setup().await?;
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+
+    // Publish a bytecode to the L1 BytecodesSupplier. Patch upgrades do not include
+    // an upgrade transaction so these preimages are not consumed, but the server must
+    // still scan the supplier without errors.
+    let supplier_bytecode = pad_bytecode_for_supplier(&SampleForceDeployment::DEPLOYED_BYTECODE);
+    upgrade_tester
+        .publish_bytecodes_to_l1_supplier([supplier_bytecode])
+        .await?;
 
     // Prepare protocol upgrade
     let protocol_upgrade = upgrade_tester
@@ -136,12 +155,19 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
     let tester = Tester::setup().await?;
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
-    // Publish the bytecodes for upgrade beforehand.
+    // Publish the bytecodes for upgrade beforehand via L2 deploy.
     // TODO: we need to use bytecode instead of deployed bytecode for now, since under the hood `publish_bytecodes`
     // actually deploys contracts since BytecodesSupplier is not ready for zksync os
     // Once this is fixed, also check the logic for `ForceDeploymentBytecodeInfo` in the builder.
     upgrade_tester
         .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
+        .await?;
+
+    // Also publish to the L1 BytecodesSupplier so `fetch_force_preimages` discovers
+    // the bytecode via `BytecodePublished` events.
+    let supplier_bytecode = pad_bytecode_for_supplier(&SampleForceDeployment::DEPLOYED_BYTECODE);
+    upgrade_tester
+        .publish_bytecodes_to_l1_supplier([supplier_bytecode])
         .await?;
 
     // Prepare protocol upgrade
@@ -227,13 +253,17 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
     let tester = gateway_tester.into_primary_chain();
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
-    // Publish the bytecodes for upgrade beforehand.
+    // Publish the bytecodes for upgrade beforehand via L2 deploy.
     // TODO: we need to use bytecode instead of deployed bytecode for now, since under the hood `publish_bytecodes`
     // actually deploys contracts since BytecodesSupplier is not ready for zksync os
     // Once this is fixed, also check the logic for `ForceDeploymentBytecodeInfo` in the builder.
     upgrade_tester
         .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
         .await?;
+
+    // NOTE: We don't publish to the L1 BytecodesSupplier here because the
+    // gateway Anvil state (v31.0) uses a different BytecodesSupplier deployment.
+    // The L1-to-L1 supplier flow is covered by `upgrade_to_v31_with_deployments`.
 
     // Prepare protocol upgrade
     let protocol_upgrade = upgrade_tester
@@ -270,154 +300,6 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
     while en1.l2_provider.get_block_number().await? < main_node_block {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
-
-    Ok(())
-}
-
-/// Verifies that bytecodes published to the `BytecodesSupplier` contract on L1 are
-/// correctly fetched by the server during a protocol upgrade.
-///
-/// The test publishes a bytecode to the supplier before executing a patch upgrade,
-/// verifying that:
-/// 1. `BytecodePublished` events on L1 are scanned without errors.
-/// 2. The upgrade completes successfully even when the supplier has published bytecodes.
-///
-/// Since this is a patch-only upgrade (no force deployments), it focuses on confirming
-/// that the supplier scanning path does not interfere with the upgrade flow.
-#[test_log::test(tokio::test)]
-async fn upgrade_patch_with_bytecodes_from_supplier() -> anyhow::Result<()> {
-    let upgrade_timestamp = U256::from(0);
-    let deadline = U256::MAX;
-
-    let tester = Tester::setup().await?;
-    let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
-
-    // Publish a bytecode to the BytecodesSupplier contract on L1 before the upgrade.
-    // The server should scan `BytecodePublished` events from the supplier
-    // and return this bytecode as a force preimage when processing the upgrade.
-    // The supplier requires bytecodes padded to 32 bytes with an odd number of words.
-    let mut bytecode = SampleForceDeployment::DEPLOYED_BYTECODE.to_vec();
-    let padding = (32 - bytecode.len() % 32) % 32;
-    bytecode.extend(vec![0u8; padding]);
-    // Ensure odd number of 32-byte words (ZKsync bytecode convention).
-    if (bytecode.len() / 32).is_multiple_of(2) {
-        bytecode.extend([0u8; 32]);
-    }
-    upgrade_tester
-        .publish_bytecodes_to_l1_supplier([Bytes::from(bytecode)])
-        .await?;
-
-    // Execute a patch upgrade. Patch upgrades do not include an L2 upgrade transaction
-    // so force preimages are not consumed, but the server must still scan the supplier
-    // without errors.
-    let protocol_upgrade = upgrade_tester
-        .protocol_upgrade_builder()
-        .await?
-        .bump_patch(1)
-        .with_force_deployments(BTreeMap::new())
-        .with_timestamp(upgrade_timestamp)
-        .build();
-
-    upgrade_tester
-        .execute_default_upgrade(
-            &protocol_upgrade,
-            deadline,
-            upgrade_timestamp,
-            true,
-            Vec::new(),
-        )
-        .await?;
-
-    Ok(())
-}
-
-/// Performs a minor protocol upgrade where the force deployment bytecodes are
-/// published to the `BytecodesSupplier` contract on L1. This exercises the
-/// `fetch_force_preimages` code path end-to-end: the server must scan
-/// `BytecodePublished` events from the supplier, compute the correct zkOS
-/// bytecode hashes via `set_properties_code`, and inject them as preimages
-/// for the upgrade transaction.
-#[test_log::test(tokio::test)]
-async fn upgrade_minor_with_bytecodes_from_supplier() -> anyhow::Result<()> {
-    let upgrade_timestamp = U256::from(0);
-    let deadline = U256::MAX;
-
-    let sample_force_deployment_address: Address = "0x000000000000000000000000000000000000dead"
-        .parse()
-        .unwrap();
-
-    let force_deployments: BTreeMap<Address, Bytes> = [(
-        sample_force_deployment_address,
-        SampleForceDeployment::DEPLOYED_BYTECODE.clone(),
-    )]
-    .into_iter()
-    .collect();
-
-    let tester = Tester::setup().await?;
-    let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
-
-    // Publish via L2 deploy (existing path — ensures preimages exist in state as fallback).
-    upgrade_tester
-        .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
-        .await?;
-
-    // Also publish to the L1 BytecodesSupplier so `fetch_force_preimages` discovers
-    // the bytecode via `BytecodePublished` events.
-    // The supplier requires bytecodes padded to 32-byte boundaries with an odd number
-    // of 32-byte words (ZKsync bytecode convention).
-    let mut supplier_bytecode = SampleForceDeployment::DEPLOYED_BYTECODE.to_vec();
-    let padding = (32 - supplier_bytecode.len() % 32) % 32;
-    supplier_bytecode.extend(vec![0u8; padding]);
-    if (supplier_bytecode.len() / 32).is_multiple_of(2) {
-        supplier_bytecode.extend([0u8; 32]);
-    }
-    upgrade_tester
-        .publish_bytecodes_to_l1_supplier([Bytes::from(supplier_bytecode)])
-        .await?;
-
-    // Prepare a minor protocol upgrade with force deployments.
-    let protocol_upgrade = upgrade_tester
-        .protocol_upgrade_builder()
-        .await?
-        .bump_minor(1)
-        .with_force_deployments(force_deployments)
-        .with_timestamp(upgrade_timestamp)
-        .build();
-
-    // Deploy new CommitterFacet (required for minor version upgrades).
-    let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
-    let committer_facet = CommitterFacetV31::deploy(
-        upgrade_tester.tester.l1_provider().clone(),
-        U256::from(l1_chain_id),
-    )
-    .await?;
-
-    let facet_cut = FacetCut {
-        facet: *committer_facet.address(),
-        action: Action::Replace,
-        isFreezable: true,
-        selectors: vec![FixedBytes(
-            CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR,
-        )],
-    };
-
-    upgrade_tester
-        .execute_default_upgrade(
-            &protocol_upgrade,
-            deadline,
-            upgrade_timestamp,
-            false,
-            vec![facet_cut],
-        )
-        .await?;
-
-    // Verify the force-deployed contract is callable.
-    let force_deployed_contract = SampleForceDeployment::new(
-        sample_force_deployment_address,
-        upgrade_tester.tester.l2_provider.clone(),
-    );
-    let stored_value = force_deployed_contract.return42().call().await?;
-    assert_eq!(stored_value, U256::from(42));
 
     Ok(())
 }
