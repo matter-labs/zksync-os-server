@@ -13,13 +13,13 @@ use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::PeekableReceiver;
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
+use zksync_os_pipeline::{TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_storage_api::{ReadFinality, ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
 
-type InputChannel = PeekableReceiver<SignedBatchEnvelope<FriProof>>;
-type OutputChannel = mpsc::Sender<L1SenderCommand<ExecuteCommand>>;
+type InputChannel = TrackedUnboundedReceiver<SignedBatchEnvelope<FriProof>>;
+type OutputChannel = TrackedUnboundedSender<L1SenderCommand<ExecuteCommand>>;
 
 mod db;
 
@@ -93,17 +93,14 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
         self,
         main_node_channels: Option<(InputChannel, OutputChannel)>,
         priority_ops_internal_sender: mpsc::Sender<(u64, u64, Option<usize>)>,
+        health_reporter: ComponentHealthReporter,
     ) -> anyhow::Result<()> {
-        let latency_tracker = ComponentStateReporter::global().handle_for(
-            "priority_tree_manager#prepare_execute_commands",
-            GenericComponentState::Processing,
-        );
         let (mut proved_batch_envelopes_receiver, execute_batches_sender) =
             main_node_channels.unzip();
         let mut last_processed_batch = self.last_executed_batch_on_init;
 
-        async fn take_n<T>(
-            receiver: &mut PeekableReceiver<T>,
+        async fn take_n<T: Send + 'static>(
+            receiver: &mut TrackedUnboundedReceiver<T>,
             n: usize,
         ) -> anyhow::Result<Option<Vec<T>>> {
             let mut out = Vec::default();
@@ -117,7 +114,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
         }
 
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
+            health_reporter.enter_state(GenericComponentState::WaitingRecv);
             let (batch_envelopes, batch_ranges) = match proved_batch_envelopes_receiver.as_mut() {
                 Some(r) => {
                     // todo(#160): we enforce executing one batch at a time for now as we don't have
@@ -134,11 +131,11 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                             batch_number = envelope.batch_number(),
                             "Passing through batch that was already executed"
                         );
-                        latency_tracker.enter_state(GenericComponentState::WaitingSend);
                         if let Some(sender) = &execute_batches_sender {
                             sender
                                 .send(L1SenderCommand::Passthrough(Box::new(envelope)))
-                                .await?;
+                                .ok()
+                                .context("execute_batches channel closed")?;
                         }
 
                         continue;
@@ -182,7 +179,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                     (None, ranges)
                 }
             };
-            latency_tracker.enter_state(GenericComponentState::Processing);
+            health_reporter.enter_state(GenericComponentState::Processing);
             let mut priority_ops = Vec::new();
             let mut interop_roots = Vec::new();
             let mut merkle_tree = self.merkle_tree.lock().await;
@@ -219,7 +216,6 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                     "Processing batch in priority tree manager"
                 );
 
-                latency_tracker.enter_state(GenericComponentState::WaitingSend);
                 priority_ops_internal_sender
                     .send((
                         batch_number,
@@ -228,7 +224,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                     ))
                     .await
                     .context("failed to send priority ops count")?;
-                latency_tracker.enter_state(GenericComponentState::Processing);
+                health_reporter.enter_state(GenericComponentState::Processing);
 
                 if first_priority_op_id_in_batch.is_none() {
                     // Short-circuit for batches with no L1 txs.
@@ -266,14 +262,17 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                 });
             }
             drop(merkle_tree);
+            // Record progress unconditionally — both main-node and EN paths processed this batch.
+            let last_block = *batch_ranges.last().unwrap().1.end();
+            health_reporter.record_processed(last_block, 0);
             if let Some(s) = &execute_batches_sender {
-                latency_tracker.enter_state(GenericComponentState::WaitingSend);
                 s.send(L1SenderCommand::SendToL1(ExecuteCommand::new(
                     batch_envelopes.unwrap(),
                     priority_ops,
                     interop_roots,
                 )))
-                .await?;
+                .ok()
+                .context("execute_batches channel closed")?;
             }
             last_processed_batch = batch_ranges.last().unwrap().0;
         }
@@ -284,18 +283,15 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
         self,
         mut priority_ops_internal_receiver: mpsc::Receiver<(u64, u64, Option<usize>)>,
     ) -> anyhow::Result<()> {
-        let latency_tracker = ComponentStateReporter::global().handle_for(
-            "priority_tree_manager#keep_caching",
-            GenericComponentState::Processing,
-        );
+        let (health_reporter, _rx) =
+            ComponentHealthReporter::new("priority_tree_manager#keep_caching");
         let mut finality_receiver = self.finality.subscribe();
 
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
+            health_reporter.enter_state(GenericComponentState::WaitingRecv);
             let Some((batch_number, last_block_number, last_priority_op_id)) =
                 priority_ops_internal_receiver.recv().await
             else {
-                // Sender was dropped (graceful shutdown), exit cleanly.
                 return Ok(());
             };
             finality_receiver
@@ -303,7 +299,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                 .await
                 .context("failed to wait for executed block number")?;
 
-            latency_tracker.enter_state(GenericComponentState::Processing);
+            health_reporter.enter_state(GenericComponentState::Processing);
             let mut tree = self.merkle_tree.lock().await;
             if let Some(last_priority_op_id) = last_priority_op_id {
                 let leaves_to_trim = (last_priority_op_id + 1)

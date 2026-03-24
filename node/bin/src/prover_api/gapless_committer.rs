@@ -2,14 +2,13 @@ use crate::prover_api::proof_storage::{ProofStorage, StoredBatch};
 use anyhow::Context;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
-use tokio::sync::mpsc;
 use zksync_os_contract_interface::l1_discovery::BatchVerificationSL;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 
 /// Receives Batches with proofs - potentially out of order;
 /// * Fixes the order (by filling in the `buffer` field);
@@ -23,6 +22,7 @@ pub struct GaplessCommitter {
     pub last_committed_batch_number: u64,
     pub proof_storage: ProofStorage,
     pub batch_verification_l1_config: BatchVerificationSL,
+    pub health_reporter: ComponentHealthReporter,
 }
 
 #[async_trait]
@@ -31,24 +31,22 @@ impl PipelineComponent for GaplessCommitter {
     type Output = L1SenderCommand<CommitCommand>;
 
     const NAME: &'static str = "gapless_committer";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
         self,
-        mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
-        let latency_tracker = ComponentStateReporter::global()
-            .handle_for("gapless_committer", GenericComponentState::WaitingRecv);
+        let health_reporter = self.health_reporter;
 
         let mut buffer: BTreeMap<u64, SignedBatchEnvelope<FriProof>> = BTreeMap::new();
         let mut next_expected_batch_number = self.next_expected_batch_number;
 
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
+            health_reporter.enter_state(GenericComponentState::WaitingRecv);
             match input.recv().await {
                 Some(batch) => {
-                    latency_tracker.enter_state(GenericComponentState::Processing);
+                    health_reporter.enter_state(GenericComponentState::Processing);
                     buffer.insert(batch.batch_number(), batch);
 
                     // Flush ready batches
@@ -67,6 +65,8 @@ impl PipelineComponent for GaplessCommitter {
                             ready.last().unwrap().batch_number()
                         );
                         for batch in ready {
+                            let batch_number = batch.batch_number();
+                            let last_block = batch.batch.last_block_number;
                             let batch = batch.with_stage(BatchExecutionStage::FriProofStored);
                             let stored_batch = StoredBatch::V1(batch);
                             self.proof_storage
@@ -86,9 +86,13 @@ impl PipelineComponent for GaplessCommitter {
                                 .map(L1SenderCommand::SendToL1)
                                 .context("Committer batch signature failure")?
                             };
-                            latency_tracker.enter_state(GenericComponentState::WaitingSend);
-                            output.send(result).await?;
-                            latency_tracker.enter_state(GenericComponentState::Processing);
+                            output
+                                .send(result)
+                                .ok()
+                                .context("outbound channel closed")?;
+                            let _ = batch_number; // suppress unused warning
+                            health_reporter.record_processed(last_block, 0);
+                            health_reporter.enter_state(GenericComponentState::Processing);
                         }
                     }
                 }

@@ -19,8 +19,8 @@ use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
 };
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 
 fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E>) {
     move |result| match result {
@@ -34,6 +34,7 @@ pub struct BatchVerificationPipelineStep<E> {
     validators: Vec<Address>,
     last_committed_batch_number: u64,
     l1_state: L1State,
+    pub health_reporter: ComponentHealthReporter,
     _phantom: std::marker::PhantomData<E>,
 }
 
@@ -42,6 +43,7 @@ impl<E> BatchVerificationPipelineStep<E> {
         config: BatchVerificationConfig,
         l1_state: L1State,
         last_committed_batch_number: u64,
+        health_reporter: ComponentHealthReporter,
     ) -> Self {
         let config_validators = config
             .accepted_signers
@@ -70,6 +72,7 @@ impl<E> BatchVerificationPipelineStep<E> {
             validators,
             last_committed_batch_number,
             l1_state,
+            health_reporter,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -83,12 +86,11 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
     type Output = SignedBatchEnvelope<E>;
 
     const NAME: &'static str = "batch_verification";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
         self,
-        mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         if self.config.server_enabled {
             let (server, response_receiver) = BatchVerificationServer::new();
@@ -111,7 +113,37 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
                     .boxed()
                     .map(report_exit("Batch response processor"));
 
-            let verifier = BatchVerifier::new(&self, response_channels, server);
+            // Destructure to get health_reporter by value while passing &self to BatchVerifier::new
+            // (avoiding partial move conflict by using struct literal construction)
+            let BatchVerificationPipelineStep {
+                config,
+                threshold,
+                validators,
+                last_committed_batch_number,
+                l1_state,
+                health_reporter,
+                _phantom,
+            } = self;
+
+            BATCH_VERIFICATION_SEQUENCER_METRICS
+                .threshold
+                .set(threshold);
+            BATCH_VERIFICATION_SEQUENCER_METRICS
+                .validators_count
+                .set(validators.len());
+
+            let verifier = BatchVerifier {
+                config,
+                accepted_signers: validators,
+                threshold,
+                request_id_counter: AtomicU64::new(1),
+                response_channels,
+                server,
+                l1_chain_id: l1_state.sl_chain_id,
+                multisig_committer: l1_state.validator_timelock_sl,
+                last_committed_batch_number,
+                health_reporter,
+            };
             let verifier_fut = verifier
                 .run(input, output)
                 .boxed()
@@ -121,14 +153,28 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
             Ok(())
         } else {
             while let Some(batch) = input.recv().await {
-                output
-                    .send(batch.with_signatures(BatchSignatureData::NotNeeded))
-                    .await
-                    .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?
+                forward_batch(
+                    &self.health_reporter,
+                    &output,
+                    batch.with_signatures(BatchSignatureData::NotNeeded),
+                )?;
             }
             Ok(())
         }
     }
+}
+
+fn forward_batch<E>(
+    health_reporter: &ComponentHealthReporter,
+    output: &TrackedUnboundedSender<SignedBatchEnvelope<E>>,
+    batch_envelope: SignedBatchEnvelope<E>,
+) -> anyhow::Result<()> {
+    let last_block = batch_envelope.batch.last_block_number;
+    output
+        .send(batch_envelope)
+        .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
+    health_reporter.record_processed(last_block, 0);
+    Ok(())
 }
 
 /// Takes BatchVerificationResponse from server and routes them to appropriate
@@ -139,18 +185,14 @@ async fn run_batch_response_processor(
     mut response_receiver: mpsc::Receiver<BatchVerificationResponse>,
     response_channels: ResponseChannelsMapArc,
 ) -> anyhow::Result<()> {
-    let latency_tracker = ComponentStateReporter::global().handle_for(
-        "batch_response_processor",
-        GenericComponentState::WaitingRecv,
-    );
+    let (health_reporter, _rx) = ComponentHealthReporter::new("batch_response_processor");
     while let Some(response) = response_receiver.recv().await {
-        latency_tracker.enter_state(GenericComponentState::Processing);
+        health_reporter.enter_state(GenericComponentState::Processing);
         let request_id = response.request_id;
 
         // Route response to the appropriate channel
         if let Some(sender) = response_channels.read().await.get(&request_id) {
             tracing::debug!(request_id, "Received batch verification response");
-            latency_tracker.enter_state(GenericComponentState::WaitingSend);
             if let Err(e) = sender.send(response).await {
                 tracing::warn!(request_id, ?e, "Failed to route response");
             }
@@ -158,7 +200,7 @@ async fn run_batch_response_processor(
             // debug, because probably we finished processing this batch and this is an extra response
             tracing::debug!(request_id, "Response for unknown request_id, dropping");
         }
-        latency_tracker.enter_state(GenericComponentState::WaitingRecv);
+        health_reporter.enter_state(GenericComponentState::WaitingRecv);
     }
 
     tracing::info!("Batch response processor shutting down");
@@ -181,6 +223,7 @@ struct BatchVerifier {
     l1_chain_id: u64,
     multisig_committer: Address,
     last_committed_batch_number: u64,
+    health_reporter: ComponentHealthReporter,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -213,42 +256,16 @@ impl BatchVerificationError {
 }
 
 impl BatchVerifier {
-    pub fn new<E>(
-        component: &BatchVerificationPipelineStep<E>,
-        response_channels: ResponseChannelsMapArc,
-        server: Arc<BatchVerificationServer>,
-    ) -> Self {
-        BATCH_VERIFICATION_SEQUENCER_METRICS
-            .threshold
-            .set(component.threshold);
-        BATCH_VERIFICATION_SEQUENCER_METRICS
-            .validators_count
-            .set(component.validators.len());
-
-        Self {
-            config: component.config.clone(),
-            accepted_signers: component.validators.clone(),
-            threshold: component.threshold,
-            request_id_counter: AtomicU64::new(1),
-            response_channels,
-            server,
-            l1_chain_id: component.l1_state.sl_chain_id,
-            multisig_committer: component.l1_state.validator_timelock_sl,
-            last_committed_batch_number: component.last_committed_batch_number,
-        }
-    }
-
     async fn run<E: Send + Sync>(
         &self,
-        mut batch_for_signing_receiver: PeekableReceiver<BatchForSigning<E>>,
-        singed_batcher_sender: Sender<SignedBatchEnvelope<E>>,
+        mut batch_for_signing_receiver: TrackedUnboundedReceiver<BatchForSigning<E>>,
+        singed_batcher_sender: TrackedUnboundedSender<SignedBatchEnvelope<E>>,
     ) -> anyhow::Result<()> {
-        let latency_tracker = ComponentStateReporter::global()
-            .handle_for("batch_verifier", GenericComponentState::WaitingRecv);
+        let health_reporter = &self.health_reporter;
         let metrics = &*BATCH_VERIFICATION_SEQUENCER_METRICS;
 
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
+            health_reporter.enter_state(GenericComponentState::WaitingRecv);
             // We process the batches one by one. Consider adding concurrency here when we need it.
             let Some(batch_envelope) = batch_for_signing_receiver.recv().await else {
                 // Channel closed, exit the loop
@@ -262,18 +279,17 @@ impl BatchVerifier {
                     "Skipping signing of already committed batch {}",
                     batch_envelope.batch_number()
                 );
-                singed_batcher_sender
-                    .send(
-                        batch_envelope
-                            .with_signatures(BatchSignatureData::AlreadyCommitted)
-                            .with_stage(BatchExecutionStage::BatchSigned),
-                    )
-                    .await
-                    .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
+                forward_batch(
+                    health_reporter,
+                    &singed_batcher_sender,
+                    batch_envelope
+                        .with_stage(BatchExecutionStage::BatchSigned)
+                        .with_signatures(BatchSignatureData::AlreadyCommitted),
+                )?;
                 continue;
             }
 
-            latency_tracker.enter_state(GenericComponentState::Processing);
+            health_reporter.enter_state(GenericComponentState::Processing);
             let batch_envelope = batch_envelope.with_stage(BatchExecutionStage::SigningStarted);
             metrics.last_batch_number.set(batch_envelope.batch_number());
 
@@ -315,15 +331,13 @@ impl BatchVerifier {
             metrics.attempts_to_success.observe(retry_count + 1);
             metrics.total_latency.observe(start_time.elapsed());
 
-            latency_tracker.enter_state(GenericComponentState::WaitingSend);
-            singed_batcher_sender
-                .send(
-                    batch_envelope
-                        .with_signatures(BatchSignatureData::Signed { signatures })
-                        .with_stage(BatchExecutionStage::BatchSigned),
-                )
-                .await
-                .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
+            forward_batch(
+                health_reporter,
+                &singed_batcher_sender,
+                batch_envelope
+                    .with_signatures(BatchSignatureData::Signed { signatures })
+                    .with_stage(BatchExecutionStage::BatchSigned),
+            )?;
         }
     }
 
@@ -502,7 +516,6 @@ mod tests {
     use alloy::primitives::Address;
     use alloy::signers::local::PrivateKeySigner;
     use secrecy::SecretString;
-    use tokio::sync::mpsc;
     use zksync_os_batch_types::{BatchSignature, ValidatedBatchSignature};
     use zksync_os_l1_sender::batcher_model::{
         BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
@@ -559,7 +572,11 @@ mod tests {
     fn make_verifier(
         accepted_signers: Vec<String>,
         last_committed_batch_number: u64,
-    ) -> (BatchVerifier, ResponseChannelsMapArc) {
+    ) -> (
+        BatchVerifier,
+        ResponseChannelsMapArc,
+        tokio::sync::watch::Receiver<zksync_os_observability::ComponentHealth>,
+    ) {
         let config = test_config(accepted_signers.clone());
         let (server, _rx) = BatchVerificationServer::new();
         let server = Arc::new(server);
@@ -569,6 +586,7 @@ mod tests {
             .map(|s| s.parse().unwrap())
             .collect();
         let threshold = config.threshold;
+        let (health_reporter, health_rx) = ComponentHealthReporter::new("batch_verifier");
         let verifier = BatchVerifier {
             config,
             accepted_signers: accepted_signers_addrs,
@@ -579,14 +597,15 @@ mod tests {
             multisig_committer: MULTISIG_COMMITTER_DUMMY.parse().unwrap(),
             last_committed_batch_number,
             request_id_counter: AtomicU64::new(1),
+            health_reporter,
         };
-        (verifier, response_channels)
+        (verifier, response_channels, health_rx)
     }
 
     #[tokio::test]
     async fn process_response_refused_returns_none() {
         let batch = dummy_batch_envelope(1, 1, 2);
-        let (verifier, _) = make_verifier(Vec::new(), 0);
+        let (verifier, _, _) = make_verifier(Vec::new(), 0);
 
         let response = BatchVerificationResponse {
             request_id: 1,
@@ -603,7 +622,7 @@ mod tests {
         let batch = dummy_batch_envelope(1, 1, 2);
         let (response, _addr) = make_success_response(1, &batch).await;
 
-        let (verifier, _) = make_verifier(vec![DUMMY_ADDRESS.to_string()], 0);
+        let (verifier, _, _) = make_verifier(vec![DUMMY_ADDRESS.to_string()], 0);
 
         let result = verifier.process_response(&batch, 1, response);
         assert!(result.is_none());
@@ -614,7 +633,7 @@ mod tests {
         let batch = dummy_batch_envelope(1, 1, 2);
         let (response, addr) = make_success_response(1, &batch).await;
         let accepted = vec![DUMMY_ADDRESS.to_string(), addr.to_string()];
-        let (verifier, _) = make_verifier(accepted, 0);
+        let (verifier, _, _) = make_verifier(accepted, 0);
 
         let result = verifier.process_response(&batch, 1, response);
         let validated: ValidatedBatchSignature =
@@ -625,20 +644,21 @@ mod tests {
     #[tokio::test]
     async fn run_skips_already_committed_batches_and_forwards_them() {
         let accepted = Vec::new();
-        let (verifier, _) = make_verifier(accepted, 10);
+        let (verifier, _, health_rx) = make_verifier(accepted, 10);
 
-        let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
-        let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
-        let peekable = zksync_os_pipeline::PeekableReceiver::new(input_rx);
+        let (input_tx, input_rx) =
+            zksync_os_pipeline::tracked_unbounded_channel::<BatchForSigning<()>>();
+        let (output_tx, mut output_rx) =
+            zksync_os_pipeline::tracked_unbounded_channel::<SignedBatchEnvelope<()>>();
 
         // batch with number 5 < 10, so it does not need to go through signing and should be forwarded as is
         let batch = dummy_batch_envelope(5, 30, 35);
-        input_tx.send(batch).await.expect("failed to send batch");
+        input_tx.send(batch).expect("failed to send batch");
         drop(input_tx);
 
         let run_handle = tokio::spawn(async move {
             verifier
-                .run(peekable, output_tx)
+                .run(input_rx, output_tx)
                 .await
                 .expect("run should succeed");
         });
@@ -651,6 +671,7 @@ mod tests {
                 out.signature_data
             ),
         }
+        assert_eq!(health_rx.borrow().last_processed_seq, 35);
 
         assert!(output_rx.recv().await.is_none());
         run_handle
@@ -663,7 +684,7 @@ mod tests {
         // Prepare commit info and a valid signature from an accepted signer.
         let batch = dummy_batch_envelope(3, 10, 15);
         let (response, addr) = make_success_response(1, &batch).await;
-        let (verifier, response_channels) = make_verifier(vec![addr.to_string()], 0);
+        let (verifier, response_channels, _) = make_verifier(vec![addr.to_string()], 0);
 
         // Ensure there is at least one subscriber so that send_verification_request
         // succeeds with threshold = 1 and to observe the outgoing request.
@@ -695,16 +716,17 @@ mod tests {
 
         // Wire up the pipeline: one input batch that must be signed, and an
         // output channel where we expect a signed batch.
-        let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
-        let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
-        let peekable = zksync_os_pipeline::PeekableReceiver::new(input_rx);
+        let (input_tx, input_rx) =
+            zksync_os_pipeline::tracked_unbounded_channel::<BatchForSigning<()>>();
+        let (output_tx, mut output_rx) =
+            zksync_os_pipeline::tracked_unbounded_channel::<SignedBatchEnvelope<()>>();
 
-        input_tx.send(batch).await.expect("failed to send batch");
+        input_tx.send(batch).expect("failed to send batch");
         drop(input_tx);
 
         let run_handle = tokio::spawn(async move {
             verifier
-                .run(peekable, output_tx)
+                .run(input_rx, output_tx)
                 .await
                 .expect("run should succeed");
         });

@@ -3,7 +3,6 @@ use async_trait::async_trait;
 use std::ops::Div;
 use std::path::Path;
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
@@ -12,13 +11,13 @@ use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeVersion, RocksDBWrapper, TreeEntry,
 };
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
 
-#[derive(Debug)]
 pub(crate) struct TreeManager {
     pub tree: MerkleTree<RocksDBWrapper>,
+    pub health_reporter: ComponentHealthReporter,
 }
 
 #[async_trait]
@@ -30,29 +29,26 @@ impl PipelineComponent for TreeManager {
         BlockMerkleTreeData,
     );
     const NAME: &'static str = "merkle_tree";
-    const OUTPUT_BUFFER_SIZE: usize = 10;
 
     async fn run(
         self,
-        mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         let tree = self.tree;
+        let health_reporter = self.health_reporter;
 
         // only used to skip blocks that were already processed by the tree -
         // will be removed once idempotency is handled on the framework level
         let mut last_processed_block = tree.latest_version()?.expect("tree wasn't initialized");
-
-        let latency_tracker =
-            ComponentStateReporter::global().handle_for("tree", GenericComponentState::WaitingRecv);
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
+            health_reporter.enter_state(GenericComponentState::WaitingRecv);
 
             let Some((block_output, replay_record)) = input.recv().await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
-            latency_tracker.enter_state(GenericComponentState::Processing);
+            health_reporter.enter_state(GenericComponentState::Processing);
             let started_at = Instant::now();
             let block_number = block_output.header.number;
 
@@ -114,10 +110,14 @@ impl PipelineComponent for TreeManager {
                     block: block_number,
                 },
             };
-            latency_tracker.enter_state(GenericComponentState::WaitingSend);
-            output
+            let block_ts = replay_record.block_context.timestamp;
+            if output
                 .send((block_output, replay_record, tree_block))
-                .await?;
+                .is_err()
+            {
+                anyhow::bail!("Outbound channel closed");
+            }
+            health_reporter.record_processed(block_number, block_ts);
         }
     }
 }

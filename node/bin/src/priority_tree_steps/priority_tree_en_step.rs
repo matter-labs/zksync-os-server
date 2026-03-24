@@ -2,6 +2,7 @@ use reth_tasks::Runtime;
 use std::path::Path;
 use tokio::sync::mpsc;
 use zksync_os_l1_watcher::CommittedBatchProvider;
+use zksync_os_observability::ComponentHealthReporter;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_storage_api::{ReadFinality, ReadReplay};
 
@@ -52,11 +53,16 @@ where
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "priority tree caching",
             |shutdown| async move {
+                let (health_reporter, _rx) = ComponentHealthReporter::new("priority_tree_en");
                 tokio::select! {
                     result = priority_tree_manager_for_caching.keep_caching(priority_txs_internal_receiver) => {
                         result.expect("keep_caching");
                     }
-                    result = priority_tree_manager_for_prepare.prepare_execute_commands(None, priority_txs_internal_sender) => {
+                    result = priority_tree_manager_for_prepare.prepare_execute_commands(
+                        None,
+                        priority_txs_internal_sender,
+                        health_reporter,
+                    ) => {
                         result.expect("prepare_execute_commands");
                     }
                     _guard = shutdown => {

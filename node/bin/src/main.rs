@@ -9,6 +9,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
+use zksync_os_pipeline_health::PipelineHealthConfig;
 use zksync_os_server::config::{
     BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
     ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
@@ -372,6 +373,12 @@ async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse fee config");
 
+    let pipeline_health_config = repo
+        .single::<PipelineHealthConfig>()
+        .expect("Failed to load pipeline_health config")
+        .parse()
+        .expect("Failed to parse pipeline_health config");
+
     // Validate that operator signers resolve to different Ethereum addresses (Main Node only).
     // Resolving the address for GCP KMS keys requires a network call, but is necessary to catch
     // duplicates across different backends (e.g. a local key and a KMS key for the same address).
@@ -421,6 +428,7 @@ async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         interop_fee_updater_config,
         external_price_api_client_config,
         fee_config,
+        pipeline_health_config,
     }
 }
 

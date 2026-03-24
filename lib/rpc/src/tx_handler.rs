@@ -48,7 +48,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
     ) -> Result<B256, EthSendRawTransactionError> {
         if let TransactionAcceptanceState::NotAccepting(reason) = &*self.acceptance_state.borrow() {
             return Err(EthSendRawTransactionError::NotAcceptingTransactions(
-                *reason,
+                reason.clone(),
             ));
         }
 

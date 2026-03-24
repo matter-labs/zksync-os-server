@@ -1,73 +1,7 @@
 use crate::execution::execute_block_in_vm::SealReason;
 use std::time::Duration;
+use vise::Counter;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
-use vise::{Counter, EncodeLabelValue};
-use zksync_os_observability::{GenericComponentState, StateLabel};
-use zksync_os_storage_api::StateAccessLabel;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
-#[metrics(label = "state", rename_all = "snake_case")]
-pub enum SequencerState {
-    ConfiguredBlockLimitReached,
-
-    WaitingForCommand,
-
-    WaitingForTx,
-    Execution,
-    ReadStorage,
-    ReadPreimage,
-    Sealing,
-
-    AddingToState,
-    AddingToRepos,
-    UpdatingMempool,
-    AddingToReplayStorage,
-    WaitingSend,
-    BlockContextTxs,
-    InitializingVm,
-}
-impl StateLabel for SequencerState {
-    fn generic(&self) -> GenericComponentState {
-        match self {
-            Self::WaitingForCommand
-            | Self::WaitingForTx
-            | Self::ConfiguredBlockLimitReached
-            | Self::BlockContextTxs => GenericComponentState::WaitingRecv,
-            Self::WaitingSend => GenericComponentState::WaitingSend,
-            _ => GenericComponentState::Processing,
-        }
-    }
-    fn specific(&self) -> &'static str {
-        match self {
-            SequencerState::ConfiguredBlockLimitReached => "configured_limit_reached",
-            SequencerState::WaitingForCommand => "waiting_for_command",
-            SequencerState::WaitingForTx => "waiting_for_tx",
-            SequencerState::Execution => "execution",
-            SequencerState::ReadStorage => "read_storage",
-            SequencerState::ReadPreimage => "read_preimage",
-            SequencerState::Sealing => "sealing",
-            SequencerState::AddingToState => "adding_to_state",
-            SequencerState::AddingToRepos => "adding_to_repos",
-            SequencerState::UpdatingMempool => "updating_mempool",
-            SequencerState::AddingToReplayStorage => "adding_to_replay_storage",
-            SequencerState::WaitingSend => "waiting_send",
-            SequencerState::BlockContextTxs => "block_context_txs",
-            SequencerState::InitializingVm => "initializing_vm",
-        }
-    }
-}
-
-impl StateAccessLabel for SequencerState {
-    fn read_storage_state() -> Self {
-        Self::ReadStorage
-    }
-    fn read_preimage_state() -> Self {
-        Self::ReadPreimage
-    }
-    fn default_execution_state() -> Self {
-        Self::Execution
-    }
-}
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "execution")]

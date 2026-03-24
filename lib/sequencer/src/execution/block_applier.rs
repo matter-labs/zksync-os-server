@@ -2,9 +2,9 @@ use crate::config::SequencerConfig;
 use crate::model::blocks::BlockCommandType;
 use alloy::consensus::Sealed;
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 use zksync_os_interface::types::BlockOutput;
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_storage_api::{ReplayRecord, WriteReplay, WriteRepository, WriteState};
 
 /// Persists blocks in various local storages.
@@ -19,6 +19,7 @@ where
     pub replay: Replay,
     pub repositories: Repo,
     pub config: SequencerConfig,
+    pub health_reporter: ComponentHealthReporter,
 }
 
 #[async_trait]
@@ -32,30 +33,31 @@ where
     type Output = (BlockOutput, ReplayRecord);
 
     const NAME: &'static str = "block_applier";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
         mut self,
-        mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         loop {
+            self.health_reporter
+                .enter_state(GenericComponentState::WaitingRecv);
             let Some((block_output, executed_replay, cmd_type)) = input.recv().await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
 
             let block_number = executed_replay.block_context.block_number;
+            let block_ts = executed_replay.block_context.timestamp;
             let override_allowed = match cmd_type {
                 BlockCommandType::Rebuild => true,
                 _ if self.config.node_role.is_external() => true,
                 _ => false,
             };
 
-            tracing::info!(
-                block_number,
-                "Received canonized block {block_number}. Saving to disc."
-            );
+            self.health_reporter
+                .enter_state(GenericComponentState::Processing);
+            tracing::info!(block_number, "Persisting block {block_number}");
             self.replay.write(
                 Sealed::new_unchecked(executed_replay.clone(), block_output.header.hash()),
                 override_allowed,
@@ -75,10 +77,12 @@ where
                 .populate(block_output.clone(), executed_replay.transactions.clone())
                 .await?;
 
-            if output.send((block_output, executed_replay)).await.is_err() {
+            if output.send((block_output, executed_replay)).is_err() {
                 tracing::info!("outbound channel closed");
                 return Ok(());
             }
+            self.health_reporter
+                .record_processed(block_number, block_ts);
         }
     }
 }
