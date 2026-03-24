@@ -182,9 +182,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
-    let l1_provider = build_node_provider(&config.general_config.l1_rpc_url).await;
+    let l1_provider =
+        build_node_provider(&config.general_config.l1_rpc_url, &config.provider_config).await;
     let sl_provider = match &config.general_config.gateway_rpc_url {
-        Some(url) => build_node_provider(url).await,
+        Some(url) => build_node_provider(url, &config.provider_config).await,
         None => l1_provider.clone(),
     };
     let gateway_provider = config

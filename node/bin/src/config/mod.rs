@@ -41,6 +41,7 @@ pub struct Config {
     pub tx_validator_config: MempoolTxValidatorConfig,
     pub sequencer_config: SequencerConfig,
     pub l1_sender_config: L1SenderConfig,
+    pub provider_config: ProviderConfig,
     pub l1_watcher_config: L1WatcherConfig,
     pub batcher_config: BatcherConfig,
     pub prover_input_generator_config: ProverInputGeneratorConfig,
@@ -84,6 +85,9 @@ impl Config {
         schema
             .insert(&L1SenderConfig::DESCRIPTION, "l1_sender")
             .expect("Failed to insert l1_sender config");
+        schema
+            .insert(&ProviderConfig::DESCRIPTION, "provider")
+            .expect("Failed to insert provider config");
         schema
             .insert(&L1WatcherConfig::DESCRIPTION, "l1_watcher")
             .expect("Failed to insert l1_watcher config");
@@ -547,6 +551,18 @@ pub struct L1SenderConfig {
     /// External Nodes only replay blocks, so they may leave this unset.
     #[config(with = Serde![str])]
     pub pubdata_mode: Option<PubdataMode>,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct ProviderConfig {
+    /// Number of retries for L1/SL RPC calls, excluding the initial attempt.
+    #[config(default_t = 2)]
+    pub max_retries: u32,
+
+    /// Constant backoff duration between L1/SL RPC retries.
+    #[config(default_t = 200 * TimeUnit::Millis)]
+    pub retry_backoff: Duration,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

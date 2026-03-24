@@ -14,8 +14,8 @@ use zksync_os_server::config::{
     ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
     InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
     MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig, ProofStorageConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
-    StateBackendConfig, StatusServerConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, ProviderConfig, RebuildBlocksConfig, RpcConfig,
+    SequencerConfig, StateBackendConfig, StatusServerConfig,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -294,6 +294,12 @@ async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         l1_sender_config.pubdata_mode = None;
     }
 
+    let provider_config = repo
+        .single::<ProviderConfig>()
+        .expect("Failed to load provider config")
+        .parse()
+        .expect("Failed to parse provider config");
+
     let l1_watcher_config = repo
         .single::<L1WatcherConfig>()
         .expect("Failed to load L1 watcher config")
@@ -409,6 +415,7 @@ async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         tx_validator_config,
         sequencer_config,
         l1_sender_config,
+        provider_config,
         l1_watcher_config,
         batcher_config,
         prover_input_generator_config,
