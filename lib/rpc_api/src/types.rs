@@ -53,10 +53,6 @@ pub struct L2ToL1LogProof {
     ///
     /// Present whenever the node has a gateway provider configured (i.e. the chain settles to a
     /// gateway rather than directly to L1). `None` for chains that settle directly to L1.
-    ///
-    /// For [`LogProofTarget::MessageRoot`] proofs, this is the block the proof anchors to.
-    /// Consumers need this value to know which SL block's interop root to wait for on the
-    /// destination chain before verifying message inclusion.
     pub gateway_block_number: Option<u64>,
 }
 
