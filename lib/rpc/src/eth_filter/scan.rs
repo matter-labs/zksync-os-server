@@ -26,7 +26,11 @@ pub(crate) fn scan_logs(
             return Err(EthFilterError::BlockNotFound(number.into()));
         };
         if filter.matches_bloom(block.header.logs_bloom) {
-            tracing::trace!(number, ?filter, "Block matches bloom filter, scanning receipts");
+            tracing::trace!(
+                number,
+                ?filter,
+                "Block matches bloom filter, scanning receipts"
+            );
             let stored_txs = get_block_transactions(repo, block, number)?;
             let logs_before = logs.len();
             collect_matching_logs(filter, stored_txs, &mut logs);
