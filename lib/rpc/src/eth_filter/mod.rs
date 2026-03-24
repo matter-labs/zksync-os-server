@@ -1,6 +1,4 @@
 use crate::config::RpcConfig;
-use crate::eth_impl::build_api_log;
-use crate::metrics::API_METRICS;
 use crate::result::ToRpcResult;
 use crate::rpc_storage::ReadRpcStorage;
 use crate::types::QueryLimits;
@@ -8,6 +6,8 @@ mod pending;
 use pending::{FullTransactionsReceiver, PendingTransactionKind, PendingTransactionsReceiver};
 mod registry;
 use registry::{FilterKind, FilterRegistry};
+mod scan;
+use scan::scan_logs;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::{B256, BlockNumber};
 use alloy::rpc::types::{
@@ -19,7 +19,7 @@ use jsonrpsee::core::RpcResult;
 use std::time::Instant;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
-use zksync_os_storage_api::{RepositoryBlock, RepositoryError, StoredTxData};
+use zksync_os_storage_api::RepositoryError;
 use zksync_os_types::L2Envelope;
 
 #[derive(Clone)]
@@ -122,42 +122,6 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         self.get_logs_in_block_range(filter, from, to)
     }
 
-    fn collect_matching_logs(filter: &Filter, stored_txs: Vec<StoredTxData>, out: &mut Vec<Log>) {
-        let mut log_index_in_block = 0u64;
-        for tx in stored_txs {
-            for inner_log in tx.receipt.logs() {
-                if filter.matches(inner_log) {
-                    out.push(build_api_log(
-                        *tx.tx.hash(),
-                        inner_log.clone(),
-                        tx.meta.clone(),
-                        log_index_in_block - tx.meta.number_of_logs_before_this_tx,
-                    ));
-                }
-                log_index_in_block += 1;
-            }
-        }
-    }
-
-    fn get_block_transactions(
-        &self,
-        block: RepositoryBlock,
-        block_number: u64,
-    ) -> EthFilterResult<Vec<StoredTxData>> {
-        block
-            .unseal()
-            .body
-            .transactions
-            .into_iter()
-            .map(|hash| {
-                self.storage
-                    .repository()
-                    .get_stored_transaction(hash)?
-                    .ok_or(EthFilterError::BlockNotFound(block_number.into()))
-            })
-            .collect()
-    }
-
     fn get_logs_in_block_range(
         &self,
         filter: Filter,
@@ -171,48 +135,13 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         {
             return Err(EthFilterError::QueryExceedsMaxBlocks(max_blocks_per_filter));
         }
-
-        let is_multi_block_range = from != to;
-        let mut stats = BlockScanStats::new(to - from + 1);
-        let mut logs = Vec::new();
-        for number in from..=to {
-            let Some(block) = self.storage.repository().get_block_by_number(number)? else {
-                return Err(EthFilterError::BlockNotFound(number.into()));
-            };
-            if filter.matches_bloom(block.header.logs_bloom) {
-                tracing::trace!(
-                    number,
-                    ?filter,
-                    "Block matches bloom filter, scanning receipts",
-                );
-                let stored_txs = self.get_block_transactions(block, number)?;
-                let logs_before = logs.len();
-                Self::collect_matching_logs(&filter, stored_txs, &mut logs);
-                if logs.len() > logs_before {
-                    stats.true_positive += 1;
-                } else {
-                    stats.false_positive += 1;
-                }
-
-                // size check but only if range is multiple blocks, so we always return all
-                // logs of a single block
-                if let Some(max_logs_per_response) = self.query_limits.max_logs_per_response
-                    && is_multi_block_range
-                    && logs.len() > max_logs_per_response
-                {
-                    let suggested_to = number.saturating_sub(1);
-                    return Err(EthFilterError::QueryExceedsMaxResults {
-                        max_logs: max_logs_per_response,
-                        from_block: from,
-                        to_block: suggested_to,
-                    });
-                }
-            } else {
-                stats.negative += 1;
-            }
-        }
-
-        Ok(logs)
+        scan_logs(
+            self.storage.repository(),
+            &filter,
+            from,
+            to,
+            self.query_limits.max_logs_per_response,
+        )
     }
 
     /// Endless future that calls [`Self::clear_stale_filters`] every `stale_filter_ttl` interval.
@@ -298,35 +227,6 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterApiServer
 }
 
 type EthFilterResult<T> = Result<T, EthFilterError>;
-
-/// Tracks bloom filter scan statistics for a single `eth_getLogs` call.
-/// Observes Prometheus metrics when dropped, ensuring they are recorded on all exit paths.
-struct BlockScanStats {
-    total: u64,
-    true_positive: u64,
-    false_positive: u64,
-    negative: u64,
-}
-
-impl BlockScanStats {
-    fn new(total: u64) -> Self {
-        Self {
-            total,
-            true_positive: 0,
-            false_positive: 0,
-            negative: 0,
-        }
-    }
-}
-
-impl Drop for BlockScanStats {
-    fn drop(&mut self) {
-        API_METRICS.get_logs_scanned_blocks[&"total"].observe(self.total);
-        API_METRICS.get_logs_scanned_blocks[&"true_positive"].observe(self.true_positive);
-        API_METRICS.get_logs_scanned_blocks[&"false_positive"].observe(self.false_positive);
-        API_METRICS.get_logs_scanned_blocks[&"negative"].observe(self.negative);
-    }
-}
 
 /// Errors that can occur in the handler implementation
 #[derive(Debug, thiserror::Error)]
