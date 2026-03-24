@@ -167,6 +167,14 @@ impl Tester {
         &self.sl_provider
     }
 
+    /// Returns the gateway provider if a gateway RPC URL is configured, `None` otherwise.
+    /// Use this when calling [`L1State::fetch`] or [`L1State::fetch_finalized`].
+    pub fn gateway_eth_provider(&self) -> Option<DynProvider> {
+        self.gateway_rpc_url
+            .as_ref()
+            .map(|_| self.sl_provider.clone().erased())
+    }
+
     pub async fn gateway_provider(&self) -> anyhow::Result<Option<DynProvider<Zksync>>> {
         let provider: Option<DynProvider<Zksync>> =
             if let Some(gateway_rpc_url) = &self.gateway_rpc_url {
@@ -514,9 +522,10 @@ impl Tester {
         } else {
             l1.provider.clone()
         };
+        let gateway_eth_provider = gateway_rpc_url.as_ref().map(|_| sl_provider.clone());
         let prover_tester = ProverTester::new(
             EthDynProvider::new(l1.provider.clone()),
-            sl_provider.clone(),
+            gateway_eth_provider,
             EthDynProvider::new(l2_provider.clone()),
             DynProvider::new(l2_zk_provider.clone()),
         );
@@ -929,7 +938,7 @@ async fn wait_for_gateway_readiness(
 
         L1State::fetch_finalized(
             DynProvider::new(l1.provider.clone()),
-            DynProvider::new(gateway_provider),
+            Some(DynProvider::new(gateway_provider)),
             bridgehub_address,
             chain_id,
         )

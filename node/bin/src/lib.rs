@@ -183,22 +183,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
     let l1_provider = build_node_provider(&config.general_config.l1_rpc_url).await;
-    let sl_provider = match &config.general_config.gateway_rpc_url {
-        Some(url) => build_node_provider(url).await,
-        None => l1_provider.clone(),
+    let gateway_provider = match &config.general_config.gateway_rpc_url {
+        Some(url) => Some(build_node_provider(url).await),
+        None => None,
     };
-    let gateway_provider = config
-        .general_config
-        .gateway_rpc_url
-        .as_ref()
-        .map(|_| sl_provider.clone());
 
     tracing::info!("Reading L1 state");
     let l1_state = if node_role.is_main() {
         // On the main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
         L1State::fetch_finalized(
             l1_provider.clone().erased(),
-            sl_provider.clone().erased(),
+            gateway_provider.as_ref().map(|p| p.clone().erased()),
             bridgehub_address,
             chain_id,
         )
@@ -207,12 +202,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     } else {
         L1State::fetch(
             l1_provider.clone().erased(),
-            sl_provider.clone().erased(),
+            gateway_provider.as_ref().map(|p| p.clone().erased()),
             bridgehub_address,
             chain_id,
         )
         .await
         .expect("failed to fetch L1 state")
+    };
+    let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
+        l1_provider.clone()
+    } else {
+        gateway_provider.clone().unwrap()
     };
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();

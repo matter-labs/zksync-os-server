@@ -183,7 +183,7 @@ impl UpgradeTester {
         let bridgehub_address_l1 = tester.l2_zk_provider.get_bridgehub_contract().await?;
         let l1_state = L1State::fetch(
             tester.l1_provider().clone().erased(),
-            tester.sl_provider().clone().erased(),
+            tester.gateway_eth_provider(),
             bridgehub_address_l1,
             chain_id,
         )

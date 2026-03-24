@@ -199,7 +199,7 @@ pub struct GeneralConfig {
     pub l1_rpc_url: String,
 
     /// Gateway's JSON RPC API.
-    /// Currently, it's a marker of whether chain settles to Gateway or not.
+    /// Must be present if the chain is currently settling to Gateway.
     pub gateway_rpc_url: Option<String>,
 
     /// Gateway chain ID. Used by the migration watcher to construct `SetSLChainId` system
