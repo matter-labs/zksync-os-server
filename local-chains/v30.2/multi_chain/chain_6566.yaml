@@ -12,7 +12,4 @@ l1_sender:
   operator_execute_sk: '0xb878497fc910d43e9d692ccc256964f62d5a223293b4cff0a8c4bb9d352b3292'
 rpc:
   address: 0.0.0.0:3051
-external_price_api_client:
-  source: Forced
-  forced_prices:
-    '0x0000000000000000000000000000000000000001': 3000
+

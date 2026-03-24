@@ -1,0 +1,31 @@
+# Generic local development configuration.
+# Overrides production defaults to make local development faster and more convenient.
+# Loaded by run_local.sh (and auto-loaded by `cargo run`) before any chain-specific config file.
+
+l1_watcher:
+  poll_interval: 100ms
+
+l1_sender:
+  poll_interval: 100ms
+
+batcher:
+  batch_timeout: 1s
+
+prover_api:
+  fake_fri_provers:
+    enabled: true
+  fake_snark_provers:
+    enabled: true
+
+observability:
+  log:
+    format: terminal
+    use_color: true
+
+sequencer:
+  revm_consistency_checker_enabled: false
+
+external_price_api_client:
+  source: Forced
+  forced_prices:
+    '0x0000000000000000000000000000000000000001': 3000

@@ -13,6 +13,7 @@ pub enum LogFormat {
     /// Represents JSON formatting for logs.
     /// This format outputs log records as JSON objects,
     /// making it suitable for structured logging.
+    #[default]
     Json,
 
     /// Represents logfmt (key=value) formatting for logs.
@@ -21,7 +22,6 @@ pub enum LogFormat {
     LogFmt,
 
     /// Represents terminal-friendly formatting for logs.
-    #[default]
     Terminal,
 }
 

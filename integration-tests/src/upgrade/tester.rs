@@ -174,7 +174,7 @@ impl UpgradeTester {
 
     // Fetch the contracts configuration from the tester.
     async fn fetch(tester: Tester) -> anyhow::Result<Self> {
-        let chain_config: Config = load_chain_config(tester.chain_layout);
+        let chain_config: Config = load_chain_config(tester.chain_layout).await;
         let chain_id = chain_config
             .genesis_config
             .chain_id

@@ -21,7 +21,6 @@ pub(crate) struct BatchInfoAccumulator {
     pub execution_versions: HashSet<u32>,
 
     // Limits
-    pub blocks_per_batch_limit: u64,
     pub tx_per_batch_limit: u64,
     pub batch_pubdata_limit_bytes: u64,
     pub interop_roots_per_batch_limit: u64,
@@ -29,13 +28,11 @@ pub(crate) struct BatchInfoAccumulator {
 
 impl BatchInfoAccumulator {
     pub fn new(
-        blocks_per_batch_limit: u64,
         tx_per_batch_limit: u64,
         batch_pubdata_limit_bytes: u64,
         interop_roots_per_batch_limit: u64,
     ) -> Self {
         Self {
-            blocks_per_batch_limit,
             tx_per_batch_limit,
             batch_pubdata_limit_bytes,
             interop_roots_per_batch_limit,
@@ -121,12 +118,6 @@ impl BatchInfoAccumulator {
         if self.protocol_versions.len() > 1 {
             BATCHER_METRICS.seal_reason[&"protocol_version_change"].inc();
             tracing::debug!("Batcher: protocol version changed within the batch");
-            return true;
-        }
-
-        if self.block_count > self.blocks_per_batch_limit {
-            BATCHER_METRICS.seal_reason[&"blocks_per_batch"].inc();
-            tracing::debug!("Batcher: reached blocks per batch limit");
             return true;
         }
 

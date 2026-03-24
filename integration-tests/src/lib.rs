@@ -293,7 +293,7 @@ impl Tester {
         // ENs will not use this dir
         let proof_storage_path = tempdir.path().join("proof_storage_path");
 
-        let default_config = load_chain_config(chain_layout);
+        let default_config = load_chain_config(chain_layout).await;
 
         // Create a handle to run the sequencer in the background
         let general_config = GeneralConfig {
@@ -303,29 +303,29 @@ impl Tester {
         };
         let sequencer_config = SequencerConfig {
             fee_collector_address: Address::random(),
-            ..Default::default()
+            ..default_config.sequencer_config
         };
         let rpc_config = RpcConfig {
             address: l2_rpc_address.clone(),
             // Override default with a higher value as the test can be slow in CI
             send_raw_transaction_sync_timeout: Duration::from_secs(10),
-            ..Default::default()
+            ..default_config.rpc_config
         };
         let prover_api_config = ProverApiConfig {
             fake_fri_provers: FakeFriProversConfig {
                 enabled: !enable_prover,
-                ..Default::default()
+                ..default_config.prover_api_config.fake_fri_provers
             },
             fake_snark_provers: FakeSnarkProversConfig {
                 enabled: !enable_prover,
-                ..Default::default()
+                ..default_config.prover_api_config.fake_snark_provers
             },
             address: prover_api_address,
             proof_storage: ProofStorageConfig {
                 path: proof_storage_path.clone(),
-                ..Default::default()
+                ..default_config.prover_api_config.proof_storage
             },
-            ..Default::default()
+            ..default_config.prover_api_config
         };
         let batch_verification_config = BatchVerificationConfig {
             server_enabled: false,
@@ -361,29 +361,27 @@ impl Tester {
         let mut config = Config {
             general_config,
             network_config,
-            genesis_config: default_config.genesis_config.clone(),
+            genesis_config: default_config.genesis_config,
             rpc_config,
-            mempool_config: Default::default(),
-            tx_validator_config: Default::default(),
+            mempool_config: default_config.mempool_config,
+            tx_validator_config: default_config.tx_validator_config,
             sequencer_config,
-            l1_sender_config: default_config.l1_sender_config.clone(),
-            l1_watcher_config: Default::default(),
-            batcher_config: Default::default(),
+            l1_sender_config: default_config.l1_sender_config,
+            l1_watcher_config: default_config.l1_watcher_config,
+            batcher_config: default_config.batcher_config,
             prover_input_generator_config: ProverInputGeneratorConfig {
                 logging_enabled: enable_prover,
-                ..Default::default()
+                ..default_config.prover_input_generator_config
             },
             prover_api_config,
             status_server_config,
-            observability_config: Default::default(),
-            gas_adjuster_config: Default::default(),
+            observability_config: default_config.observability_config,
+            gas_adjuster_config: default_config.gas_adjuster_config,
             batch_verification_config,
-            base_token_price_updater_config: default_config.base_token_price_updater_config.clone(),
-            interop_fee_updater_config: default_config.interop_fee_updater_config.clone(),
-            external_price_api_client_config: default_config
-                .external_price_api_client_config
-                .clone(),
-            fee_config: Default::default(),
+            base_token_price_updater_config: default_config.base_token_price_updater_config,
+            interop_fee_updater_config: default_config.interop_fee_updater_config,
+            external_price_api_client_config: default_config.external_price_api_client_config,
+            fee_config: default_config.fee_config,
         };
 
         if let Some(ephemeral_state) = &config.general_config.ephemeral_state {
@@ -860,7 +858,7 @@ impl GatewayTesterBuilder {
                 protocol_version,
                 chain_index: i,
             };
-            let chain_config = load_chain_config(chain_layout);
+            let chain_config = load_chain_config(chain_layout).await;
             let chain_id = chain_config
                 .genesis_config
                 .chain_id

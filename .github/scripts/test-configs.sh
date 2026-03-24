@@ -68,7 +68,7 @@ for entry in "${CONFIGS[@]}"; do
   ANVIL_PID=$!
 
   echo "Starting server..."
-  ./zksync-os-server --config "${CUR_CONFIG}" > "${SERVER_LOGFILE}" 2>&1 &
+  ./zksync-os-server --config "local-chains/local_dev.yaml" --config "${CUR_CONFIG}" > "${SERVER_LOGFILE}" 2>&1 &
   SERVER_PID=$!
 
   RPC_PORT=$(yq -r '
