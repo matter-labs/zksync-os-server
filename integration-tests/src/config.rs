@@ -145,6 +145,7 @@ fn load_config_from_path(config_path: &Path) -> Config {
     Config {
         genesis_config,
         l1_sender_config: config_repo.single().unwrap().parse().unwrap(),
+        provider_config: Default::default(),
         general_config: config_repo.single().unwrap().parse().unwrap(),
         network_config: Default::default(),
         rpc_config: Default::default(),

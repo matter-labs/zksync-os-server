@@ -367,6 +367,7 @@ impl Tester {
             tx_validator_config: Default::default(),
             sequencer_config,
             l1_sender_config: default_config.l1_sender_config.clone(),
+            provider_config: Default::default(),
             l1_watcher_config: Default::default(),
             batcher_config: Default::default(),
             prover_input_generator_config: ProverInputGeneratorConfig {
