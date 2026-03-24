@@ -6,6 +6,8 @@ use crate::rpc_storage::ReadRpcStorage;
 use crate::types::QueryLimits;
 mod pending;
 use pending::{FullTransactionsReceiver, PendingTransactionKind, PendingTransactionsReceiver};
+mod registry;
+use registry::{ActiveFilter, FilterKind};
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::{B256, BlockNumber, U128};
 use alloy::rpc::types::{
@@ -353,34 +355,6 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterApiServer
 
     async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
         Ok(self.logs_impl(filter).to_rpc_result()?)
-    }
-}
-
-/// An active installed filter
-#[derive(Debug)]
-struct ActiveFilter {
-    /// At which block the filter was polled last.
-    block: u64,
-    /// Last time this filter was polled.
-    last_poll_timestamp: Instant,
-    /// What kind of filter it is.
-    kind: FilterKind,
-}
-
-#[derive(Clone, Debug)]
-enum FilterKind {
-    Log(Box<Filter>),
-    Block,
-    PendingTransaction(PendingTransactionKind),
-}
-
-impl FilterKind {
-    fn as_log_filter(&self) -> Option<&Filter> {
-        if let Self::Log(filter) = self {
-            Some(filter)
-        } else {
-            None
-        }
     }
 }
 
