@@ -10,7 +10,6 @@ l1_sender:
 
 batcher:
   batch_timeout: 1s
-  blocks_per_batch_limit: 10
 
 prover_api:
   fake_fri_provers:
