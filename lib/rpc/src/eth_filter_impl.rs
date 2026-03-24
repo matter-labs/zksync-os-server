@@ -130,21 +130,17 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
     }
 
     fn filter_logs_impl(&self, id: FilterId) -> EthFilterResult<Vec<Log>> {
-        let filter = {
-            if let FilterKind::Log(ref filter) = self
-                .active_filters
-                .get(&id)
-                .ok_or_else(|| EthFilterError::FilterNotFound(id.clone()))?
-                .kind
-            {
-                filter.clone()
-            } else {
-                // Not a log filter
-                return Err(EthFilterError::FilterNotFound(id));
-            }
-        };
+        let active_filter = self
+            .active_filters
+            .get(&id)
+            .ok_or_else(|| EthFilterError::FilterNotFound(id.clone()))?;
+        let filter = active_filter
+            .kind
+            .as_log_filter()
+            .ok_or(EthFilterError::FilterNotFound(id))?
+            .clone();
 
-        self.logs_impl(*filter)
+        self.logs_impl(filter)
     }
 
     fn logs_impl(&self, filter: Filter) -> EthFilterResult<Vec<Log>> {
@@ -365,6 +361,16 @@ enum FilterKind {
     Log(Box<Filter>),
     Block,
     PendingTransaction(PendingTransactionKind),
+}
+
+impl FilterKind {
+    fn as_log_filter(&self) -> Option<&Filter> {
+        if let Self::Log(filter) = self {
+            Some(filter)
+        } else {
+            None
+        }
+    }
 }
 
 /// Represents the kind of pending transaction data that can be retrieved.
