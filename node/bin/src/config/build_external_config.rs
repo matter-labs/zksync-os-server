@@ -10,6 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use zksync_os_types::ConfigFormat;
 
+/// Builds the runtime [`Config`] by parsing all supported sections from the repository,
+/// applying node-role-specific adjustments, and validating distinct L1 operator addresses.
 pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     let general_config = repo
         .single::<GeneralConfig>()
@@ -193,6 +195,8 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     }
 }
 
+/// Loads JSON / YAML config files into [`ConfigSources`] in the provided order, inferring the
+/// format from each path extension.
 pub fn load_config_file_sources(config_sources: &mut ConfigSources, config_paths: &[PathBuf]) {
     for config_path in config_paths {
         let source_name = config_path.to_string_lossy();
