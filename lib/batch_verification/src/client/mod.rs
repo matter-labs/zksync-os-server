@@ -204,7 +204,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                         }
                         Some(Err(parsing_err)) =>
                         {
-                            tracing::warn!("Error parsing verification request message. Ignoring: {}", parsing_err);
+                            tracing::error!("Error parsing verification request message. Ignoring: {}", parsing_err);
                         }
                         None => {
                             anyhow::bail!("Server has disconnected verification client");

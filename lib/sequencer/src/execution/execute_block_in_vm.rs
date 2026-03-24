@@ -348,26 +348,31 @@ pub async fn execute_block_in_vm<V: ViewState>(
         .computational_native_used_per_block
         .observe(output.computational_native_used);
 
+    let block_hash_output = hash_block_output(&output);
+
     tracing::info!(
         block_number = output.header.number,
-        command = command.metrics_label,
-        ?seal_reason,
-        tx_count = executed_txs.len(),
-        storage_writes = output.storage_writes.len(),
-        preimages = output.published_preimages.len(),
-        pubdata_bytes = output.pubdata.len(),
+        "Block {} ({}) sealed because of {seal_reason:?} in block executor with {} transactions ({} purged) and {} gas. \
+        Block hash output: {block_hash_output:?}, canonical hash: {:?}. \
+        storage_writes: {}, preimages: {}, pubdata bytes: {}. \
+        ",
+        output.header.number,
+        command.metrics_label,
+        executed_txs.len(),
+        purged_txs.len(),
         cumulative_gas_used,
-        purged_txs_len = purged_txs.len(),
-        "Block sealed in block executor"
+        output.header.hash(),
+        output.storage_writes.len(),
+        output.published_preimages.len(),
+        output.pubdata.len(),
     );
 
     tracing::info!(
         output = ?BlockOutputDebug(&output),
         block_number = output.header.number,
-        "Block output"
+        "Full block {} output",
+        output.header.number,
     );
-
-    let block_hash_output = hash_block_output(&output);
 
     // Check if the block output matches the expected hash.
     if let Some(expected_hash) = command.expected_block_output_hash
