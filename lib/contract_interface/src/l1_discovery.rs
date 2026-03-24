@@ -48,19 +48,31 @@ impl L1State {
         l2_chain_id: u64,
     ) -> anyhow::Result<Self> {
         let l1_chain_id = l1_provider.get_chain_id().await?;
-        let sl_chain_id = sl_provider.get_chain_id().await?;
 
         let bridgehub_l1 = Bridgehub::new(bridgehub_address_l1, l1_provider, l2_chain_id);
-        let bridgehub_address_sl = if l1_chain_id == sl_chain_id {
-            bridgehub_address_l1
+        let diamond_proxy_l1 = bridgehub_l1.zk_chain().await?;
+
+        // Call ZKChainStorage::getSettlementLayer() on the L1 diamond proxy to determine whether
+        // this chain is currently settling on L1 or on the Gateway.
+        // Returns address(0) when settling on L1, or the Gateway address after migration.
+        let settlement_layer_address = diamond_proxy_l1.get_settlement_layer().await?;
+
+        let (sl_chain_id, bridgehub_address_sl) = if settlement_layer_address.is_zero() {
+            // Settling on L1: the settlement layer is L1 itself.
+            (l1_chain_id, bridgehub_address_l1)
         } else {
-            L2_BRIDGEHUB_ADDRESS
+            // Settling on Gateway: the settlement layer is a separate chain.
+            let sl_chain_id = sl_provider.get_chain_id().await?;
+            anyhow::ensure!(
+                sl_chain_id != l1_chain_id,
+                "Settling on Gateway but SL chain ID is identical to L1 chain ID"
+            );
+            (sl_chain_id, L2_BRIDGEHUB_ADDRESS)
         };
         let bridgehub_sl = Bridgehub::new(bridgehub_address_sl, sl_provider, l2_chain_id);
 
         Self::validate_chain_ids(&bridgehub_l1, &bridgehub_sl, l2_chain_id).await?;
 
-        let diamond_proxy_l1 = bridgehub_l1.zk_chain().await?;
         let diamond_proxy_sl = bridgehub_sl.zk_chain().await?;
         let validator_timelock_sl = bridgehub_sl.validator_timelock_address().await?;
 

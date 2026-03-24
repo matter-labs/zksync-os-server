@@ -241,6 +241,7 @@ alloy::sol! {
         function baseTokenGasPriceMultiplierNominator() external view returns (uint128);
         function baseTokenGasPriceMultiplierDenominator() external view returns (uint128);
         function getBaseToken() external view returns (address);
+        function getSettlementLayer() external view returns (address);
     }
 
     // Taken from `common/Config.sol`
@@ -831,6 +832,15 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .enrich("baseTokenGasPriceMultiplierDenominator", None)
+    }
+
+    /// Returns the address of the current settlement layer as stored in `ZKChainStorage`.
+    pub async fn get_settlement_layer(&self) -> Result<Address> {
+        self.instance
+            .getSettlementLayer()
+            .call()
+            .await
+            .enrich("getSettlementLayer", None)
     }
 
     pub async fn get_server_notifier_address(&self) -> Result<Address> {
