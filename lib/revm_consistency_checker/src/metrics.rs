@@ -6,6 +6,7 @@ use vise::{Gauge, Metrics};
 #[metrics(prefix = "revm_consistency_checker")]
 pub(crate) struct RevmConsistencyCheckerMetrics {
     /// Unix timestamp of the most recent detection -- used for alerts
+    #[metrics(unit = Unit::Seconds)]
     pub last_inconsistency_timestamp: Gauge<u64>,
     /// Block number of the most recent detected inconsistency.
     pub last_inconsistent_block_number: Gauge<u64>,

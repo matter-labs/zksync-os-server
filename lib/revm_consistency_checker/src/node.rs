@@ -68,11 +68,6 @@ where
             replay_record.block_context.block_number,
             block_output.header.hash(),
         );
-        tracing::info!(
-            block_number = replay_record.block_context.block_number,
-            "Sleeping for {}s before reverting after REVM inconsistency so metrics can propagate",
-            METRICS_PROPAGATION_DELAY.as_secs(),
-        );
 
         if self.revert_enabled {
             let mut config = self.internal_config_manager.read_config()?;
@@ -88,6 +83,11 @@ where
                 new_blacklist_size - initial_blacklist_size
             );
 
+            tracing::info!(
+                block_number = replay_record.block_context.block_number,
+                "Sleeping for {}s before reverting after REVM inconsistency so metrics can propagate",
+                METRICS_PROPAGATION_DELAY.as_secs(),
+            );
             thread::sleep(METRICS_PROPAGATION_DELAY);
             self.internal_config_manager
                 .write_config_and_panic(&config, &message)?;
