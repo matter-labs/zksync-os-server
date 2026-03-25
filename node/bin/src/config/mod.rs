@@ -46,6 +46,7 @@ pub use build_external_config::{build_external_config, load_config_file_sources}
 #[derive(Debug)]
 pub struct Config {
     pub general_config: GeneralConfig,
+    pub provider_config: ProviderConfig,
     pub network_config: NetworkConfig,
     pub genesis_config: GenesisConfig,
     pub rpc_config: RpcConfig,
@@ -75,6 +76,9 @@ impl Config {
         schema
             .insert(&GeneralConfig::DESCRIPTION, "general")
             .expect("Failed to insert general config");
+        schema
+            .insert(&ProviderConfig::DESCRIPTION, "provider")
+            .expect("Failed to insert provider config");
         schema
             .insert(&NetworkConfig::DESCRIPTION, "network")
             .expect("Failed to insert network config");
@@ -192,13 +196,17 @@ pub struct GeneralConfig {
     #[config(default_t = NodeRole::MainNode, with = Serde![str])]
     pub node_role: NodeRole,
 
-    /// L1's JSON RPC API.
-    #[config(default_t = "http://localhost:8545".into())]
-    pub l1_rpc_url: String,
+    /// L1 JSON-RPC APIs as a comma-delimited list.
+    #[config(
+        default_t = vec!["http://localhost:8545".into()],
+        with = Delimited::new(",")
+    )]
+    pub l1_rpc_url: Vec<String>,
 
-    /// Gateway's JSON RPC API.
+    /// Gateway JSON-RPC APIs as a comma-delimited list.
     /// Currently, it's a marker of whether chain settles to Gateway or not.
-    pub gateway_rpc_url: Option<String>,
+    #[config(default, with = Delimited::new(","))]
+    pub gateway_rpc_url: Vec<String>,
 
     /// Gateway chain ID. Used by the migration watcher to construct `SetSLChainId` system
     /// transactions when a `MigrateToGateway` event fires. Defaults to 506 (ZKsync Gateway).
@@ -258,6 +266,17 @@ pub struct GeneralConfig {
     /// Path to ephemeral state to load at startup.
     #[config(default_t = None)]
     pub ephemeral_state: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct ProviderConfig {
+    /// Delay between RPC retry attempts.
+    #[config(default_t = Duration::from_millis(200))]
+    pub retry_backoff_period: Duration,
+    /// Maximum number of retry attempts after the initial request fails.
+    #[config(default_t = 2)]
+    pub retry_attempt_limit: u32,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

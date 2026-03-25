@@ -182,16 +182,24 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
-    let l1_provider = build_node_provider(&config.general_config.l1_rpc_url).await;
-    let sl_provider = match &config.general_config.gateway_rpc_url {
-        Some(url) => build_node_provider(url).await,
-        None => l1_provider.clone(),
+    let l1_provider = build_node_provider(
+        &config.general_config.l1_rpc_url,
+        config.provider_config.clone(),
+    )
+    .await
+    .expect("failed to create L1 provider");
+    let sl_provider = if config.general_config.gateway_rpc_url.is_empty() {
+        l1_provider.clone()
+    } else {
+        build_node_provider(
+            &config.general_config.gateway_rpc_url,
+            config.provider_config.clone(),
+        )
+        .await
+        .expect("failed to create settlement layer provider")
     };
-    let gateway_provider = config
-        .general_config
-        .gateway_rpc_url
-        .as_ref()
-        .map(|_| sl_provider.clone());
+    let gateway_provider =
+        (!config.general_config.gateway_rpc_url.is_empty()).then(|| sl_provider.clone());
 
     tracing::info!("Reading L1 state");
     let l1_state = if node_role.is_main() {
@@ -244,7 +252,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         };
         if let (PubdataMode::Blobs | PubdataMode::Calldata, true) = (
             pubdata_mode,
-            config.general_config.gateway_rpc_url.is_some(),
+            !config.general_config.gateway_rpc_url.is_empty(),
         ) {
             panic!(
                 "Pubdata mode {:?} cannot be used when settling on Gateway",
@@ -539,7 +547,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .run(),
         );
 
-        if config.general_config.gateway_rpc_url.is_some() {
+        if !config.general_config.gateway_rpc_url.is_empty() {
             runtime.spawn_critical_task(
                 "interop roots watcher",
                 InteropWatcher::create_watcher(
@@ -777,7 +785,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     if node_role.is_main()
-        && config.general_config.gateway_rpc_url.is_some()
+        && !config.general_config.gateway_rpc_url.is_empty()
         && current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
     {
         let eth_call_handler = EthCallHandler::new(
@@ -1054,7 +1062,7 @@ async fn run_main_node_pipeline(
             provider: sl_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: config.general_config.gateway_rpc_url.is_some(),
+            gateway: !config.general_config.gateway_rpc_url.is_empty(),
         })
         .pipe(snark_proving_step)
         .pipe(GaplessL1ProofSender::new(
@@ -1064,7 +1072,7 @@ async fn run_main_node_pipeline(
             provider: sl_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: config.general_config.gateway_rpc_url.is_some(),
+            gateway: !config.general_config.gateway_rpc_url.is_empty(),
         })
         .pipe(
             PriorityTreePipelineStep::new(
@@ -1080,7 +1088,7 @@ async fn run_main_node_pipeline(
             provider: sl_provider,
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: config.general_config.gateway_rpc_url.is_some(),
+            gateway: !config.general_config.gateway_rpc_url.is_empty(),
         })
         .pipe(BatchSink::new(internal_config_manager));
 

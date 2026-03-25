@@ -222,7 +222,8 @@ impl Tester {
             config.network_config.boot_nodes = vec![self.node_record];
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
             config.l1_sender_config.pubdata_mode = None;
-            config.general_config.gateway_rpc_url = self.gateway_rpc_url.clone();
+            config.general_config.gateway_rpc_url =
+                self.gateway_rpc_url.clone().into_iter().collect();
             config.batch_verification_config.connect_address = self.batch_verification_url.clone();
             if let Some(f) = config_overrides {
                 f(config)
@@ -298,7 +299,7 @@ impl Tester {
         // Create a handle to run the sequencer in the background
         let general_config = GeneralConfig {
             rocks_db_path: rocks_db_path.clone(),
-            l1_rpc_url: l1.address.clone(),
+            l1_rpc_url: vec![l1.address.clone()],
             ..default_config.general_config
         };
         let sequencer_config = SequencerConfig {
@@ -360,6 +361,7 @@ impl Tester {
 
         let mut config = Config {
             general_config,
+            provider_config: default_config.provider_config,
             network_config,
             genesis_config: default_config.genesis_config,
             rpc_config,
@@ -394,7 +396,7 @@ impl Tester {
         if let Some(f) = config_overrides {
             f(&mut config)
         }
-        let gateway_rpc_url = config.general_config.gateway_rpc_url.clone();
+        let gateway_rpc_url = config.general_config.gateway_rpc_url.first().cloned();
 
         let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
             .build()
@@ -872,7 +874,7 @@ impl GatewayTesterBuilder {
                 l1.clone(),
                 chain_options.enable_prover,
                 Some(move |config: &mut Config| {
-                    config.general_config.gateway_rpc_url = Some(gateway_rpc_url.clone());
+                    config.general_config.gateway_rpc_url = vec![gateway_rpc_url.clone()];
                     chain_options.apply_to_config(config);
                     if let Some(deployment_filter) = deployment_filter {
                         config.sequencer_config.tx_validator.deployment_filter = deployment_filter;

@@ -102,3 +102,4 @@ sentry.workspace = true
 tempfile.workspace = true
 flate2.workspace = true
 tar.workspace = true
+tower.workspace = true

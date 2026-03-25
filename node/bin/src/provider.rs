@@ -1,3 +1,4 @@
+use crate::config::ProviderConfig;
 use alloy::network::{Ethereum, EthereumWallet};
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
@@ -42,13 +43,14 @@ impl RetryPolicy for OptimisticRetryPolicy {
 
 pub async fn build_node_provider(
     rpc_url: &str,
+    provider_config: &ProviderConfig,
 ) -> FillProvider<
     impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
     impl Provider<Ethereum> + Clone + 'static,
 > {
     let retry_layer = RetryBackoffLayer::new_with_policy(
-        2,        // max retries, excluding the initial attempt
-        200,      // backoff in ms,
+        provider_config.max_retries,
+        provider_config.retry_backoff.as_millis() as u64,
         u64::MAX, // compute units per second, considering it unlimited for now
         OptimisticRetryPolicy::default(),
     );
