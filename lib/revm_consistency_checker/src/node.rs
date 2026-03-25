@@ -20,7 +20,10 @@ use crate::metrics::METRICS;
 use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
 
-const METRICS_PROPAGATION_DELAY: Duration = Duration::from_secs(5);
+/// In case of revert we need metric to be pulled before crashing.
+/// We would still find out without this, because SLIs would break.
+/// But this way we get the alert earlier.
+const METRICS_PROPAGATION_DELAY: Duration = Duration::from_secs(30);
 
 pub struct RevmConsistencyChecker<State>
 where
