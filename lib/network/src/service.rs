@@ -50,6 +50,10 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
     ) -> Result<Self, NetworkError> {
+        // Install ViseRecorder before creating the NetworkManager so that reth-network metrics
+        // are captured. This must happen before `NetworkManager::builder()` because that is where
+        // reth initializes its metric handles (via `Default::default()` on each metrics struct).
+        crate::metrics::install_recorder();
         match NatResolver::Any.external_addr().await {
             None => {
                 tracing::info!("could not resolve external IP (STUN)");

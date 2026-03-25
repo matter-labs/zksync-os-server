@@ -50,6 +50,8 @@ pub struct TxPoolMetrics {
     pub(crate) total_eip4844_transactions: Gauge,
     /// Number of all EIP-7702 transactions in the pool
     pub(crate) total_eip7702_transactions: Gauge,
+    /// Number of all other transactions in the pool
+    pub(crate) total_other_transactions: Gauge,
 
     /// How often the pool was updated after the canonical state changed
     pub(crate) performed_state_updates: Counter,
@@ -241,6 +243,9 @@ impl Recorder for ViseRecorder {
             }
             "transaction_pool.total_eip7702_transactions" => {
                 &TRANSACTION_POOL_METRICS.total_eip7702_transactions
+            }
+            "transaction_pool.total_other_transactions" => {
+                &TRANSACTION_POOL_METRICS.total_other_transactions
             }
             // Blob store gauges
             "transaction_pool.blobstore_byte_size" => &BLOB_STORE_METRICS.blobstore_byte_size,
