@@ -57,11 +57,24 @@ where
         report: &CompareReport,
     ) -> anyhow::Result<()> {
         report.log_tracing(20);
-        if !report.is_empty() {
-            let block_number = replay_record.block_context.block_number;
-            METRICS.record_inconsistency(block_number);
+        if report.is_empty() {
+            return Ok(());
         }
-        if self.revert_enabled && !report.is_empty() {
+
+        let block_number = replay_record.block_context.block_number;
+        METRICS.record_inconsistency(block_number);
+        let message = format!(
+            "REVM consistency check failed for block number {}, block hash {}",
+            replay_record.block_context.block_number,
+            block_output.header.hash(),
+        );
+        tracing::info!(
+            block_number = replay_record.block_context.block_number,
+            "Sleeping for {}s before reverting after REVM inconsistency so metrics can propagate",
+            METRICS_PROPAGATION_DELAY.as_secs(),
+        );
+
+        if self.revert_enabled {
             let mut config = self.internal_config_manager.read_config()?;
             config.failing_block = Some(replay_record.block_context.block_number);
 
@@ -75,21 +88,12 @@ where
                 new_blacklist_size - initial_blacklist_size
             );
 
-            let message = format!(
-                "REVM consistency check failed for block number {}, block hash {}",
-                replay_record.block_context.block_number,
-                block_output.header.hash(),
-            );
-            tracing::warn!(
-                delay = ?METRICS_PROPAGATION_DELAY,
-                block_number = replay_record.block_context.block_number,
-                "Sleeping before reverting after REVM inconsistency so metrics can propagate"
-            );
             thread::sleep(METRICS_PROPAGATION_DELAY);
             self.internal_config_manager
                 .write_config_and_panic(&config, &message)?;
+        } else {
+            tracing::warn!(message);
         }
-
         Ok(())
     }
 }
