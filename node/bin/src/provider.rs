@@ -2,11 +2,21 @@ use crate::config::ProviderConfig;
 use alloy::network::{Ethereum, EthereumWallet};
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
-use alloy::rpc::client::RpcClient;
+use alloy::rpc::client::{BuiltInConnectionString, RpcClient};
 use alloy::signers::local::PrivateKeySigner;
-use alloy::transports::layers::{RateLimitRetryPolicy, RetryBackoffLayer, RetryPolicy};
-use alloy::transports::{TransportError, TransportErrorKind};
+use alloy::transports::http::Http;
+use alloy::transports::layers::{
+    FallbackLayer, RateLimitRetryPolicy, RetryBackoffLayer, RetryPolicy,
+};
+use alloy::transports::{BoxTransport, TransportConnect, TransportError, TransportErrorKind};
+use futures::future::try_join_all;
+use std::num::NonZeroUsize;
 use std::time::Duration;
+use tower::{Layer, ServiceBuilder};
+
+/// It should practically never take this long for a request,
+/// so if it does it's better to return an error than keep hanging
+const RPC_TIMEOUT_BEFORE_RETRY: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Copy, Clone, Default)]
 struct OptimisticRetryPolicy(RateLimitRetryPolicy);
@@ -41,25 +51,58 @@ impl RetryPolicy for OptimisticRetryPolicy {
     }
 }
 
+/// Build BoxTransport from a url, adds a timeout
+/// see `RPC_TIMEOUT_BEFORE_RETRY`
+async fn transport_for_url(rpc_url: &str) -> Result<BoxTransport, TransportError> {
+    let connection = rpc_url.parse::<BuiltInConnectionString>()?;
+
+    match connection {
+        BuiltInConnectionString::Http(url) => {
+            let client = reqwest::Client::builder()
+                .timeout(RPC_TIMEOUT_BEFORE_RETRY)
+                .build()
+                .map_err(TransportErrorKind::custom)?;
+            Ok(BoxTransport::new(Http::with_client(client, url)))
+        }
+        _ => connection.get_transport().await,
+    }
+}
+
+/// Creates a provider from list of RPC URLs
+/// The provider can change the endpoint used based on stability and latency
 pub async fn build_node_provider(
-    rpc_url: &str,
-    provider_config: &ProviderConfig,
-) -> FillProvider<
-    impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
-    impl Provider<Ethereum> + Clone + 'static,
+    rpc_urls: &[String],
+    provider_config: ProviderConfig,
+) -> Result<
+    FillProvider<
+        impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
+        impl Provider<Ethereum> + Clone + 'static,
+    >,
+    TransportError,
 > {
+    assert!(
+        !rpc_urls.is_empty(),
+        "at least one RPC URL must be configured to build a provider"
+    );
+
     let retry_layer = RetryBackoffLayer::new_with_policy(
-        provider_config.max_retries,
-        provider_config.retry_backoff.as_millis() as u64,
+        provider_config.retry_attempt_limit,
+        provider_config.retry_backoff_period.as_millis() as u64,
         u64::MAX, // compute units per second, considering it unlimited for now
         OptimisticRetryPolicy::default(),
     );
-    let client = RpcClient::builder()
+
+    let transports =
+        try_join_all(rpc_urls.iter().map(|rpc_url| transport_for_url(rpc_url))).await?;
+
+    let fallback_layer = FallbackLayer::default()
+        .with_active_transport_count(NonZeroUsize::new(1).expect("1 is non-zero"));
+    let transport = ServiceBuilder::new()
         .layer(retry_layer)
-        .connect(rpc_url)
-        .await
-        .expect("failed to connect to L1 api");
-    ProviderBuilder::new()
+        .service(fallback_layer.layer(transports));
+    let client = RpcClient::new(transport, false);
+
+    Ok(ProviderBuilder::new()
         .wallet(EthereumWallet::new(PrivateKeySigner::random()))
-        .connect_client(client)
+        .connect_client(client))
 }
