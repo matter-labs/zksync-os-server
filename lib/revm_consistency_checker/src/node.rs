@@ -20,11 +20,6 @@ use crate::metrics::METRICS;
 use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
 
-/// In case of revert we need metric to be pulled before crashing.
-/// We would still find out without this, because SLIs would break.
-/// But this way we get the alert earlier.
-const METRICS_PROPAGATION_DELAY: Duration = Duration::from_secs(30);
-
 pub struct RevmConsistencyChecker<State>
 where
     State: ReadStateHistory + Clone + Send + 'static,
@@ -68,6 +63,7 @@ where
             replay_record.block_context.block_number,
             block_output.header.hash(),
         );
+        tracing::warn!(message);
 
         if self.revert_enabled {
             let mut config = self.internal_config_manager.read_config()?;
@@ -83,16 +79,8 @@ where
                 new_blacklist_size - initial_blacklist_size
             );
 
-            tracing::info!(
-                block_number = replay_record.block_context.block_number,
-                "Sleeping for {}s before reverting after REVM inconsistency so metrics can propagate",
-                METRICS_PROPAGATION_DELAY.as_secs(),
-            );
-            thread::sleep(METRICS_PROPAGATION_DELAY);
             self.internal_config_manager
                 .write_config_and_panic(&config, &message)?;
-        } else {
-            tracing::warn!(message);
         }
         Ok(())
     }
