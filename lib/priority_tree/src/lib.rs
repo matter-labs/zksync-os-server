@@ -34,7 +34,7 @@ pub struct PriorityTreeManager<ReplayStorage, Finality> {
     initial_block_number: u64,
 }
 
-impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
+impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
     PriorityTreeManager<ReplayStorage, Finality>
 {
     pub fn new(
@@ -57,10 +57,39 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
         })
     }
 
+    /// Initializes priority tree and starts the tasks
+    /// For ENs set main_node_channels to None
+    pub async fn run(
+        mut self,
+        main_node_channels: Option<(InputChannel, OutputChannel)>,
+    ) -> anyhow::Result<()> {
+        self.init().await.expect("init");
+
+        // Internal channels for priority tree manager
+        let (priority_txs_internal_sender, priority_txs_internal_receiver) =
+            mpsc::channel::<(u64, u64, Option<usize>)>(1000);
+
+        // Clone what we need before moving into async blocks
+        let priority_tree_manager_for_prepare = self.clone();
+        let priority_tree_manager_for_caching = self;
+        tokio::select! {
+            result = priority_tree_manager_for_caching
+                        .keep_caching(priority_txs_internal_receiver) => {
+                result.expect("keep_caching");
+                Ok(())
+            }
+            result = priority_tree_manager_for_prepare
+                .prepare_execute_commands(main_node_channels, priority_txs_internal_sender) => {
+                result.expect("prepare_execute_commands");
+                Ok(())
+            }
+        }
+    }
+
     /// Performs the async initialization: replays any blocks that are already executed on L1
     /// but not yet reflected in the persisted priority tree. Must be called before any other
     /// method that depends on `last_executed_batch_on_init`.
-    pub async fn init(&mut self) -> anyhow::Result<()> {
+    async fn init(&mut self) -> anyhow::Result<()> {
         let started_at = Instant::now();
         let finality_state = self.finality.get_finality_status();
         let (last_executed_batch, last_executed_block) = (
@@ -102,7 +131,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
     ///   and it will forward the proven batch envelopes along with the priority ops proofs.
     /// - For the EN: you must provide neither `proved_batch_envelopes_receiver` nor `execute_batches_sender`
     ///   and it will keep adding new transactions to the tree for finalized blocks.
-    pub async fn prepare_execute_commands(
+    async fn prepare_execute_commands(
         self,
         main_node_channels: Option<(InputChannel, OutputChannel)>,
         priority_ops_internal_sender: mpsc::Sender<(u64, u64, Option<usize>)>,
@@ -293,7 +322,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
     }
 
     /// Keeps caching the priority tree after each batch execution.
-    pub async fn keep_caching(
+    async fn keep_caching(
         self,
         mut priority_ops_internal_receiver: mpsc::Receiver<(u64, u64, Option<usize>)>,
     ) -> anyhow::Result<()> {

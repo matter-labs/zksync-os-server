@@ -64,27 +64,9 @@ where
         input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
     ) -> anyhow::Result<()> {
-        self.priority_tree_manager.init().await?;
-
-        // Internal channels for priority tree manager
-        let (priority_txs_internal_sender, priority_txs_internal_receiver) =
-            mpsc::channel::<(u64, u64, Option<usize>)>(1000);
-
-        // Clone what we need before moving into async blocks
-        let priority_tree_manager_for_prepare = self.priority_tree_manager.clone();
-        let priority_tree_manager_for_caching = self.priority_tree_manager;
-
-        tokio::select! {
-            result = priority_tree_manager_for_caching
-                        .keep_caching(priority_txs_internal_receiver) => {
-                result.expect("keep_caching");
-                Ok(())
-            }
-            result = priority_tree_manager_for_prepare
-                .prepare_execute_commands(Some((input, output)), priority_txs_internal_sender) => {
-                result.expect("prepare_execute_commands");
-                Ok(())
-            }
-        }
+        self.priority_tree_manager
+            .run(Some((input, output)))
+            .await?;
+        Ok(())
     }
 }
