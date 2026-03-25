@@ -967,6 +967,7 @@ async fn run_main_node_pipeline(
     );
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::channel(8);
+    let (applied_block_sender, applied_block_receiver) = watch::channel(None);
 
     Pipeline::new()
         .pipe(MainNodeCommandSource {
@@ -984,6 +985,7 @@ async fn run_main_node_pipeline(
             state: state.clone(),
             config: config.into(),
             tx_acceptance_state_sender,
+            applied_block_receiver,
         })
         .pipe(BlockCanonizer {
             consensus: NoopCanonization::new(),
@@ -994,6 +996,7 @@ async fn run_main_node_pipeline(
             replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             config: config.into(),
+            applied_block_sender,
         })
         .pipe_opt(
             config
@@ -1111,6 +1114,7 @@ async fn run_en_pipeline(
             .rocks_db_path
             .join(INTERNAL_CONFIG_FILE_NAME),
     );
+    let (applied_block_sender, applied_block_receiver) = watch::channel(None);
 
     Pipeline::new()
         .pipe(ExternalNodeCommandSource {
@@ -1123,12 +1127,14 @@ async fn run_en_pipeline(
             state: state.clone(),
             config: config.into(),
             tx_acceptance_state_sender,
+            applied_block_receiver,
         })
         .pipe(BlockApplier {
             state: state.clone(),
             replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             config: config.into(),
+            applied_block_sender,
         })
         .pipe_opt(
             config

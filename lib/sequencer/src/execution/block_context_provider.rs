@@ -95,6 +95,10 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         }
     }
 
+    pub fn next_block_number(&self) -> u64 {
+        self.next_block_number
+    }
+
     pub async fn prepare_command(
         &mut self,
         block_command: BlockCommand,

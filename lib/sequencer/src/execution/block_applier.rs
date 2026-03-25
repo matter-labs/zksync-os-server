@@ -3,7 +3,7 @@ use crate::model::blocks::BlockCommandType;
 use alloy::consensus::Sealed;
 use anyhow::Context;
 use async_trait::async_trait;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReplayRecord, WriteReplay, WriteRepository, WriteState};
@@ -20,6 +20,7 @@ where
     pub replay: Replay,
     pub repositories: Repo,
     pub config: SequencerConfig,
+    pub applied_block_sender: watch::Sender<Option<u64>>,
 }
 
 #[async_trait]
@@ -71,6 +72,12 @@ where
             self.repositories
                 .populate(block_output.clone(), executed_replay.transactions.clone())
                 .await?;
+
+            self.applied_block_sender.send_replace(Some(block_number));
+            tracing::debug!(
+                block_number,
+                "BlockApplier updated applied block progress watch"
+            );
 
             output
                 .send((block_output, executed_replay))
