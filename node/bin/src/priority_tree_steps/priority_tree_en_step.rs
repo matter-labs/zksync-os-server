@@ -1,3 +1,4 @@
+use reth_tasks::Runtime;
 use std::path::Path;
 use tokio::sync::mpsc;
 use zksync_os_l1_watcher::CommittedBatchProvider;
@@ -39,7 +40,7 @@ where
     }
 
     /// Run the priority tree tasks for EN (doesn't use pipeline framework as it has no I/O)
-    pub async fn run(self) -> anyhow::Result<()> {
+    pub fn spawn(self, runtime: &Runtime) {
         // Internal channel for priority tree manager
         let (priority_txs_internal_sender, priority_txs_internal_receiver) =
             mpsc::channel::<(u64, u64, Option<usize>)>(1000);
@@ -48,32 +49,22 @@ where
         let priority_tree_manager_for_prepare = self.priority_tree_manager.clone();
         let priority_tree_manager_for_caching = self.priority_tree_manager;
 
-        // Task 1: Prepare execute commands (but don't send them)
-        let prepare_task = tokio::spawn({
-            async move {
-                priority_tree_manager_for_prepare
-                    .prepare_execute_commands(None, priority_txs_internal_sender)
-                    .await
-            }
-        });
-
-        // Task 2: Keep caching
-        let keep_caching_task = tokio::spawn({
-            async move {
-                priority_tree_manager_for_caching
-                    .keep_caching(priority_txs_internal_receiver)
-                    .await
-            }
-        });
-
-        // Wait for any task to complete (they should all run indefinitely)
-        tokio::select! {
-            _ = prepare_task => {
-                anyhow::bail!("Priority tree prepare_execute_commands ended unexpectedly")
-            }
-            _ = keep_caching_task => {
-                anyhow::bail!("Priority tree keep_caching ended unexpectedly")
-            }
-        }
+        runtime.spawn_critical_with_graceful_shutdown_signal(
+            "priority tree caching",
+            |shutdown| async move {
+                tokio::select! {
+                    result = priority_tree_manager_for_caching.keep_caching(priority_txs_internal_receiver) => {
+                        result.expect("keep_caching");
+                    }
+                    result = priority_tree_manager_for_prepare.prepare_execute_commands(None, priority_txs_internal_sender) => {
+                        result.expect("prepare_execute_commands");
+                    }
+                    _guard = shutdown => {
+                        // Ensures both futures are dropped before we shutdown gracefully. Otherwise
+                        // priority tree manager might keep holding DB.
+                    }
+                }
+            },
+        );
     }
 }

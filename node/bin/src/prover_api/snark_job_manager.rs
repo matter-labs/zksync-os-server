@@ -240,12 +240,13 @@ impl FakeSnarkProver {
         }
     }
 
-    pub async fn run(self) -> anyhow::Result<()> {
+    pub async fn run(self) {
         loop {
             tokio::time::sleep(self.polling_interval).await;
             self.job_manager
                 .process_pending_fake_or_timed_out_fri_proofs(Some(self.max_batch_age))
-                .await?;
+                .await
+                .expect("snark prover failed");
         }
     }
 }

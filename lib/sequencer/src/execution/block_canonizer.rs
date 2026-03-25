@@ -137,7 +137,8 @@ where
                 // Only receive when we have capacity in the produced_queue.
                 maybe_executed = input.recv(), if produced_queue.len() < MAX_PRODUCED_QUEUE_SIZE => {
                     let Some((block_output, replay_record, cmd_type)) = maybe_executed else {
-                        anyhow::bail!("inbound channel closed");
+                        tracing::info!("inbound channel closed");
+                        return Ok(());
                     };
                     match cmd_type {
                         BlockCommandType::Replay => {

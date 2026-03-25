@@ -196,10 +196,10 @@ if [ -f "$SINGLE_CONFIG" ]; then
     echo -e "\n${GREEN}Starting single chain with config: $SINGLE_CONFIG${NC}"
     if [ -n "$LOGS_DIR" ]; then
         CHAIN_LOG_FILE="$LOGS_DIR/chain-$LOG_TIMESTAMP.log"
-        cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$SINGLE_CONFIG" > "$CHAIN_LOG_FILE" 2>&1 &
+        cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$REPO_ROOT/local-chains/local_dev.yaml" --config "$SINGLE_CONFIG" > "$CHAIN_LOG_FILE" 2>&1 &
         echo -e "${GREEN}Chain logs: $CHAIN_LOG_FILE${NC}"
     else
-        cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$SINGLE_CONFIG" &
+        cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$REPO_ROOT/local-chains/local_dev.yaml" --config "$SINGLE_CONFIG" &
     fi
     CHAIN_PID=$!
     PIDS+=($CHAIN_PID)
@@ -221,10 +221,10 @@ else
             # Extract config file name without extension for log file naming
             CONFIG_NAME=$(basename "$config_file" .yaml)
             CHAIN_LOG_FILE="$LOGS_DIR/${CONFIG_NAME}-$LOG_TIMESTAMP.log"
-            cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$config_file" > "$CHAIN_LOG_FILE" 2>&1 &
+            cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$REPO_ROOT/local-chains/local_dev.yaml" --config "$config_file" > "$CHAIN_LOG_FILE" 2>&1 &
             echo -e "${GREEN}Chain logs: $CHAIN_LOG_FILE${NC}"
         else
-            cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$config_file" &
+            cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$REPO_ROOT/local-chains/local_dev.yaml" --config "$config_file" &
         fi
         CHAIN_PID=$!
         PIDS+=($CHAIN_PID)

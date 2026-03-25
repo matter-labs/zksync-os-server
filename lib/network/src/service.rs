@@ -2,6 +2,7 @@ use crate::config::NetworkConfig;
 use crate::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
 use crate::version::{ZksProtocolV1, ZksProtocolV2};
 use crate::wire::replays::RecordOverride;
+use alloy::eips::eip2124::Head;
 use alloy::primitives::BlockNumber;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, Hardforks};
 use reth_discv5::discv5;
@@ -13,11 +14,11 @@ use reth_network::{
     NetworkConfig as RethNetworkConfig, NetworkConfigBuilder, NetworkManager, PeersConfig,
 };
 use reth_provider::BlockNumReader;
+use reth_tasks::Runtime;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
-use tokio::task::JoinSet;
+use tokio::sync::mpsc;
 use zksync_os_metadata::NODE_CLIENT_VERSION;
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::NodeRole;
@@ -49,6 +50,10 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
     ) -> Result<Self, NetworkError> {
+        // Install ViseRecorder before creating the NetworkManager so that reth-network metrics
+        // are captured. This must happen before `NetworkManager::builder()` because that is where
+        // reth initializes its metric handles (via `Default::default()` on each metrics struct).
+        crate::metrics::install_recorder();
         match NatResolver::Any.external_addr().await {
             None => {
                 tracing::info!("could not resolve external IP (STUN)");
@@ -58,6 +63,16 @@ impl NetworkService {
             }
         };
         let rlpx_address = SocketAddr::V4(SocketAddrV4::new(config.address, config.port));
+        let chain_spec = client.chain_spec();
+        let genesis = Head {
+            hash: chain_spec.genesis_hash(),
+            number: 0,
+            timestamp: chain_spec.genesis().timestamp,
+            difficulty: chain_spec.genesis().difficulty,
+            total_difficulty: chain_spec.genesis().difficulty,
+        };
+        let fork_id = chain_spec.fork_id(&genesis);
+        tracing::info!(?genesis, ?fork_id, "initializing p2p network service");
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
         let cfg_builder = RethNetworkConfig::builder(config.secret_key)
             .boot_nodes(config.boot_nodes.clone())
@@ -80,20 +95,23 @@ impl NetworkService {
             // Setup Node Discovery Protocol v5 on `localhost:<port>:UDP` that points to RLPx socket
             // at `localhost:<port>:TCP`
             .discovery_v5(
-                reth_discv5::Config::builder(rlpx_address).discv5_config(
-                    discv5::ConfigBuilder::new(discv5::ListenConfig::from_ip(
-                        rlpx_address.ip(),
-                        config.port,
-                    ))
-                    // Require only 2 peers to agree on our external IP to update our local ENR
-                    .enr_peer_update_min(2)
-                    // 2 peers from above must agree on external IP within 1h from each other.
-                    // This can make the node less responsive to dynamic IP changes.
-                    .vote_duration(Duration::from_secs(3600))
-                    // Sets peer ban duration to 1 second, effectively disabling it
-                    .ban_duration(Some(Duration::from_secs(1)))
-                    .build(),
-                ),
+                reth_discv5::Config::builder(rlpx_address)
+                    .discv5_config(
+                        discv5::ConfigBuilder::new(discv5::ListenConfig::from_ip(
+                            rlpx_address.ip(),
+                            config.port,
+                        ))
+                        // Require only 2 peers to agree on our external IP to update our local ENR
+                        .enr_peer_update_min(2)
+                        // 2 peers from above must agree on external IP within 1h from each other.
+                        // This can make the node less responsive to dynamic IP changes.
+                        .vote_duration(Duration::from_secs(3600))
+                        // Sets peer ban duration to 1 second, effectively disabling it
+                        .ban_duration(Some(Duration::from_secs(1)))
+                        .build(),
+                    )
+                    // Specify custom fork id configuration
+                    .fork(b"zksync-os", fork_id),
             )
             .peer_config(
                 PeersConfig::default()
@@ -106,7 +124,10 @@ impl NetworkService {
                         medium: Duration::from_secs(60),
                         high: Duration::from_secs(60 * 2),
                         max: Duration::from_secs(60 * 3),
-                    }),
+                    })
+                    // Peers' fork id must match, otherwise we could discover peers from other
+                    // chains.
+                    .with_enforce_enr_fork_id(true),
             )
             // Use the same port for RLPx (TCP) and for discv5 (UDP)
             .listener_addr(rlpx_address)
@@ -116,7 +137,9 @@ impl NetworkService {
             // Do not require any block hashes in `eth` RLPx protocol as it is unused
             .required_block_hashes(vec![])
             // Set network id to ZKsync OS chain's id, otherwise we might connect to unrelated peers
-            .network_id(Some(client.chain_spec().chain_id()));
+            .network_id(Some(chain_spec.chain_id()))
+            // Use genesis as chain head
+            .set_head(genesis);
         let net_cfg =
             Self::register_rlpx_sub_protocols(cfg_builder, zks_config, replay, protocol_tx)
                 .build(client);
@@ -166,13 +189,20 @@ impl NetworkService {
     }
 
     /// Consume the service by registering it as an endless task that drives the network state.
-    pub fn run(mut self, tasks: &mut JoinSet<()>, stop_receiver: watch::Receiver<bool>) {
-        tasks.spawn(self.network_manager);
-        tasks.spawn(async move {
-            while !*stop_receiver.borrow() {
-                let Some(event) = self.protocol_rx.recv().await else {
-                    break;
-                };
+    pub fn spawn(mut self, runtime: &Runtime) {
+        runtime.spawn_critical_with_graceful_shutdown_signal(
+            "p2p network task",
+            |shutdown| async move {
+                self.network_manager
+                    .run_until_graceful_shutdown(shutdown, |_network| {
+                        // todo: save peers to disk like reth?
+                    })
+                    .await;
+                tracing::info!("p2p network graceful shutdown complete");
+            },
+        );
+        runtime.spawn_critical_task("p2p protocol logger", async move {
+            while let Some(event) = self.protocol_rx.recv().await {
                 // For now events are only used for diagnostical reasons (new connection got
                 // established or max connections reached). In the future we might have other events
                 // that we would want to process here somehow.

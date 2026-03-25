@@ -1,6 +1,6 @@
 use alloy::eips::BlockId;
-use alloy::network::{Ethereum, TransactionBuilder};
-use alloy::primitives::{Address, Bytes, U256};
+use alloy::network::{Ethereum, ReceiptResponse, TransactionBuilder};
+use alloy::primitives::{Address, Bytes, U128, U256};
 use alloy::providers::PendingTransactionBuilder;
 use alloy::providers::ext::DebugApi;
 use alloy::rpc::types::TransactionRequest;
@@ -10,10 +10,13 @@ use alloy::rpc::types::trace::geth::{
 };
 use alloy::sol_types::{Revert, SolCall, SolError};
 use std::collections::HashMap;
-use zksync_os_integration_tests::assert_traits::{ReceiptAssert, ReceiptsAssert};
-use zksync_os_integration_tests::contracts::{EventEmitter, TracingPrimary, TracingSecondary};
+use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert, ReceiptsAssert};
+use zksync_os_integration_tests::contracts::{
+    Counter, EventEmitter, TracingPrimary, TracingSecondary,
+};
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
-use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
+use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, TesterBuilder, test_multisetup};
+use zksync_os_server::config::FeeConfig;
 
 fn check_call_frame(
     call_frame: CallFrame,
@@ -70,6 +73,34 @@ fn check_call_frame(
             gas: subcall.gas,
             gas_used: subcall.gas_used,
         }
+    );
+}
+
+fn pubdata_exhaustion_fee_config() -> FeeConfig {
+    FeeConfig {
+        native_price_usd: 3e-9,
+        base_fee_override: Some(U128::from(25_000_000u64)),
+        native_per_gas: 100,
+        pubdata_price_override: Some(U128::from(100_000_000_000u64)),
+        native_price_override: Some(U128::from(1_000_000u64)),
+        pubdata_price_cap: None,
+    }
+}
+
+/// This limit is high enough for validation to pass under `pubdata_exhaustion_fee_config()`,
+/// but low enough for the tx to run out of resources when paying for execution pubdata.
+const PUBDATA_EXHAUSTION_GAS_LIMIT: u64 = 580_000;
+
+fn assert_pubdata_exhaustion_call_frame(call_frame: &CallFrame) {
+    assert_eq!(
+        call_frame.error.as_deref(),
+        Some("execution reverted: insufficient gas to cover pubdata cost")
+    );
+    assert!(call_frame.gas_used > U256::ZERO);
+    assert!(call_frame.output.is_some());
+    assert!(
+        call_frame.revert_reason.is_none(),
+        "post-execution revert should not invent a revert reason"
     );
 }
 
@@ -154,6 +185,135 @@ async fn call_trace_transaction(tester: Tester) -> anyhow::Result<()> {
             gas_used: revert_subcall.gas_used,
         }
     );
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+async fn call_trace_transaction_reports_pubdata_exhaustion(
+    builder: TesterBuilder,
+) -> anyhow::Result<()> {
+    let tester = builder
+        .fee_config(pubdata_exhaustion_fee_config())
+        .build()
+        .await?;
+    let counter = Counter::deploy(tester.l2_provider.clone()).await?;
+
+    let receipt = counter
+        .increment(U256::from(1))
+        .gas(PUBDATA_EXHAUSTION_GAS_LIMIT)
+        .send()
+        .await?
+        .with_timeout(Some(DEFAULT_TIMEOUT))
+        .get_receipt()
+        .await?;
+    assert!(
+        !receipt.status(),
+        "transaction should revert after execution"
+    );
+
+    let trace = tester
+        .l2_provider
+        .debug_trace_transaction(
+            receipt.transaction_hash(),
+            GethDebugTracingOptions::call_tracer(CallConfig::default()),
+        )
+        .await?;
+    let call_frame = trace
+        .try_into_call_frame()
+        .expect("expected call tracer result");
+    assert_pubdata_exhaustion_call_frame(&call_frame);
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+async fn call_trace_transaction_reports_pubdata_exhaustion_with_only_top_call(
+    builder: TesterBuilder,
+) -> anyhow::Result<()> {
+    let tester = builder
+        .fee_config(pubdata_exhaustion_fee_config())
+        .build()
+        .await?;
+    let counter = Counter::deploy(tester.l2_provider.clone()).await?;
+
+    let receipt = counter
+        .increment(U256::from(1))
+        .gas(PUBDATA_EXHAUSTION_GAS_LIMIT)
+        .send()
+        .await?
+        .with_timeout(Some(DEFAULT_TIMEOUT))
+        .get_receipt()
+        .await?;
+    assert!(
+        !receipt.status(),
+        "transaction should revert after execution"
+    );
+
+    let trace = tester
+        .l2_provider
+        .debug_trace_transaction(
+            receipt.transaction_hash(),
+            GethDebugTracingOptions::call_tracer(CallConfig {
+                only_top_call: Some(true),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let call_frame = trace
+        .try_into_call_frame()
+        .expect("expected call tracer result");
+    assert!(
+        call_frame.calls.is_empty(),
+        "only_top_call traces should not include nested calls"
+    );
+    assert_pubdata_exhaustion_call_frame(&call_frame);
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+async fn call_trace_block_reports_pubdata_exhaustion(builder: TesterBuilder) -> anyhow::Result<()> {
+    let tester = builder
+        .fee_config(pubdata_exhaustion_fee_config())
+        .build()
+        .await?;
+    let counter = Counter::deploy(tester.l2_provider.clone()).await?;
+
+    let receipt = counter
+        .increment(U256::from(1))
+        .gas(PUBDATA_EXHAUSTION_GAS_LIMIT)
+        .send()
+        .await?
+        .with_timeout(Some(DEFAULT_TIMEOUT))
+        .get_receipt()
+        .await?;
+    assert!(
+        !receipt.status(),
+        "transaction should revert after execution"
+    );
+
+    let traces = tester
+        .l2_provider
+        .debug_trace_block_by_number(
+            receipt
+                .block_number()
+                .expect("reverted receipt should have block number")
+                .into(),
+            GethDebugTracingOptions::call_tracer(CallConfig::default()),
+        )
+        .await?;
+    let call_frame = traces
+        .iter()
+        .find_map(|trace| {
+            if trace.tx_hash() == Some(receipt.transaction_hash()) {
+                trace.success()?.clone().try_into_call_frame().ok()
+            } else {
+                None
+            }
+        })
+        .expect("block trace should include reverted transaction");
+    assert_pubdata_exhaustion_call_frame(&call_frame);
 
     Ok(())
 }

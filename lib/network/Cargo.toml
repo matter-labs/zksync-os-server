@@ -32,6 +32,8 @@ tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 secrecy.workspace = true
+vise.workspace = true
+metrics.workspace = true
 
 reth-network.workspace = true
 reth-network-peers.workspace = true
@@ -40,6 +42,7 @@ reth-eth-wire.workspace = true
 reth-discv5.workspace = true
 reth-chainspec.workspace = true
 reth-provider.workspace = true
+reth-tasks.workspace = true
 
 [dev-dependencies]
 assert_matches.workspace = true

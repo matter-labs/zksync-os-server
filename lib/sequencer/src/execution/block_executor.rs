@@ -77,9 +77,10 @@ where
             latency_tracker.enter_state(SequencerState::WaitingForCommand);
 
             let Some(cmd) = input.recv().await else {
-                anyhow::bail!("inbound channel closed");
+                tracing::info!("inbound channel closed");
+                return Ok(());
             };
-            tracing::debug!("Command {cmd} received by BlockExecutor");
+            tracing::info!("Command {cmd} received by BlockExecutor");
             let cmd_type = cmd.command_type();
 
             // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
@@ -104,7 +105,7 @@ where
                 block_number,
                 "Prepared context for block {block_number}. expected_block_output_hash: {:?}, starting_l1_priority_id: {}, timestamp: {}, execution_version: {}. Executing..",
                 prepared_command.expected_block_output_hash,
-                prepared_command.starting_l1_priority_id,
+                prepared_command.starting_cursors.l1_priority_id,
                 prepared_command.block_context.timestamp,
                 prepared_command.block_context.execution_version,
             );
@@ -143,7 +144,7 @@ where
             }
             last_processed_block_at = Some(Instant::now());
 
-            tracing::debug!(block_number, "Executed. Updating mempools...");
+            tracing::info!(block_number, "Executed. Updating mempools...");
             latency_tracker.enter_state(SequencerState::UpdatingMempool);
 
             self.block_context_provider
@@ -159,7 +160,7 @@ where
                 block_output.published_preimages.clone(),
             )?;
 
-            tracing::debug!(
+            tracing::info!(
                 block_number,
                 time_since_last_block = ?time_since_last_block,
                 "Block processed in `BlockExecutor`. Sending downstream..."

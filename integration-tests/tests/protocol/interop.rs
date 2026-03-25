@@ -352,14 +352,6 @@ async fn deposit_erc20_to_chain(
         .context("L1 ERC20 deposit transaction")
 }
 
-/// Extracts the gateway chain block number from an `UntilMsgRoot` log proof.
-fn get_gw_block_number(proof: &[FixedBytes<32>]) -> u64 {
-    let first = &proof[0];
-    let gw_proof_index = 1 + first.0[1] as usize + 1 + first.0[2] as usize;
-    let elem = &proof[gw_proof_index];
-    u128::from_be_bytes(elem.0[0..16].try_into().unwrap()) as u64
-}
-
 /// Relayer functionality: wait for finalization and obtain message proof (MessageRoot variant).
 async fn relayer_get_message_proof(
     provider: &impl ZksyncApi,
@@ -525,7 +517,9 @@ async fn test_interop_l2_to_l1_message_verification() -> anyhow::Result<()> {
     let log_proof =
         relayer_get_message_proof(&chain_a.l2_zk_provider, tx_hash, block_number).await?;
 
-    let gw_block_number = get_gw_block_number(&log_proof.proof);
+    let gw_block_number = log_proof
+        .gateway_block_number
+        .expect("MessageRoot proof must contain gateway_block_number");
 
     // Wait for interop root to become available on chain B, keyed by gateway chain + GW block
     chain_b
@@ -673,7 +667,9 @@ async fn test_interop_bundle_send() -> Result<()> {
     )
     .await?;
 
-    let gw_block_number = get_gw_block_number(&log_proof.proof);
+    let gw_block_number = log_proof
+        .gateway_block_number
+        .expect("MessageRoot proof must contain gateway_block_number");
 
     // Wait for interop root to get included on chain B, keyed by gateway chain + GW block
     chain_b

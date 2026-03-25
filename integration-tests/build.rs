@@ -27,6 +27,10 @@ fn decompress_l1_states() {
             continue;
         }
 
+        if entry.path().ends_with("v30.1") {
+            continue;
+        }
+
         let gz_path = entry.path().join("l1-state.json.gz");
         assert!(gz_path.is_file(), "expected {} to exist", gz_path.display());
 
