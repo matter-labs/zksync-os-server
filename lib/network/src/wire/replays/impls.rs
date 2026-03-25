@@ -8,10 +8,10 @@ use crate::wire::{BlockHashes, ForcedPreimage};
 use alloy::consensus::crypto::RecoveryError;
 use alloy::primitives::{BlockNumber, Bytes};
 use zksync_os_interface::types::BlockContext as InterfaceBlockContext;
-use zksync_os_types::InteropRootsLogIndex;
 use zksync_os_interface::types::BlockHashes as InterfaceBlockHashes;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_storage_api::ReplayRecord as StorageReplayRecord;
+use zksync_os_types::InteropRootsLogIndex;
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
 // ==================================================

@@ -41,14 +41,14 @@ impl PartialEq for SystemTxEnvelope {
 
 impl SystemTxEnvelope {
     /// A constructor for system transaction that imports interop roots.
-    /// `log_id` is used as the transaction salt to ensure uniqueness.
-    pub fn import_interop_roots(roots: Vec<InteropRoot>, log_id: u64) -> Self {
+    /// `latest_log_id` is used as the transaction salt to ensure uniqueness.
+    pub fn import_interop_roots(roots: Vec<InteropRoot>, latest_log_id: u64) -> Self {
         let tx_input = SystemTxInput::ImportInteropRoots(roots);
         let (calldata, _) = tx_input.encode_data();
         let transaction = SystemTx {
             to: tx_input.to_address(),
             input: Bytes::from(calldata),
-            salt: log_id,
+            salt: latest_log_id,
         };
         Self {
             hash: transaction.calculate_hash(),
