@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use vise::{Gauge, Metrics};
+use vise::{Gauge, Metrics, Unit};
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "revm_consistency_checker")]
