@@ -29,3 +29,8 @@ status_server_enabled=false \
 rpc_address=0.0.0.0:3051 \
 cargo run 
 ```
+
+If the node should advertise a private LAN IP, set `network_interface` to the local interface that
+owns it, for example `network_interface=eth0` when `eth0` resolves to `172.16.1.12`. This
+overrides `network_address`. `network_boot_nodes` also accepts DNS hosts such as
+`enode://<node_id>@main-node.internal:3060`.

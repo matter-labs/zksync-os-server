@@ -219,7 +219,7 @@ impl Tester {
     ) -> anyhow::Result<Self> {
         let overrides_fun = |config: &mut Config| {
             config.general_config.node_role = NodeRole::ExternalNode;
-            config.network_config.boot_nodes = vec![self.node_record];
+            config.network_config.boot_nodes = vec![self.node_record.into()];
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
             config.l1_sender_config.pubdata_mode = None;
             config.general_config.gateway_rpc_url = self.gateway_rpc_url.clone();
@@ -354,6 +354,7 @@ impl Tester {
             enabled: true,
             secret_key: Some(network_secret_key),
             address: Ipv4Addr::LOCALHOST,
+            interface: None,
             port: network_locked_port.port,
             boot_nodes: vec![],
         };

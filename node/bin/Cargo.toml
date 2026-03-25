@@ -61,6 +61,8 @@ execution_utils.workspace = true
 full_statement_verifier.workspace = true
 
 reth-tasks.workspace = true
+reth-network-peers.workspace = true
+reth-net-nat.workspace = true
 
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false, features = [

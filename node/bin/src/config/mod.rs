@@ -3,6 +3,8 @@ use self::util::{SecretKeyDeserializer, SignerConfigDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use num::{BigInt, BigUint, rational::Ratio};
+use reth_net_nat::net_if::resolve_net_if_ip;
+use reth_network_peers::TrustedPeer;
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::{SizeUnit, TimeUnit};
 use smart_config::value::SecretString;
@@ -11,14 +13,14 @@ use smart_config::{
     EtherAmount, ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
 };
 use std::collections::{HashMap, HashSet};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_mempool::SubPoolLimit;
-use zksync_os_network::{NodeRecord, SecretKey};
+use zksync_os_network::SecretKey;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 use zksync_os_operator_signer::SignerConfig;
@@ -271,20 +273,44 @@ pub struct NetworkConfig {
     #[config(secret)]
     #[config(default, with = SecretKeyDeserializer)]
     pub secret_key: Option<SecretKey>,
-    /// IPv4 address to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
+    /// IPv4 address to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol
+    /// (rlpx).
     #[config(default_t = Ipv4Addr::UNSPECIFIED, with = Serde![str])]
     pub address: Ipv4Addr,
+    /// Optional networking interface override. If set, this is used instead of `network.address`.
+    /// The interface IP is resolved at startup; for example, `eth0` may resolve to a private LAN
+    /// address such as `172.16.1.12`.
+    #[config(default_t = None)]
+    pub interface: Option<String>,
     /// Port to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
     #[config(default_t = 3060)]
     pub port: u16,
     /// All boot nodes to start network discovery with. Expected format is
-    /// `enode://<node ID>@<IP address>:<port>` delimited by commas (`,`). For example:
+    /// `enode://<node ID>@<IP address>:<port>` or `enode://<node ID>@<DNS name>:<port>`
+    /// delimited by commas (`,`). DNS names are resolved by the networking stack. For example:
     /// `enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060`
     #[config(
         default,
         with = Delimited::repeat(Serde![str], ",")
     )]
-    pub boot_nodes: Vec<NodeRecord>,
+    pub boot_nodes: Vec<TrustedPeer>,
+}
+
+impl NetworkConfig {
+    fn resolved_address(&self) -> Ipv4Addr {
+        let Some(interface) = self.interface.as_deref() else {
+            return self.address;
+        };
+
+        match resolve_net_if_ip(interface).unwrap_or_else(|err| {
+            panic!("failed to resolve network interface '{interface}': {err}")
+        }) {
+            IpAddr::V4(ip) => ip,
+            IpAddr::V6(ip) => panic!(
+                "failed to resolve network interface '{interface}': resolved to unsupported IPv6 address {ip}"
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -1001,7 +1027,7 @@ impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {
             secret_key: value
                 .secret_key
                 .expect("`network.secret_key` is required for running p2p networking stack"),
-            address: value.address,
+            address: value.resolved_address(),
             port: value.port,
             boot_nodes: value.boot_nodes,
         }
@@ -1252,5 +1278,67 @@ impl From<FeeConfig> for zksync_os_sequencer::execution::FeeConfig {
                 .native_price_override
                 .map(|n| BigUint::from(n.to::<u128>())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NetworkConfig;
+    use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
+    use std::net::Ipv4Addr;
+
+    const TEST_SECRET_KEY: &str =
+        "0x1111111111111111111111111111111111111111111111111111111111111111";
+
+    fn loopback_interface() -> &'static str {
+        ["lo", "lo0"]
+            .into_iter()
+            .find(|interface| super::resolve_net_if_ip(interface).is_ok())
+            .expect("expected a loopback interface")
+    }
+
+    fn parse_network_config<const N: usize>(env_vars: [(&str, &str); N]) -> NetworkConfig {
+        let schema = ConfigSchema::new(&NetworkConfig::DESCRIPTION, "network");
+        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
+        repo.single::<NetworkConfig>().unwrap().parse().unwrap()
+    }
+
+    #[test]
+    fn network_interface_is_a_separate_field_and_overrides_address() {
+        let config = parse_network_config([
+            ("NETWORK_SECRET_KEY", TEST_SECRET_KEY),
+            ("NETWORK_ADDRESS", "10.0.0.1"),
+            ("NETWORK_INTERFACE", loopback_interface()),
+        ]);
+        assert_eq!(config.address, Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(config.interface.as_deref(), Some(loopback_interface()));
+
+        let runtime_config = zksync_os_network::config::NetworkConfig::from(config);
+        assert_eq!(runtime_config.address, Ipv4Addr::LOCALHOST);
+    }
+
+    #[test]
+    fn network_boot_nodes_accept_dns_names() {
+        let config = parse_network_config([(
+            "NETWORK_BOOT_NODES",
+            "enode://6f8a80d14311c39f35f516fa664deaaaa13e85b2f7493f37f6144d86991ec012937307647bd3b9a82abe2974e1407241d54947bbb39763a4cac9f77166ad92a0@localhost:30303?discport=30301",
+        )]);
+
+        assert_eq!(config.boot_nodes.len(), 1);
+        assert_eq!(config.boot_nodes[0].host.to_string(), "localhost");
+        let record = config.boot_nodes[0].resolve_blocking().unwrap();
+        assert!(record.address.is_loopback());
+        assert_eq!(record.tcp_port, 30303);
+        assert_eq!(record.udp_port, 30301);
+    }
+
+    #[test]
+    #[should_panic(expected = "failed to resolve network interface 'definitely-missing-if'")]
+    fn invalid_network_interface_panics() {
+        let _ = zksync_os_network::config::NetworkConfig::from(parse_network_config([
+            ("NETWORK_SECRET_KEY", TEST_SECRET_KEY),
+            ("NETWORK_INTERFACE", "definitely-missing-if"),
+            ("NETWORK_ADDRESS", "10.0.0.1"),
+        ]));
     }
 }
