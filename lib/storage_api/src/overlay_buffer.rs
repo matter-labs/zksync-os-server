@@ -38,7 +38,7 @@ impl OverlayBuffer {
         S: ReadStateHistory + 'a,
     {
         let base_latest = *base.block_range_available().end();
-        self.purge_already_persisted_blocks(base_latest)?;
+        // self.purge_already_persisted_blocks(base_latest)?;
         let first_overlay = self.overlays.keys().next().copied();
         let last_overlay = self.overlays.keys().next_back().copied();
         tracing::debug!(
@@ -60,8 +60,7 @@ impl OverlayBuffer {
         let base_view = base
             .state_view_at(base_latest)
             .map_err(|e| anyhow::anyhow!(e))?;
-        if first_overlay != Some(base_latest + 1)
-            || last_overlay != Some(block_number_to_execute - 1)
+        if last_overlay != Some(block_number_to_execute - 1)
         {
             // This assert is defensive - we could build overlay maps from a subset of overlay records,
             // but this behaviour is unexpected as we execute blocks in strict accession.
