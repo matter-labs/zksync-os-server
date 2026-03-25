@@ -4,6 +4,8 @@ use reth_revm::ExecuteCommitEvm;
 use reth_revm::context::{Context, ContextTr};
 use reth_revm::db::CacheDB;
 use std::collections::HashSet;
+use std::thread;
+use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;
@@ -14,8 +16,11 @@ use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ExecutionVersion;
 
 use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
+use crate::metrics::METRICS;
 use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
+
+const METRICS_PROPAGATION_DELAY: Duration = Duration::from_secs(5);
 
 pub struct RevmConsistencyChecker<State>
 where
@@ -49,6 +54,10 @@ where
         report: &CompareReport,
     ) -> anyhow::Result<()> {
         report.log_tracing(20);
+        if !report.is_empty() {
+            let block_number = replay_record.block_context.block_number;
+            METRICS.record_inconsistency(block_number);
+        }
         if self.revert_enabled && !report.is_empty() {
             let mut config = self.internal_config_manager.read_config()?;
             config.failing_block = Some(replay_record.block_context.block_number);
@@ -68,6 +77,12 @@ where
                 replay_record.block_context.block_number,
                 block_output.header.hash(),
             );
+            tracing::warn!(
+                delay = ?METRICS_PROPAGATION_DELAY,
+                block_number = replay_record.block_context.block_number,
+                "Sleeping before reverting after REVM inconsistency so metrics can propagate"
+            );
+            thread::sleep(METRICS_PROPAGATION_DELAY);
             self.internal_config_manager
                 .write_config_and_panic(&config, &message)?;
         }
