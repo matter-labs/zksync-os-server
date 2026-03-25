@@ -50,7 +50,7 @@ async fn setup() -> Result<(GatewayTester, Address)> {
 async fn unauthorized_address_deploy_is_rejected() -> Result<()> {
     let (mc, unauthorized) = setup().await?;
 
-    // Rejected during block execution (FilteredByValidator → Purge).
+    // Rejected during block execution (FilteredByValidator -> Purge).
     let pending = EventEmitter::deploy_builder(mc.chain(0).l2_provider.clone())
         .from(unauthorized)
         .send()
