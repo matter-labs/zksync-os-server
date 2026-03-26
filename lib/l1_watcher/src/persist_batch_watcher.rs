@@ -62,6 +62,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             // one.
             last_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
             config.poll_interval,
             Box::new(this),
         );

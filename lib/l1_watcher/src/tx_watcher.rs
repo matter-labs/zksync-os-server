@@ -51,6 +51,7 @@ impl L1TxWatcher {
             zk_chain_l1.provider().clone(),
             next_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
             config.poll_interval,
             this.into(),
         );

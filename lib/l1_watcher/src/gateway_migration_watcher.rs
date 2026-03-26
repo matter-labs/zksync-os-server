@@ -87,6 +87,7 @@ impl GatewayMigrationWatcher {
             zk_chain.provider().clone(),
             next_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
             config.poll_interval,
             Box::new(this),
         ))

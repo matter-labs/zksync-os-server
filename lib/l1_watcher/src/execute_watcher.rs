@@ -50,6 +50,7 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
             // one.
             last_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
             config.poll_interval,
             this.into(),
         );

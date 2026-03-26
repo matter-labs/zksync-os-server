@@ -42,6 +42,7 @@ impl InteropWatcher {
             bridgehub.provider().clone(),
             this.starting_interop_event_index.block_number,
             config.max_blocks_to_process,
+            config.confirmations,
             config.poll_interval,
             Box::new(this),
         );

@@ -110,6 +110,7 @@ impl L1UpgradeTxWatcher {
             zk_chain_l1.provider().clone(),
             last_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
             config.poll_interval,
             this.into(),
         );

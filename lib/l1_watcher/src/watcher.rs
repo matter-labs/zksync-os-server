@@ -12,6 +12,7 @@ pub struct L1Watcher {
     provider: DynProvider,
     next_l1_block: BlockNumber,
     max_blocks_to_process: u64,
+    confirmations: BlockNumber,
     poll_interval: Duration,
     processor: Box<dyn ProcessRawEvents>,
 }
@@ -21,6 +22,7 @@ impl L1Watcher {
         provider: DynProvider,
         next_l1_block: BlockNumber,
         max_blocks_to_process: u64,
+        confirmations: BlockNumber,
         poll_interval: Duration,
         processor: Box<dyn ProcessRawEvents>,
     ) -> Self {
@@ -28,6 +30,7 @@ impl L1Watcher {
             provider,
             next_l1_block,
             max_blocks_to_process,
+            confirmations,
             poll_interval,
             processor,
         }
@@ -45,11 +48,12 @@ impl L1Watcher {
 
     async fn poll(&mut self) -> Result<(), L1WatcherError> {
         let latest_block = self.provider.get_block_number().await?;
+        let latest_confirmed_block = latest_block.saturating_sub(self.confirmations);
 
-        while self.next_l1_block <= latest_block {
+        while self.next_l1_block <= latest_confirmed_block {
             let from_block = self.next_l1_block;
             // Inspect up to `self.max_blocks_to_process` blocks at a time
-            let to_block = latest_block.min(from_block + self.max_blocks_to_process - 1);
+            let to_block = latest_confirmed_block.min(from_block + self.max_blocks_to_process - 1);
 
             let events = self
                 .extract_logs_from_l1_blocks(from_block, to_block)
