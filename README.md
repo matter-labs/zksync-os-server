@@ -26,6 +26,8 @@ The ZKsync OS Server design optimizes for throughput, low latency, and a seamles
 
 ## Quickstart
 
+> **Note:** This repo uses Git LFS. Install it **before** cloning: `brew install git-lfs && git lfs install` (macOS) or `sudo apt-get install -y git-lfs && git lfs install` (Linux). If you already cloned without it, run `git lfs pull`.
+
 To run server locally with in-memory L1 node and dummy proofs, run the following commands:
 ```bash
 # Launch zksync-os-server on the default port 3050

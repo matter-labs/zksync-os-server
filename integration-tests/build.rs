@@ -37,6 +37,14 @@ fn decompress_l1_states() {
         let compressed = std::fs::read(&gz_path)
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", gz_path.display()));
 
+        assert!(
+            !compressed.starts_with(b"version https://git-lfs"),
+            "{} is a Git LFS pointer, not the actual file.\n\
+             Install git-lfs and run `git lfs pull` to fetch the real content.\n\
+             See: https://git-lfs.com",
+            gz_path.display()
+        );
+
         let hash = Sha256::digest(&compressed);
         let hex_hash = format!("{hash:x}");
 
