@@ -8,6 +8,7 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+build = "build.rs"
 
 [dependencies]
 zksync_os_contract_interface.workspace = true
@@ -19,11 +20,13 @@ alloy-rlp.workspace = true
 serde.workspace = true
 semver.workspace = true
 thiserror.workspace = true
-num_enum.workspace = true
 bincode.workspace = true
 zksync_os_interface.workspace = true
 chrono = { workspace = true, default-features = false, features = ["now"] }
 num.workspace = true
+
+[build-dependencies]
+toml.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

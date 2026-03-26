@@ -11,8 +11,8 @@ use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    BlockStartCursors, ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion,
-    SystemTxEnvelope, SystemTxType, ZkEnvelope, ZkTransaction,
+    BlockStartCursors, InteropRootsLogIndex, ProtocolSemanticVersion, SystemTxEnvelope,
+    SystemTxType, ZkEnvelope, ZkTransaction,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -151,9 +151,12 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     Vec::new()
                 };
 
-                let execution_version: ExecutionVersion = (&self.protocol_version)
-                    .try_into()
-                    .context("Cannot instantiate a block for unsupported execution version")?;
+                let execution_version: u32 =
+                    zksync_os_types::protocol_config::forward_system_version(
+                        &self.protocol_version,
+                    )
+                    .context("Cannot instantiate a block for unsupported forward system version")?
+                    .into();
 
                 // Append a SetSLChainId system transaction exactly once: when the protocol
                 // version is v31 (either via upgrade from v30, or on the first block of a
@@ -194,7 +197,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
-                    execution_version: execution_version as u32,
+                    execution_version,
                     blob_fee: U256::ONE,
                 };
                 self.last_constructed_block_ctx_sender

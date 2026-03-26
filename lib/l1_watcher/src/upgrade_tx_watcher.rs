@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::factory_deps::load_factory_deps;
-use crate::util::ANVIL_L1_CHAIN_ID;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
@@ -31,7 +30,6 @@ const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 pub struct L1UpgradeTxWatcher {
     admin_contract_l1: Address,
 
-    provider_l1: DynProvider,
     provider_sl: DynProvider,
     /// Address of the bytecode supplier contract (used to detect published bytecode preimages)
     #[allow(dead_code)] // TODO: enable once bytecode supplier integration is ready
@@ -98,7 +96,6 @@ impl L1UpgradeTxWatcher {
 
         let this = Self {
             admin_contract_l1: admin_l1,
-            provider_l1: zk_chain_l1.provider().clone(),
             provider_sl: zk_chain_sl.provider().clone(),
             bytecode_supplier_address,
             ctm_sl,
@@ -291,22 +288,6 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
                 "ignoring upgrade timestamp for older or equal protocol version"
             );
             return Ok(());
-        }
-
-        // In localhost environment, we may want to test upgrades to non-live versions, but
-        // we don't want to allow them anywhere else.
-        if !request.protocol_version.is_live() {
-            tracing::warn!(
-                ?request.protocol_version,
-                "received a protocol version that is not marked as live"
-            );
-            // Only allow non-live versions in localhost environment.
-            if self.provider_l1.get_chain_id().await? != ANVIL_L1_CHAIN_ID {
-                panic!(
-                    "Received an upgrade to a non-live protocol version: {:?}",
-                    request.protocol_version
-                );
-            }
         }
 
         let upgrade_info = self

@@ -18,7 +18,7 @@ use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_pipeline::PipelineComponent;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
+use zksync_os_types::{PubdataMode, ZksyncOsEncode};
 
 /// This component generates prover input from batch replay data
 pub struct ProverInputGenerator<ReadState> {
@@ -177,17 +177,32 @@ fn compute_prover_input(
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
-    let proving_version = ProvingVersion::try_from(replay_record.protocol_version.clone())
-        .expect("invalid protocol version");
-    let prover_input = match proving_version {
-        ProvingVersion::V1
-        | ProvingVersion::V2
-        | ProvingVersion::V3
-        | ProvingVersion::V4
-        | ProvingVersion::V5 => {
-            panic!("computing prover input for batch with prover version v1-v5 is not supported");
+    let forward_system_version: u32 =
+        zksync_os_types::protocol_config::forward_system_version(&replay_record.protocol_version)
+            .expect("invalid protocol version")
+            .into();
+    let app_bin_tag =
+        zksync_os_types::protocol_config::app_bin_tag(&replay_record.protocol_version)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no app_bin_tag for protocol version {}",
+                    replay_record.protocol_version
+                )
+            });
+    let bin_variant = if enable_logging {
+        "singleblock_batch_logging_enabled"
+    } else {
+        "singleblock_batch"
+    };
+    let bin_bytes = zksync_os_multivm::apps::app_bin_bytes(app_bin_tag, bin_variant)
+        .unwrap_or_else(|| panic!("unknown app_bin_tag/variant: {app_bin_tag}/{bin_variant}"));
+    let prover_input = match forward_system_version {
+        1..=4 => {
+            panic!(
+                "computing prover input for forward system version {forward_system_version} (v1-v4) is not supported"
+            );
         }
-        ProvingVersion::V6 => {
+        5 => {
             use zk_ee::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
@@ -202,12 +217,6 @@ fn compute_prover_input(
 
             let list_source = TxListSource { transactions };
 
-            let bin_bytes = if enable_logging {
-                zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_LOGGING_ENABLED
-            } else {
-                zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_APP
-            };
-
             let da_commitment_scheme = (da_commitment_scheme as u8)
                 .try_into()
                 .expect("Failed to convert DA commitment scheme");
@@ -225,7 +234,7 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
-        ProvingVersion::V7 => {
+        6 => {
             use zk_ee_dev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
@@ -240,12 +249,6 @@ fn compute_prover_input(
 
             let list_source = TxListSource { transactions };
 
-            let bin_bytes = if enable_logging {
-                zksync_os_multivm::apps::v7::SINGLEBLOCK_BATCH_LOGGING_ENABLED
-            } else {
-                zksync_os_multivm::apps::v7::SINGLEBLOCK_BATCH_APP
-            };
-
             let da_commitment_scheme = (da_commitment_scheme as u8)
                 .try_into()
                 .expect("Failed to convert DA commitment scheme");
@@ -263,6 +266,7 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
+        _ => panic!("unsupported forward system version: {forward_system_version}"),
     };
     let latency = prover_input_generation_latency.observe();
 

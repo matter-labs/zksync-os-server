@@ -13,10 +13,10 @@ build = "build.rs"
 
 [dependencies]
 zksync_os_interface.workspace = true
+zk_os_forward_system_v3.workspace = true
+zk_os_forward_system_v4.workspace = true
 zk_os_forward_system.workspace = true
-zk_os_forward_system_0_1_2.workspace = true
-zk_os_forward_system_0_0_28.workspace = true
-zk_os_forward_system_0_2_8.workspace = true
+zk_os_forward_system_v5_simulation.workspace = true
 zk_os_forward_system_dev.workspace = true
 anyhow.workspace = true
 zksync_os_types.workspace = true
@@ -31,8 +31,8 @@ tracing.workspace = true
 anyhow.workspace = true
 cargo_metadata = { workspace = true, default-features = false }
 reqwest = { workspace = true, features = ["blocking"] }
+toml.workspace = true
 url.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-test-casing.workspace = true
