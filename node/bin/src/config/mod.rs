@@ -25,6 +25,7 @@ use zksync_os_network::SecretKey;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 use zksync_os_operator_signer::SignerConfig;
+use zksync_os_pipeline_health::PipelineHealthConfig;
 use zksync_os_tx_validators::deployment_filter;
 use zksync_os_types::{NodeRole, PubdataMode};
 
@@ -73,6 +74,7 @@ pub struct Config {
     #[config_validate(required_if = NodeRole::MainNode, skip_nested)]
     pub external_price_api_client_config: Option<ExternalPriceApiClientConfig>,
     pub fee_config: FeeConfig,
+    pub pipeline_health_config: PipelineHealthConfig,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -244,6 +246,9 @@ impl Config {
         schema
             .insert(&FeeConfig::DESCRIPTION, "fee")
             .expect("Failed to insert fee config");
+        schema
+            .insert(&PipelineHealthConfig::DESCRIPTION, "pipeline_health")
+            .expect("Failed to insert pipeline_health config");
         schema
     }
 

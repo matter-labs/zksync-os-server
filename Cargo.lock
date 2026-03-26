@@ -14155,6 +14155,7 @@ dependencies = [
  "zksync_os_merkle_tree_api",
  "zksync_os_multivm",
  "zksync_os_network",
+ "zksync_os_pipeline_health",
  "zksync_os_rpc_api",
  "zksync_os_server",
  "zksync_os_state_full_diffs",
@@ -14453,6 +14454,21 @@ dependencies = [
  "reth-tasks",
  "tokio",
  "tracing",
+ "zksync_os_observability",
+]
+
+[[package]]
+name = "zksync_os_pipeline_health"
+version = "0.18.1"
+dependencies = [
+ "futures",
+ "smart-config",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "vise",
+ "zksync_os_observability",
+ "zksync_os_types",
 ]
 
 [[package]]
@@ -14538,6 +14554,7 @@ dependencies = [
  "zksync_os_multivm",
  "zksync_os_observability",
  "zksync_os_pipeline",
+ "zksync_os_sequencer",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -14772,6 +14789,7 @@ dependencies = [
  "zksync_os_observability",
  "zksync_os_operator_signer",
  "zksync_os_pipeline",
+ "zksync_os_pipeline_health",
  "zksync_os_priority_tree",
  "zksync_os_raft",
  "zksync_os_reth_compat",
@@ -14836,6 +14854,9 @@ dependencies = [
  "serde",
  "tokio",
  "tracing",
+ "zksync_os_observability",
+ "zksync_os_pipeline_health",
+ "zksync_os_types",
 ]
 
 [[package]]
@@ -14881,6 +14902,7 @@ dependencies = [
  "zksync_os_batch_types",
  "zksync_os_interface",
  "zksync_os_observability",
+ "zksync_os_pipeline",
  "zksync_os_rocksdb",
  "zksync_os_types",
 ]

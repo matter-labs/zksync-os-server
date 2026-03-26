@@ -28,6 +28,7 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
+use zksync_os_pipeline_health::PipelineHealthConfig;
 pub use zksync_os_server::config::DeploymentFilterConfig;
 use zksync_os_server::config::{
     BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, FeeConfig,
@@ -151,6 +152,7 @@ pub struct Tester {
     node_record: NodeRecord,
     l2_rpc_address: String,
     batch_verification_url: String,
+    status_url: String,
     gateway_rpc_url: Option<String>,
     sl_provider: EthDynProvider,
     log_state: NodeLogState,
@@ -236,6 +238,22 @@ impl Tester {
 
     pub fn l2_rpc_url(&self) -> &str {
         &self.l2_rpc_address
+    }
+
+    pub fn status_url(&self) -> &str {
+        &self.status_url
+    }
+
+    pub async fn get_health(&self) -> serde_json::Value {
+        let url = format!("{}/status/health", self.status_url);
+        reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .expect("Failed to call /status/health")
+            .json()
+            .await
+            .expect("Failed to parse health response as JSON")
     }
 
     pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
@@ -362,6 +380,7 @@ impl Tester {
         let batch_verification_address = format!("0.0.0.0:{}", batch_verification_locked_port.port);
         let batch_verification_url =
             format!("http://localhost:{}", batch_verification_locked_port.port);
+        let status_url = format!("http://localhost:{}", status_locked_port.port);
 
         let rocks_db_path = tempdir.path().join("rocksdb");
         // ENs will not use this dir
@@ -458,6 +477,7 @@ impl Tester {
             interop_fee_updater_config: default_config.interop_fee_updater_config,
             external_price_api_client_config: default_config.external_price_api_client_config,
             fee_config: default_config.fee_config,
+            pipeline_health_config: Default::default(),
         };
 
         if let Some(ephemeral_state) = &config.general_config.ephemeral_state {
@@ -616,6 +636,7 @@ impl Tester {
             runtime,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             batch_verification_url,
+            status_url,
             gateway_rpc_url,
             sl_provider,
             node_record,
@@ -776,6 +797,7 @@ struct NodeBuilderOptions {
     fee_config: Option<FeeConfig>,
     gas_price_scale_factor: Option<f64>,
     estimate_gas_pubdata_price_factor: Option<f64>,
+    pipeline_health_config: Option<PipelineHealthConfig>,
 }
 
 impl Default for NodeBuilderOptions {
@@ -809,6 +831,9 @@ impl NodeBuilderOptions {
         }
         if let Some(factor) = self.estimate_gas_pubdata_price_factor {
             config.rpc_config.estimate_gas_pubdata_price_factor = factor;
+        }
+        if let Some(phc) = self.pipeline_health_config.clone() {
+            config.pipeline_health_config = phc;
         }
     }
 }
@@ -859,6 +884,11 @@ impl TesterBuilder {
 
     pub fn estimate_gas_pubdata_price_factor(mut self, factor: f64) -> Self {
         self.options.estimate_gas_pubdata_price_factor = Some(factor);
+        self
+    }
+
+    pub fn pipeline_health_config(mut self, phc: PipelineHealthConfig) -> Self {
+        self.options.pipeline_health_config = Some(phc);
         self
     }
 

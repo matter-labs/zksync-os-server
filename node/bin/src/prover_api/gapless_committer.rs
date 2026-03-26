@@ -2,14 +2,13 @@ use crate::prover_api::proof_storage::{ProofStorage, StoredBatch};
 use anyhow::Context;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
-use tokio::sync::mpsc;
 use zksync_os_contract_interface::l1_discovery::BatchVerificationSL;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 
 /// Receives Batches with proofs - potentially out of order;
 /// * Fixes the order (by filling in the `buffer` field);
@@ -23,6 +22,7 @@ pub struct GaplessCommitter {
     pub last_committed_batch_number: u64,
     pub proof_storage: ProofStorage,
     pub batch_verification_l1_config: BatchVerificationSL,
+    pub health_reporter: ComponentHealthReporter,
 }
 
 #[async_trait]
@@ -31,70 +31,63 @@ impl PipelineComponent for GaplessCommitter {
     type Output = L1SenderCommand<CommitCommand>;
 
     const NAME: &'static str = "gapless_committer";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
         self,
-        mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
-        let latency_tracker = ComponentStateReporter::global()
-            .handle_for("gapless_committer", GenericComponentState::WaitingRecv);
+        let health_reporter = self.health_reporter;
 
         let mut buffer: BTreeMap<u64, SignedBatchEnvelope<FriProof>> = BTreeMap::new();
         let mut next_expected_batch_number = self.next_expected_batch_number;
 
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
-            match input.recv().await {
-                Some(batch) => {
-                    latency_tracker.enter_state(GenericComponentState::Processing);
-                    buffer.insert(batch.batch_number(), batch);
+            health_reporter.enter_state(GenericComponentState::Idle);
+            let Some(batch) = input.recv_and_record(&health_reporter).await else {
+                tracing::info!("inbound channel closed");
+                return Ok(());
+            };
+            health_reporter.enter_state(GenericComponentState::Active);
+            buffer.insert(batch.batch_number(), batch);
 
-                    // Flush ready batches
-                    let mut ready: Vec<SignedBatchEnvelope<FriProof>> = Vec::new();
-                    while let Some(next_batch) = buffer.remove(&next_expected_batch_number) {
-                        ready.push(next_batch);
-                        next_expected_batch_number += 1;
-                    }
+            // Flush ready batches
+            let mut ready: Vec<SignedBatchEnvelope<FriProof>> = Vec::new();
+            while let Some(next_batch) = buffer.remove(&next_expected_batch_number) {
+                ready.push(next_batch);
+                next_expected_batch_number += 1;
+            }
 
-                    if !ready.is_empty() {
-                        tracing::info!(
-                            buffer_size = buffer.len(),
-                            "Saving {} (batches {}-{}) to proof_storage",
-                            ready.len(),
-                            ready[0].batch_number(),
-                            ready.last().unwrap().batch_number()
-                        );
-                        for batch in ready {
-                            let batch = batch.with_stage(BatchExecutionStage::FriProofStored);
-                            let stored_batch = StoredBatch::V1(batch);
-                            self.proof_storage
-                                .save_batch_with_proof(&stored_batch)
-                                .await?;
-                            let result = if stored_batch.batch_number()
-                                <= self.last_committed_batch_number
-                            {
-                                L1SenderCommand::Passthrough(Box::new(
-                                    stored_batch.batch_envelope(),
-                                ))
-                            } else {
-                                CommitCommand::try_new(
-                                    &self.batch_verification_l1_config,
-                                    stored_batch.batch_envelope(),
-                                )
-                                .map(L1SenderCommand::SendToL1)
-                                .context("Committer batch signature failure")?
-                            };
-                            latency_tracker.enter_state(GenericComponentState::WaitingSend);
-                            output.send(result).await?;
-                            latency_tracker.enter_state(GenericComponentState::Processing);
-                        }
-                    }
-                }
-                None => {
-                    tracing::info!("inbound channel closed");
-                    return Ok(());
+            if !ready.is_empty() {
+                tracing::info!(
+                    buffer_size = buffer.len(),
+                    "Saving {} (batches {}-{}) to proof_storage",
+                    ready.len(),
+                    ready[0].batch_number(),
+                    ready.last().unwrap().batch_number()
+                );
+                for batch in ready {
+                    let batch = batch.with_stage(BatchExecutionStage::FriProofStored);
+                    let stored_batch = StoredBatch::V1(batch);
+                    self.proof_storage
+                        .save_batch_with_proof(&stored_batch)
+                        .await?;
+                    let result = if stored_batch.batch_number() <= self.last_committed_batch_number
+                    {
+                        L1SenderCommand::Passthrough(Box::new(stored_batch.batch_envelope()))
+                    } else {
+                        CommitCommand::try_new(
+                            &self.batch_verification_l1_config,
+                            stored_batch.batch_envelope(),
+                        )
+                        .map(L1SenderCommand::SendToL1)
+                        .context("Committer batch signature failure")?
+                    };
+                    output
+                        .send(result)
+                        .ok()
+                        .context("outbound channel closed")?;
+                    health_reporter.enter_state(GenericComponentState::Active);
                 }
             }
         }

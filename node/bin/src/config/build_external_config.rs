@@ -5,6 +5,7 @@ use crate::config::{
     MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig, ProverApiConfig,
     ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
+use zksync_os_pipeline_health::PipelineHealthConfig;
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -137,6 +138,41 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse fee config");
 
+    let pipeline_health_config = repo
+        .single::<PipelineHealthConfig>()
+        .expect("Failed to load pipeline_health config")
+        .parse()
+        .expect("Failed to parse pipeline_health config");
+
+    // Validate that operator signers resolve to different Ethereum addresses (Main Node only).
+    // Resolving the address for GCP KMS keys requires a network call, but is necessary to catch
+    // duplicates across different backends (e.g. a local key and a KMS key for the same address).
+    if let (Some(commit), Some(prove), Some(execute)) = (
+        &l1_sender_config.operator_commit_sk,
+        &l1_sender_config.operator_prove_sk,
+        &l1_sender_config.operator_execute_sk,
+    ) {
+        let commit_addr = commit
+            .address()
+            .await
+            .expect("failed to resolve commit operator address");
+        let prove_addr = prove
+            .address()
+            .await
+            .expect("failed to resolve prove operator address");
+        let execute_addr = execute
+            .address()
+            .await
+            .expect("failed to resolve execute operator address");
+        if commit_addr == prove_addr || prove_addr == execute_addr || execute_addr == commit_addr {
+            panic!(
+                "Operator addresses for commit, prove and execute must be different, \
+                 got commit={commit_addr}, prove={prove_addr}, execute={execute_addr}"
+            );
+        }
+    }
+
+
     Config {
         general_config,
         network_config,
@@ -158,6 +194,7 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         interop_fee_updater_config,
         external_price_api_client_config,
         fee_config,
+        pipeline_health_config,
     }
 }
 
