@@ -4,8 +4,8 @@ use crate::version::{ZksProtocolV1, ZksProtocolV2};
 use crate::wire::replays::RecordOverride;
 use alloy::eips::eip2124::Head;
 use alloy::primitives::BlockNumber;
-use futures::FutureExt;
-use futures::future::{BoxFuture, join_all};
+use backon::{ConstantBuilder, Retryable, Sleeper};
+use futures::future::join_all;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, Hardforks};
 use reth_discv5::discv5;
 use reth_eth_wire::HelloMessageWithProtocols;
@@ -18,9 +18,10 @@ use reth_network::{
 use reth_network_peers::{NodeRecord, TrustedPeer};
 use reth_provider::BlockNumReader;
 use reth_tasks::Runtime;
+use std::future::Future;
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_metadata::NODE_CLIENT_VERSION;
@@ -29,94 +30,131 @@ use zksync_os_types::NodeRole;
 
 /// Max number of active devp2p connections.
 const MAX_ACTIVE_CONNECTIONS: usize = 10;
-/// Retry DNS resolution aggressively during startup so discv5 bootstrap has usable boot nodes.
-const INITIAL_BOOT_NODE_RESOLUTION_BACKOFF: Duration = Duration::from_secs(1);
-/// Keep the retry interval bounded to avoid unbounded startup delays between attempts.
-const MAX_BOOT_NODE_RESOLUTION_BACKOFF: Duration = Duration::from_secs(30);
+/// Retry boot node DNS resolution for up to ~2 minutes so discv5 bootstrap has usable peers.
+const BOOT_NODE_RESOLUTION_RETRY_DELAY: Duration = Duration::from_secs(5);
+const BOOT_NODE_RESOLUTION_MAX_RETRIES: usize = 24;
+const BOOT_NODE_RESOLUTION_RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new()
+    .with_delay(BOOT_NODE_RESOLUTION_RETRY_DELAY)
+    .with_max_times(BOOT_NODE_RESOLUTION_MAX_RETRIES);
 
-async fn resolve_boot_nodes_with_backoff(
+#[derive(Debug, thiserror::Error)]
+#[error("failed to resolve any configured boot nodes before starting the p2p network")]
+struct BootNodeResolutionError {
+    unresolved_boot_nodes: usize,
+}
+
+#[derive(Debug)]
+struct BootNodeResolutionState {
+    unresolved_boot_nodes: Vec<TrustedPeer>,
+    resolved_boot_nodes: Vec<TrustedPeer>,
+}
+
+async fn resolve_boot_nodes_with_retry(
     boot_nodes: Vec<TrustedPeer>,
 ) -> Result<Vec<TrustedPeer>, NetworkError> {
-    resolve_boot_nodes_with_backoff_using(
+    resolve_boot_nodes_with_retry_using(
         boot_nodes,
-        |boot_node| {
-            async move {
-                tokio::task::spawn_blocking(move || boot_node.resolve_blocking())
-                    .await
-                    .unwrap_or_else(|error| {
-                        Err(io::Error::other(format!(
-                            "boot node DNS resolution task failed: {error}"
-                        )))
-                    })
-            }
-            .boxed()
-        },
-        |duration| async move { tokio::time::sleep(duration).await }.boxed(),
+        |boot_node| async move { boot_node.resolve().await },
+        tokio::time::sleep,
     )
     .await
 }
 
-async fn resolve_boot_nodes_with_backoff_using<Resolve, Sleep>(
+async fn resolve_boot_nodes_with_retry_using<Resolve, ResolveFut, Sleep>(
     boot_nodes: Vec<TrustedPeer>,
     resolve: Resolve,
     sleep: Sleep,
 ) -> Result<Vec<TrustedPeer>, NetworkError>
 where
-    Resolve: Fn(TrustedPeer) -> BoxFuture<'static, io::Result<NodeRecord>>,
-    Sleep: Fn(Duration) -> BoxFuture<'static, ()>,
+    Resolve: Fn(TrustedPeer) -> ResolveFut + 'static,
+    ResolveFut: Future<Output = io::Result<NodeRecord>>,
+    Sleep: Sleeper,
 {
     if boot_nodes.is_empty() {
         return Ok(vec![]);
     }
 
-    let mut unresolved_boot_nodes = boot_nodes;
-    let mut resolved_boot_nodes = Vec::with_capacity(unresolved_boot_nodes.len());
-    let mut backoff = INITIAL_BOOT_NODE_RESOLUTION_BACKOFF;
+    let state = Arc::new(Mutex::new(BootNodeResolutionState {
+        resolved_boot_nodes: Vec::with_capacity(boot_nodes.len()),
+        unresolved_boot_nodes: boot_nodes,
+    }));
+    let resolve = Arc::new(resolve);
 
-    loop {
-        let resolution_results = join_all(unresolved_boot_nodes.into_iter().map(|boot_node| {
-            let resolution = resolve(boot_node.clone());
-            async move { (boot_node, resolution.await) }
-        }))
-        .await;
+    {
+        let state = Arc::clone(&state);
+        let resolve = Arc::clone(&resolve);
+        move || {
+            let state = Arc::clone(&state);
+            let resolve = Arc::clone(&resolve);
+            async move {
+                let unresolved_boot_nodes = {
+                    state
+                        .lock()
+                        .expect("boot node resolution state poisoned")
+                        .unresolved_boot_nodes
+                        .clone()
+                };
+                let resolution_results =
+                    join_all(unresolved_boot_nodes.into_iter().map(|boot_node| {
+                        let resolution = resolve.as_ref()(boot_node.clone());
+                        async move { (boot_node, resolution.await) }
+                    }))
+                    .await;
 
-        unresolved_boot_nodes = Vec::new();
-        for (boot_node, resolution) in resolution_results {
-            match resolution {
-                Ok(record) => {
-                    tracing::info!(boot_node = %boot_node, resolved = ?record, "resolved boot node");
-                    resolved_boot_nodes.push(record.into());
+                let mut state = state.lock().expect("boot node resolution state poisoned");
+                state.unresolved_boot_nodes.clear();
+                for (boot_node, resolution) in resolution_results {
+                    match resolution {
+                        Ok(record) => {
+                            tracing::info!(
+                                boot_node = %boot_node,
+                                resolved = ?record,
+                                "resolved boot node"
+                            );
+                            state.resolved_boot_nodes.push(record.into());
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                boot_node = %boot_node,
+                                %err,
+                                "failed to resolve boot node"
+                            );
+                            state.unresolved_boot_nodes.push(boot_node);
+                        }
+                    }
                 }
-                Err(err) => {
-                    tracing::warn!(boot_node = %boot_node, %err, "failed to resolve boot node");
-                    unresolved_boot_nodes.push(boot_node);
+
+                if state.unresolved_boot_nodes.is_empty() || !state.resolved_boot_nodes.is_empty() {
+                    Ok(())
+                } else {
+                    Err(BootNodeResolutionError {
+                        unresolved_boot_nodes: state.unresolved_boot_nodes.len(),
+                    })
                 }
             }
         }
-
-        if unresolved_boot_nodes.is_empty() {
-            return Ok(resolved_boot_nodes);
-        }
-
-        if !resolved_boot_nodes.is_empty() {
-            tracing::warn!(
-                resolved_boot_nodes = resolved_boot_nodes.len(),
-                unresolved_boot_nodes = unresolved_boot_nodes.len(),
-                "starting p2p network with partially resolved boot nodes"
-            );
-            return Ok(resolved_boot_nodes);
-        }
-
+    }
+    .retry(BOOT_NODE_RESOLUTION_RETRY_BUILDER)
+    .sleep(sleep)
+    .notify(|error, retry_in| {
         tracing::info!(
-            retry_in = ?backoff,
-            unresolved_boot_nodes = unresolved_boot_nodes.len(),
+            retry_in = ?retry_in,
+            unresolved_boot_nodes = error.unresolved_boot_nodes,
             "retrying boot node resolution before starting p2p network"
         );
-        sleep(backoff).await;
-        backoff = backoff
-            .saturating_mul(2)
-            .min(MAX_BOOT_NODE_RESOLUTION_BACKOFF);
+    })
+    .await
+    .map_err(|error| io::Error::new(io::ErrorKind::AddrNotAvailable, error))?;
+
+    let state = state.lock().expect("boot node resolution state poisoned");
+    if !state.unresolved_boot_nodes.is_empty() {
+        tracing::warn!(
+            resolved_boot_nodes = state.resolved_boot_nodes.len(),
+            unresolved_boot_nodes = state.unresolved_boot_nodes.len(),
+            "starting p2p network with partially resolved boot nodes"
+        );
     }
+    Ok(state.resolved_boot_nodes.clone())
 }
 
 /// Manages the entire network state including all RLPx subprotocols and discv5 peer discovery.
@@ -165,7 +203,7 @@ impl NetworkService {
             total_difficulty: chain_spec.genesis().difficulty,
         };
         let fork_id = chain_spec.fork_id(&genesis);
-        let boot_nodes = resolve_boot_nodes_with_backoff(config.boot_nodes.clone()).await?;
+        let boot_nodes = resolve_boot_nodes_with_retry(config.boot_nodes.clone()).await?;
         tracing::info!(?genesis, ?fork_id, "initializing p2p network service");
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
         let cfg_builder = RethNetworkConfig::builder(config.secret_key)
@@ -308,13 +346,14 @@ impl NetworkService {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_boot_nodes_with_backoff_using;
-    use futures::FutureExt;
+    use super::BOOT_NODE_RESOLUTION_MAX_RETRIES;
+    use super::BOOT_NODE_RESOLUTION_RETRY_DELAY;
+    use super::resolve_boot_nodes_with_retry_using;
+    use reth_network::error::NetworkError;
     use reth_network_peers::{NodeRecord, TrustedPeer};
     use std::collections::{HashMap, VecDeque};
     use std::io;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
     const NODE_A: &str = "enode://6f8a80d14311c39f35f516fa664deaaaa13e85b2f7493f37f6144d86991ec012937307647bd3b9a82abe2974e1407241d54947bbb39763a4cac9f77166ad92a0@node-a.internal:30303?discport=30301";
     const NODE_B: &str = "enode://1dd9d65c4552b5eb43d5ad55a2ee3f56c6cbc1c64a5c8d659f51fcd51bace24351232b8d7821617d2b29b54b81cdefb9b3e9c37d7fd5f63270bcc9e1a6f6a439@node-b.internal:30303?discport=30301";
@@ -340,7 +379,7 @@ mod tests {
         ])));
         let sleeps = Arc::new(Mutex::new(Vec::new()));
 
-        let resolved = resolve_boot_nodes_with_backoff_using(
+        let resolved = resolve_boot_nodes_with_retry_using(
             vec![trusted_peer(NODE_A), trusted_peer(NODE_B)],
             {
                 let responses = Arc::clone(&responses);
@@ -359,7 +398,6 @@ mod tests {
                             )),
                         }
                     }
-                    .boxed()
                 }
             },
             {
@@ -369,7 +407,6 @@ mod tests {
                     async move {
                         sleeps.lock().unwrap().push(duration);
                     }
-                    .boxed()
                 }
             },
         )
@@ -377,27 +414,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(resolved, vec![trusted_peer(NODE_A_IP)]);
-        assert_eq!(&*sleeps.lock().unwrap(), &[Duration::from_secs(1)]);
+        assert_eq!(
+            &*sleeps.lock().unwrap(),
+            &[BOOT_NODE_RESOLUTION_RETRY_DELAY]
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "current_thread"))]
-    async fn boot_node_resolution_caps_exponential_backoff() {
+    async fn boot_node_resolution_uses_configured_retry_budget() {
+        let attempts = BOOT_NODE_RESOLUTION_MAX_RETRIES + 1;
         let responses = Arc::new(Mutex::new(HashMap::from([(
             NODE_A.to_owned(),
-            VecDeque::from([
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(node_record(NODE_A_IP)),
-            ]),
+            std::iter::repeat_n(None, attempts).collect::<VecDeque<_>>(),
         )])));
         let sleeps = Arc::new(Mutex::new(Vec::new()));
 
-        let resolved = resolve_boot_nodes_with_backoff_using(
+        let err = resolve_boot_nodes_with_retry_using(
             vec![trusted_peer(NODE_A)],
             {
                 let responses = Arc::clone(&responses);
@@ -416,7 +448,6 @@ mod tests {
                             )),
                         }
                     }
-                    .boxed()
                 }
             },
             {
@@ -426,25 +457,26 @@ mod tests {
                     async move {
                         sleeps.lock().unwrap().push(duration);
                     }
-                    .boxed()
                 }
             },
         )
         .await
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(resolved, vec![trusted_peer(NODE_A_IP)]);
+        match err {
+            NetworkError::Io(err) => assert_eq!(err.kind(), io::ErrorKind::AddrNotAvailable),
+            other => panic!("unexpected error: {other:?}"),
+        }
         assert_eq!(
-            &*sleeps.lock().unwrap(),
-            &[
-                Duration::from_secs(1),
-                Duration::from_secs(2),
-                Duration::from_secs(4),
-                Duration::from_secs(8),
-                Duration::from_secs(16),
-                Duration::from_secs(30),
-                Duration::from_secs(30),
-            ],
+            sleeps.lock().unwrap().len(),
+            BOOT_NODE_RESOLUTION_MAX_RETRIES
+        );
+        assert!(
+            sleeps
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|delay| *delay == BOOT_NODE_RESOLUTION_RETRY_DELAY)
         );
     }
 
@@ -452,7 +484,7 @@ mod tests {
     async fn boot_node_resolution_returns_immediately_when_all_nodes_resolve() {
         let sleeps = Arc::new(Mutex::new(Vec::new()));
 
-        let resolved = resolve_boot_nodes_with_backoff_using(
+        let resolved = resolve_boot_nodes_with_retry_using(
             vec![trusted_peer(NODE_A), trusted_peer(NODE_B)],
             |boot_node| {
                 let record = match boot_node.to_string().as_str() {
@@ -460,7 +492,7 @@ mod tests {
                     NODE_B => node_record(NODE_B_IP),
                     _ => panic!("unexpected boot node"),
                 };
-                async move { Ok(record) }.boxed()
+                async move { Ok(record) }
             },
             {
                 let sleeps = Arc::clone(&sleeps);
@@ -469,7 +501,6 @@ mod tests {
                     async move {
                         sleeps.lock().unwrap().push(duration);
                     }
-                    .boxed()
                 }
             },
         )
