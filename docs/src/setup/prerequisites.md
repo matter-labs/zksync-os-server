@@ -2,8 +2,34 @@
 
 This project requires:
 
+* **Git LFS** (this repo uses Git Large File Storage for chain state files)
 * The **Foundry nightly toolchain**
 * The **Rust toolchain**
+
+### Install Git LFS
+
+This repository uses [Git LFS](https://git-lfs.com) to store large chain state files (`*.json.gz`, `*.tar.gz`).
+You **must** install and initialize Git LFS before cloning, otherwise you'll get small pointer files instead of the actual data.
+
+```bash
+# macOS
+brew install git-lfs
+
+# Ubuntu/Debian
+sudo apt-get install -y git-lfs
+```
+
+Then run the one-time global setup:
+
+```bash
+git lfs install
+```
+
+After this, `git clone` will automatically fetch LFS files. If you already cloned without LFS, run:
+
+```bash
+git lfs pull
+```
 
 ### Install Foundry (v1.5.1)
 

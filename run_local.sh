@@ -114,6 +114,13 @@ if [ ! -f "$L1_STATE_FILE_GZ" ]; then
     exit 1
 fi
 
+# Detect Git LFS pointer instead of actual file
+if head -c 40 "$L1_STATE_FILE_GZ" | grep -q "version https://git-lfs"; then
+    echo -e "${RED}Error: '$L1_STATE_FILE_GZ' is a Git LFS pointer, not the actual file.${NC}"
+    echo -e "${RED}Run: git lfs install && git lfs pull${NC}"
+    exit 1
+fi
+
 # Decompress L1 state file into temporary directory
 gzip -d < "$L1_STATE_FILE_GZ" > "$TEMP_DIR/l1-state.json"
 
