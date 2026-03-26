@@ -547,9 +547,9 @@ impl EvmTracer for CallTracer {
         assert!(self.create_operation_requested.is_none());
 
         self.create_operation_requested = if is_create2 {
-            Some(CreateType::Create)
-        } else {
             Some(CreateType::Create2)
+        } else {
+            Some(CreateType::Create)
         };
     }
 }
@@ -611,6 +611,7 @@ pub(crate) fn fmt_error_msg(error: &EvmError) -> String {
 mod tests {
     use super::*;
     use alloy::sol_types::{Revert, SolError};
+    use zksync_os_interface::tracing::EvmTracer;
     use zksync_os_interface::types::ExecutionOutput;
 
     fn make_tx_output(execution_result: ExecutionResult) -> TxOutput {
@@ -728,5 +729,25 @@ mod tests {
 
         assert_eq!(frame.error.as_deref(), Some(POST_EXECUTION_PUBDATA_ERROR));
         assert!(frame.to.is_none());
+    }
+
+    #[test]
+    fn create_request_tracks_create_opcode_type() {
+        let mut tracer = CallTracer::default();
+
+        tracer.on_create_request(false);
+        assert!(matches!(
+            tracer.create_operation_requested,
+            Some(CreateType::Create)
+        ));
+
+        // Use a fresh tracer for the CREATE2 case instead of mutating internal state.
+        let mut tracer = CallTracer::default();
+
+        tracer.on_create_request(true);
+        assert!(matches!(
+            tracer.create_operation_requested,
+            Some(CreateType::Create2)
+        ));
     }
 }
