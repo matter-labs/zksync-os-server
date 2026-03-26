@@ -9,6 +9,7 @@ use futures::StreamExt;
 use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
+use zk_ee::memory::stack_trait::Stack;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::types::{BlockContext, BlockOutput};
@@ -105,12 +106,14 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
                 tracing::info!(
                     block_number=command.block_context.block_number,
-                    tx_hash=?tx.hash(),
-                    tx_index_in_block=executed_txs.len(),
-                    cumulative_gas_used_before=cumulative_gas_used,
-                    gas_limit=tx.inner.gas_limit(),
-                    signer=?tx.inner.signer(),
-                    "Executing transaction..."
+                    "Executing transaction {:?} ({:?}) in block {} at index {} signer {:?} nonce {} with gas limit {} and cumulative gas used {cumulative_gas_used}...",
+                    tx.hash(),
+                    tx.tx_type(),
+                    command.block_context.block_number,
+                    executed_txs.len(),
+                    tx.inner.signer(),
+                    tx.nonce(),
+                    tx.inner.gas_limit()
                 );
 
                 all_processed_txs.push(tx.clone());
@@ -147,7 +150,9 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         tracing::info!(
                             block_number=command.block_context.block_number,
                             output=?res,
-                            "Transaction executed"
+                            "Transaction {:?} executed with status {status_str} in block {}",
+                            tx.hash(),
+                            command.block_context.block_number
                         );
 
                         if let Some(SystemTxType::ImportInteropRoots(roots_count)) = tx.as_system_tx_type() {
@@ -216,6 +221,14 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         }
                     }
                     Err(e) => {
+                        tracing::info!(
+                            block_number = command.block_context.block_number,
+                            "Transaction {:?} ({}) in block {} failed: {e:?}",
+                            tx.tx_type(),
+                            tx.hash(),
+                            command.block_context.block_number
+                        );
+
                         match (tx.tx_type(), command.invalid_tx_policy) {
                             (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
                                 return Err(
