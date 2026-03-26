@@ -47,8 +47,12 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         tx_bytes: Bytes,
     ) -> Result<B256, EthSendRawTransactionError> {
         if let TransactionAcceptanceState::NotAccepting(reason) = &*self.acceptance_state.borrow() {
+            tracing::warn!(
+                reason = ?reason,
+                "transaction rejected: pipeline backpressure active"
+            );
             return Err(EthSendRawTransactionError::NotAcceptingTransactions(
-                *reason,
+                reason.clone(),
             ));
         }
 

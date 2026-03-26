@@ -9,6 +9,7 @@ use time::UtcDateTime;
 use zksync_os_batch_types::{BatchInfo, BatchSignatureSet};
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_observability::LatencyDistributionTracker;
+use zksync_os_pipeline::HasBlockSeq;
 use zksync_os_types::PubdataMode;
 use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion};
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
@@ -310,6 +311,17 @@ impl RealSnarkProof {
             RealSnarkProof::V1(proof) => proof.as_slice(),
             RealSnarkProof::V2 { proof, .. } => proof.as_slice(),
         }
+    }
+}
+
+impl<E: Send + 'static, S: Send + 'static> HasBlockSeq for BatchEnvelope<E, S> {
+    fn block_seq(&self) -> u64 {
+        self.batch.last_block_number
+    }
+    // Batch-level messages do not readily carry per-block timestamps;
+    // return 0 so the monitor skips time-lag checks for these components.
+    fn block_timestamp(&self) -> u64 {
+        0
     }
 }
 

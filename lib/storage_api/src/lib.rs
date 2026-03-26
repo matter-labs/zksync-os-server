@@ -18,7 +18,7 @@ pub use repository::{
 };
 
 mod metered_state;
-pub use metered_state::{MeteredViewState, StateAccessLabel};
+pub use metered_state::MeteredViewState;
 
 mod state;
 pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};

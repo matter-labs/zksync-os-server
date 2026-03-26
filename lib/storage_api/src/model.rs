@@ -2,6 +2,7 @@ use alloy::primitives::{Address, B256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
 use zksync_os_interface::types::BlockContext;
+use zksync_os_pipeline::HasBlockSeq;
 use zksync_os_types::{
     BlockStartCursors, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction,
 };
@@ -110,4 +111,13 @@ pub struct FinalityStatus {
     pub last_committed_batch: u64,
     pub last_executed_block: u64,
     pub last_executed_batch: u64,
+}
+
+impl HasBlockSeq for ReplayRecord {
+    fn block_seq(&self) -> u64 {
+        self.block_context.block_number
+    }
+    fn block_timestamp(&self) -> u64 {
+        self.block_context.timestamp
+    }
 }

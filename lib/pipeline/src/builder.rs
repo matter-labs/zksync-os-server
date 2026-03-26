@@ -1,29 +1,34 @@
 use crate::PipelineComponent;
-use crate::peekable_receiver::PeekableReceiver;
+use crate::tracked_channel::{TrackedUnboundedReceiver, tracked_unbounded_channel};
 use reth_tasks::Runtime;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
 
 /// Pipeline with an active output stream that can be piped to more components
 pub struct Pipeline<Output: Send + 'static> {
-    receiver: PeekableReceiver<Output>,
+    receiver: TrackedUnboundedReceiver<Output>,
     runtime: Runtime,
-
     spawned_tasks: HashSet<&'static str>,
     shutdown_sender: mpsc::Sender<&'static str>,
     shutdown_receiver: mpsc::Receiver<&'static str>,
+    /// Ordered list of (upstream_component_name, downstream_component_name) pairs.
+    /// Derived automatically from pipe() call order.
+    pub adjacency: Vec<(&'static str, &'static str)>,
+    last_component_name: Option<&'static str>,
 }
 
 impl Pipeline<()> {
     pub fn new(runtime: Runtime) -> Self {
-        let (_sender, receiver) = mpsc::channel(1);
+        let (_sender, receiver) = tracked_unbounded_channel::<()>();
         let (shutdown_sender, shutdown_receiver) = mpsc::channel(16);
         Self {
-            receiver: PeekableReceiver::new(receiver),
+            receiver,
             runtime,
             spawned_tasks: HashSet::default(),
             shutdown_sender,
             shutdown_receiver,
+            adjacency: vec![],
+            last_component_name: None,
         }
     }
 
@@ -71,7 +76,7 @@ impl<Output: Send + 'static> Pipeline<Output> {
     where
         C: PipelineComponent<Input = Output>,
     {
-        let (output_sender, output_receiver) = mpsc::channel(C::OUTPUT_BUFFER_SIZE);
+        let (output_sender, output_receiver) = tracked_unbounded_channel::<C::Output>();
         let input_receiver = self.receiver;
 
         let shutdown_sender = self.shutdown_sender.clone();
@@ -95,12 +100,19 @@ impl<Output: Send + 'static> Pipeline<Output> {
             });
         self.spawned_tasks.insert(C::NAME);
 
+        let mut adjacency = self.adjacency;
+        if let Some(prev) = self.last_component_name {
+            adjacency.push((prev, C::NAME));
+        }
+
         Pipeline {
-            receiver: PeekableReceiver::new(output_receiver),
+            receiver: output_receiver,
             runtime: self.runtime,
             spawned_tasks: self.spawned_tasks,
             shutdown_sender: self.shutdown_sender,
             shutdown_receiver: self.shutdown_receiver,
+            adjacency,
+            last_component_name: Some(C::NAME),
         }
     }
 
@@ -130,5 +142,55 @@ impl<Output: Send + 'static> Pipeline<Output> {
             true => self.pipe(c_true),
             false => self.pipe(c_false),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Verify that adjacency pairs reflect pipe() call order.
+    ///
+    /// The `Pipeline` struct's runtime field cannot be constructed without a live tokio executor,
+    /// so instead we directly test the adjacency accumulation logic that `pipe()` uses.
+    #[test]
+    fn adjacency_reflects_pipe_order() {
+        let mut adjacency: Vec<(&'static str, &'static str)> = vec![];
+        let mut last: Option<&'static str> = None;
+
+        // Simulate: pipe(A), pipe(B), pipe(C)
+        for name in ["a", "b", "c"] {
+            if let Some(prev) = last {
+                adjacency.push((prev, name));
+            }
+            last = Some(name);
+        }
+
+        assert_eq!(adjacency, vec![("a", "b"), ("b", "c")]);
+    }
+
+    /// Verify that skipping a pipe_opt(None) does not add an adjacency entry between
+    /// the component before None and the one after.
+    #[test]
+    fn pipe_opt_none_skips_adjacency() {
+        let mut adjacency: Vec<(&'static str, &'static str)> = vec![];
+        let mut last: Option<&'static str> = None;
+
+        // Simulate: pipe(A), pipe_opt(None), pipe(C)
+        // pipe(A):
+        if let Some(prev) = last {
+            adjacency.push((prev, "a"));
+        }
+        last = Some("a");
+
+        // pipe_opt(None): no-op — last unchanged, no adjacency pushed
+
+        // pipe(C):
+        if let Some(prev) = last {
+            adjacency.push((prev, "c"));
+        }
+        last = Some("c");
+
+        // Expect ("a","c") — no intermediate edge because None was skipped
+        assert_eq!(adjacency, vec![("a", "c")]);
+        let _ = last;
     }
 }

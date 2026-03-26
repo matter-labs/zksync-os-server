@@ -1,8 +1,9 @@
 use alloy::primitives::B256;
 use std::fmt::Display;
 use std::time::Duration;
-use zksync_os_interface::types::BlockContext;
+use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_mempool::MarkingTxStream;
+use zksync_os_pipeline::HasBlockSeq;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
@@ -28,6 +29,44 @@ pub enum BlockCommandType {
     Replay,
     Produce,
     Rebuild,
+}
+
+/// Message flowing from `BlockExecutor` → `BlockCanonizer` → `BlockApplier`.
+///
+/// A named struct rather than a raw tuple so that `HasBlockSeq` can be implemented
+/// (orphan rule prevents impls on tuples of foreign types).
+#[derive(Clone, Debug)]
+pub struct BlockPayload {
+    pub output: BlockOutput,
+    pub record: ReplayRecord,
+    pub command_type: BlockCommandType,
+}
+
+impl HasBlockSeq for BlockPayload {
+    fn block_seq(&self) -> u64 {
+        self.record.block_context.block_number
+    }
+    fn block_timestamp(&self) -> u64 {
+        self.record.block_context.timestamp
+    }
+}
+
+/// Message flowing from `BlockApplier` → `TreeManager`.
+///
+/// A named struct so that `HasBlockSeq` can be implemented.
+#[derive(Clone, Debug)]
+pub struct AppliedBlock {
+    pub output: BlockOutput,
+    pub record: ReplayRecord,
+}
+
+impl HasBlockSeq for AppliedBlock {
+    fn block_seq(&self) -> u64 {
+        self.record.block_context.block_number
+    }
+    fn block_timestamp(&self) -> u64 {
+        self.record.block_context.timestamp
+    }
 }
 
 /// Command to produce a new block.
@@ -125,4 +164,62 @@ pub enum SealPolicy {
     /// - `Replay` maps to `UntilExhausted { allowed_to_finish_early: false }`
     /// - `Rebuild` maps to `UntilExhausted { allowed_to_finish_early: true }`
     UntilExhausted { allowed_to_finish_early: bool },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_replay_record(block_number: u64, timestamp: u64) -> ReplayRecord {
+        ReplayRecord {
+            block_context: BlockContext {
+                block_number,
+                timestamp,
+                ..Default::default()
+            },
+            transactions: vec![],
+            previous_block_timestamp: 0,
+            node_version: semver::Version::new(0, 1, 0),
+            protocol_version: ProtocolSemanticVersion::new(0, 1, 0),
+            block_output_hash: B256::ZERO,
+            force_preimages: vec![],
+            starting_cursors: BlockStartCursors::default(),
+        }
+    }
+
+    fn make_block_output() -> BlockOutput {
+        use alloy::consensus::Header;
+        BlockOutput {
+            header: Header::default().seal(B256::ZERO),
+            tx_results: vec![],
+            storage_writes: vec![],
+            account_diffs: vec![],
+            published_preimages: vec![],
+            pubdata: vec![],
+            computational_native_used: 0,
+        }
+    }
+
+    #[test]
+    fn block_payload_has_block_seq() {
+        let r = make_replay_record(42, 1_700_000_000);
+        let payload = BlockPayload {
+            output: make_block_output(),
+            record: r,
+            command_type: BlockCommandType::Produce,
+        };
+        assert_eq!(payload.block_seq(), 42);
+        assert_eq!(payload.block_timestamp(), 1_700_000_000);
+    }
+
+    #[test]
+    fn applied_block_has_block_seq() {
+        let r = make_replay_record(100, 1_700_000_100);
+        let block = AppliedBlock {
+            output: make_block_output(),
+            record: r,
+        };
+        assert_eq!(block.block_seq(), 100);
+        assert_eq!(block.block_timestamp(), 1_700_000_100);
+    }
 }

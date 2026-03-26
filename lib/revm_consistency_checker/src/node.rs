@@ -4,12 +4,12 @@ use reth_revm::ExecuteCommitEvm;
 use reth_revm::context::{Context, ContextTr};
 use reth_revm::db::CacheDB;
 use std::collections::HashSet;
-use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_revm::{DefaultZk, ZkBuilder};
+use zksync_os_sequencer::model::blocks::AppliedBlock;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ExecutionVersion;
 
@@ -81,27 +81,29 @@ impl<State> PipelineComponent for RevmConsistencyChecker<State>
 where
     State: ReadStateHistory + Clone + Send + 'static,
 {
-    type Input = (BlockOutput, ReplayRecord);
-    type Output = (BlockOutput, ReplayRecord);
+    type Input = AppliedBlock;
+    type Output = AppliedBlock;
 
     const NAME: &'static str = "revm_consistency_checker";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
         mut self,
-        mut input: PeekableReceiver<Self::Input>, // PeekableReceiver<(BlockOutput, ReplayRecord)>
-        output: Sender<Self::Output>,             // Sender<(BlockOutput, ReplayRecord)>
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
-        let latency_tracker = ComponentStateReporter::global().handle_for(
-            "revm_consistency_checker",
-            GenericComponentState::WaitingRecv,
-        );
+        // NOTE: RevmConsistencyChecker has no ComponentId and is not registered with
+        // PipelineHealthMonitor, but we still use ComponentHealthReporter for metrics benefits.
+        let (health_reporter, _rx) = ComponentHealthReporter::new("revm_consistency_checker");
         // Remember unsupported execution versions to log only one warning for it.
         let mut warned_unsupported_versions: HashSet<u32> = HashSet::new();
 
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
-            let Some((block_output, replay_record)) = input.recv().await else {
+            health_reporter.enter_state(GenericComponentState::Idle);
+            let Some(AppliedBlock {
+                output: block_output,
+                record: replay_record,
+            }) = input.recv_and_record(&health_reporter).await
+            else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
@@ -130,7 +132,7 @@ where
                 }
             };
 
-            latency_tracker.enter_state(GenericComponentState::Processing);
+            health_reporter.enter_state(GenericComponentState::Active);
             let state_block_number = replay_record.block_context.block_number - 1;
             let block_hashes = replay_record.block_context.block_hashes;
             let state_view = self
@@ -186,10 +188,11 @@ where
                 self.handle_report(&block_output, &replay_record, &compare_report)?;
             }
 
-            latency_tracker.enter_state(GenericComponentState::WaitingSend);
             if output
-                .send((block_output.clone(), replay_record.clone()))
-                .await
+                .send(AppliedBlock {
+                    output: block_output.clone(),
+                    record: replay_record.clone(),
+                })
                 .is_err()
             {
                 anyhow::bail!("Outbound channel closed");

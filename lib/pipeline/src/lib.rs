@@ -11,9 +11,15 @@
 //! - **Sink**: End of pipeline (e.g. BatchSink)
 
 pub mod builder;
+pub mod has_block_seq;
 pub mod peekable_receiver;
+pub mod tracked_channel;
 pub mod traits;
 
 pub use builder::Pipeline;
+pub use has_block_seq::HasBlockSeq;
 pub use peekable_receiver::PeekableReceiver;
+pub use tracked_channel::{
+    TrackedUnboundedReceiver, TrackedUnboundedSender, tracked_unbounded_channel,
+};
 pub use traits::PipelineComponent;

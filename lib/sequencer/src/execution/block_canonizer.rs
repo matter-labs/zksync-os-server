@@ -1,9 +1,9 @@
-use crate::model::blocks::BlockCommandType;
+use crate::model::blocks::{BlockCommandType, BlockPayload};
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use tokio::sync::mpsc;
-use zksync_os_interface::types::BlockOutput;
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
+use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 use zksync_os_storage_api::ReplayRecord;
 
 /// Pipeline component that ensures that only canonized blocks are sent downstream,
@@ -25,6 +25,7 @@ where
     /// Channel to send new canonized blocks to for the node to replay.
     /// They are sent to `NodeCommandSource` and then through the whole pipeline.
     pub canonized_blocks_for_execution: mpsc::Sender<ReplayRecord>,
+    pub health_reporter: ComponentHealthReporter,
 }
 
 #[async_trait]
@@ -73,38 +74,37 @@ where
     Consensus: BlockCanonization,
 {
     /// Input from BlockExecutor
-    type Input = (BlockOutput, ReplayRecord, BlockCommandType);
+    type Input = BlockPayload;
     /// Output to BlockApplier
-    type Output = (BlockOutput, ReplayRecord, BlockCommandType);
+    type Output = BlockPayload;
 
     const NAME: &'static str = "block_canonizer";
-    /// The downstream (output) component is `BlockApplier`.
-    /// `BlockApplier` does persistence, which is generally fast and shouldn't be the bottleneck.
-    /// We put `2` here to allow for mild persistence latency spikes,
-    /// without allowing `BlockCanonizer` to be too far ahead
-    const OUTPUT_BUFFER_SIZE: usize = 2;
 
     async fn run(
         mut self,
-        mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        mut input: TrackedUnboundedReceiver<Self::Input>,
+        output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         /// Maximum number of blocks that can be waiting for canonization.
         /// When this limit is reached, backpressure is applied to the upstream BlockExecutor.
         const MAX_PRODUCED_QUEUE_SIZE: usize = 2;
 
-        let mut produced_queue: VecDeque<(BlockOutput, ReplayRecord, BlockCommandType)> =
-            VecDeque::new();
+        let mut produced_queue: VecDeque<BlockPayload> = VecDeque::new();
 
         loop {
+            self.health_reporter
+                .enter_state(GenericComponentState::Idle);
             tokio::select! {
                 // Select arm that receives canonized blocks from Consensus.
                 // If this block was earlier proposed by this node - sends downstream.
                 // Otherwise - sends to the beginning of pipeline for execution.
                 canonized = self.consensus.next_canonized() => {
                     let record = canonized?;
-                    if let Some((block_output, produced_replay, cmd_type)) =
-                        produced_queue.pop_front()
+                    if let Some(BlockPayload {
+                        output: block_output,
+                        record: produced_replay,
+                        command_type: cmd_type,
+                    }) = produced_queue.pop_front()
                     {
                         tracing::info!(
                             "Received a Replay block {} (block output hash: {}) from Consensus while having a pending block. \
@@ -121,7 +121,19 @@ where
                                 produced_replay.block_context.block_number
                             );
                         }
-                        output.send((block_output, produced_replay, cmd_type)).await?;
+                        let block_number = produced_replay.block_context.block_number;
+                        let block_ts = produced_replay.block_context.timestamp;
+                        if output
+                            .send(BlockPayload {
+                                output: block_output,
+                                record: produced_replay,
+                                command_type: cmd_type,
+                            })
+                            .is_err()
+                        {
+                            anyhow::bail!("Outbound channel closed");
+                        }
+                        self.health_reporter.record_processed(block_number, Some(block_ts));
                     } else {
                         tracing::info!(
                             "Received new block {} (block output hash: {}) from Consensus. \
@@ -136,7 +148,12 @@ where
                 // Select arm that receives executed blocks from `BlockExecutor` (upstream).
                 // Only receive when we have capacity in the produced_queue.
                 maybe_executed = input.recv(), if produced_queue.len() < MAX_PRODUCED_QUEUE_SIZE => {
-                    let Some((block_output, replay_record, cmd_type)) = maybe_executed else {
+                    let Some(BlockPayload {
+                        output: block_output,
+                        record: replay_record,
+                        command_type: cmd_type,
+                    }) = maybe_executed
+                    else {
                         tracing::info!("inbound channel closed");
                         return Ok(());
                     };
@@ -148,9 +165,19 @@ where
                             replay_record.block_context.block_number,
                             replay_record.block_output_hash,
                         );
-                        output
-                            .send((block_output, replay_record, cmd_type))
-                            .await?;
+                        let block_number = replay_record.block_context.block_number;
+                        let block_ts = replay_record.block_context.timestamp;
+                        if output
+                            .send(BlockPayload {
+                                output: block_output,
+                                record: replay_record,
+                                command_type: cmd_type,
+                            })
+                            .is_err()
+                        {
+                            anyhow::bail!("Outbound channel closed");
+                        }
+                        self.health_reporter.record_processed(block_number, Some(block_ts));
                         }
                         BlockCommandType::Produce | BlockCommandType::Rebuild => {
                             tracing::info!(
@@ -160,9 +187,15 @@ where
                                 replay_record.block_context.block_number,
                                 replay_record.block_output_hash,
                             );
+                            self.health_reporter
+                                .enter_state(GenericComponentState::Active);
                             let proposed = replay_record.clone();
                             self.consensus.propose(proposed).await?;
-                            produced_queue.push_back((block_output, replay_record, cmd_type));
+                            produced_queue.push_back(BlockPayload {
+                                output: block_output,
+                                record: replay_record,
+                                command_type: cmd_type,
+                            });
                         }
                     }
                 }

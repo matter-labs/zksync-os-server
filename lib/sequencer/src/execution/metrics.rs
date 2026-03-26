@@ -1,73 +1,64 @@
 use crate::execution::execute_block_in_vm::SealReason;
-use std::time::Duration;
-use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
-use vise::{Counter, EncodeLabelValue};
 use zksync_os_observability::{GenericComponentState, StateLabel};
-use zksync_os_storage_api::StateAccessLabel;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
-#[metrics(label = "state", rename_all = "snake_case")]
+/// Component-specific state for the block executor / sequencer execution loop.
 pub enum SequencerState {
-    ConfiguredBlockLimitReached,
-
+    /// Waiting for the next block command from the command source.
     WaitingForCommand,
-
-    WaitingForTx,
-    Execution,
-    ReadStorage,
-    ReadPreimage,
-    Sealing,
-
-    AddingToState,
-    AddingToRepos,
-    UpdatingMempool,
-    AddingToReplayStorage,
-    WaitingSend,
-    BlockContextTxs,
+    /// Setting up the VM for block execution.
     InitializingVm,
+    /// Running the VM to execute transactions.
+    Execution,
+    /// Updating the mempool after block execution.
+    UpdatingMempool,
 }
+
 impl StateLabel for SequencerState {
     fn generic(&self) -> GenericComponentState {
         match self {
-            Self::WaitingForCommand
-            | Self::WaitingForTx
-            | Self::ConfiguredBlockLimitReached
-            | Self::BlockContextTxs => GenericComponentState::WaitingRecv,
-            Self::WaitingSend => GenericComponentState::WaitingSend,
-            _ => GenericComponentState::Processing,
+            Self::WaitingForCommand => GenericComponentState::Idle,
+            _ => GenericComponentState::Active,
         }
     }
     fn specific(&self) -> &'static str {
         match self {
-            SequencerState::ConfiguredBlockLimitReached => "configured_limit_reached",
-            SequencerState::WaitingForCommand => "waiting_for_command",
-            SequencerState::WaitingForTx => "waiting_for_tx",
-            SequencerState::Execution => "execution",
-            SequencerState::ReadStorage => "read_storage",
-            SequencerState::ReadPreimage => "read_preimage",
-            SequencerState::Sealing => "sealing",
-            SequencerState::AddingToState => "adding_to_state",
-            SequencerState::AddingToRepos => "adding_to_repos",
-            SequencerState::UpdatingMempool => "updating_mempool",
-            SequencerState::AddingToReplayStorage => "adding_to_replay_storage",
-            SequencerState::WaitingSend => "waiting_send",
-            SequencerState::BlockContextTxs => "block_context_txs",
-            SequencerState::InitializingVm => "initializing_vm",
+            Self::WaitingForCommand => "waiting_for_command",
+            Self::InitializingVm => "initializing_vm",
+            Self::Execution => "execution",
+            Self::UpdatingMempool => "updating_mempool",
         }
     }
 }
 
-impl StateAccessLabel for SequencerState {
-    fn read_storage_state() -> Self {
-        Self::ReadStorage
+/// Component-specific state for the block applier.
+pub enum BlockApplierState {
+    /// Waiting for the next block from BlockCanonizer.
+    Idle,
+    /// Persisting replay record and applying storage writes to the state layer.
+    AddingToStorage,
+    /// Populating the repository layer used by the JSON-RPC API.
+    PopulatingRepos,
+}
+
+impl StateLabel for BlockApplierState {
+    fn generic(&self) -> GenericComponentState {
+        match self {
+            Self::Idle => GenericComponentState::Idle,
+            _ => GenericComponentState::Active,
+        }
     }
-    fn read_preimage_state() -> Self {
-        Self::ReadPreimage
-    }
-    fn default_execution_state() -> Self {
-        Self::Execution
+    fn specific(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::AddingToStorage => "adding_to_storage",
+            Self::PopulatingRepos => "populating_repos",
+        }
     }
 }
+
+use std::time::Duration;
+use vise::Counter;
+use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "execution")]
@@ -130,3 +121,64 @@ pub struct ExecutionMetrics {
 
 #[vise::register]
 pub(crate) static EXECUTION_METRICS: vise::Global<ExecutionMetrics> = vise::Global::new();
+
+#[cfg(test)]
+mod state_tests {
+    use super::*;
+
+    #[test]
+    fn block_applier_state_label_mappings() {
+        use zksync_os_observability::GenericComponentState;
+        assert_eq!(
+            BlockApplierState::Idle.generic(),
+            GenericComponentState::Idle
+        );
+        assert_eq!(BlockApplierState::Idle.specific(), "idle");
+        assert_eq!(
+            BlockApplierState::AddingToStorage.generic(),
+            GenericComponentState::Active
+        );
+        assert_eq!(
+            BlockApplierState::AddingToStorage.specific(),
+            "adding_to_storage"
+        );
+        assert_eq!(
+            BlockApplierState::PopulatingRepos.generic(),
+            GenericComponentState::Active
+        );
+        assert_eq!(
+            BlockApplierState::PopulatingRepos.specific(),
+            "populating_repos"
+        );
+    }
+
+    #[test]
+    fn sequencer_state_label_mappings() {
+        assert_eq!(
+            SequencerState::WaitingForCommand.generic(),
+            GenericComponentState::Idle
+        );
+        assert_eq!(
+            SequencerState::WaitingForCommand.specific(),
+            "waiting_for_command"
+        );
+        assert_eq!(
+            SequencerState::InitializingVm.generic(),
+            GenericComponentState::Active
+        );
+        assert_eq!(SequencerState::InitializingVm.specific(), "initializing_vm");
+        assert_eq!(
+            SequencerState::Execution.generic(),
+            GenericComponentState::Active
+        );
+        assert_eq!(SequencerState::Execution.specific(), "execution");
+        assert_eq!(
+            SequencerState::UpdatingMempool.generic(),
+            GenericComponentState::Active
+        );
+        assert_eq!(
+            SequencerState::UpdatingMempool.specific(),
+            "updating_mempool"
+        );
+    }
+}

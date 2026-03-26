@@ -4,6 +4,7 @@ use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{Address, Bytes};
 use itertools::Itertools;
 use std::fmt::Display;
+use zksync_os_pipeline::HasBlockSeq;
 
 pub mod commit;
 pub mod execute;
@@ -30,6 +31,26 @@ impl<C: SendToL1> L1SenderCommand<C> {
             Self::SendToL1(cmd) => cmd.as_ref().len(),
             Self::Passthrough(_) => 1,
         }
+    }
+
+    /// Last block number in this command's final batch.
+    /// Use this (not first_batch_number) for record_processed — the monitor lag
+    /// computation is block-based, not batch-based.
+    pub fn last_block_number(&self) -> u64 {
+        match self {
+            Self::SendToL1(cmd) => cmd.as_ref().last().unwrap().batch.last_block_number,
+            Self::Passthrough(envelope) => envelope.batch.last_block_number,
+        }
+    }
+}
+
+impl<C: SendToL1 + Send + 'static> HasBlockSeq for L1SenderCommand<C> {
+    fn block_seq(&self) -> u64 {
+        self.last_block_number()
+    }
+    // Batch-level commands do not carry per-block timestamps; 0 skips time-lag checks.
+    fn block_timestamp(&self) -> u64 {
+        0
     }
 }
 
