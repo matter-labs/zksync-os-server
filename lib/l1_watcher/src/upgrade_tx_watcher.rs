@@ -111,9 +111,11 @@ impl L1UpgradeTxWatcher {
             last_l1_block,
             config.max_blocks_to_process,
             config.confirmations,
+            zk_chain_l1.provider().get_chain_id().await?,
             config.poll_interval,
             this.into(),
-        );
+        )
+        .await?;
 
         Ok(l1_watcher)
     }

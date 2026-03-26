@@ -447,6 +447,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
+            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 commit watcher")
@@ -460,6 +461,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
+            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 execute watcher")
@@ -547,6 +549,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                     config.l1_watcher_config.clone().into(),
                     next_cursors.interop_event_index.clone(),
                     interop_roots_subpool.clone(),
+                    node_startup_state.l1_state.l1_chain_id,
                 )
                 .await
                 .expect("failed to start L1 interop roots watcher")
@@ -726,6 +729,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             persistent_batch_storage.clone(),
+            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 batch persist watcher")
