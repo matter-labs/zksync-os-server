@@ -9,7 +9,6 @@ use tokio::signal::unix::{SignalKind, signal};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
-use zksync_os_pipeline_health::PipelineHealthConfig;
 use zksync_os_server::config::{
     Config, ConfigArgs, ConfigValidate, ProofStorageConfig, RebuildBlocksConfig,
     StateBackendConfig, build_external_config, load_config_file_sources,

@@ -4,7 +4,6 @@ use crate::{
     BatchVerificationResponseCodec, BatchVerificationResult,
     wire_format::ensure_supported_wire_format,
 };
-use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -71,13 +70,12 @@ mod metrics;
 /// Client that connects to the main sequencer for batch verification
 pub struct BatchVerificationClient<Finality, ReadState> {
     chain_id: u64,
-    diamond_proxy_sl: Address,
     server_address: String,
     l1_state: L1State,
     signer: PrivateKeySigner,
     block_cache: BlockCache<Finality, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
     read_state: ReadState,
-    health_reporter: ComponentHealthReporter,
+    pub health_reporter: ComponentHealthReporter,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -97,10 +95,8 @@ type VerificationInput = (BlockOutput, ReplayRecord, BlockMerkleTreeData);
 impl<Finality: ReadFinality, ReadState: ReadStateHistory>
     BatchVerificationClient<Finality, ReadState>
 {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_id: u64,
-        diamond_proxy_sl: Address,
         server_address: String,
         private_key: SecretString,
         finality: Finality,
@@ -121,7 +117,6 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
 
         Self {
             chain_id,
-            diamond_proxy_sl,
             server_address,
             l1_state,
             signer,
@@ -294,7 +289,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                 })
                 .collect(),
             self.chain_id,
-            self.diamond_proxy_sl,
+            self.l1_state.diamond_proxy_address_sl(),
             request.batch_number,
             request.pubdata_mode,
             self.l1_state.sl_chain_id,

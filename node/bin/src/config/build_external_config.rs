@@ -5,10 +5,10 @@ use crate::config::{
     MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig, ProverApiConfig,
     ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
-use zksync_os_pipeline_health::PipelineHealthConfig;
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use std::fs;
 use std::path::{Path, PathBuf};
+use zksync_os_pipeline_health::PipelineHealthConfig;
 use zksync_os_types::ConfigFormat;
 
 /// Builds the runtime [`Config`] by parsing all supported sections from the repository

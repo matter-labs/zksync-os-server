@@ -64,9 +64,16 @@ pub struct BackpressureCondition {
 
 /// Per-component backpressure config.
 /// A separate metrics_interval controls how often Prometheus gauges are refreshed.
+///
+/// `default` acts as a fallback: any per-component field that is `None` is resolved
+/// from `default`. This lets operators set a single `pipeline_health.default.max_block_lag`
+/// without needing to enumerate every component individually.
 #[derive(DescribeConfig, DeserializeConfig, Clone, Debug)]
 #[config(derive(Default))]
 pub struct PipelineHealthConfig {
+    /// Fallback thresholds applied to any component that does not have its own explicit setting.
+    #[config(nest, default)]
+    pub default: BackpressureCondition,
     #[config(nest, default)]
     pub block_executor: BackpressureCondition,
     #[config(nest, default)]
@@ -106,8 +113,11 @@ pub struct PipelineHealthConfig {
 }
 
 impl PipelineHealthConfig {
-    pub fn condition_for(&self, id: ComponentId) -> &BackpressureCondition {
-        match id {
+    /// Returns the effective backpressure condition for `id`.
+    ///
+    /// Per-component settings take precedence; any field left `None` falls back to `self.default`.
+    pub fn condition_for(&self, id: ComponentId) -> BackpressureCondition {
+        let specific = match id {
             ComponentId::BlockExecutor => &self.block_executor,
             ComponentId::BlockApplier => &self.block_applier,
             ComponentId::TreeManager => &self.tree_manager,
@@ -124,6 +134,10 @@ impl PipelineHealthConfig {
             ComponentId::L1SenderProve => &self.l1_sender_prove,
             ComponentId::PriorityTree => &self.priority_tree,
             ComponentId::L1SenderExecute => &self.l1_sender_execute,
+        };
+        BackpressureCondition {
+            max_block_lag: specific.max_block_lag.or(self.default.max_block_lag),
+            max_time_lag: specific.max_time_lag.or(self.default.max_time_lag),
         }
     }
 }
@@ -138,6 +152,36 @@ mod tests {
         let cond = config.condition_for(ComponentId::BlockExecutor);
         assert!(cond.max_block_lag.is_none());
         assert!(cond.max_time_lag.is_none());
+    }
+
+    #[test]
+    fn default_fallback_applies_when_component_is_unset() {
+        let config = PipelineHealthConfig {
+            default: BackpressureCondition {
+                max_block_lag: Some(50),
+                max_time_lag: None,
+            },
+            ..Default::default()
+        };
+        let cond = config.condition_for(ComponentId::BlockApplier);
+        assert_eq!(cond.max_block_lag, Some(50));
+    }
+
+    #[test]
+    fn per_component_overrides_default() {
+        let config = PipelineHealthConfig {
+            default: BackpressureCondition {
+                max_block_lag: Some(50),
+                max_time_lag: None,
+            },
+            block_applier: BackpressureCondition {
+                max_block_lag: Some(10),
+                max_time_lag: None,
+            },
+            ..Default::default()
+        };
+        let cond = config.condition_for(ComponentId::BlockApplier);
+        assert_eq!(cond.max_block_lag, Some(10));
     }
 
     #[test]

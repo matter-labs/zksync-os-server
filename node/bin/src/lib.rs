@@ -1420,7 +1420,6 @@ async fn run_en_pipeline(
     let pipeline = if config.batch_verification_config.client_enabled {
         pipeline.pipe(BatchVerificationClient::new(
             chain_id,
-            node_state_on_startup.l1_state.diamond_proxy_address_sl(),
             config.batch_verification_config.connect_address.clone(),
             config.batch_verification_config.signing_key.clone(),
             finality.clone(),
