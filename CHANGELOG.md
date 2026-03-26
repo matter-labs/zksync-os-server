@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.18.1](https://github.com/matter-labs/zksync-os-server/compare/v0.18.0...v0.18.1) (2026-03-26)
+
+
+### Features
+
+* **config:** set production-oriented defaults, extract local dev overrides ([#1062](https://github.com/matter-labs/zksync-os-server/issues/1062)) ([5e850f5](https://github.com/matter-labs/zksync-os-server/commit/5e850f54b0be944b3d1b1ae33f20a2edf9f9fd05))
+* **network:** report metrics from `reth-network` crate ([#1063](https://github.com/matter-labs/zksync-os-server/issues/1063)) ([2e1ec9d](https://github.com/matter-labs/zksync-os-server/commit/2e1ec9d114ca6e325fb05f7a3240c7997d2326cd))
+* **network:** support `network_interface` and DNS boot nodes ([#1075](https://github.com/matter-labs/zksync-os-server/issues/1075)) ([f2afb8d](https://github.com/matter-labs/zksync-os-server/commit/f2afb8d544dfad2159ff496ab1c6bec3883e0e7e))
+* **tracer:** Meaningful errors for out-of-pubdata reverts ([#1058](https://github.com/matter-labs/zksync-os-server/issues/1058)) ([e62b216](https://github.com/matter-labs/zksync-os-server/commit/e62b216758b795f40061691db497c9f51d1899ba))
+
+
+### Bug Fixes
+
+* fix batch storage in revert case ([#1081](https://github.com/matter-labs/zksync-os-server/issues/1081)) ([4cce328](https://github.com/matter-labs/zksync-os-server/commit/4cce328f3fbe5df9d44ce181e2ccdef2b8e711a4))
+* **priority-tree:** run initialization in background to avoid shutdown bug ([#1067](https://github.com/matter-labs/zksync-os-server/issues/1067)) ([debea8f](https://github.com/matter-labs/zksync-os-server/commit/debea8fab1bac9e83337b684900cd57f71736173))
+* **tracer:** map CREATE and CREATE2 correctly ([#1060](https://github.com/matter-labs/zksync-os-server/issues/1060)) ([553e627](https://github.com/matter-labs/zksync-os-server/commit/553e627241a8390eba5fbd7a3affb034df6a9316))
+
 ## [0.18.0](https://github.com/matter-labs/zksync-os-server/compare/v0.17.1...v0.18.0) (2026-03-24)
 
 
