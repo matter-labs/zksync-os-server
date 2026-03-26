@@ -61,8 +61,13 @@ jobs:
     env:
       ZKSYNC_USE_CUDA_STUBS: true
     steps:
+      - name: Install git-lfs
+        run: sudo apt-get install -y git-lfs && git lfs install
+
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          lfs: true
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
@@ -80,8 +85,13 @@ jobs:
   test:
     runs-on: matterlabs-ci-runner-high-performance
     steps:
+      - name: Install git-lfs
+        run: sudo apt-get install -y git-lfs && git lfs install
+
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          lfs: true
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
@@ -171,9 +181,13 @@ jobs:
   build-prover-tests:
     runs-on: matterlabs-ci-runner-ultra-performance
     steps:
+      - name: Install git-lfs
+        run: sudo apt-get install -y git-lfs && git lfs install
 
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          lfs: true
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
@@ -208,8 +222,13 @@ jobs:
     runs-on: [matterlabs-ci-hetzner-rtx6000-gpu]
     needs: build-prover-tests
     steps:
+      - name: Install git-lfs
+        run: sudo apt-get install -y git-lfs && git lfs install
+
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          lfs: true
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
@@ -261,6 +280,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          lfs: true
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
