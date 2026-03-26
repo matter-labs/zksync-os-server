@@ -8,7 +8,7 @@ pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
 mod node_state_on_startup;
-mod priority_tree_steps;
+mod priority_tree_pipeline_step;
 pub mod prover_api;
 mod prover_input_generator;
 mod provider;
@@ -24,8 +24,6 @@ use crate::config::{
 };
 use crate::en_remote_config::load_remote_config;
 use crate::node_state_on_startup::NodeStateOnStartup;
-use crate::priority_tree_steps::priority_tree_en_step::PriorityTreeENStep;
-use crate::priority_tree_steps::priority_tree_pipeline_step::PriorityTreePipelineStep;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::fri_proving_pipeline_step::FriProvingPipelineStep;
@@ -46,6 +44,7 @@ use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
+use priority_tree_pipeline_step::PriorityTreePipelineStep;
 use reth_tasks::Runtime;
 use ruint::aliases::U256;
 use std::net::SocketAddr;
@@ -84,6 +83,7 @@ use zksync_os_network::RecordOverride;
 use zksync_os_network::service::{NetworkService, ZksProtocolConfig};
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
+use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, loopback_consensus,
 };
@@ -1073,7 +1073,6 @@ async fn run_main_node_pipeline(
                 finality,
                 committed_batch_provider,
             )
-            .await
             .unwrap(),
         )
         .pipe(L1Sender {
@@ -1162,7 +1161,7 @@ async fn run_en_pipeline(
 
     // Run Priority Tree tasks for EN - not part of the pipeline.
     if config.general_config.run_priority_tree {
-        let priority_tree_en_step = PriorityTreeENStep::new(
+        let priority_tree_manager = PriorityTreeManager::new(
             block_replay_storage,
             Path::new(
                 &config
@@ -1173,10 +1172,21 @@ async fn run_en_pipeline(
             finality.clone(),
             committed_batch_provider,
         )
-        .await
         .unwrap();
-
-        priority_tree_en_step.spawn(runtime);
+        runtime.spawn_critical_with_graceful_shutdown_signal(
+            "priority tree caching",
+            |shutdown| async move {
+                tokio::select! {
+                    result = priority_tree_manager.run(None) => {
+                        result.expect("PriorityTreeManager run failed");
+                    }
+                    _guard = shutdown => {
+                        // Ensures both futures are dropped before we shutdown gracefully. Otherwise
+                        // priority tree manager might keep holding DB.
+                    }
+                }
+            },
+        );
     }
     runtime.spawn_critical_task(
         "clear failing block config",
