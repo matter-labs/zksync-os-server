@@ -61,7 +61,6 @@ where
     // ==============================================================================
 
     pub async fn run(mut self) -> anyhow::Result<()> {
-        let _command_name = Input::NAME;
         loop {
             // Wait for commands if there is nothing pending.
             // Resubmit commands (from Watcher) are prioritised over new upstream commands.
