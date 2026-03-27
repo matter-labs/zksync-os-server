@@ -480,7 +480,8 @@ impl Tester {
             .await?;
 
         // Deposits fail before genesis upgrade tx is processed, so we wait for the first block with upgrade tx.
-        l2_zk_provider.wait_for_block(1).await?;
+        // Second block contains pre-baked L1->L2 transactions and funding the test wallet should happen there, so we wait for it as well.
+        l2_zk_provider.wait_for_block(2).await?;
         ensure_test_wallet_funded(
             &l1,
             &EthDynProvider::new(l2_provider.clone()),
