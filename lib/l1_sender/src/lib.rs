@@ -6,8 +6,8 @@ pub mod error;
 mod metrics;
 pub mod pipeline_component;
 mod submitter;
-mod watcher;
 pub mod upgrade_gatekeeper;
+mod watcher;
 
 pub use error::{L1SendError, RecoverableReason};
 
@@ -23,8 +23,8 @@ use alloy::primitives::{Address, B256};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{PendingTransactionError, Provider, WalletProvider};
-use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::TransactionReceipt;
+use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use futures::future::BoxFuture;
 use std::time::Duration;
 use tokio::sync::mpsc;

@@ -4,11 +4,11 @@ use crate::error::RecoverableReason;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use crate::{InFlightTx, reason_label, validate_tx_receipt_reverted};
 use alloy::network::Ethereum;
-use alloy::providers::{PendingTransactionError, Provider, WatchTxError};
 use alloy::primitives::B256;
+use alloy::providers::{PendingTransactionError, Provider, WatchTxError};
 use alloy::rpc::types::TransactionReceipt;
-use futures::stream::FuturesOrdered;
 use futures::StreamExt;
+use futures::stream::FuturesOrdered;
 use std::future::Future;
 use std::pin::Pin;
 use tokio::sync::mpsc;
@@ -38,7 +38,11 @@ where
 
 /// The resolved output of one receipt future: the original command, its tx hash
 /// (for logging even after the future is consumed), and the polling result.
-type WatchResult<Input> = (Input, B256, Result<TransactionReceipt, PendingTransactionError>);
+type WatchResult<Input> = (
+    Input,
+    B256,
+    Result<TransactionReceipt, PendingTransactionError>,
+);
 
 impl<Input, P> Watcher<Input, P>
 where
@@ -79,7 +83,8 @@ where
 
         // Drain remaining futures after the Submitter's channel closed.
         while let Some((command, tx_hash, receipt_result)) = pending.next().await {
-            self.handle_receipt(command, tx_hash, receipt_result).await?;
+            self.handle_receipt(command, tx_hash, receipt_result)
+                .await?;
         }
 
         Ok(())

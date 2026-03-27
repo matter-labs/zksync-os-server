@@ -1,10 +1,10 @@
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::error::{L1SendError, RecoverableReason};
+use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use crate::{
     ExponentialBackoff, InFlightTx, TRANSACTION_TIMEOUT, reason_label, report_balance_and_nonce,
 };
-use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use alloy::consensus::BlobTransactionValidationError;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, Encodable2718};
@@ -284,7 +284,11 @@ where
                 .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
 
             self.in_flight_tx
-                .send(InFlightTx { command: cmd, tx_hash, receipt_future })
+                .send(InFlightTx {
+                    command: cmd,
+                    tx_hash,
+                    receipt_future,
+                })
                 .await
                 .map_err(|_| {
                     L1SendError::Fatal(anyhow::anyhow!("in_flight channel closed (Watcher died)"))
@@ -305,7 +309,8 @@ where
             "transient error {context}, entering backoff"
         );
         L1_SENDER_METRICS.transient_errors.inc();
-        self.latency_tracker.enter_state(L1SenderState::TransientBackoff);
+        self.latency_tracker
+            .enter_state(L1SenderState::TransientBackoff);
         let delay = self.backoff.next();
         tokio::time::sleep(delay).await;
     }
