@@ -7,6 +7,7 @@ mod metrics;
 pub mod pipeline_component;
 pub mod upgrade_gatekeeper;
 mod watcher;
+mod submitter;
 
 pub use error::{L1SendError, RecoverableReason};
 
@@ -38,7 +39,7 @@ use zksync_os_pipeline::PeekableReceiver;
 /// Normally 15-30 seconds is enough for normal priority transactions, and 60-120 is enough for
 /// lower gas price transactions. We picked 300 seconds conservatively as it should cover most
 /// scenarios with network congestion.
-const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Future that resolves into a (fallible) transaction receipt.
 pub(crate) type TransactionReceiptFuture =
@@ -52,14 +53,14 @@ pub(crate) type TransactionReceiptFuture =
 ///
 /// Used to pace retries after transient and recoverable errors so we don't hammer
 /// a struggling RPC endpoint.
-struct ExponentialBackoff {
+pub(crate) struct ExponentialBackoff {
     initial: Duration,
     current: Duration,
     max: Duration,
 }
 
 impl ExponentialBackoff {
-    fn new(initial: Duration, max: Duration) -> Self {
+    pub(crate) fn new(initial: Duration, max: Duration) -> Self {
         Self {
             initial,
             current: initial,
@@ -68,14 +69,14 @@ impl ExponentialBackoff {
     }
 
     /// Returns the current delay and doubles it (capped at `max`) for the next call.
-    fn next(&mut self) -> Duration {
+    pub(crate) fn next(&mut self) -> Duration {
         let delay = self.current;
         self.current = std::cmp::min(self.current * 2, self.max);
         delay
     }
 
     /// Resets the delay to the initial value after a successful cycle.
-    fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.current = self.initial;
     }
 }
@@ -649,6 +650,40 @@ pub(crate) fn reason_label(reason: RecoverableReason) -> &'static str {
         RecoverableReason::BlobFeeBlocked => "blob_fee_blocked",
         RecoverableReason::TxTimeout => "tx_timeout",
         RecoverableReason::NonceTooLow => "nonce_too_low",
+    }
+}
+
+/// Reports operator balance and nonce after a successful send cycle.
+///
+/// These calls are informational — RPC failures are logged at WARN level
+/// and do not affect the send loop.
+pub(crate) async fn report_balance_and_nonce<P, Input>(provider: &P, operator_address: Address)
+where
+    P: Provider<Ethereum>,
+    Input: SendToL1,
+{
+    match provider.get_balance(operator_address).await {
+        Ok(balance) => {
+            let balance_str = format_ether(balance);
+            if let Ok(v) = balance_str.parse::<f64>() {
+                L1_SENDER_METRICS.balance[&Input::NAME].set(v);
+            } else {
+                tracing::warn!("failed to parse balance for metrics");
+            }
+            tracing::info!(
+                command_name = Input::NAME,
+                balance = balance_str,
+                "operator balance after send cycle"
+            );
+        }
+        Err(e) => tracing::warn!(?e, "failed to fetch operator balance"),
+    }
+
+    match provider.get_transaction_count(operator_address).await {
+        Ok(nonce) => {
+            L1_SENDER_METRICS.nonce[&Input::NAME].set(nonce);
+        }
+        Err(e) => tracing::warn!(?e, "failed to fetch operator nonce"),
     }
 }
 
