@@ -101,6 +101,13 @@ pub(crate) struct InFlightTx<Input> {
 ///
 /// Handles operator registration and passthrough commands before spawning the
 /// Submitter and Watcher tasks under `tokio::try_join!`.
+///
+/// Both tasks run on the current task via `try_join!` rather than `tokio::spawn` —
+/// neither has CPU-bound sections, and a fatal error in either task should
+/// immediately cancel the other and crash the binary.
+///
+/// `Input: Send + 'static` is required because the Watcher boxes `Input` values
+/// into pinned futures polled concurrently by `FuturesOrdered` across await points.
 pub async fn run_l1_sender<Input: SendToL1 + Send + 'static>(
     mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
     outbound: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
@@ -134,11 +141,12 @@ pub async fn run_l1_sender<Input: SendToL1 + Send + 'static>(
         return Ok(());
     }
 
-    let channel_capacity = config.command_limit;
-    let cmd_buffer_capacity = config.command_limit;
-
-    let (in_flight_tx, in_flight_rx) = mpsc::channel(channel_capacity);
-    let (resubmit_tx, resubmit_rx) = mpsc::channel(channel_capacity);
+    // Both channels are bounded by command_limit: at most that many transactions
+    // can be in-flight at once, so the same limit applies to both the in_flight
+    // (Submitter → Watcher) and resubmit (Watcher → Submitter) directions.
+    let command_limit = config.command_limit;
+    let (in_flight_tx, in_flight_rx) = mpsc::channel(command_limit);
+    let (resubmit_tx, resubmit_rx) = mpsc::channel(command_limit);
 
     // The Watcher gets a provider clone only for debug-tracing reverted txs.
     let watcher_provider = provider.clone();
@@ -155,7 +163,7 @@ pub async fn run_l1_sender<Input: SendToL1 + Send + 'static>(
         pending_commands: Vec::new(),
         latency_tracker: latency_tracker.clone(),
         backoff: ExponentialBackoff::new(Duration::from_secs(5), Duration::from_secs(60)),
-        cmd_buffer: Vec::with_capacity(cmd_buffer_capacity),
+        cmd_buffer: Vec::with_capacity(command_limit),
     };
 
     let watcher = Watcher {
