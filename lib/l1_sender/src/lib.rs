@@ -6,6 +6,7 @@ pub mod error;
 mod metrics;
 pub mod pipeline_component;
 pub mod upgrade_gatekeeper;
+mod watcher;
 
 pub use error::{L1SendError, RecoverableReason};
 
@@ -40,7 +41,7 @@ use zksync_os_pipeline::PeekableReceiver;
 const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Future that resolves into a (fallible) transaction receipt.
-type TransactionReceiptFuture =
+pub(crate) type TransactionReceiptFuture =
     BoxFuture<'static, Result<TransactionReceipt, PendingTransactionError>>;
 
 // ==============================================================================
@@ -87,10 +88,10 @@ impl ExponentialBackoff {
 ///
 /// We track `tx_hash` separately from the receipt future so that if the future
 /// times out (and is consumed), we can log the hash and re-queue the command.
-struct InFlightTx<Input> {
-    command: Input,
-    tx_hash: B256,
-    receipt_future: TransactionReceiptFuture,
+pub(crate) struct InFlightTx<Input> {
+    pub(crate) command: Input,
+    pub(crate) tx_hash: B256,
+    pub(crate) receipt_future: TransactionReceiptFuture,
 }
 
 // ==============================================================================
@@ -642,7 +643,7 @@ where
 
 /// Converts a `RecoverableReason` to the Prometheus label string used by
 /// `L1_SENDER_METRICS.recoverable_errors`.
-fn reason_label(reason: RecoverableReason) -> &'static str {
+pub(crate) fn reason_label(reason: RecoverableReason) -> &'static str {
     match reason {
         RecoverableReason::GasBlocked => "gas_blocked",
         RecoverableReason::BlobFeeBlocked => "blob_fee_blocked",
@@ -782,7 +783,7 @@ async fn register_operator<
 ///
 /// A revert is always fatal: gas was already burned and manual inspection of
 /// the contract/calldata is required.
-async fn validate_tx_receipt_reverted<Input: SendToL1>(
+pub(crate) async fn validate_tx_receipt_reverted<Input: SendToL1>(
     provider: &impl Provider,
     command: &Input,
     receipt: TransactionReceipt,
