@@ -552,7 +552,7 @@ pub struct L1SenderConfig {
     pub max_fee_per_gas: EtherAmount,
 
     /// Max priority fee per gas we are willing to spend.
-    #[config(default_t = 1 * EtherUnit::Gwei)]
+    #[config(default_t = 10 * EtherUnit::Gwei)]
     pub max_priority_fee_per_gas: EtherAmount,
 
     /// Max fee per blob gas we are willing to spend.
