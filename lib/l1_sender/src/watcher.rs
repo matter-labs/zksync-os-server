@@ -29,11 +29,11 @@ where
     Input: SendToL1,
     P: Provider<Ethereum>,
 {
-    pub in_flight_rx: mpsc::Receiver<InFlightTx<Input>>,
-    pub resubmit_tx: mpsc::Sender<Input>,
-    pub outbound: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
-    pub provider: P,
-    pub latency_tracker: ComponentStateHandle<L1SenderState>,
+    pub(crate) in_flight_rx: mpsc::Receiver<InFlightTx<Input>>,
+    pub(crate) resubmit_tx: mpsc::Sender<Input>,
+    pub(crate) outbound: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
+    pub(crate) provider: P,
+    pub(crate) latency_tracker: ComponentStateHandle<L1SenderState>,
 }
 
 /// The resolved output of one receipt future: the original command, its tx hash
