@@ -87,7 +87,7 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Run tests
-        run: cargo nextest run --release --workspace --stress-count 20 upgrade_to_v31_with_deployments
+        run: cargo nextest run --release --workspace ${NEXTEST_ITERATIONS}
 
       - name: Upload test results
         if: always() && !cancelled()
