@@ -16,6 +16,7 @@ use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL,
 use zksync_os_integration_tests::config::{ChainLayout, load_chain_config};
 use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_integration_tests::provider::{ZksyncApi, ZksyncTestingProvider};
+use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
 use zksync_os_integration_tests::{CURRENT_TO_L1, StoppedTester, Tester, test_multisetup};
 use zksync_os_server::INTERNAL_CONFIG_FILE_NAME;
 use zksync_os_server::config::Config;
@@ -199,6 +200,7 @@ async fn revert_batches_on_l1(stopped: &StoppedTester, new_last_batch: u64) -> a
 #[test_runtime(flavor = "multi_thread")]
 async fn node_stop_and_restart_preserves_state() -> anyhow::Result<()> {
     let tester = Tester::setup().await?;
+    let rpc_recorder = tester.record_l2_http_rpc(RpcRecordConfig::default());
     let original_rpc_url = tester.l2_rpc_url().to_owned();
 
     // Send a transaction and wait for it to be included.
@@ -231,6 +233,13 @@ async fn node_stop_and_restart_preserves_state() -> anyhow::Result<()> {
         .await?
         .expect("transaction receipt should be present after restart");
     assert_eq!(recovered.transaction_hash, tx_hash);
+
+    let rpc_report = rpc_recorder.stop().await;
+    rpc_report.assert_eventually_ready()?;
+    tracing::info!(
+        timeline = %rpc_report.format_detailed_timeline(),
+        "Observed HTTP RPC detailed timeline during restart"
+    );
 
     Ok(())
 }

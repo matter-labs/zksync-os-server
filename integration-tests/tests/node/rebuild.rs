@@ -9,6 +9,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::time::Instant;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
+use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, test_multisetup};
 use zksync_os_server::config::RebuildBlocksConfig;
 
@@ -27,6 +28,7 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
         config.sequencer_config.block_time = Duration::from_millis(50);
     }
     let tester = env.launch(config).await?;
+    let rpc_recorder = tester.record_l2_http_rpc(RpcRecordConfig::default());
 
     // This test empties an older block from the main sender, which makes that sender's later
     // transactions invalid because their nonces become too high. A second sender contributes the
@@ -210,5 +212,13 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
         second_sender_receipt.transaction_hash,
         rebuilt_last_tx.block_number,
     );
+
+    let rpc_report = rpc_recorder.stop().await;
+    rpc_report.assert_eventually_ready()?;
+    tracing::info!(
+        timeline = %rpc_report.format_detailed_timeline(),
+        "Observed HTTP RPC detailed timeline during rebuild"
+    );
+
     Ok(())
 }
