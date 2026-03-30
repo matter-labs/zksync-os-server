@@ -66,6 +66,7 @@ impl<T: MigrationProcessor> GatewayMigrationWatcher<T> {
         current_migration_number: u64,
         config: L1WatcherConfig,
         sl_chain_id_subpool: SlChainIdSubpool,
+        l1_chain_id: u64,
     ) -> anyhow::Result<L1Watcher> {
         let server_notifier_contract = zk_chain.get_server_notifier_address().await?;
         let chain_asset_handler_address = bridgehub.chain_asset_handler_address().await?;
@@ -96,14 +97,16 @@ impl<T: MigrationProcessor> GatewayMigrationWatcher<T> {
             _marker: PhantomData,
         };
 
-        let l1_watcher = L1Watcher::new(
+        L1Watcher::new(
             zk_chain.provider().clone(),
             next_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
+            l1_chain_id,
             config.poll_interval,
             this.into(),
-        );
-        Ok(l1_watcher)
+        )
+        .await
     }
 }
 

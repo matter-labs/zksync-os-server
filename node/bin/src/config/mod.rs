@@ -530,6 +530,10 @@ pub struct L1WatcherConfig {
     #[config(default_t = 1000)]
     pub max_blocks_to_process: u64,
 
+    /// Number of latest L1 blocks to leave unprocessed in order to reduce reorg risk.
+    #[config(default_t = 2)]
+    pub confirmations: u64,
+
     /// How often to poll L1 for new priority requests.
     #[config(default_t = 100 * TimeUnit::Millis)]
     pub poll_interval: Duration,
@@ -1054,6 +1058,7 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
     fn from(c: L1WatcherConfig) -> Self {
         Self {
             max_blocks_to_process: c.max_blocks_to_process,
+            confirmations: c.confirmations,
             poll_interval: c.poll_interval,
         }
     }

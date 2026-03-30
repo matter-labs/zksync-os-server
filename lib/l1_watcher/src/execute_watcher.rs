@@ -22,6 +22,7 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         zk_chain: ZkChain<DynProvider>,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
+        l1_chain_id: u64,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_executed_batch = finality.get_finality_status().last_executed_batch;
@@ -50,9 +51,12 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
             // one.
             last_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
+            l1_chain_id,
             config.poll_interval,
             this.into(),
-        );
+        )
+        .await?;
 
         Ok(l1_watcher)
     }

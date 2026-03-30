@@ -30,6 +30,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         config: L1WatcherConfig,
         zk_chain: ZkChain<DynProvider>,
         batch_storage: BatchStorage,
+        l1_chain_id: u64,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_persisted_batch = batch_storage.latest_batch();
@@ -62,9 +63,12 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             // one.
             last_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
+            l1_chain_id,
             config.poll_interval,
             Box::new(this),
-        );
+        )
+        .await?;
 
         Ok(l1_watcher)
     }
