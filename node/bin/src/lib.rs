@@ -579,6 +579,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // External nodes: always accepts, but may be rejected on the main node side during forwarding
     let (tx_acceptance_state_sender, tx_acceptance_state_receiver) =
         watch::channel(TransactionAcceptanceState::Accepting);
+
     let (stop_sender, stop_receiver) = watch::channel(false);
     let stop_sender_for_shutdown = stop_sender.clone();
     runtime.spawn_with_graceful_shutdown_signal(|shutdown| async move {

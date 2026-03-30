@@ -10,8 +10,9 @@ pub struct ComponentHealth {
     pub specific_state: &'static str,
     /// When the current state was entered (monotonic).
     pub state_entered_at: Instant,
-    /// Block number of the last item successfully processed.
-    pub last_processed_block_number: u64,
+    /// Block number of the last item successfully processed. `None` until first call to
+    /// `record_processed`.
+    pub last_processed_block_number: Option<u64>,
     /// Block timestamp of the last processed block. `None` if not yet processed or unavailable
     /// (e.g. batch-level components that call `record_processed` with `None`).
     pub last_processed_block_timestamp: Option<u64>,
@@ -34,7 +35,7 @@ impl ComponentHealthReporter {
             state: GenericComponentState::Idle,
             specific_state: "idle",
             state_entered_at: Instant::now(),
-            last_processed_block_number: 0,
+            last_processed_block_number: None,
             last_processed_block_timestamp: None,
             last_processed_block_at: None,
         };
@@ -67,7 +68,7 @@ impl ComponentHealthReporter {
     pub fn record_processed(&self, block_number: u64, block_timestamp: Option<u64>) {
         let now = Instant::now();
         self.sender.send_modify(|health| {
-            health.last_processed_block_number = block_number;
+            health.last_processed_block_number = Some(block_number);
             health.last_processed_block_timestamp = block_timestamp;
             health.last_processed_block_at = Some(now);
         });
@@ -87,7 +88,7 @@ mod tests {
         let health = rx.borrow().clone();
         assert_eq!(health.state, GenericComponentState::Idle);
         assert_eq!(health.specific_state, "idle");
-        assert_eq!(health.last_processed_block_number, 0);
+        assert_eq!(health.last_processed_block_number, None);
         assert_eq!(health.last_processed_block_timestamp, None);
         drop(reporter);
     }
@@ -113,13 +114,13 @@ mod tests {
     async fn record_processed_updates_seq_and_timestamp() {
         let (reporter, rx) = ComponentHealthReporter::new("test_component");
         reporter.record_processed(42, Some(1_700_000_000));
-        assert_eq!(rx.borrow().last_processed_block_number, 42);
+        assert_eq!(rx.borrow().last_processed_block_number, Some(42));
         assert_eq!(
             rx.borrow().last_processed_block_timestamp,
             Some(1_700_000_000)
         );
         reporter.record_processed(100, Some(1_700_000_100));
-        assert_eq!(rx.borrow().last_processed_block_number, 100);
+        assert_eq!(rx.borrow().last_processed_block_number, Some(100));
         assert_eq!(
             rx.borrow().last_processed_block_timestamp,
             Some(1_700_000_100)
@@ -142,8 +143,8 @@ mod tests {
         let (r2, rx2) = ComponentHealthReporter::new("c2");
         r1.record_processed(10, None);
         r2.record_processed(20, None);
-        assert_eq!(rx1.borrow().last_processed_block_number, 10);
-        assert_eq!(rx2.borrow().last_processed_block_number, 20);
+        assert_eq!(rx1.borrow().last_processed_block_number, Some(10));
+        assert_eq!(rx2.borrow().last_processed_block_number, Some(20));
     }
 
     #[tokio::test]

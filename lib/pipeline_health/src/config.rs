@@ -58,7 +58,7 @@ pub struct BackpressureCondition {
     /// Trigger backpressure when this component is more than N blocks behind BlockExecutor.
     pub max_block_lag: Option<u64>,
     /// Trigger backpressure when block-timestamp lag exceeds this duration.
-    /// Only evaluated when last_processed_block_timestamp > 0 for both head and component.
+    /// Only evaluated when `last_processed_block_timestamp` is `Some` for both head and this component.
     pub max_time_lag: Option<Duration>,
 }
 
@@ -67,7 +67,8 @@ pub struct BackpressureCondition {
 ///
 /// `default` acts as a fallback: any per-component field that is `None` is resolved
 /// from `default`. This lets operators set a single `pipeline_health.default.max_block_lag`
-/// without needing to enumerate every component individually.
+/// without needing to enumerate every component individually. For most deployments,
+/// setting only `default` is sufficient; per-component fields allow advanced per-component tuning.
 #[derive(DescribeConfig, DeserializeConfig, Clone, Debug)]
 #[config(derive(Default))]
 pub struct PipelineHealthConfig {

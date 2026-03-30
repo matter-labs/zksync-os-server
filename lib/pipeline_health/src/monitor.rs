@@ -52,7 +52,7 @@ impl PipelineHealthMonitor {
         let seqs: std::collections::HashMap<ComponentId, u64> = self
             .components
             .iter()
-            .map(|(id, rx)| (*id, rx.borrow().last_processed_block_number))
+            .map(|(id, rx)| (*id, rx.borrow().last_processed_block_number.unwrap_or(0)))
             .collect();
 
         self.adjacency
@@ -104,7 +104,7 @@ impl PipelineHealthMonitor {
             .map(|(_, rx)| {
                 let h = rx.borrow();
                 (
-                    h.last_processed_block_number,
+                    h.last_processed_block_number.unwrap_or(0),
                     h.last_processed_block_timestamp,
                 )
             })
@@ -126,23 +126,25 @@ impl PipelineHealthMonitor {
         // The adjacent diff view is exposed separately via `component_block_diff_to_upstream`.
         let adjacent_diffs = self.compute_adjacent_diffs();
 
-        let mut active_causes: Vec<BackpressureCause> =
-            self.components
-                .iter()
-                .flat_map(|(id, rx)| {
-                    let health = rx.borrow();
-                    let block_lag = adjacent_diffs.get(id).copied().unwrap_or_else(|| {
-                        head_seq.saturating_sub(health.last_processed_block_number)
-                    });
-                    self.evaluate(*id, &health, block_lag, head_ts)
-                })
-                .collect();
+        let mut active_component_ids: std::collections::HashSet<ComponentId> =
+            std::collections::HashSet::new();
+        let mut active_causes: Vec<BackpressureCause> = self
+            .components
+            .iter()
+            .flat_map(|(id, rx)| {
+                let health = rx.borrow();
+                let block_lag = adjacent_diffs.get(id).copied().unwrap_or_else(|| {
+                    head_seq.saturating_sub(health.last_processed_block_number.unwrap_or(0))
+                });
+                let causes = self.evaluate(*id, &health, block_lag, head_ts);
+                if !causes.is_empty() {
+                    active_component_ids.insert(*id);
+                }
+                causes
+            })
+            .collect();
 
         active_causes.sort_by_key(|c| c.component);
-
-        // Build the active set before active_causes is moved into new_state.
-        let active_set: std::collections::HashSet<&'static str> =
-            active_causes.iter().map(|c| c.component).collect();
 
         let new_state = if active_causes.is_empty() {
             TransactionAcceptanceState::Accepting
@@ -185,11 +187,11 @@ impl PipelineHealthMonitor {
         // Emit metrics always in sync with current evaluation result.
         for (id, rx) in &self.components {
             let health = rx.borrow();
-            MONITOR_METRICS.backpressure_active[id].set(active_set.contains(id.as_str()) as u64);
+            MONITOR_METRICS.backpressure_active[id].set(active_component_ids.contains(id) as u64);
             MONITOR_METRICS.component_last_processed_block[id]
-                .set(health.last_processed_block_number);
+                .set(health.last_processed_block_number.unwrap_or(0));
             MONITOR_METRICS.component_block_lag[id]
-                .set(head_seq.saturating_sub(health.last_processed_block_number));
+                .set(head_seq.saturating_sub(health.last_processed_block_number.unwrap_or(0)));
             let time_lag = match (health.last_processed_block_timestamp, head_ts) {
                 (Some(comp_ts), Some(h_ts)) => h_ts.saturating_sub(comp_ts) as f64,
                 _ => 0.0,
@@ -269,7 +271,7 @@ mod tests {
             state: GenericComponentState::Active,
             specific_state: "active",
             state_entered_at: Instant::now(),
-            last_processed_block_number: seq,
+            last_processed_block_number: Some(seq),
             last_processed_block_timestamp: ts,
             last_processed_block_at: None,
         }

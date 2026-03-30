@@ -58,7 +58,7 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
         .component_health
         .iter()
         .find(|(id, _)| *id == ComponentId::BlockExecutor)
-        .map(|(_, rx)| rx.borrow().last_processed_block_number)
+        .map(|(_, rx)| rx.borrow().last_processed_block_number.unwrap_or(0))
         .unwrap_or(0);
 
     let head_ts = state
@@ -74,7 +74,7 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
         .map(|(id, rx)| {
             let h = rx.borrow();
             let elapsed = now.duration_since(h.state_entered_at).as_secs_f64();
-            let lag = head_block.saturating_sub(h.last_processed_block_number);
+            let lag = head_block.saturating_sub(h.last_processed_block_number.unwrap_or(0));
             let time_lag_secs = match (h.last_processed_block_timestamp, head_ts) {
                 (Some(comp_ts), Some(h_ts)) if h_ts > comp_ts => (h_ts - comp_ts) as f64,
                 _ => 0.0,
@@ -84,7 +84,7 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
                 snapshot: ComponentSnapshot {
                     state: h.state.as_str(),
                     state_duration_secs: elapsed,
-                    last_processed_block: h.last_processed_block_number,
+                    last_processed_block: h.last_processed_block_number.unwrap_or(0),
                     block_lag: lag,
                     time_lag_secs,
                 },

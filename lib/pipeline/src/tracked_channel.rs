@@ -233,8 +233,8 @@ mod tests {
         let (reporter, health_rx) = ComponentHealthReporter::new("test");
         let item = rx.recv_and_record(&reporter).await.unwrap();
         assert_eq!(item.seq, 10);
-        // Verify reporter updated (last_processed_block_number should be 10)
-        assert_eq!(health_rx.borrow().last_processed_block_number, 10);
+        // Verify reporter updated (last_processed_block_number should be Some(10))
+        assert_eq!(health_rx.borrow().last_processed_block_number, Some(10));
         assert_eq!(
             health_rx.borrow().last_processed_block_timestamp,
             Some(1000)

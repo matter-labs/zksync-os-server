@@ -667,7 +667,7 @@ mod tests {
                 out.signature_data
             ),
         }
-        assert_eq!(health_rx.borrow().last_processed_block_number, 35);
+        assert_eq!(health_rx.borrow().last_processed_block_number, Some(35));
 
         assert!(output_rx.recv().await.is_none());
         run_handle
