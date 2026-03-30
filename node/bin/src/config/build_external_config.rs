@@ -172,7 +172,6 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         }
     }
 
-
     Config {
         general_config,
         network_config,

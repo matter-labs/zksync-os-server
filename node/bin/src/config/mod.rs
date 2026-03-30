@@ -1610,6 +1610,7 @@ mod tests {
                 forced: ForcedPriceClientConfig::default(),
             }),
             fee_config: FeeConfig::default(),
+            pipeline_health_config: PipelineHealthConfig::default(),
         }
     }
 
