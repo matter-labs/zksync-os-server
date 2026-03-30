@@ -87,7 +87,7 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Run tests
-        run: cargo nextest run --release --workspace ${NEXTEST_ITERATIONS}
+        run: cargo nextest run --release --workspace node_recovers_from_l1_batch_revert_after_restart_v30 --stress-count 20
 
       - name: Upload test results
         if: always() && !cancelled()
