@@ -212,7 +212,6 @@ async fn node_stop_and_restart_preserves_state() -> anyhow::Result<()> {
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-#[ignore]
 async fn node_recovers_from_l1_batch_revert_after_restart_v30() -> anyhow::Result<()> {
     let tester = Tester::setup_with_overrides(make_commit_only_config).await?;
 
