@@ -148,7 +148,7 @@ impl WriteState for StateHandle {
         // As such, preimages might be missing for a short period (not yet written to disk, but purged from overlay).
         //
         // TODO: The right fix here would be to have `block_range_available()` depend on both storage & preimages being written.
-        // 
+        //
         // We intentionally defer the proper fix for now.
         // Whilst we prefer the above, it requires tracking preimages progress for persistent state across restarts.
         // That implies extra metadata and migration / compatibility work.
