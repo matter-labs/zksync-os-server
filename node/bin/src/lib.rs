@@ -1127,7 +1127,8 @@ async fn run_main_node_pipeline(
             "Batcher subsystem disabled — skipping prover input generation, L1 settlement, and downstream components"
         );
         pipeline.pipe(NoOpSink::new()).spawn();
-        return;
+        runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
+        return (pipeline_acceptance_rx, component_health);
     }
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())

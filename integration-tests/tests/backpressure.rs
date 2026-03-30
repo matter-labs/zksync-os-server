@@ -1,3 +1,7 @@
+use alloy::network::TransactionBuilder;
+use alloy::primitives::{Address, U256};
+use alloy::providers::Provider;
+use alloy::rpc::types::TransactionRequest;
 use std::time::Duration;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TesterBuilder, test_multisetup};
 use zksync_os_pipeline_health::{BackpressureCondition, PipelineHealthConfig};
@@ -108,8 +112,8 @@ async fn health_endpoint_returns_pipeline_snapshot() {
 ///
 ///   `lag = BlockExecutor.last_processed_block_number - Batcher.last_processed_block_number`
 ///
-/// At startup all components are at seq 0. Once `BlockExecutor` has produced `max_block_lag + 1`
-/// blocks while the `Batcher` is still at 0 (waiting for the first batch to complete), the lag
+/// We actively submit a stream of simple L2 transfers so the sequencer keeps producing blocks.
+/// Once `BlockExecutor` has produced `max_block_lag + 1` more blocks than `Batcher`, the lag
 /// threshold is exceeded and `accepting_transactions` flips to `false`.
 ///
 /// Once the next batch completes and the Batcher calls `record_processed`, the lag drops back
@@ -142,9 +146,28 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
     };
 
     let node = builder
+        .block_time(Duration::from_millis(250))
         .pipeline_health_config(health_config)
         .build()
         .await?;
+
+    let tx_load = {
+        let provider = node.l2_provider.clone();
+        tokio::spawn(async move {
+            let gas_price = provider
+                .get_gas_price()
+                .await
+                .expect("failed to fetch gas price for backpressure test load");
+            loop {
+                let tx = TransactionRequest::default()
+                    .to(Address::random())
+                    .value(U256::from(1u64))
+                    .with_gas_price(gas_price * 10);
+                let _ = provider.send_transaction(tx).await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+    };
 
     // --- Phase 1: confirm the health endpoint is reachable and log initial state ---
     //
@@ -177,6 +200,7 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
+    tx_load.abort();
 
     // The response must carry at least one backpressure cause.
     let causes = backpressure_health

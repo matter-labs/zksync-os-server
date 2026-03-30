@@ -810,6 +810,7 @@ impl Default for NodeBuilderOptions {
             fee_config: None,
             gas_price_scale_factor: None,
             estimate_gas_pubdata_price_factor: None,
+            pipeline_health_config: None,
         }
     }
 }
