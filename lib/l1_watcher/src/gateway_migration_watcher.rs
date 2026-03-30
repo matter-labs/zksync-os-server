@@ -1,16 +1,31 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessRawEvents, util};
-use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
+use alloy::primitives::{Address, B256, ChainId, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Log, Topic, ValueOrArray};
 use alloy::sol_types::SolEvent;
-use std::sync::Arc;
+use tokio::sync::watch;
 use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
-use zksync_os_contract_interface::{
-    Bridgehub, IChainAssetHandler, ServerNotifier::MigrateToGateway, ZkChain,
-};
+use zksync_os_contract_interface::{Bridgehub, ServerNotifier::MigrateToGateway, ZkChain};
 use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_types::SystemTxEnvelope;
+
+/// Whether a gateway migration is currently underway.
+///
+/// The state starts as [`Stable`][GatewayMigrationState::Stable] and flips to
+/// [`InProgress`][GatewayMigrationState::InProgress] the moment a
+/// `MigrateToGateway` or `MigrateFromGateway` event is observed on L1.  Once
+/// in-progress, the node will not submit new commit transactions until the
+/// corresponding `SetSLChainId` system transaction has been applied on L2.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum GatewayMigrationState {
+    #[default]
+    Stable,
+    /// A migration event has been detected.  `migration_number` is the
+    /// on-chain migration counter for which a `SetSLChainId` system tx has
+    /// been submitted.  L1 commits must not resume until that tx is applied.
+    InProgress { migration_number: u64 },
+}
 
 /// Limit the number of L1 blocks to scan when looking for the migration number block.
 const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
@@ -30,6 +45,10 @@ pub struct GatewayMigrationWatcher {
     /// New settlement layer chain ID when a `MigrateFromGateway` event fires.
     l1_chain_id: ChainId,
     sl_chain_id_subpool: SlChainIdSubpool,
+    /// Shared migration state: set to [`GatewayMigrationState::InProgress`] as soon as a
+    /// migration event is detected, so that other components (e.g. the L1 commit sender) can
+    /// pause until the node restarts against the new settlement layer.
+    migration_state: watch::Sender<GatewayMigrationState>,
 }
 
 impl GatewayMigrationWatcher {
@@ -43,12 +62,13 @@ impl GatewayMigrationWatcher {
         current_migration_number: u64,
         config: L1WatcherConfig,
         sl_chain_id_subpool: SlChainIdSubpool,
+        migration_state: watch::Sender<GatewayMigrationState>,
     ) -> anyhow::Result<L1Watcher> {
         let server_notifier_contract = zk_chain.get_server_notifier_address().await?;
         let chain_asset_handler_address = bridgehub.chain_asset_handler_address().await?;
 
         let current_l1_block = zk_chain.provider().get_block_number().await?;
-        let next_l1_block = find_l1_block_by_migration_number(
+        let next_l1_block = util::find_block_by_migration_number(
             zk_chain.clone(),
             chain_asset_handler_address,
             l2_chain_id,
@@ -81,6 +101,7 @@ impl GatewayMigrationWatcher {
             l1_chain_id,
             gw_chain_id,
             sl_chain_id_subpool,
+            migration_state,
         };
 
         L1Watcher::new(
@@ -147,48 +168,20 @@ impl ProcessRawEvents for GatewayMigrationWatcher {
         tracing::info!(
             new_sl_chain_id,
             migration_number,
-            "gateway migration event caught"
+            "gateway migration event caught; pausing L1 commit pipeline"
         );
+
+        // Signal all consumers (e.g. the L1 commit gate) to stop submitting new
+        // transactions to the current settlement layer.  Commits resume once the
+        // corresponding SetSLChainId system transaction has been applied on L2.
+        // Ignore send errors: they only occur if every receiver has been dropped,
+        // which means no consumer is listening anyway.
+        let _ = self
+            .migration_state
+            .send(GatewayMigrationState::InProgress { migration_number });
 
         let envelope = SystemTxEnvelope::set_sl_chain_id(new_sl_chain_id, migration_number);
         self.sl_chain_id_subpool.insert(envelope).await;
         Ok(())
     }
-}
-
-/// Finds the first L1 block where `migrationNumber(_chainId) >= migration_number` on the
-/// `IChainAssetHandler` contract, using binary search. This is used to determine the starting
-/// L1 block for the gateway migration watcher.
-async fn find_l1_block_by_migration_number(
-    zk_chain: ZkChain<DynProvider>,
-    chain_asset_handler: Address,
-    chain_id: u64,
-    migration_number: u64,
-) -> anyhow::Result<BlockNumber> {
-    let instance = Arc::new(IChainAssetHandler::new(
-        chain_asset_handler,
-        zk_chain.provider().clone(),
-    ));
-    let target = U256::from(migration_number);
-
-    util::find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| {
-        let instance = instance.clone();
-        async move {
-            let code = zk
-                .provider()
-                .get_code_at(*instance.address())
-                .block_id(block.into())
-                .await?;
-            if code.0.is_empty() {
-                return Ok(false);
-            }
-            let res = instance
-                .migrationNumber(U256::from(chain_id))
-                .block(block.into())
-                .call()
-                .await?;
-            Ok(res >= target)
-        }
-    })
-    .await
 }

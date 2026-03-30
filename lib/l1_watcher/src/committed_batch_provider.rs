@@ -1,10 +1,12 @@
 use crate::util;
 use alloy::primitives::BlockNumber;
+use alloy::providers::DynProvider;
 use anyhow::Context;
 use rangemap::RangeInclusiveMap;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use zksync_os_batch_types::DiscoveredCommittedBatch;
+use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 
@@ -44,29 +46,68 @@ impl CommittedBatchProvider {
         // todo: this can take a while and should ideally happen in the background
         // Ignore genesis here as it was handled above
         for batch_number in l1_state.last_executed_batch.max(1)..=l1_state.last_committed_batch {
-            let sl_block_with_commit = util::find_l1_commit_block_by_batch_number(
-                l1_state.diamond_proxy_sl.clone(),
-                batch_number,
-                max_l1_blocks_to_scan,
-            )
-            .await?;
-            let discovered_batch = util::fetch_stored_batch_data(
-                &l1_state.diamond_proxy_sl,
-                sl_block_with_commit,
-                batch_number,
-            )
-            .await?
-            .with_context(|| format!("failed to find committed batch {batch_number} on L1"))?;
-            tracing::info!(
-                batch_number = discovered_batch.number(),
-                "discovered committed batch on startup"
-            );
-            inner.insert(discovered_batch);
+            if batch_number == l1_state.last_executed_batch {
+                // Potential edge case when we are starting up for the first time after migration.
+                // Last executed batch was committed not on previous SL rather than current SL, and
+                // we need to look it up there.
+                let discovered_batch = match Self::fetch(
+                    &l1_state.diamond_proxy_sl,
+                    l1_state.last_executed_batch,
+                    max_l1_blocks_to_scan,
+                )
+                .await
+                {
+                    Ok(discovered_batch) => discovered_batch,
+                    Err(e) => {
+                        // todo: this should look up on GW instead when we are migrating GW->L1
+                        tracing::info!(
+                            "failed to find last executed batch on SL, trying L1 instead: {e:#?}"
+                        );
+                        Self::fetch(
+                            &l1_state.diamond_proxy_l1,
+                            l1_state.last_executed_batch,
+                            max_l1_blocks_to_scan,
+                        )
+                        .await?
+                    }
+                };
+                inner.insert(discovered_batch);
+            } else {
+                let discovered_batch = Self::fetch(
+                    &l1_state.diamond_proxy_sl,
+                    batch_number,
+                    max_l1_blocks_to_scan,
+                )
+                .await?;
+                inner.insert(discovered_batch);
+            }
         }
 
         Ok(Self {
             inner: Arc::new(RwLock::new(inner)),
         })
+    }
+
+    async fn fetch(
+        zk_chain: &ZkChain<DynProvider>,
+        batch_number: u64,
+        max_l1_blocks_to_scan: u64,
+    ) -> anyhow::Result<DiscoveredCommittedBatch> {
+        let sl_block_with_commit = util::find_l1_commit_block_by_batch_number(
+            zk_chain.clone(),
+            batch_number,
+            max_l1_blocks_to_scan,
+        )
+        .await?;
+        let discovered_batch =
+            util::fetch_stored_batch_data(zk_chain, sl_block_with_commit, batch_number)
+                .await?
+                .with_context(|| format!("failed to find committed batch {batch_number} on L1"))?;
+        tracing::info!(
+            batch_number = discovered_batch.number(),
+            "discovered committed batch on startup"
+        );
+        Ok(discovered_batch)
     }
 
     pub(crate) fn insert(&self, batch: DiscoveredCommittedBatch) {

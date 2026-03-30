@@ -170,6 +170,12 @@ alloy::sol! {
     #[sol(rpc)]
     interface IChainAssetHandler {
         function migrationNumber(uint256 _chainId) external view returns (uint256);
+        event MigrationFinalized(
+            uint256 indexed chainId,
+            uint256 migrationNumber,
+            bytes32 indexed assetId,
+            address indexed zkChain
+        );
     }
 
     // `IChainTypeManager.sol`

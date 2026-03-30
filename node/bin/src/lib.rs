@@ -7,6 +7,7 @@ mod command_source;
 pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
+mod migration_gate;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
 pub mod prover_api;
@@ -66,8 +67,9 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
-    CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
-    L1TxWatcher, L1UpgradeTxWatcher,
+    CommittedBatchProvider, GatewayMigrationState, GatewayMigrationWatcher, L1CommitWatcher,
+    L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, MigrationFinalizedWatcher,
+    SettlementLayerWatcher,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
@@ -523,7 +525,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         upgrade_subpool.insert(upgrade_tx).await;
     }
 
+    // The migration state channel is always created so that the MigrationGate in the
+    // main-node pipeline has a stable receiver regardless of the protocol version.
+    // On pre-v31 chains the sender is never written to, so the gate stays transparent.
+    let (migration_state_sender, migration_state_receiver) =
+        watch::channel(GatewayMigrationState::Stable);
+
+    // Carries the trigger batch number from MigrationGate to SettlementLayerWatcher.
+    // None until MigrationGate detects the SetSLChainId batch; Some(N) after detection.
+    let (migration_triggered_sender, migration_triggered_receiver) =
+        watch::channel::<Option<u64>>(None);
+
     if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
+        // MigrationFinalizedWatcher needs its own sender clone so both watchers can
+        // write to the shared migration state channel independently.
+        let migration_finalized_state_sender = migration_state_sender.clone();
         runtime.spawn_critical_task(
             "gateway migration watcher",
             GatewayMigrationWatcher::create_watcher(
@@ -535,9 +551,42 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 next_cursors.migration_number,
                 config.l1_watcher_config.clone().into(),
                 sl_chain_id_subpool.clone(),
+                migration_state_sender,
             )
             .await
             .expect("failed to start gateway migration watcher")
+            .run(),
+        );
+
+        // Watches for MigrationFinalized events on the IChainAssetHandler of the current
+        // settlement layer. On detection, sets migration state back to Stable so the
+        // MigrationGate resumes forwarding L1 commit transactions.
+        runtime.spawn_critical_task(
+            "migration finalized watcher",
+            MigrationFinalizedWatcher::create_watcher(
+                node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                node_startup_state.l1_state.bridgehub_sl.clone(),
+                chain_id,
+                node_startup_state.l1_state.l1_chain_id,
+                next_cursors.migration_number,
+                config.l1_watcher_config.clone().into(),
+                migration_finalized_state_sender,
+            )
+            .await
+            .expect("failed to start migration finalized watcher")
+            .run(),
+        );
+
+        // Crashes the node when getSettlementLayer() changes, forcing a restart against the
+        // new settlement layer.
+        runtime.spawn_critical_task(
+            "settlement layer watcher",
+            SettlementLayerWatcher::new(
+                node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                node_startup_state.l1_state.settlement_layer_address,
+                config.l1_watcher_config.poll_interval,
+                migration_triggered_receiver,
+            )
             .run(),
         );
 
@@ -835,6 +884,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_batch_provider.clone(),
             canonization_engine,
             leadership,
+            migration_state_receiver,
+            migration_triggered_sender,
         )
         .await;
     } else {
@@ -917,6 +968,8 @@ async fn run_main_node_pipeline(
     committed_batch_provider: CommittedBatchProvider,
     canonization_engine: BlockCanonizationEngine,
     leadership: LeadershipSignal,
+    migration_state: watch::Receiver<GatewayMigrationState>,
+    migration_triggered: watch::Sender<Option<u64>>,
 ) {
     let pubdata_mode = config
         .l1_sender_config
@@ -1082,6 +1135,10 @@ async fn run_main_node_pipeline(
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy_sl.clone(),
         ))
+        .pipe(migration_gate::MigrationGate {
+            migration_state,
+            migration_triggered,
+        })
         .pipe(L1Sender::<_, _, CommitCommand> {
             provider: sl_provider.clone(),
             config: config.l1_sender_config.clone().into(),

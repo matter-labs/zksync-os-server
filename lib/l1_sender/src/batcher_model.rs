@@ -47,6 +47,11 @@ pub struct BatchMetadata {
     pub messages: Vec<Vec<u8>>,
     #[serde(default)]
     pub multichain_root: B256,
+    /// Migration number of the `SetSLChainId` system transaction executed in this batch, if any.
+    /// `None` for the vast majority of batches; `Some(n)` only for the single batch that contains
+    /// the `SetSLChainId` transaction triggered by a gateway migration.
+    #[serde(default)]
+    pub set_sl_chain_id_migration_number: Option<u64>,
 }
 
 impl BatchMetadata {
