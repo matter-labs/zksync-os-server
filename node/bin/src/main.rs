@@ -483,6 +483,7 @@ fn load_internal_config(config: &mut Config) {
         .l2_signer_blacklist
         .extend(internal_config.l2_signer_blacklist);
     if let Some(failing_block) = internal_config.failing_block {
+        zksync_os_revm_consistency_checker::metrics::METRICS.record_inconsistency(42);
         if config.sequencer_config.block_rebuild.is_some() {
             panic!(
                 "External config specifies block rebuild: {:?} and internal config specifies failing block: {}. \

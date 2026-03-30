@@ -4,7 +4,7 @@ use vise::{Gauge, Metrics, Unit};
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "revm_consistency_checker")]
-pub(crate) struct RevmConsistencyCheckerMetrics {
+pub struct RevmConsistencyCheckerMetrics {
     /// Unix timestamp of the most recent detection -- used for alerts
     #[metrics(unit = Unit::Seconds)]
     pub last_inconsistency_timestamp: Gauge<u64>,
@@ -13,7 +13,7 @@ pub(crate) struct RevmConsistencyCheckerMetrics {
 }
 
 #[vise::register]
-pub(crate) static METRICS: vise::Global<RevmConsistencyCheckerMetrics> = vise::Global::new();
+pub static METRICS: vise::Global<RevmConsistencyCheckerMetrics> = vise::Global::new();
 
 impl RevmConsistencyCheckerMetrics {
     pub fn record_inconsistency(&self, block_number: u64) {
