@@ -870,6 +870,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         });
     }
 
+    // Wait for repositories to be ready to be used in RPC.
+    repositories.wait_for_db_ready_to_process_blocks().await;
+
     // =========== Start JSON RPC ========
     zksync_os_rpc::spawn(
         config.rpc_config.into(),
