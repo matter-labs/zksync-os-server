@@ -7,7 +7,7 @@ use reth_revm::state::Bytecode;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 use zksync_os_revm::transaction::abstraction::ZKsyncTxBuilder;
 use zksync_os_revm::{ZKsyncTx, ZkSpecId};
-use zksync_os_types::{ExecutionVersion, ZkTransaction};
+use zksync_os_types::{ForwardSystemVersion, ZkTransaction};
 
 /// Get unpadded code from full bytecode with artifacts.
 pub fn get_unpadded_code(full_bytecode: &[u8], account: &AccountProperties) -> Bytecode {
@@ -125,12 +125,12 @@ pub fn zk_tx_into_revm_tx(
         .unwrap()
 }
 
-pub fn zk_spec_version(execution_version: ExecutionVersion) -> Option<ZkSpecId> {
-    match execution_version {
-        ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
+pub fn zk_spec_version(forward_system_version: ForwardSystemVersion) -> Option<ZkSpecId> {
+    match forward_system_version {
+        ForwardSystemVersion::V1 | ForwardSystemVersion::V2 | ForwardSystemVersion::V3 => {
             Some(ZkSpecId::AtlasV1)
         }
-        ExecutionVersion::V4 | ExecutionVersion::V5 | ExecutionVersion::V6 => {
+        ForwardSystemVersion::V4 | ForwardSystemVersion::V5 | ForwardSystemVersion::V6 => {
             Some(ZkSpecId::AtlasV2)
         }
     }

@@ -104,8 +104,8 @@ use zksync_os_storage_api::{
     WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
-    BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, PubdataMode,
-    TransactionAcceptanceState, UpgradeInfo, UpgradeMetadata,
+    BlockStartCursors, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
+    UpgradeInfo, UpgradeMetadata,
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -484,18 +484,29 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         &genesis.genesis_upgrade_tx().await.protocol_version
     };
 
+    // Fail fast if the binary doesn't know this protocol version.
+    if zksync_os_types::protocol_config::forward_system_version(current_protocol_version).is_err() {
+        panic!(
+            "server binary does not support protocol version {current_protocol_version}; \
+             supported versions: {:?}",
+            zksync_os_types::protocol_config::supported_versions()
+        );
+    }
+
     if config
         .sequencer_config
         .tx_validator
         .deployment_filter
         .enabled
     {
-        let exec_version = ExecutionVersion::try_from(current_protocol_version)
-            .expect("Cannot determine execution version");
+        let exec_version: u32 =
+            zksync_os_types::protocol_config::forward_system_version(current_protocol_version)
+                .expect("Cannot determine execution version")
+                .into();
         assert!(
-            exec_version >= ExecutionVersion::V6,
+            exec_version >= 6,
             "Deployment filter requires execution version V6 or later (protocol >= v31.0), \
-             but current protocol version {current_protocol_version} uses {exec_version:?}"
+             but current protocol version {current_protocol_version} uses execution version {exec_version}"
         );
     }
 

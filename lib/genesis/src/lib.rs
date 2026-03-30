@@ -20,7 +20,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_interface::types::BlockContext;
-use zksync_os_types::{ConfigFormat, ExecutionVersion, L1UpgradeEnvelope, ProtocolSemanticVersion};
+use zksync_os_types::{ConfigFormat, L1UpgradeEnvelope, ProtocolSemanticVersion};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenesisInput {
@@ -216,11 +216,15 @@ async fn build_genesis(
     protocol_version: &ProtocolSemanticVersion,
 ) -> anyhow::Result<GenesisState> {
     let genesis_input = genesis_input_source.genesis_input().await?;
-    let execution_version = ExecutionVersion::try_from(protocol_version).with_context(|| {
+    let execution_version: u32 = zksync_os_types::protocol_config::forward_system_version(
+        protocol_version,
+    )
+    .with_context(|| {
         format!(
-            "Cannot determine execution version for genesis protocol version {protocol_version}"
+            "Cannot determine forward system version for genesis protocol version {protocol_version}"
         )
-    })?;
+    })?
+    .into();
 
     // BTreeMap is used to ensure that the storage logs are sorted by key, so that the order is deterministic
     // which is important for tree.
@@ -316,7 +320,7 @@ async fn build_genesis(
         gas_limit: 100_000_000,
         pubdata_limit: 100_000_000,
         mix_hash: U256::ZERO,
-        execution_version: execution_version as u32,
+        execution_version,
         blob_fee: U256::ONE,
     };
 
