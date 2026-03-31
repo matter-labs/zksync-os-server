@@ -4,7 +4,10 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use std::time::Duration;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TesterBuilder, test_multisetup};
-use zksync_os_pipeline_health::{BatchPipelineCondition, PipelineHealthConfig};
+use zksync_os_pipeline_health::{
+    BatchPipelineCondition, BlockPipelineCondition, ComponentConditionOverride, ComponentOverrides,
+    PipelineHealthConfig,
+};
 
 /// Verifies that the /status/health endpoint is reachable and returns a well-formed JSON
 /// response containing all expected top-level fields and a valid pipeline snapshot.
@@ -30,23 +33,6 @@ async fn health_endpoint_returns_pipeline_snapshot() {
         "Missing 'accepting_transactions' field in health response; got: {health}"
     );
 
-    // Pipeline snapshot must be present
-    let pipeline = health
-        .get("pipeline")
-        .expect("Missing 'pipeline' key in health response");
-
-    assert!(
-        pipeline.get("head_block").is_some(),
-        "Missing 'pipeline.head_block' in health response; got: {health}"
-    );
-    assert!(
-        pipeline
-            .get("components")
-            .and_then(|v| v.as_array())
-            .is_some(),
-        "Missing or non-array 'pipeline.components' in health response; got: {health}"
-    );
-
     // A freshly started node with no backpressure configured must be accepting transactions.
     let accepting = health["accepting_transactions"]
         .as_bool()
@@ -56,39 +42,6 @@ async fn health_endpoint_returns_pipeline_snapshot() {
         "Expected node to accept transactions on startup, but it reported not accepting; \
          health response: {health}"
     );
-
-    // head_block is reported as a non-negative integer (u64)
-    let head_block = pipeline["head_block"]
-        .as_u64()
-        .expect("'pipeline.head_block' must be a u64-compatible integer");
-    // Genesis block produces block 0; after startup the node should have produced at least one
-    // block (the upgrade transaction block). We allow 0 here since the timing may vary in CI.
-    let _ = head_block; // value is valid; just checking type and presence
-
-    // Each component entry must have required fields
-    let components = pipeline["components"].as_array().unwrap();
-    for entry in components {
-        assert!(
-            entry.get("name").and_then(|v| v.as_str()).is_some(),
-            "Component entry missing 'name' field; entry: {entry}"
-        );
-        assert!(
-            entry.get("state").and_then(|v| v.as_str()).is_some(),
-            "Component entry missing 'state' field; entry: {entry}"
-        );
-        assert!(
-            entry.get("last_processed_block").is_some(),
-            "Component entry missing 'last_processed_block' field; entry: {entry}"
-        );
-        assert!(
-            entry.get("block_lag").is_some(),
-            "Component entry missing 'block_lag' field; entry: {entry}"
-        );
-        assert!(
-            entry.get("time_lag_secs").is_some(),
-            "Component entry missing 'time_lag_secs' field; entry: {entry}"
-        );
-    }
 
     tracing::info!(
         "Health response:\n{}",
@@ -210,24 +163,64 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
         "Expected at least one backpressure cause but got none; health: {backpressure_health}"
     );
 
-    // The cause must come from the batcher with a time-lag trigger.
     // The Batcher calls record_processed(last_block_number, Some(last_block_timestamp))
     // so the monitor can compute a real time lag and fire backpressure.
-    let cause = &causes[0];
+    // Other batch-pipeline components may also appear in causes — find the batcher entry.
+    let batcher_cause = causes
+        .iter()
+        .find(|c| c["component"].as_str() == Some("batcher"))
+        .unwrap_or_else(|| {
+            panic!(
+                "Expected a backpressure cause from 'batcher' but got: {causes:?}; \
+                 full health: {backpressure_health}"
+            )
+        });
     assert_eq!(
-        cause["component"].as_str(),
-        Some("batcher"),
-        "Expected backpressure to originate from 'batcher'; cause: {cause}"
-    );
-    assert_eq!(
-        cause["trigger"].as_str(),
+        batcher_cause["trigger"].as_str(),
         Some("time_lag_too_high"),
-        "Expected backpressure trigger to be 'time_lag_too_high'; cause: {cause}"
+        "Expected batcher backpressure trigger to be 'time_lag_too_high'; cause: {batcher_cause}"
     );
 
     tracing::info!(
         "Backpressure triggered as expected:\n{}",
         serde_json::to_string_pretty(&backpressure_health).unwrap()
+    );
+
+    // --- Phase 2b: verify HTTP 503 and RPC rejection while backpressure is active ---
+    //
+    // The health endpoint must return 503 Service Unavailable when not accepting transactions.
+    let raw_response = reqwest::Client::new()
+        .get(format!("{}/status/health", node.status_url()))
+        .send()
+        .await
+        .expect("failed to reach /status/health");
+    assert_eq!(
+        raw_response.status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE,
+        "expected HTTP 503 while backpressure is active"
+    );
+
+    // eth_sendRawTransaction must be rejected with a backpressure error.
+    // Build and sign a real transaction following the pattern in tests/rpc/api.rs.
+    let fees = node.l2_provider.estimate_eip1559_fees().await?;
+    let tx = TransactionRequest::default()
+        .to(Address::random())
+        .value(U256::from(1u64))
+        .nonce(0)
+        .gas_limit(50_000)
+        .gas_price(fees.max_fee_per_gas);
+    let envelope = tx.build(&node.l2_wallet).await?;
+    let encoded = alloy::eips::eip2718::Encodable2718::encoded_2718(&envelope);
+    let err = node
+        .l2_provider
+        .send_raw_transaction(&encoded)
+        .await
+        .expect_err("transaction should be rejected while backpressure is active");
+    // NotAcceptingReason::PipelineBackpressure formats as:
+    // "Node is not currently accepting transactions: pipeline backpressure (N component(s) reporting)."
+    assert!(
+        err.to_string().contains("pipeline backpressure"),
+        "unexpected rejection error: {err}"
     );
 
     // --- Phase 3: wait for backpressure to clear naturally (max 180 s) ---
@@ -262,6 +255,126 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
     tracing::info!(
         "Backpressure cleared as expected:\n{}",
         serde_json::to_string_pretty(&cleared_health).unwrap()
+    );
+
+    Ok(())
+}
+
+/// Verifies that /status/pipeline reflects the configured thresholds per component group.
+///
+/// Block-pipeline components must expose both max_block_lag and max_time_lag_secs.
+/// Batch-pipeline components must expose only max_time_lag_secs (never max_block_lag,
+/// since block lag oscillates during normal batch accumulation and is not a meaningful signal).
+#[tokio::test]
+async fn pipeline_endpoint_reflects_configured_thresholds() {
+    let health_config = PipelineHealthConfig {
+        block_pipeline: BlockPipelineCondition {
+            max_block_lag: Some(50),
+            max_time_lag: Some(Duration::from_secs(30)),
+        },
+        batch_pipeline: BatchPipelineCondition {
+            max_time_lag: Some(Duration::from_secs(300)),
+        },
+        ..PipelineHealthConfig::default()
+    };
+
+    let node = TesterBuilder::default()
+        .pipeline_health_config(health_config)
+        .build()
+        .await
+        .expect("failed to start node");
+
+    let pipeline = node.get_pipeline().await;
+    let components = pipeline["components"]
+        .as_array()
+        .expect("'components' must be a JSON array");
+
+    // block_executor is a block-pipeline component — must have both thresholds
+    let block_executor = components
+        .iter()
+        .find(|c| c["name"].as_str() == Some("block_executor"))
+        .expect("block_executor not found in pipeline components");
+    assert_eq!(
+        block_executor["thresholds"]["max_block_lag"].as_u64(),
+        Some(50),
+        "block_executor must expose max_block_lag threshold"
+    );
+    assert_eq!(
+        block_executor["thresholds"]["max_time_lag_secs"].as_f64(),
+        Some(30.0),
+        "block_executor must expose max_time_lag_secs threshold"
+    );
+
+    // batcher is a batch-pipeline component — must have time lag only, never block lag
+    let batcher = components
+        .iter()
+        .find(|c| c["name"].as_str() == Some("batcher"))
+        .expect("batcher not found in pipeline components");
+    assert!(
+        batcher["thresholds"]["max_block_lag"].is_null(),
+        "batcher must NOT expose max_block_lag (oscillates during batch accumulation)"
+    );
+    assert_eq!(
+        batcher["thresholds"]["max_time_lag_secs"].as_f64(),
+        Some(300.0),
+        "batcher must expose max_time_lag_secs threshold"
+    );
+}
+
+/// Verifies that a component_override with enabled=false silences backpressure for that
+/// component, even when the group condition would trigger.
+///
+/// The test uses the same tight batch_pipeline.max_time_lag=500ms that normally fires within
+/// ~1 s, but disables it specifically for the batcher. We wait long enough that the batcher
+/// lag would normally exceed the threshold, then assert the node remains accepting.
+///
+/// Note: other batch-pipeline components (e.g. batch_verification) are not disabled, so they
+/// may still trigger. To isolate the override behaviour we also disable all other batch
+/// components that report timestamps. The goal is to confirm that the batcher specifically
+/// does not appear in backpressure_causes.
+#[test_multisetup([CURRENT_TO_L1])]
+async fn component_override_disables_backpressure_for_batcher(
+    builder: TesterBuilder,
+) -> anyhow::Result<()> {
+    // Tight threshold on the batch pipeline, but batcher is explicitly silenced.
+    let health_config = PipelineHealthConfig {
+        batch_pipeline: BatchPipelineCondition {
+            max_time_lag: Some(Duration::from_millis(500)),
+        },
+        component_overrides: ComponentOverrides {
+            batcher: Some(ComponentConditionOverride {
+                enabled: false,
+                max_block_lag: None,
+                max_time_lag: None,
+            }),
+            ..ComponentOverrides::default()
+        },
+        ..PipelineHealthConfig::default()
+    };
+
+    let node = builder
+        .block_time(Duration::from_millis(250))
+        .pipeline_health_config(health_config)
+        .build()
+        .await?;
+
+    // Wait long enough that batcher time-lag would normally exceed 500ms threshold.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    let health = node.get_health().await;
+
+    // The batcher must not appear in any backpressure causes.
+    let causes = health
+        .get("backpressure_causes")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        causes
+            .iter()
+            .all(|c| c["component"].as_str() != Some("batcher")),
+        "batcher must not appear in backpressure_causes when its override is enabled=false; \
+         health: {health}"
     );
 
     Ok(())

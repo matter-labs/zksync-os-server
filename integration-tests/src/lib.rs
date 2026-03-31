@@ -256,6 +256,18 @@ impl Tester {
             .expect("Failed to parse health response as JSON")
     }
 
+    pub async fn get_pipeline(&self) -> serde_json::Value {
+        let url = format!("{}/status/pipeline", self.status_url);
+        reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .expect("Failed to call /status/pipeline")
+            .json()
+            .await
+            .expect("Failed to parse pipeline response as JSON")
+    }
+
     pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
         // Due to type inference issue, we need to specify None type here and this whole function if a de-facto helper for this
         self.launch_external_node_inner(None::<fn(&mut Config)>)
