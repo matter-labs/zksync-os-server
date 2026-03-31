@@ -3,6 +3,7 @@ use jsonrpsee::core::middleware::{Batch, BatchEntry, Notification};
 use jsonrpsee::server::middleware::rpc::{RpcService, RpcServiceT};
 use jsonrpsee::types::Request;
 use jsonrpsee::{BatchResponseBuilder, MethodResponse};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
@@ -26,6 +27,99 @@ impl Monitoring {
     }
 }
 
+/// Ensures latency is recorded even if the future is dropped mid-flight (client disconnected).
+struct CallGuard {
+    method: String,
+    started: Instant,
+    request_size: usize,
+    /// `Some((output_size, error_code))` once the future has resolved.
+    completed: Option<(usize, Option<i32>)>,
+}
+
+impl CallGuard {
+    fn new(method: String, request_size: usize) -> Self {
+        Self {
+            method,
+            started: Instant::now(),
+            request_size,
+            completed: None,
+        }
+    }
+}
+
+/// Ensures batch-level metrics are recorded even if the future is dropped mid-flight (client disconnected).
+struct BatchGuard {
+    batch_size: usize,
+    batch_input_size: usize,
+    request_counts: HashMap<String, u64>,
+    started: Instant,
+    /// `Some(response_size)` once the batch has resolved.
+    completed: Option<usize>,
+}
+
+impl BatchGuard {
+    fn new(
+        batch_size: usize,
+        batch_input_size: usize,
+        request_counts: HashMap<String, u64>,
+    ) -> Self {
+        Self {
+            batch_size,
+            batch_input_size,
+            request_counts,
+            started: Instant::now(),
+            completed: None,
+        }
+    }
+}
+
+impl Drop for BatchGuard {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        let cancelled = self.completed.is_none();
+        let response_size = self.completed.take().unwrap_or(0);
+        if cancelled {
+            API_METRICS.cancelled["batch"].inc();
+        }
+        API_METRICS.response_time["batch"].observe(elapsed);
+        API_METRICS.request_size["batch"].observe(self.batch_input_size);
+        API_METRICS.response_size["batch"].observe(response_size);
+        for (method, count) in &self.request_counts {
+            API_METRICS.requests_in_batch_count[method.as_str()].observe(*count);
+        }
+        if !cancelled {
+            tracing::debug!(
+                target: "rpc::monitoring::batch",
+                batch_size = self.batch_size,
+                elapsed = ?elapsed,
+                batch_input_size = self.batch_input_size,
+                response_size,
+                "rpc batch call completed"
+            );
+        }
+    }
+}
+
+impl Drop for CallGuard {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        let cancelled = self.completed.is_none();
+        let (output_size, error_code) = self.completed.take().unwrap_or((0, None));
+        if cancelled {
+            API_METRICS.cancelled[&self.method].inc();
+        }
+        log_and_report(
+            CallKind::Call,
+            &self.method,
+            elapsed,
+            self.request_size,
+            output_size,
+            error_code,
+            cancelled,
+        );
+    }
+}
+
 impl RpcServiceT for Monitoring {
     type MethodResponse = <RpcService as RpcServiceT>::MethodResponse;
     type NotificationResponse = <RpcService as RpcServiceT>::NotificationResponse;
@@ -40,18 +134,9 @@ impl RpcServiceT for Monitoring {
         let fut = self.inner.call(request);
 
         async move {
-            let started = Instant::now();
+            let mut guard = CallGuard::new(method, request_size);
             let out = fut.await;
-            let output_size = out.as_json().get().len();
-
-            log_and_report(
-                CallKind::Call,
-                &method,
-                started.elapsed(),
-                request_size,
-                output_size,
-                out.as_error_code(),
-            );
+            guard.completed = Some((out.as_json().get().len(), out.as_error_code()));
             out
         }
     }
@@ -79,15 +164,15 @@ impl RpcServiceT for Monitoring {
                     None
                 }
             })
-            .fold(std::collections::HashMap::new(), |mut acc, method| {
-                *acc.entry(method).or_insert(0) += 1;
+            .fold(HashMap::new(), |mut acc, method| {
+                *acc.entry(method).or_insert(0u64) += 1;
                 acc
             });
 
         let mut batch_rp = BatchResponseBuilder::new_with_limit(self.max_response_size_bytes);
         let service = self.clone();
         async move {
-            let started = Instant::now();
+            let mut guard = BatchGuard::new(batch_size, batch_input_size, request_counts);
             let mut got_notification = false;
 
             for batch_entry in batch.into_iter() {
@@ -119,26 +204,7 @@ impl RpcServiceT for Monitoring {
                 MethodResponse::from_batch(batch_rp.finish())
             };
 
-            let response_size = response.as_json().get().len();
-            let elapsed = started.elapsed();
-
-            // Report batch metrics
-            API_METRICS.response_time["batch"].observe(elapsed);
-            API_METRICS.request_size["batch"].observe(batch_input_size);
-            API_METRICS.response_size["batch"].observe(response_size);
-            for (method, count) in request_counts {
-                API_METRICS.requests_in_batch_count[&method].observe(count);
-            }
-
-            tracing::debug!(
-                target: "rpc::monitoring::batch",
-                batch_size,
-                elapsed = ?elapsed,
-                batch_input_size,
-                response_size,
-                "rpc batch call completed"
-            );
-
+            guard.completed = Some(response.as_json().get().len());
             response
         }
     }
@@ -163,6 +229,7 @@ impl RpcServiceT for Monitoring {
                 request_size,
                 output_size,
                 out.as_error_code(),
+                false,
             );
             out
         }
@@ -202,6 +269,7 @@ fn log_and_report(
     request_size: usize,
     output_size_bytes: usize,
     error_code: Option<i32>,
+    cancelled: bool,
 ) {
     API_METRICS.response_time[method].observe(elapsed);
     API_METRICS.request_size[method].observe(request_size);
@@ -223,6 +291,7 @@ fn log_and_report(
             ?elapsed,
             request_size,
             output_size_bytes,
+            cancelled,
         },
         message: "rpc call completed",
     );
