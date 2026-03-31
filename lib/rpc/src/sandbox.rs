@@ -485,8 +485,13 @@ impl EvmTracer for CallTracer {
 
     /// Opcode failed for some reason. Note: call frame ends immediately
     fn on_opcode_error(&mut self, error: &EvmError, _frame_state: impl EvmFrameInterface) {
-        if self.only_top_call && self.current_call_depth > 1 {
+        if self.only_top_call
+            && (self.current_call_depth > 1 || self.create_operation_requested.is_some())
+        {
             // Ignore errors in subcalls if only the top call should be traced
+            if self.create_operation_requested.is_some() {
+                self.create_operation_requested = None;
+            }
             return;
         }
 
@@ -502,16 +507,22 @@ impl EvmTracer for CallTracer {
     /// Special cases, when error happens in frame before any opcode is executed (unfortunately we can't provide access to state)
     /// Note: call frame ends immediately
     fn on_call_error(&mut self, error: &EvmError) {
-        if self.only_top_call && self.current_call_depth > 1 {
+        if self.only_top_call
+            && (self.current_call_depth > 1 || self.create_operation_requested.is_some())
+        {
             // Ignore errors in subcalls if only the top call should be traced
+            if self.create_operation_requested.is_some() {
+                self.create_operation_requested = None;
+            }
             return;
         }
 
         let current_call = self.unfinished_calls.last_mut().expect("Should exist");
         current_call.error = Some(fmt_error_msg(error));
 
-        // Sanity check
-        assert!(self.create_operation_requested.is_none());
+        if self.create_operation_requested.is_some() {
+            self.create_operation_requested = None;
+        }
     }
 
     /// We should treat selfdestruct as a special kind of a call
@@ -892,5 +903,31 @@ mod tests {
         );
 
         assert_eq!(tracer.unfinished_calls[0].output, Some(original_output));
+    }
+
+    #[test]
+    fn only_top_call_ignores_nested_create_pre_frame_opcode_error() {
+        let mut tracer = CallTracer::new_with_config(vec![], false, true);
+        tracer.current_call_depth = 1;
+        tracer.unfinished_calls.push(make_empty_call_frame());
+        tracer.on_create_request(false);
+
+        tracer.on_opcode_error(&EvmError::OutOfGas, TestFrame::default());
+
+        assert!(tracer.unfinished_calls[0].error.is_none());
+        assert!(tracer.create_operation_requested.is_none());
+    }
+
+    #[test]
+    fn only_top_call_ignores_nested_create_pre_frame_call_error() {
+        let mut tracer = CallTracer::new_with_config(vec![], false, true);
+        tracer.current_call_depth = 1;
+        tracer.unfinished_calls.push(make_empty_call_frame());
+        tracer.on_create_request(true);
+
+        tracer.on_call_error(&EvmError::OutOfGas);
+
+        assert!(tracer.unfinished_calls[0].error.is_none());
+        assert!(tracer.create_operation_requested.is_none());
     }
 }
