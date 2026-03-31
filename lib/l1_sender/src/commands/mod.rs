@@ -48,9 +48,15 @@ impl<C: SendToL1 + Send + 'static> HasBlockSeq for L1SenderCommand<C> {
     fn block_seq(&self) -> u64 {
         self.last_block_number()
     }
-    // Batch-level commands do not carry per-block timestamps; 0 skips time-lag checks.
     fn block_timestamp(&self) -> u64 {
-        0
+        match self {
+            Self::SendToL1(cmd) => cmd
+                .as_ref()
+                .last()
+                .map(|e| e.block_timestamp())
+                .unwrap_or(0),
+            Self::Passthrough(envelope) => envelope.block_timestamp(),
+        }
     }
 }
 

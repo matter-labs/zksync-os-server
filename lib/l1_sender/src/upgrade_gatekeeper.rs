@@ -119,10 +119,19 @@ impl PipelineComponent for UpgradeGatekeeper {
             }
 
             let last_block = command.last_block_number();
+            let last_block_timestamp = match &command {
+                L1SenderCommand::SendToL1(cmd) => cmd
+                    .as_ref()
+                    .last()
+                    .map(|e| e.batch.batch_info.last_block_timestamp),
+                L1SenderCommand::Passthrough(envelope) => {
+                    Some(envelope.batch.batch_info.last_block_timestamp)
+                }
+            };
             if output.send(command).is_err() {
                 anyhow::bail!("Outbound channel closed");
             }
-            health_reporter.record_processed(last_block, None);
+            health_reporter.record_processed(last_block, last_block_timestamp);
         }
     }
 }

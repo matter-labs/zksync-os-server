@@ -208,6 +208,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                             self.health_reporter.enter_state(BatchVerificationClientState::Active);
 
                             let last_block = message.last_block_number;
+                            let last_block_timestamp = message.commit_data.last_block_timestamp;
                             let batch_number = message.batch_number;
                             let request_id = message.request_id;
                             let verification_result = self.handle_verification_request(message).await;
@@ -224,7 +225,8 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                                     writer.send(BatchVerificationResponse { request_id, batch_number, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
                                 },
                             }
-                            self.health_reporter.record_processed(last_block, None);
+                            self.health_reporter
+                                .record_processed(last_block, Some(last_block_timestamp));
                         }
                         Some(Err(parsing_err)) =>
                         {

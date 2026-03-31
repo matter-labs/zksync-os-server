@@ -136,7 +136,7 @@
         },
         "overrides": []
       },
-      "description": "The largest number of blocks any single component is behind the pipeline head. Zero means all components are processing the latest block. Rising lag in a specific component means it cannot keep up with block production — use Block Lag By Component to identify which one.",
+      "description": "The largest number of blocks any block-pipeline component (block_executor, block_canonizer, block_applier, tree_manager, prover_input_generator) is behind the pipeline head. Filters out batch components where block_lag oscillates with batch size and is not a reliable signal — use Worst Batch Time Lag for batch pipeline health.",
       "gridPos": { "h": 5, "w": 4, "x": 8, "y": 1 },
       "id": 103,
       "options": {
@@ -155,13 +155,13 @@
         {
           "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
           "editorMode": "code",
-          "expr": "max(pipeline_component_block_lag) or vector(0)",
+          "expr": "max(pipeline_component_block_lag{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}) or vector(0)",
           "legendFormat": "{{component}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Worst Block Lag",
+      "title": "Worst Block Lag (Block Pipeline)",
       "type": "stat"
     },
     {
@@ -181,7 +181,7 @@
         },
         "overrides": []
       },
-      "description": "Wall-clock seconds between the block timestamp of the pipeline head and the most recently processed block of the slowest component. Unlike block lag, this accounts for block timing variance and reflects real delay from the user's perspective. Yellow ≥ 5s, Red ≥ 30s. Returns 0 if timestamp is unavailable.",
+      "description": "Wall-clock seconds between the pipeline head timestamp and the last batch-pipeline component's processed timestamp. Batch components (batcher, fri_job_manager, gapless_committer, l1_sender_*, etc.) use max_time_lag for backpressure — this is the primary batch pipeline health signal. Yellow ≥ 5s, Red ≥ 30s.",
       "gridPos": { "h": 5, "w": 4, "x": 12, "y": 1 },
       "id": 104,
       "options": {
@@ -200,13 +200,13 @@
         {
           "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
           "editorMode": "code",
-          "expr": "max(pipeline_component_time_lag_seconds) or vector(0)",
+          "expr": "max(pipeline_component_time_lag_seconds{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}) or vector(0)",
           "legendFormat": "{{component}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Worst Time Lag",
+      "title": "Worst Batch Time Lag",
       "type": "stat"
     },
     {
@@ -877,7 +877,7 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 46 },
       "id": 120,
       "panels": [],
-      "title": "Stage Group Drilldowns",
+      "title": "Pipeline Group Drilldowns",
       "type": "row"
     },
     {
@@ -897,8 +897,8 @@
         },
         "overrides": []
       },
-      "description": "Blocks queued between components (block diff to upstream) for the sequencer execution path: block_executor → block_canonizer → block_applier → tree_manager. A growing diff in block_applier or tree_manager (which write to storage and the Merkle tree) typically indicates I/O saturation rather than CPU pressure.",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 47 },
+      "description": "Blocks queued between components (block diff to upstream) for the block pipeline: block_executor → block_canonizer → block_applier → tree_manager → prover_input_generator. A growing diff in block_applier or tree_manager typically indicates I/O saturation. A growing diff in prover_input_generator means prover input computation is the bottleneck.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 47 },
       "id": 121,
       "options": {
         "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -909,13 +909,13 @@
         {
           "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
           "editorMode": "code",
-          "expr": "pipeline_component_block_diff_to_upstream{component=~\"block_executor|block_canonizer|block_applier|tree_manager\"}",
+          "expr": "pipeline_component_block_diff_to_upstream{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}",
           "legendFormat": "{{component}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Sequencer Path Block Diff to Upstream",
+      "title": "Block Pipeline Block Diff to Upstream",
       "type": "timeseries"
     },
     {
@@ -935,8 +935,8 @@
         },
         "overrides": []
       },
-      "description": "Blocks queued between components (block diff to upstream) for the proving path: prover_input_generator → batcher → batch_verification → fri_job_manager → snark_job_manager → gapless_committer → gapless_l1_proof_sender. Some diff here is normal since proving is slower than block production — watch for unbounded monotonic growth which signals the prover is falling permanently behind.",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 47 },
+      "description": "Blocks queued between batch-pipeline components (block diff to upstream) for batcher → batch_verification → fri_job_manager → snark_job_manager → gapless_committer → gapless_l1_proof_sender → l1_sender_* → priority_tree. Some diff here is normal since proving is slower than block production — watch for unbounded monotonic growth which signals the prover is falling permanently behind.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 47 },
       "id": 122,
       "options": {
         "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -947,13 +947,13 @@
         {
           "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
           "editorMode": "code",
-          "expr": "pipeline_component_block_diff_to_upstream{component=~\"prover_input_generator|batcher|batch_verification|fri_job_manager|snark_job_manager|gapless_committer|gapless_l1_proof_sender\"}",
+          "expr": "pipeline_component_block_diff_to_upstream{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}",
           "legendFormat": "{{component}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Prover Path Block Diff to Upstream",
+      "title": "Batch Pipeline Block Diff to Upstream",
       "type": "timeseries"
     },
     {
@@ -973,46 +973,8 @@
         },
         "overrides": []
       },
-      "description": "Blocks queued between components (block diff to upstream) for L1 settlement components: l1_sender_commit, l1_sender_prove, l1_sender_execute, priority_tree. Growth here usually indicates L1 submission is congested — check gas prices, nonce sequencing issues, or operator ETH balance running low.",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 47 },
-      "id": 123,
-      "options": {
-        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "pluginVersion": "12.0.1",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
-          "editorMode": "code",
-          "expr": "pipeline_component_block_diff_to_upstream{component=~\"l1_sender_commit|l1_sender_prove|l1_sender_execute|priority_tree\"}",
-          "legendFormat": "{{component}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Settlement Path Block Diff to Upstream",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisPlacement": "auto",
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "description": "Block lag for the sequencer execution path components: block_executor, block_canonizer, block_applier, tree_manager. These should all stay near zero. A lag spike in tree_manager while block_applier is fine suggests Merkle tree computation is the bottleneck.",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 55 },
+      "description": "Block lag for block-pipeline components: block_executor, block_canonizer, block_applier, tree_manager, prover_input_generator. All should stay near zero. A lag spike in tree_manager while block_applier is fine suggests Merkle tree computation is the bottleneck. Batch components are excluded — their block_lag oscillates with batch size and is not a reliable signal.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 55 },
       "id": 124,
       "options": {
         "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -1023,13 +985,13 @@
         {
           "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
           "editorMode": "code",
-          "expr": "pipeline_component_block_lag{component=~\"block_executor|block_canonizer|block_applier|tree_manager\"}",
+          "expr": "pipeline_component_block_lag{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}",
           "legendFormat": "{{component}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Sequencer Path Block Lag",
+      "title": "Block Pipeline Block Lag",
       "type": "timeseries"
     },
     {
@@ -1045,12 +1007,12 @@
             "showPoints": "never",
             "spanNulls": true
           },
-          "unit": "none"
+          "unit": "s"
         },
         "overrides": []
       },
-      "description": "Block lag for the proving path components: prover_input_generator, batcher, batch_verification, fri_job_manager, snark_job_manager, gapless_committer, gapless_l1_proof_sender. A steadily growing lag here is expected if the proof pipeline is slower than block production — alert only if the rate of growth accelerates.",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 55 },
+      "description": "Wall-clock time lag for all batch-pipeline components: batcher, batch_verification, fri_job_manager, snark_job_manager, gapless_committer, gapless_l1_proof_sender, l1_sender_commit, l1_sender_prove, l1_sender_execute, upgrade_gatekeeper, priority_tree. A stable lag is acceptable — a monotonically growing lag signals the batch pipeline cannot keep up with block production. This is the primary backpressure metric for batch components.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 55 },
       "id": 125,
       "options": {
         "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -1061,13 +1023,51 @@
         {
           "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
           "editorMode": "code",
-          "expr": "pipeline_component_block_lag{component=~\"prover_input_generator|batcher|batch_verification|fri_job_manager|snark_job_manager|gapless_committer|gapless_l1_proof_sender\"}",
+          "expr": "pipeline_component_time_lag_seconds{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}",
           "legendFormat": "{{component}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Prover Path Block Lag",
+      "title": "Batch Pipeline Time Lag",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Wall-clock time lag for block-pipeline components (block_executor, block_canonizer, block_applier, tree_manager, prover_input_generator). Should stay near zero in normal operation. A rising value here directly translates to delayed transaction finality visible to users.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 63 },
+      "id": 127,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "pipeline_component_time_lag_seconds{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Block Pipeline Time Lag",
       "type": "timeseries"
     },
     {
@@ -1087,84 +1087,8 @@
         },
         "overrides": []
       },
-      "description": "Block lag for L1 settlement components: l1_sender_commit, l1_sender_prove, l1_sender_execute, priority_tree. These lag behind the prover path by design. A sudden increase compared to the prover path lag suggests an L1 submission issue rather than a sequencing issue.",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 55 },
-      "id": 126,
-      "options": {
-        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "pluginVersion": "12.0.1",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
-          "editorMode": "code",
-          "expr": "pipeline_component_block_lag{component=~\"l1_sender_commit|l1_sender_prove|l1_sender_execute|priority_tree\"}",
-          "legendFormat": "{{component}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Settlement Path Block Lag",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisPlacement": "auto",
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "description": "Wall-clock time lag for sequencer path components (block_executor, block_canonizer, block_applier, tree_manager). Should stay near zero in normal operation. A rising value here directly translates to delayed transaction finality visible to users.",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 63 },
-      "id": 127,
-      "options": {
-        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "pluginVersion": "12.0.1",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
-          "editorMode": "code",
-          "expr": "pipeline_component_time_lag_seconds{component=~\"block_executor|block_canonizer|block_applier|tree_manager\"}",
-          "legendFormat": "{{component}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Sequencer Path Time Lag",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisPlacement": "auto",
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "description": "Wall-clock time lag for the proving path components. A baseline lag is expected since proof generation takes longer than block production. What matters is whether this lag is stable (acceptable) or growing over time (prover falling behind permanently).",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 63 },
+      "description": "Absolute block number of the last block processed by each batch-pipeline component. All lines should advance together, though batch components naturally advance in steps (one jump per sealed batch). A flat line for one component means it has stalled. Use this alongside Batch Pipeline Time Lag to distinguish stalls from expected batch-size variation.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 63 },
       "id": 128,
       "options": {
         "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -1175,51 +1099,13 @@
         {
           "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
           "editorMode": "code",
-          "expr": "pipeline_component_time_lag_seconds{component=~\"prover_input_generator|batcher|batch_verification|fri_job_manager|snark_job_manager|gapless_committer|gapless_l1_proof_sender\"}",
+          "expr": "pipeline_component_last_processed_block{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}",
           "legendFormat": "{{component}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Prover Path Time Lag",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisPlacement": "auto",
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "description": "Wall-clock time lag for L1 settlement components (l1_sender_commit, l1_sender_prove, l1_sender_execute, priority_tree). This represents how far behind on-chain state is from the latest sequenced blocks. Compare to the proving path time lag — if settlement lag grows faster than prover lag, the bottleneck is specifically in L1 submission.",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 63 },
-      "id": 129,
-      "options": {
-        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "pluginVersion": "12.0.1",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
-          "editorMode": "code",
-          "expr": "pipeline_component_time_lag_seconds{component=~\"l1_sender_commit|l1_sender_prove|l1_sender_execute|priority_tree\"}",
-          "legendFormat": "{{component}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Settlement Path Time Lag",
+      "title": "Batch Pipeline Last Processed Block",
       "type": "timeseries"
     },
     {

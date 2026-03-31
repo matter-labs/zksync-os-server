@@ -255,6 +255,10 @@ pub async fn run_l1_sender<Input: SendToL1>(
         L1_SENDER_METRICS.nonce[&command_name].set(nonce);
         for command in completed_commands {
             let last_block = command.as_ref().last().map(|e| e.batch.last_block_number);
+            let last_block_timestamp = command
+                .as_ref()
+                .last()
+                .map(|e| e.batch.batch_info.last_block_timestamp);
             for mut output_envelope in command.into() {
                 output_envelope.set_stage(Input::MINED_STAGE);
                 outbound
@@ -263,7 +267,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     .context("outbound channel closed")?;
             }
             if let Some(lb) = last_block {
-                health_reporter.record_processed(lb, None);
+                health_reporter.record_processed(lb, last_block_timestamp);
             }
         }
     }
@@ -302,11 +306,12 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
                         );
                         // Capture before with_stage() moves batch.
                         let last_block = batch.batch.last_block_number;
+                        let last_block_timestamp = batch.batch.batch_info.last_block_timestamp;
                         outbound
                             .send((*batch).with_stage(Input::PASSTHROUGH_STAGE))
                             .ok()
                             .context("outbound channel closed")?;
-                        health_reporter.record_processed(last_block, None);
+                        health_reporter.record_processed(last_block, Some(last_block_timestamp));
                     }
                 }
             }

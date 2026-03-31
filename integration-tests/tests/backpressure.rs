@@ -4,7 +4,7 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use std::time::Duration;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TesterBuilder, test_multisetup};
-use zksync_os_pipeline_health::{BackpressureCondition, PipelineHealthConfig};
+use zksync_os_pipeline_health::{BatchPipelineCondition, PipelineHealthConfig};
 
 /// Verifies that the /status/health endpoint is reachable and returns a well-formed JSON
 /// response containing all expected top-level fields and a valid pipeline snapshot.
@@ -101,46 +101,44 @@ async fn health_endpoint_returns_pipeline_snapshot() {
 /// # Main-node only
 ///
 /// This test uses `CURRENT_TO_L1` which brings up the full main-node pipeline including the
-/// Batcher. The backpressure condition is tied to Batcher lag, so this test would be meaningless
-/// in External Node mode where the Batcher is absent.
+/// Batcher. The backpressure condition is tied to Batcher time lag, so this test would be
+/// meaningless in External Node mode.
 ///
 /// # How the trigger works
 ///
-/// The `Batcher` component calls `record_processed` once per *batch* (a batch = multiple blocks).
-/// This means its `last_processed_block_number` stays at the last batch's ending block while the next batch
-/// is being accumulated. The pipeline health monitor tracks:
+/// After the timestamp fixes (Tasks 1–2), the Batcher calls
+/// `record_processed(last_block_number, Some(last_block_timestamp))` once per batch.
+/// The monitor tracks:
 ///
-///   `lag = BlockExecutor.last_processed_block_number - Batcher.last_processed_block_number`
+///   `time_lag = BlockExecutor.last_timestamp - Batcher.last_timestamp`
 ///
-/// We actively submit a stream of simple L2 transfers so the sequencer keeps producing blocks.
-/// Once `BlockExecutor` has produced `max_block_lag + 1` more blocks than `Batcher`, the lag
-/// threshold is exceeded and `accepting_transactions` flips to `false`.
-///
-/// Once the next batch completes and the Batcher calls `record_processed`, the lag drops back
-/// below the threshold and accepting resumes.
+/// Block timestamps are stored as whole Unix seconds. The monitor computes lag as
+/// `Duration::from_secs(head_secs - component_secs)`, so the minimum observable
+/// non-zero lag is exactly 1 second. Any `max_time_lag` below 1 s (including 500 ms)
+/// triggers as soon as the head timestamp is 1 full second ahead of the Batcher's
+/// last sealed timestamp. The trigger fires during normal batch accumulation (~1 s
+/// batch_timeout) and clears immediately when the next batch seals.
 ///
 /// # Thresholds chosen
 ///
-/// * `batcher.max_block_lag = 1`: the batcher seals batches approximately every 1 s
-///   (`batch_timeout`). With a 250 ms block time, head advances ~2 blocks after each batch seal
-///   before the next one completes, creating a reliable lag of 2 > 1. The 30 s poll window
-///   catches this trigger within the first inter-batch period (~75% of each 1 s cycle).
-/// * Trigger poll timeout: 30 s — ample time to observe the lag exceed 1 block.
-/// * Clear poll timeout: 180 s — generous headroom for CI resource contention; clearing happens
-///   as soon as the batcher seals the next batch (~1 s after trigger), not after the prover
-///   finishes.
+/// * `batch_pipeline.max_time_lag = 500ms`: any sub-1-second value suffices; we choose
+///   500 ms to make the intent clear. The trigger fires once head_ts > batcher_ts by
+///   ≥ 1 s (the first integer-second boundary), within the first ~1 s batch cycle.
+/// * Trigger poll timeout: 30 s.
+/// * Clear poll timeout: 180 s — generous headroom for CI resource contention; clearing
+///   happens as soon as the batcher seals the next batch (~1 s after trigger).
 #[test_multisetup([CURRENT_TO_L1])]
 async fn backpressure_triggers_and_clears_under_batcher_lag(
     builder: TesterBuilder,
 ) -> anyhow::Result<()> {
-    // Configure a tight backpressure threshold on the Batcher component.
-    // The batcher seals a batch approximately every 1 s (batch_timeout). With a 250 ms block
-    // time, head advances ~2 blocks after each batch seal before the next one completes,
-    // reliably producing lag = 2 > 1 and triggering backpressure every inter-batch period.
+    // Configure a tight time-lag threshold on the batch pipeline.
+    // Block timestamps are whole Unix seconds. The monitor computes
+    // `lag = Duration::from_secs(head_ts - batcher_ts)`, so the minimum non-zero lag is
+    // exactly 1 s. Any max_time_lag below 1 s (we use 500 ms) triggers as soon as the head
+    // timestamp advances 1 full second past the Batcher's last sealed timestamp (~1 batch cycle).
     let health_config = PipelineHealthConfig {
-        batcher: BackpressureCondition {
-            max_block_lag: Some(1),
-            max_time_lag: None,
+        batch_pipeline: BatchPipelineCondition {
+            max_time_lag: Some(Duration::from_millis(500)),
         },
         ..PipelineHealthConfig::default()
     };
@@ -183,9 +181,9 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
 
     // --- Phase 2: poll until backpressure fires (max 30 s) ---
     //
-    // The batcher seals a batch ~every 1 s. After each seal, head advances ~2 more blocks
-    // before the next batch completes, so lag = 2 > 1 and the monitor sets
-    // accepting_transactions=false.
+    // The batcher seals a batch ~every 1 s. Once head_ts advances 1 full second past the
+    // Batcher's last sealed timestamp, time_lag (integer seconds) ≥ 1 s > 500 ms threshold,
+    // so the monitor sets accepting_transactions=false.
     let trigger_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let backpressure_health = loop {
         let health = node.get_health().await;
@@ -212,17 +210,21 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
         "Expected at least one backpressure cause but got none; health: {backpressure_health}"
     );
 
-    // The cause should identify the batcher component.
+    // The cause must come from the batcher with a time-lag trigger.
+    // This specifically validates that the Batcher timestamp fix works: Batcher now calls
+    // record_processed(last_block_number, Some(last_block_timestamp)) so the monitor can
+    // compute a real time lag and fire backpressure. Without the fix, block_timestamp()
+    // returned 0 and time_lag was always skipped.
     let cause = &causes[0];
     assert_eq!(
         cause["component"].as_str(),
         Some("batcher"),
-        "Expected backpressure cause component to be 'batcher'; cause: {cause}"
+        "Expected backpressure to originate from 'batcher'; cause: {cause}"
     );
     assert_eq!(
         cause["trigger"].as_str(),
-        Some("block_lag_too_high"),
-        "Expected backpressure trigger to be 'block_lag_too_high'; cause: {cause}"
+        Some("time_lag_too_high"),
+        "Expected backpressure trigger to be 'time_lag_too_high'; cause: {cause}"
     );
 
     tracing::info!(

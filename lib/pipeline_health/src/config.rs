@@ -51,62 +51,163 @@ impl ComponentId {
     }
 }
 
-/// Per-component backpressure thresholds.
-/// Both conditions are independent — either can trigger backpressure.
-#[derive(DescribeConfig, DeserializeConfig, Default, Clone, Debug)]
-pub struct BackpressureCondition {
-    /// Trigger backpressure when this component is more than N blocks behind BlockExecutor.
+/// Internal evaluation condition used by the monitor's evaluate() logic.
+/// Constructed from the public config types by condition_for().
+/// Not part of the public API — callers configure via BlockPipelineCondition /
+/// BatchPipelineCondition.
+pub(crate) struct BackpressureCondition {
     pub max_block_lag: Option<u64>,
-    /// Trigger backpressure when block-timestamp lag exceeds this duration.
-    /// Only evaluated when `last_processed_block_timestamp` is `Some` for both head and this component.
     pub max_time_lag: Option<Duration>,
 }
 
-/// Per-component backpressure config.
-/// A separate metrics_interval controls how often Prometheus gauges are refreshed.
+/// Backpressure thresholds for block-level pipeline components:
+/// BlockExecutor, BlockCanonizer, BlockApplier, TreeManager, ProverInputGenerator.
 ///
-/// `default` acts as a fallback: any per-component field that is `None` is resolved
-/// from `default`. This lets operators set a single `pipeline_health.default.max_block_lag`
-/// without needing to enumerate every component individually. For most deployments,
-/// setting only `default` is sufficient; per-component fields allow advanced per-component tuning.
+/// Both fields are applicable: blocks flow one at a time, so both block count and
+/// wall-clock time are meaningful lag measures.
+#[derive(DescribeConfig, DeserializeConfig, Default, Clone, Debug)]
+pub struct BlockPipelineCondition {
+    /// Trigger backpressure when a block-pipeline component is more than N blocks behind
+    /// its upstream neighbour (or behind BlockExecutor if no adjacency is registered).
+    pub max_block_lag: Option<u64>,
+    /// Trigger backpressure when the block-timestamp lag for any block-pipeline component
+    /// exceeds this duration. Only evaluated when both head and component timestamps are
+    /// available (Some).
+    pub max_time_lag: Option<Duration>,
+}
+
+/// Backpressure thresholds for batch-level pipeline components:
+/// Batcher, BatchVerification, FriJobManager, GaplessCommitter, UpgradeGatekeeper,
+/// L1SenderCommit, SnarkJobManager, GaplessL1ProofSender, L1SenderProve,
+/// PriorityTree, L1SenderExecute.
+///
+/// max_block_lag is intentionally absent: block lag oscillates 0→batch_size→0 during
+/// normal batch accumulation and is not a meaningful signal for these components.
+#[derive(DescribeConfig, DeserializeConfig, Default, Clone, Debug)]
+pub struct BatchPipelineCondition {
+    /// Trigger backpressure when the block-timestamp lag for any batch-pipeline component
+    /// exceeds this duration. Only evaluated when the component has reported a timestamp
+    /// via record_processed(block_number, Some(timestamp)).
+    pub max_time_lag: Option<Duration>,
+}
+
+/// Backpressure thresholds for a single component, overriding its group default.
+///
+/// When set, this condition **completely replaces** the group condition for that component:
+/// unset fields (`None`) mean "no threshold" for that component, not "inherit from group".
+///
+/// To disable backpressure entirely for a component, set `enabled = false` — this is the
+/// only way to express an all-None override, since an absent section is indistinguishable
+/// from no override at all.
+///
+/// Note: setting `max_block_lag` on batch-pipeline components is not recommended —
+/// batch components' block lag oscillates 0→batch_size→0 during normal operation
+/// and will cause false positives. Use `max_time_lag` for batch components instead.
+#[derive(DescribeConfig, DeserializeConfig, Clone, Debug)]
+pub struct ComponentConditionOverride {
+    /// When false, backpressure is completely disabled for this component regardless
+    /// of the other fields. Default: true.
+    #[config(default_t = true)]
+    pub enabled: bool,
+    /// Override the block-lag threshold for this component.
+    pub max_block_lag: Option<u64>,
+    /// Override the time-lag threshold for this component.
+    pub max_time_lag: Option<Duration>,
+}
+
+/// Per-component backpressure condition overrides. Any component listed here has its
+/// group condition (block_pipeline or batch_pipeline) fully replaced by this override.
+/// Omitted components continue to use their group default.
+#[derive(DescribeConfig, DeserializeConfig, Default, Clone, Debug)]
+pub struct ComponentOverrides {
+    #[config(nest)]
+    pub block_executor: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub block_canonizer: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub block_applier: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub tree_manager: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub prover_input_generator: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub batcher: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub batch_verification: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub fri_job_manager: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub gapless_committer: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub upgrade_gatekeeper: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub l1_sender_commit: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub snark_job_manager: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub gapless_l1_proof_sender: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub l1_sender_prove: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub priority_tree: Option<ComponentConditionOverride>,
+    #[config(nest)]
+    pub l1_sender_execute: Option<ComponentConditionOverride>,
+}
+
+impl ComponentOverrides {
+    fn get(&self, id: ComponentId) -> Option<&ComponentConditionOverride> {
+        match id {
+            ComponentId::BlockExecutor => self.block_executor.as_ref(),
+            ComponentId::BlockCanonizer => self.block_canonizer.as_ref(),
+            ComponentId::BlockApplier => self.block_applier.as_ref(),
+            ComponentId::TreeManager => self.tree_manager.as_ref(),
+            ComponentId::ProverInputGenerator => self.prover_input_generator.as_ref(),
+            ComponentId::Batcher => self.batcher.as_ref(),
+            ComponentId::BatchVerification => self.batch_verification.as_ref(),
+            ComponentId::FriJobManager => self.fri_job_manager.as_ref(),
+            ComponentId::GaplessCommitter => self.gapless_committer.as_ref(),
+            ComponentId::UpgradeGatekeeper => self.upgrade_gatekeeper.as_ref(),
+            ComponentId::L1SenderCommit => self.l1_sender_commit.as_ref(),
+            ComponentId::SnarkJobManager => self.snark_job_manager.as_ref(),
+            ComponentId::GaplessL1ProofSender => self.gapless_l1_proof_sender.as_ref(),
+            ComponentId::L1SenderProve => self.l1_sender_prove.as_ref(),
+            ComponentId::PriorityTree => self.priority_tree.as_ref(),
+            ComponentId::L1SenderExecute => self.l1_sender_execute.as_ref(),
+        }
+    }
+}
+
+/// Pipeline health backpressure configuration.
+///
+/// Configure one or both groups; a group left at default (all None) applies no backpressure
+/// for its components. Use `component_overrides` to tune individual components.
+///
+/// Example — halt new transactions if block execution falls more than 50 blocks behind:
+///   pipeline_health.block_pipeline.max_block_lag = 50
+///
+/// Example — halt new transactions if any batch stage is more than 30 minutes stale:
+///   pipeline_health.batch_pipeline.max_time_lag = "30m"
+///
+/// Example — give l1_sender_commit a longer time_lag budget than other batch components:
+///   pipeline_health.batch_pipeline.max_time_lag = "30m"
+///   pipeline_health.component_overrides.l1_sender_commit.max_time_lag = "2h"
+///
+/// Example — disable backpressure for a specific component entirely:
+///   pipeline_health.component_overrides.priority_tree.max_time_lag =  (leave unset)
 #[derive(DescribeConfig, DeserializeConfig, Clone, Debug)]
 #[config(derive(Default))]
 pub struct PipelineHealthConfig {
-    /// Fallback thresholds applied to any component that does not have its own explicit setting.
+    /// Thresholds applied to block-level components.
     #[config(nest, default)]
-    pub default: BackpressureCondition,
+    pub block_pipeline: BlockPipelineCondition,
+    /// Thresholds applied to batch-level components.
+    /// max_block_lag is absent by design — it is not meaningful for batch components.
     #[config(nest, default)]
-    pub block_executor: BackpressureCondition,
+    pub batch_pipeline: BatchPipelineCondition,
+    /// Per-component overrides. A component listed here has its group condition fully
+    /// replaced by the override. Omitted components use the group default.
     #[config(nest, default)]
-    pub block_applier: BackpressureCondition,
-    #[config(nest, default)]
-    pub tree_manager: BackpressureCondition,
-    #[config(nest, default)]
-    pub block_canonizer: BackpressureCondition,
-    #[config(nest, default)]
-    pub prover_input_generator: BackpressureCondition,
-    #[config(nest, default)]
-    pub batcher: BackpressureCondition,
-    #[config(nest, default)]
-    pub batch_verification: BackpressureCondition,
-    #[config(nest, default)]
-    pub fri_job_manager: BackpressureCondition,
-    #[config(nest, default)]
-    pub gapless_committer: BackpressureCondition,
-    #[config(nest, default)]
-    pub upgrade_gatekeeper: BackpressureCondition,
-    #[config(nest, default)]
-    pub l1_sender_commit: BackpressureCondition,
-    #[config(nest, default)]
-    pub snark_job_manager: BackpressureCondition,
-    #[config(nest, default)]
-    pub gapless_l1_proof_sender: BackpressureCondition,
-    #[config(nest, default)]
-    pub l1_sender_prove: BackpressureCondition,
-    #[config(nest, default)]
-    pub priority_tree: BackpressureCondition,
-    #[config(nest, default)]
-    pub l1_sender_execute: BackpressureCondition,
+    pub component_overrides: ComponentOverrides,
     /// How often to refresh Prometheus metrics regardless of health change events.
     /// Default: 5 seconds.
     #[config(default_t = Duration::from_secs(5))]
@@ -116,29 +217,51 @@ pub struct PipelineHealthConfig {
 impl PipelineHealthConfig {
     /// Returns the effective backpressure condition for `id`.
     ///
-    /// Per-component settings take precedence; any field left `None` falls back to `self.default`.
-    pub fn condition_for(&self, id: ComponentId) -> BackpressureCondition {
-        let specific = match id {
-            ComponentId::BlockExecutor => &self.block_executor,
-            ComponentId::BlockApplier => &self.block_applier,
-            ComponentId::TreeManager => &self.tree_manager,
-            ComponentId::BlockCanonizer => &self.block_canonizer,
-            ComponentId::ProverInputGenerator => &self.prover_input_generator,
-            ComponentId::Batcher => &self.batcher,
-            ComponentId::BatchVerification => &self.batch_verification,
-            ComponentId::FriJobManager => &self.fri_job_manager,
-            ComponentId::GaplessCommitter => &self.gapless_committer,
-            ComponentId::UpgradeGatekeeper => &self.upgrade_gatekeeper,
-            ComponentId::L1SenderCommit => &self.l1_sender_commit,
-            ComponentId::SnarkJobManager => &self.snark_job_manager,
-            ComponentId::GaplessL1ProofSender => &self.gapless_l1_proof_sender,
-            ComponentId::L1SenderProve => &self.l1_sender_prove,
-            ComponentId::PriorityTree => &self.priority_tree,
-            ComponentId::L1SenderExecute => &self.l1_sender_execute,
-        };
-        BackpressureCondition {
-            max_block_lag: specific.max_block_lag.or(self.default.max_block_lag),
-            max_time_lag: specific.max_time_lag.or(self.default.max_time_lag),
+    /// Precedence (highest to lowest):
+    /// 1. `component_overrides` — if present, fully replaces the group condition.
+    /// 2. Group default — block-pipeline components use `block_pipeline`;
+    ///    batch-pipeline components use `batch_pipeline` (no max_block_lag).
+    pub(crate) fn condition_for(&self, id: ComponentId) -> BackpressureCondition {
+        // Per-component override takes full precedence over the group default.
+        if let Some(o) = self.component_overrides.get(id) {
+            return if o.enabled {
+                BackpressureCondition {
+                    max_block_lag: o.max_block_lag,
+                    max_time_lag: o.max_time_lag,
+                }
+            } else {
+                BackpressureCondition {
+                    max_block_lag: None,
+                    max_time_lag: None,
+                }
+            };
+        }
+
+        match id {
+            ComponentId::BlockExecutor
+            | ComponentId::BlockApplier
+            | ComponentId::TreeManager
+            | ComponentId::BlockCanonizer
+            | ComponentId::ProverInputGenerator => BackpressureCondition {
+                max_block_lag: self.block_pipeline.max_block_lag,
+                max_time_lag: self.block_pipeline.max_time_lag,
+            },
+            // All batch-level components: no block lag (oscillates during accumulation),
+            // only time lag.
+            ComponentId::Batcher
+            | ComponentId::BatchVerification
+            | ComponentId::FriJobManager
+            | ComponentId::GaplessCommitter
+            | ComponentId::UpgradeGatekeeper
+            | ComponentId::L1SenderCommit
+            | ComponentId::SnarkJobManager
+            | ComponentId::GaplessL1ProofSender
+            | ComponentId::L1SenderProve
+            | ComponentId::PriorityTree
+            | ComponentId::L1SenderExecute => BackpressureCondition {
+                max_block_lag: None,
+                max_time_lag: self.batch_pipeline.max_time_lag,
+            },
         }
     }
 }
@@ -150,43 +273,88 @@ mod tests {
     #[test]
     fn default_conditions_are_all_none() {
         let config = PipelineHealthConfig::default();
-        let cond = config.condition_for(ComponentId::BlockExecutor);
-        assert!(cond.max_block_lag.is_none());
-        assert!(cond.max_time_lag.is_none());
+        let block = config.condition_for(ComponentId::BlockExecutor);
+        assert!(block.max_block_lag.is_none());
+        assert!(block.max_time_lag.is_none());
+        let batch = config.condition_for(ComponentId::Batcher);
+        assert!(batch.max_block_lag.is_none());
+        assert!(batch.max_time_lag.is_none());
     }
 
     #[test]
-    fn default_fallback_applies_when_component_is_unset() {
+    fn block_pipeline_condition_applies_to_all_block_components() {
         let config = PipelineHealthConfig {
-            default: BackpressureCondition {
+            block_pipeline: BlockPipelineCondition {
                 max_block_lag: Some(50),
                 max_time_lag: None,
             },
             ..Default::default()
         };
-        let cond = config.condition_for(ComponentId::BlockApplier);
-        assert_eq!(cond.max_block_lag, Some(50));
+        for id in [
+            ComponentId::BlockExecutor,
+            ComponentId::BlockApplier,
+            ComponentId::TreeManager,
+            ComponentId::BlockCanonizer,
+            ComponentId::ProverInputGenerator,
+        ] {
+            let cond = config.condition_for(id);
+            assert_eq!(cond.max_block_lag, Some(50), "failed for {id:?}");
+            assert!(cond.max_time_lag.is_none(), "failed for {id:?}");
+        }
     }
 
     #[test]
-    fn per_component_overrides_default() {
+    fn batch_pipeline_condition_applies_to_all_batch_components() {
         let config = PipelineHealthConfig {
-            default: BackpressureCondition {
-                max_block_lag: Some(50),
-                max_time_lag: None,
+            batch_pipeline: BatchPipelineCondition {
+                max_time_lag: Some(Duration::from_secs(300)),
             },
-            block_applier: BackpressureCondition {
-                max_block_lag: Some(10),
+            ..Default::default()
+        };
+        for id in [
+            ComponentId::Batcher,
+            ComponentId::BatchVerification,
+            ComponentId::FriJobManager,
+            ComponentId::GaplessCommitter,
+            ComponentId::UpgradeGatekeeper,
+            ComponentId::L1SenderCommit,
+            ComponentId::SnarkJobManager,
+            ComponentId::GaplessL1ProofSender,
+            ComponentId::L1SenderProve,
+            ComponentId::PriorityTree,
+            ComponentId::L1SenderExecute,
+        ] {
+            let cond = config.condition_for(id);
+            assert!(
+                cond.max_block_lag.is_none(),
+                "batch components must never get max_block_lag; failed for {id:?}"
+            );
+            assert_eq!(
+                cond.max_time_lag,
+                Some(Duration::from_secs(300)),
+                "failed for {id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_components_never_get_block_lag_even_if_block_pipeline_configured() {
+        let config = PipelineHealthConfig {
+            block_pipeline: BlockPipelineCondition {
+                max_block_lag: Some(50),
                 max_time_lag: None,
             },
             ..Default::default()
         };
-        let cond = config.condition_for(ComponentId::BlockApplier);
-        assert_eq!(cond.max_block_lag, Some(10));
+        let cond = config.condition_for(ComponentId::Batcher);
+        assert!(
+            cond.max_block_lag.is_none(),
+            "Batcher must not get max_block_lag from block_pipeline config"
+        );
     }
 
     #[test]
-    fn condition_for_all_variants() {
+    fn condition_for_all_variants_does_not_panic() {
         let config = PipelineHealthConfig::default();
         use ComponentId::*;
         for id in [
@@ -212,6 +380,12 @@ mod tests {
     }
 
     #[test]
+    fn metrics_interval_default_is_five_seconds() {
+        let config = PipelineHealthConfig::default();
+        assert_eq!(config.metrics_interval, Duration::from_secs(5));
+    }
+
+    #[test]
     fn as_str_returns_snake_case() {
         assert_eq!(ComponentId::BlockExecutor.as_str(), "block_executor");
         assert_eq!(ComponentId::FriJobManager.as_str(), "fri_job_manager");
@@ -222,8 +396,120 @@ mod tests {
     }
 
     #[test]
-    fn metrics_interval_default_is_five_seconds() {
-        let config = PipelineHealthConfig::default();
-        assert_eq!(config.metrics_interval, Duration::from_secs(5));
+    fn component_override_fully_replaces_group_condition() {
+        // Block component: group says max_block_lag=50, override gives it only time lag
+        let config = PipelineHealthConfig {
+            block_pipeline: BlockPipelineCondition {
+                max_block_lag: Some(50),
+                max_time_lag: None,
+            },
+            component_overrides: ComponentOverrides {
+                block_executor: Some(ComponentConditionOverride {
+                    enabled: true,
+                    max_block_lag: None,
+                    max_time_lag: Some(Duration::from_secs(30)),
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let cond = config.condition_for(ComponentId::BlockExecutor);
+        // Override replaces: no block lag, has time lag
+        assert!(cond.max_block_lag.is_none());
+        assert_eq!(cond.max_time_lag, Some(Duration::from_secs(30)));
+
+        // Sibling not overridden still gets group defaults
+        let cond = config.condition_for(ComponentId::BlockCanonizer);
+        assert_eq!(cond.max_block_lag, Some(50));
+        assert!(cond.max_time_lag.is_none());
+    }
+
+    #[test]
+    fn component_override_enabled_false_disables_backpressure() {
+        // enabled=false fully silences the component regardless of group config
+        let config = PipelineHealthConfig {
+            batch_pipeline: BatchPipelineCondition {
+                max_time_lag: Some(Duration::from_secs(300)),
+            },
+            component_overrides: ComponentOverrides {
+                batcher: Some(ComponentConditionOverride {
+                    enabled: false,
+                    max_block_lag: None,
+                    max_time_lag: None,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let cond = config.condition_for(ComponentId::Batcher);
+        assert!(cond.max_block_lag.is_none());
+        assert!(cond.max_time_lag.is_none());
+
+        // Other batch components still have the group time lag
+        let cond = config.condition_for(ComponentId::FriJobManager);
+        assert_eq!(cond.max_time_lag, Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn component_override_enabled_true_with_no_thresholds_also_disables() {
+        // enabled=true (default) but all thresholds None → no backpressure for that component
+        let config = PipelineHealthConfig {
+            block_pipeline: BlockPipelineCondition {
+                max_block_lag: Some(50),
+                max_time_lag: None,
+            },
+            component_overrides: ComponentOverrides {
+                tree_manager: Some(ComponentConditionOverride {
+                    enabled: true,
+                    max_block_lag: None,
+                    max_time_lag: None,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let cond = config.condition_for(ComponentId::TreeManager);
+        assert!(cond.max_block_lag.is_none());
+        assert!(cond.max_time_lag.is_none());
+    }
+
+    #[test]
+    fn component_override_can_give_batch_component_stricter_threshold() {
+        let config = PipelineHealthConfig {
+            batch_pipeline: BatchPipelineCondition {
+                max_time_lag: Some(Duration::from_secs(300)),
+            },
+            component_overrides: ComponentOverrides {
+                l1_sender_commit: Some(ComponentConditionOverride {
+                    enabled: true,
+                    max_block_lag: None,
+                    max_time_lag: Some(Duration::from_secs(60)),
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let cond = config.condition_for(ComponentId::L1SenderCommit);
+        assert_eq!(cond.max_time_lag, Some(Duration::from_secs(60)));
+
+        // Others use group default
+        let cond = config.condition_for(ComponentId::GaplessCommitter);
+        assert_eq!(cond.max_time_lag, Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn component_overrides_default_is_all_none() {
+        let overrides = ComponentOverrides::default();
+        for id in [
+            ComponentId::BlockExecutor,
+            ComponentId::Batcher,
+            ComponentId::L1SenderExecute,
+        ] {
+            assert!(overrides.get(id).is_none(), "expected None for {id:?}");
+        }
     }
 }

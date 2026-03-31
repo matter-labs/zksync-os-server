@@ -260,7 +260,7 @@ impl PipelineHealthMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BackpressureCondition, ComponentId, PipelineHealthConfig};
+    use crate::config::{ComponentId, PipelineHealthConfig};
     use std::time::Duration;
     use tokio::time::Instant;
     use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
@@ -277,36 +277,29 @@ mod tests {
         }
     }
 
-    fn config_with_block_lag(id: ComponentId, max_lag: u64) -> PipelineHealthConfig {
-        let mut config = PipelineHealthConfig::default();
-        let cond = BackpressureCondition {
-            max_block_lag: Some(max_lag),
-            max_time_lag: None,
-        };
-        match id {
-            ComponentId::BlockApplier => config.block_applier = cond,
-            ComponentId::BlockExecutor => config.block_executor = cond,
-            ComponentId::FriJobManager => config.fri_job_manager = cond,
-            _ => {}
+    fn block_config_with_block_lag(max_lag: u64) -> PipelineHealthConfig {
+        PipelineHealthConfig {
+            block_pipeline: crate::config::BlockPipelineCondition {
+                max_block_lag: Some(max_lag),
+                max_time_lag: None,
+            },
+            ..PipelineHealthConfig::default()
         }
-        config
     }
 
-    fn config_with_time_lag(id: ComponentId, max_lag: Duration) -> PipelineHealthConfig {
-        let mut config = PipelineHealthConfig::default();
-        let cond = BackpressureCondition {
-            max_block_lag: None,
-            max_time_lag: Some(max_lag),
-        };
-        if id == ComponentId::BlockApplier {
-            config.block_applier = cond;
+    fn block_config_with_time_lag(max_lag: Duration) -> PipelineHealthConfig {
+        PipelineHealthConfig {
+            block_pipeline: crate::config::BlockPipelineCondition {
+                max_block_lag: None,
+                max_time_lag: Some(max_lag),
+            },
+            ..PipelineHealthConfig::default()
         }
-        config
     }
 
     #[test]
     fn below_lag_threshold_no_trigger() {
-        let config = config_with_block_lag(ComponentId::BlockApplier, 10);
+        let config = block_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head=100, applier=95, lag=5 < 10
         let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(95, None), 5, None);
@@ -315,7 +308,7 @@ mod tests {
 
     #[test]
     fn above_lag_threshold_triggers() {
-        let config = config_with_block_lag(ComponentId::BlockApplier, 10);
+        let config = block_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head=100, applier=85, lag=15 > 10
         let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(85, None), 15, None);
@@ -330,7 +323,7 @@ mod tests {
 
     #[test]
     fn at_exact_threshold_no_trigger() {
-        let config = config_with_block_lag(ComponentId::BlockApplier, 10);
+        let config = block_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // lag == threshold: should NOT trigger (strictly greater than)
         let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(90, None), 10, None);
@@ -339,7 +332,7 @@ mod tests {
 
     #[test]
     fn time_lag_triggers_when_exceeded() {
-        let config = config_with_time_lag(ComponentId::BlockApplier, Duration::from_secs(30));
+        let config = block_config_with_time_lag(Duration::from_secs(30));
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head_ts=1000, applier_ts=960, lag=40s > 30s; block_lag irrelevant (no max_block_lag)
         let result = monitor.evaluate(
@@ -356,7 +349,7 @@ mod tests {
 
     #[test]
     fn time_lag_skipped_when_component_timestamp_zero() {
-        let config = config_with_time_lag(ComponentId::BlockApplier, Duration::from_secs(1));
+        let config = block_config_with_time_lag(Duration::from_secs(1));
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // component timestamp = None → unavailable, must not trigger
         let result = monitor.evaluate(
@@ -370,7 +363,7 @@ mod tests {
 
     #[test]
     fn time_lag_skipped_when_head_timestamp_zero() {
-        let config = config_with_time_lag(ComponentId::BlockApplier, Duration::from_secs(1));
+        let config = block_config_with_time_lag(Duration::from_secs(1));
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head timestamp = None → unavailable, must not trigger
         let result = monitor.evaluate(
@@ -408,7 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn counter_does_not_increment_on_reason_change() {
-        let config = config_with_block_lag(ComponentId::BlockApplier, 10);
+        let config = block_config_with_block_lag(10);
         let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
         let (reporter, rx) = ComponentHealthReporter::new("block_applier");
         monitor.register(ComponentId::BlockApplier, rx);
@@ -441,7 +434,7 @@ mod tests {
     #[test]
     fn evaluate_collects_both_block_and_time_lag() {
         let config = PipelineHealthConfig {
-            block_applier: BackpressureCondition {
+            block_pipeline: crate::config::BlockPipelineCondition {
                 max_block_lag: Some(10),
                 max_time_lag: Some(Duration::from_secs(30)),
             },
@@ -456,12 +449,14 @@ mod tests {
 
     #[test]
     fn mid_pipeline_lag_does_not_cascade_to_downstream() {
-        // BlockExecutor=200, BlockCanonizer=150, BlockApplier=148
-        // BlockApplier is only 2 behind its upstream (Canonizer).
-        // Without cascade fix, BlockApplier shows lag=52 from head and triggers.
-        // With cascade fix, BlockApplier lag=2 — does NOT trigger (threshold=10).
+        // BlockExecutor=200, BlockCanonizer=195 (adjacent diff=5, within threshold),
+        // BlockApplier=193 (adjacent diff from Canonizer=2, within threshold).
+        // Without cascade fix, BlockApplier shows head-relative lag=7 and could be confused
+        // with a direct threshold violation. With the adjacent-diff fix, BlockApplier lag=2
+        // (from its upstream Canonizer) — does NOT trigger (threshold=10).
+        // Neither component should trigger since both adjacent diffs are within threshold.
         let config = PipelineHealthConfig {
-            block_applier: BackpressureCondition {
+            block_pipeline: crate::config::BlockPipelineCondition {
                 max_block_lag: Some(10),
                 max_time_lag: None,
             },
@@ -473,8 +468,8 @@ mod tests {
         let (canon_reporter, canon_rx) = ComponentHealthReporter::new("block_canonizer");
         let (apply_reporter, apply_rx) = ComponentHealthReporter::new("block_applier");
         exec_reporter.record_processed(200, None);
-        canon_reporter.record_processed(150, None);
-        apply_reporter.record_processed(148, None);
+        canon_reporter.record_processed(195, None);
+        apply_reporter.record_processed(193, None);
 
         monitor.register(ComponentId::BlockExecutor, exec_rx);
         monitor.register(ComponentId::BlockCanonizer, canon_rx);
@@ -494,7 +489,7 @@ mod tests {
     fn adjacent_lag_triggers_when_exceeds_threshold() {
         // BlockCanonizer=200, BlockApplier=185 → adjacent lag=15 > threshold=10 → triggers
         let config = PipelineHealthConfig {
-            block_applier: BackpressureCondition {
+            block_pipeline: crate::config::BlockPipelineCondition {
                 max_block_lag: Some(10),
                 max_time_lag: None,
             },

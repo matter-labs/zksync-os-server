@@ -308,8 +308,13 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
             }
             drop(merkle_tree);
             // Record progress unconditionally — both main-node and EN paths processed this batch.
+            // Timestamp is available on the main-node path (via batch_envelopes); None on EN path.
             let last_block = *batch_ranges.last().unwrap().1.end();
-            health_reporter.record_processed(last_block, None);
+            let last_block_timestamp = batch_envelopes
+                .as_ref()
+                .and_then(|v| v.last())
+                .map(|e| e.batch.batch_info.last_block_timestamp);
+            health_reporter.record_processed(last_block, last_block_timestamp);
             if let Some(s) = &execute_batches_sender {
                 s.send(L1SenderCommand::SendToL1(ExecuteCommand::new(
                     batch_envelopes.unwrap(),

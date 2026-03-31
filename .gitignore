@@ -16,3 +16,5 @@ setup_compact.key
 local-chains/*/l1-state.json
 local-chains/*/l1-state.json.sha256
 .worktrees/
+
+.claude/

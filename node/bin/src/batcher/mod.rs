@@ -124,47 +124,42 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 .enter_state(GenericComponentState::Active);
 
             let recreated;
-            let batch_envelope =
-                if prev_batch_info.batch_number < self.startup_config.last_committed_batch {
-                    let committed_batch = self
-                        .committed_batch_provider
-                        .get(prev_batch_info.batch_number + 1)
-                        .with_context(|| {
-                            format!(
-                                "committed batch {} must have been discovered on L1",
-                                prev_batch_info.batch_number + 1
-                            )
-                        })?;
-                    // Validate that the existing batch's first block matches the next block in the stream
-                    anyhow::ensure!(
-                        committed_batch.first_block_number() == next_block_number,
-                        "Existing batch first block ({}) does not match next block in stream ({})",
-                        committed_batch.first_block_number(),
-                        next_block_number
-                    );
-
-                    let Some(batch_envelope) = self
-                        .recreate_existing_batch(
-                            &mut input,
-                            &prev_batch_info,
-                            committed_batch,
+            let batch_envelope = if prev_batch_info.batch_number
+                < self.startup_config.last_committed_batch
+            {
+                let committed_batch = self
+                    .committed_batch_provider
+                    .get(prev_batch_info.batch_number + 1)
+                    .with_context(|| {
+                        format!(
+                            "committed batch {} must have been discovered on L1",
+                            prev_batch_info.batch_number + 1
                         )
-                        .await?
-                    else {
-                        return Ok(());
-                    };
-                    recreated = true;
-                    batch_envelope
-                } else {
-                    let Some(batch_envelope) = self
-                        .create_batch(&mut input, &prev_batch_info)
-                        .await?
-                    else {
-                        return Ok(());
-                    };
-                    recreated = false;
-                    batch_envelope
+                    })?;
+                // Validate that the existing batch's first block matches the next block in the stream
+                anyhow::ensure!(
+                    committed_batch.first_block_number() == next_block_number,
+                    "Existing batch first block ({}) does not match next block in stream ({})",
+                    committed_batch.first_block_number(),
+                    next_block_number
+                );
+
+                let Some(batch_envelope) = self
+                    .recreate_existing_batch(&mut input, &prev_batch_info, committed_batch)
+                    .await?
+                else {
+                    return Ok(());
                 };
+                recreated = true;
+                batch_envelope
+            } else {
+                let Some(batch_envelope) = self.create_batch(&mut input, &prev_batch_info).await?
+                else {
+                    return Ok(());
+                };
+                recreated = false;
+                batch_envelope
+            };
 
             let time_since_last_batch =
                 last_created_batch_at.map(|last_created_batch_at| last_created_batch_at.elapsed());
@@ -209,12 +204,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
             }
             let last_block_number = batch_envelope.batch.last_block_number;
+            let last_block_timestamp = batch_envelope.batch.batch_info.last_block_timestamp;
             if output.send(batch_envelope).is_err() {
                 tracing::info!("outbound channel closed");
                 return Ok(());
             }
             self.health_reporter
-                .record_processed(last_block_number, None);
+                .record_processed(last_block_number, Some(last_block_timestamp));
         }
     }
 }
