@@ -8,10 +8,12 @@ pub mod pipeline_component;
 mod submitter;
 mod types;
 pub mod upgrade_gatekeeper;
+mod watcher;
 
 pub(crate) use error::{is_nonce_too_low, is_transient};
 pub(crate) use submitter::{resubmission_action, ResubmitAction, Submitter};
 pub(crate) use types::{Backoff, GasParams, InFlightItem, InFlightTx, ResubmitRequest};
+pub(crate) use watcher::Watcher;
 
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
