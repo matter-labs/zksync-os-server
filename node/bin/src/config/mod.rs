@@ -1302,6 +1302,7 @@ impl L1SenderConfig {
             max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
+            transaction_timeout: Duration::from_secs(300),
             fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
             phantom_data: Default::default(),
         }

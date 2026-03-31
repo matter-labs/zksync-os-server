@@ -2,11 +2,13 @@ pub mod batcher_metrics;
 pub mod batcher_model;
 pub mod commands;
 pub mod config;
+mod error;
 mod metrics;
 pub mod pipeline_component;
 mod types;
 pub mod upgrade_gatekeeper;
 
+pub(crate) use error::{is_nonce_too_low, is_transient};
 pub(crate) use types::{Backoff, GasParams, InFlightItem, InFlightTx, ResubmitRequest};
 
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};

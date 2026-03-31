@@ -25,6 +25,11 @@ pub struct L1SenderConfig<Input> {
     /// How often to poll L1 for new blocks.
     pub poll_interval: Duration,
 
+    /// Maximum time to wait for a transaction to be included on L1 before
+    /// triggering a resubmission.  Defaults to 300 s in production; tests use a
+    /// shorter value to exercise the resubmission path without waiting.
+    pub transaction_timeout: Duration,
+
     /// Use Fusaka blob transaction format if the timestamp has passed.
     pub fusaka_upgrade_timestamp: u64,
 
