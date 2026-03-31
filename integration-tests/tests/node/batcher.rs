@@ -15,7 +15,7 @@ async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
     let bridgehub_address = tester.l2_zk_provider.get_bridgehub_contract().await?;
     L1State::fetch(
         tester.l1_provider().clone().erased(),
-        tester.sl_provider().clone().erased(),
+        tester.gateway_eth_provider(),
         bridgehub_address,
         chain_id,
     )
