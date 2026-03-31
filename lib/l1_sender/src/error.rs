@@ -23,12 +23,13 @@ pub(crate) fn is_transient(err: &anyhow::Error) -> bool {
 /// Detection is message-based because the EVM error code (-32000) is shared
 /// across many error classes.
 pub(crate) fn is_nonce_too_low(err: &anyhow::Error) -> bool {
-    if let Some(rpc) = err.downcast_ref::<RpcError<TransportErrorKind>>() {
-        if let RpcError::ErrorResp(payload) = rpc {
-            // TODO: extend with alternative provider phrasings ("replacement transaction underpriced",
-            //       "already known") if non-standard L1 providers are added.
-            return payload.message.to_ascii_lowercase().contains("nonce too low");
-        }
+    if let Some(RpcError::ErrorResp(payload)) = err.downcast_ref::<RpcError<TransportErrorKind>>() {
+        // TODO: extend with alternative provider phrasings ("replacement transaction underpriced",
+        //       "already known") if non-standard L1 providers are added.
+        return payload
+            .message
+            .to_ascii_lowercase()
+            .contains("nonce too low");
     }
     false
 }

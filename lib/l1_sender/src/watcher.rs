@@ -1,7 +1,7 @@
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::SendToL1;
 use crate::error::is_transient;
-use crate::metrics::{L1SenderState, L1_SENDER_METRICS};
+use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use crate::types::{Backoff, InFlightItem, InFlightTx, ResubmitRequest};
 use crate::validate_tx_receipt;
 use alloy::network::Ethereum;
@@ -86,7 +86,7 @@ where
         loop {
             match self.poll_for_receipt(in_flight.tx_hash).await? {
                 PollOutcome::Receipt(receipt) => {
-                    validate_tx_receipt(&self.provider, &in_flight.command, receipt).await?;
+                    validate_tx_receipt(&self.provider, &in_flight.command, *receipt).await?;
                     self.report_post_confirmation(Input::NAME).await;
                     self.latency_tracker.enter_state(L1SenderState::WaitingSend);
                     for mut envelope in in_flight.command.into() {
@@ -122,13 +122,9 @@ where
                         .map_err(|_| anyhow::anyhow!("resubmit channel closed"))?;
 
                     // Block until the Submitter puts a replacement item on in_flight.
-                    let replacement = self
-                        .in_flight_rx
-                        .recv()
-                        .await
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("in_flight channel closed during resubmit wait")
-                        })?;
+                    let replacement = self.in_flight_rx.recv().await.ok_or_else(|| {
+                        anyhow::anyhow!("in_flight channel closed during resubmit wait")
+                    })?;
 
                     match replacement {
                         InFlightItem::Tx(new_in_flight) => {
@@ -136,7 +132,9 @@ where
                             // Continue the outer loop to watch the replacement.
                         }
                         InFlightItem::Passthrough(_) => {
-                            anyhow::bail!("unexpected passthrough received while waiting for resubmission replacement");
+                            anyhow::bail!(
+                                "unexpected passthrough received while waiting for resubmission replacement"
+                            );
                         }
                     }
                 }
@@ -171,7 +169,7 @@ where
                 .await
                 .map_err(anyhow::Error::new)
             {
-                Ok(Some(receipt)) => return Ok(PollOutcome::Receipt(receipt)),
+                Ok(Some(receipt)) => return Ok(PollOutcome::Receipt(Box::new(receipt))),
                 Ok(None) => {
                     // Transaction not yet mined — sleep for the shorter of the
                     // poll interval and the remaining deadline budget.
@@ -221,6 +219,6 @@ where
 // ==============================================================================
 
 enum PollOutcome {
-    Receipt(alloy::rpc::types::TransactionReceipt),
+    Receipt(Box<alloy::rpc::types::TransactionReceipt>),
     TimedOut,
 }

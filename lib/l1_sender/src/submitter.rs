@@ -1,7 +1,7 @@
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::error::{is_nonce_too_low, is_transient};
-use crate::metrics::{L1SenderState, L1_SENDER_METRICS};
+use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use crate::types::{Backoff, GasParams, InFlightItem, InFlightTx, ResubmitRequest};
 use alloy::consensus::BlobTransactionValidationError;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
@@ -182,8 +182,9 @@ where
                     nonce = req.nonce,
                     "fees rose enough — sending replacement transaction",
                 );
-                let (tx_hash, nonce, gas_params_used) =
-                    self.build_and_send(&req.command, &fresh, Some(req.nonce)).await?;
+                let (tx_hash, nonce, gas_params_used) = self
+                    .build_and_send(&req.command, &fresh, Some(req.nonce))
+                    .await?;
                 InFlightItem::Tx(InFlightTx {
                     tx_hash,
                     gas_params: gas_params_used,
@@ -250,16 +251,16 @@ where
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                 continue;
             }
-            if let Some(blob_fee) = gas_params.max_fee_per_blob_gas {
-                if blob_fee > self.config.max_fee_per_blob_gas_wei {
-                    tracing::warn!(
-                        estimated = blob_fee,
-                        cap = self.config.max_fee_per_blob_gas_wei,
-                        "blob fee exceeds cap, waiting 60s before re-estimating",
-                    );
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    continue;
-                }
+            if let Some(blob_fee) = gas_params.max_fee_per_blob_gas
+                && blob_fee > self.config.max_fee_per_blob_gas_wei
+            {
+                tracing::warn!(
+                    estimated = blob_fee,
+                    cap = self.config.max_fee_per_blob_gas_wei,
+                    "blob fee exceeds cap, waiting 60s before re-estimating",
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                continue;
             }
 
             return Ok(gas_params);

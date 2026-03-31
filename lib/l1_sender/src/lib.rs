@@ -13,7 +13,6 @@ mod watcher;
 pub(crate) use submitter::Submitter;
 pub(crate) use watcher::Watcher;
 
-use anyhow::Context;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
@@ -24,8 +23,9 @@ use alloy::primitives::utils::format_ether;
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, WalletProvider};
-use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::TransactionReceipt;
+use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
+use anyhow::Context;
 use tokio::sync::mpsc::Sender;
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_operator_signer::SignerConfig;
