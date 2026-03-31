@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use axum::{
     Json,
@@ -22,11 +22,60 @@ use crate::prover_api::{
     },
 };
 
+/// Ensures `pick_job_latency` is recorded on all exit paths including cancellation.
+struct PickJobGuard {
+    stage: ProverStage,
+    started: Instant,
+    result: Option<PickJobResult>,
+}
+
+impl PickJobGuard {
+    fn new(stage: ProverStage) -> Self {
+        Self {
+            stage,
+            started: Instant::now(),
+            result: None,
+        }
+    }
+
+    fn finish(&mut self, result: PickJobResult) {
+        self.result = Some(result);
+    }
+}
+
+impl Drop for PickJobGuard {
+    fn drop(&mut self) {
+        let result = self.result.unwrap_or(PickJobResult::Cancelled);
+        PROVER_API_METRICS.pick_job_latency[&(self.stage, result)].observe(self.started.elapsed());
+    }
+}
+
+/// Ensures `submit_proof_latency` is recorded on all exit paths including early returns and cancellation.
+struct SubmitProofGuard {
+    stage: ProverStage,
+    started: Instant,
+}
+
+impl SubmitProofGuard {
+    fn new(stage: ProverStage) -> Self {
+        Self {
+            stage,
+            started: Instant::now(),
+        }
+    }
+}
+
+impl Drop for SubmitProofGuard {
+    fn drop(&mut self) {
+        PROVER_API_METRICS.submit_proof_latency[&self.stage].observe(self.started.elapsed());
+    }
+}
+
 pub(super) async fn pick_fri_job(
     Query(query): Query<ProverQuery>,
     State(state): State<AppState>,
 ) -> Response {
-    let start = Instant::now();
+    let mut guard = PickJobGuard::new(ProverStage::Fri);
     tracing::trace!(
         "Received FRI job pick request from prover with ID: {}",
         query.id
@@ -35,7 +84,7 @@ pub(super) async fn pick_fri_job(
     // see `FakeProversPool` for fake provers implementation
     match state
         .fri_job_manager
-        .pick_next_job(Duration::from_secs(0), query.id)
+        .pick_next_job(std::time::Duration::from_secs(0), query.id)
         .await
     {
         Some((fri_job, input)) => {
@@ -44,8 +93,7 @@ pub(super) async fn pick_fri_job(
                 ProverInput::Fake => vec![],
             };
             let prover_input = general_purpose::STANDARD.encode(&bytes);
-            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Fri, PickJobResult::NewJob)]
-                .observe(start.elapsed());
+            guard.finish(PickJobResult::NewJob);
             Json(BatchDataPayload {
                 batch_number: fri_job.batch_number,
                 vk_hash: fri_job.vk_hash,
@@ -54,8 +102,7 @@ pub(super) async fn pick_fri_job(
             .into_response()
         }
         None => {
-            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Fri, PickJobResult::NoJob)]
-                .observe(start.elapsed());
+            guard.finish(PickJobResult::NoJob);
             StatusCode::NO_CONTENT.into_response()
         }
     }
@@ -66,7 +113,7 @@ pub(super) async fn submit_fri_proof(
     State(state): State<AppState>,
     Json(payload): Json<FriProofPayload>,
 ) -> Result<Response, (StatusCode, String)> {
-    let start = Instant::now();
+    let _guard = SubmitProofGuard::new(ProverStage::Fri);
     tracing::debug!(
         "Received submit FRI proof request from prover with ID: {}",
         query.id
@@ -82,7 +129,7 @@ pub(super) async fn submit_fri_proof(
             format!("no Proving Version matches the provided Verification Key: {e}"),
         )
     })?;
-    let result = match state
+    match state
         .fri_job_manager
         .submit_proof(payload.batch_number, proof_bytes.into(), proving_version, &prover_id)
         .await
@@ -116,16 +163,14 @@ pub(super) async fn submit_fri_proof(
             tracing::error!("internal error: {e}");
             Err((StatusCode::INTERNAL_SERVER_ERROR, e))
         }
-    };
-    PROVER_API_METRICS.submit_proof_latency[&ProverStage::Fri].observe(start.elapsed());
-    result
+    }
 }
 
 pub(super) async fn pick_snark_job(
     Query(query): Query<ProverQuery>,
     State(state): State<AppState>,
 ) -> Response {
-    let start = Instant::now();
+    let mut guard = PickJobGuard::new(ProverStage::Snark);
     tracing::trace!(
         "Received SNARK job pick request from prover with ID: {}",
         query.id
@@ -163,8 +208,7 @@ pub(super) async fn pick_snark_job(
                 })
                 .collect();
 
-            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Snark, PickJobResult::NewJob)]
-                .observe(start.elapsed());
+            guard.finish(PickJobResult::NewJob);
             Json(NextSnarkProverJobPayload {
                 from_batch_number: from,
                 to_batch_number: to,
@@ -174,14 +218,12 @@ pub(super) async fn pick_snark_job(
             .into_response()
         }
         Ok(None) => {
-            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Snark, PickJobResult::NoJob)]
-                .observe(start.elapsed());
+            guard.finish(PickJobResult::NoJob);
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
             tracing::error!("error picking SNARK job: {e}");
-            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Snark, PickJobResult::Error)]
-                .observe(start.elapsed());
+            guard.finish(PickJobResult::Error);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -192,7 +234,7 @@ pub(super) async fn submit_snark_proof(
     State(state): State<AppState>,
     Json(payload): Json<SnarkProofPayload>,
 ) -> Result<Response, (StatusCode, String)> {
-    let start = Instant::now();
+    let _guard = SubmitProofGuard::new(ProverStage::Snark);
     tracing::debug!(
         "Received submit SNARK proof request from prover with ID: {}",
         query.id
@@ -206,7 +248,7 @@ pub(super) async fn submit_snark_proof(
             format!("no Proving Version matches the provided verification key: {e}"),
         )
     })?;
-    let result = match state
+    match state
         .snark_job_manager
         .submit_proof(
             payload.from_batch_number,
@@ -222,9 +264,7 @@ pub(super) async fn submit_snark_proof(
             StatusCode::BAD_REQUEST,
             format!("proof rejected: {err}").to_string(),
         )),
-    };
-    PROVER_API_METRICS.submit_proof_latency[&ProverStage::Snark].observe(start.elapsed());
-    result
+    }
 }
 
 pub(super) async fn peek_fri_job(
