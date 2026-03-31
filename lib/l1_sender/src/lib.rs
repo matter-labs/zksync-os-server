@@ -4,7 +4,10 @@ pub mod commands;
 pub mod config;
 mod metrics;
 pub mod pipeline_component;
+mod types;
 pub mod upgrade_gatekeeper;
+
+pub(crate) use types::{Backoff, GasParams, InFlightItem, InFlightTx, ResubmitRequest};
 
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
