@@ -5,10 +5,12 @@ pub mod config;
 mod error;
 mod metrics;
 pub mod pipeline_component;
+mod submitter;
 mod types;
 pub mod upgrade_gatekeeper;
 
 pub(crate) use error::{is_nonce_too_low, is_transient};
+pub(crate) use submitter::{resubmission_action, ResubmitAction, Submitter};
 pub(crate) use types::{Backoff, GasParams, InFlightItem, InFlightTx, ResubmitRequest};
 
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
