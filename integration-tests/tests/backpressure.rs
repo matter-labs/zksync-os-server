@@ -25,8 +25,8 @@ async fn health_endpoint_returns_pipeline_snapshot() {
 
     // Top-level fields must be present
     assert!(
-        health.get("healthy").is_some(),
-        "Missing 'healthy' field in health response; got: {health}"
+        health.get("status").is_some(),
+        "Missing 'status' field in health response; got: {health}"
     );
     assert!(
         health.get("accepting_transactions").is_some(),
@@ -264,8 +264,10 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
 /// Verifies that /status/pipeline reflects the configured thresholds per component group.
 ///
 /// Block-pipeline components must expose both max_block_lag and max_time_lag_secs.
-/// Batch-pipeline components must expose only max_time_lag_secs (never max_block_lag,
-/// since block lag oscillates during normal batch accumulation and is not a meaningful signal).
+/// Batch-pipeline components expose only the thresholds that are configured; in this test
+/// batch_pipeline.max_block_lag is None, so batch components must not expose a block-lag
+/// threshold. (When batch_pipeline.max_block_lag is set it IS surfaced — see
+/// `batch_block_lag_threshold_surfaced_by_pipeline_endpoint`.)
 #[tokio::test]
 async fn pipeline_endpoint_reflects_configured_thresholds() {
     let health_config = PipelineHealthConfig {
@@ -307,14 +309,15 @@ async fn pipeline_endpoint_reflects_configured_thresholds() {
         "block_executor must expose max_time_lag_secs threshold"
     );
 
-    // batcher is a batch-pipeline component — must have time lag only, never block lag
+    // batcher is a batch-pipeline component — batch_pipeline.max_block_lag is None in this
+    // test, so no block-lag threshold should be surfaced for it.
     let batcher = components
         .iter()
         .find(|c| c["name"].as_str() == Some("batcher"))
         .expect("batcher not found in pipeline components");
     assert!(
         batcher["thresholds"]["max_block_lag"].is_null(),
-        "batcher must NOT expose max_block_lag (oscillates during batch accumulation)"
+        "batcher must not expose max_block_lag when batch_pipeline.max_block_lag is None"
     );
     assert_eq!(
         batcher["thresholds"]["max_time_lag_secs"].as_f64(),

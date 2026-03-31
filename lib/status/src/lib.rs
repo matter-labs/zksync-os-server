@@ -20,9 +20,6 @@ pub(crate) struct AppState {
     pub pipeline_health_config: PipelineHealthConfig,
 }
 
-// todo: handle graceful shutdown in a meaningful manner:
-//       we should start a timer for RPC server's lifetime, report healthy=false and only shutdown
-//       after timer is expired
 pub async fn run_status_server(
     addr: SocketAddr,
     shutdown: GracefulShutdown,

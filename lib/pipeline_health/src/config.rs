@@ -29,6 +29,11 @@ pub enum ComponentId {
 }
 
 impl ComponentId {
+    /// Returns the component name as a snake_case string.
+    ///
+    /// **Must stay in sync with `rename_all = "snake_case"` on the `EncodeLabelValue` derive
+    /// above.** If these diverge, Prometheus metrics and JSON API responses will use different
+    /// names for the same component. The test `as_str_matches_snake_case_derive` guards this.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::BlockExecutor => "block_executor",
@@ -464,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn component_override_enabled_true_with_no_thresholds_also_disables() {
+    fn component_override_enabled_true_with_all_none_thresholds_produces_no_backpressure() {
         // enabled=true (default) but all thresholds None → no backpressure for that component
         let config = PipelineHealthConfig {
             block_pipeline: BlockPipelineCondition {
@@ -585,5 +590,40 @@ mod tests {
         let config = PipelineHealthConfig::default();
         let cond = config.condition_for(ComponentId::Batcher);
         assert!(cond.max_block_lag.is_none());
+    }
+
+    /// Guards against as_str() and the EncodeLabelValue derive diverging.
+    ///
+    /// Both must produce the same snake_case string for each variant. If they diverge,
+    /// Prometheus metrics and JSON API responses will use different component names.
+    /// Adding a new variant requires a match arm in as_str() (compile error) AND a new
+    /// case here (test failure), making divergence impossible to miss.
+    #[test]
+    fn as_str_matches_snake_case_derive() {
+        let cases: &[(ComponentId, &str)] = &[
+            (ComponentId::BlockExecutor, "block_executor"),
+            (ComponentId::BlockApplier, "block_applier"),
+            (ComponentId::TreeManager, "tree_manager"),
+            (ComponentId::BlockCanonizer, "block_canonizer"),
+            (ComponentId::ProverInputGenerator, "prover_input_generator"),
+            (ComponentId::Batcher, "batcher"),
+            (ComponentId::BatchVerification, "batch_verification"),
+            (ComponentId::FriJobManager, "fri_job_manager"),
+            (ComponentId::GaplessCommitter, "gapless_committer"),
+            (ComponentId::UpgradeGatekeeper, "upgrade_gatekeeper"),
+            (ComponentId::L1SenderCommit, "l1_sender_commit"),
+            (ComponentId::SnarkJobManager, "snark_job_manager"),
+            (ComponentId::GaplessL1ProofSender, "gapless_l1_proof_sender"),
+            (ComponentId::L1SenderProve, "l1_sender_prove"),
+            (ComponentId::PriorityTree, "priority_tree"),
+            (ComponentId::L1SenderExecute, "l1_sender_execute"),
+        ];
+        for &(id, expected) in cases {
+            assert_eq!(
+                id.as_str(),
+                expected,
+                "as_str() for {id:?} must match the EncodeLabelValue snake_case encoding"
+            );
+        }
     }
 }

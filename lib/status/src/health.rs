@@ -3,11 +3,18 @@ use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
 use zksync_os_types::{BackpressureTrigger, NotAcceptingReason, TransactionAcceptanceState};
 
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeStatus {
+    Healthy,
+    Backpressure,
+    Terminating,
+}
+
 #[derive(Serialize)]
 pub struct HealthResponse {
-    pub healthy: bool,
+    pub status: NodeStatus,
     pub accepting_transactions: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub backpressure_causes: Vec<BackpressureCauseJson>,
 }
 
@@ -61,17 +68,24 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
         _ => vec![],
     };
 
-    let healthy = !is_terminating && accepting;
-    let status = if healthy {
+    let node_status = if is_terminating {
+        NodeStatus::Terminating
+    } else if accepting {
+        NodeStatus::Healthy
+    } else {
+        NodeStatus::Backpressure
+    };
+
+    let http_status = if matches!(node_status, NodeStatus::Healthy) {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
 
     (
-        status,
+        http_status,
         Json(HealthResponse {
-            healthy,
+            status: node_status,
             accepting_transactions: accepting,
             backpressure_causes,
         }),
@@ -107,7 +121,7 @@ mod tests {
         let state = State(make_state());
         let (status, Json(body)) = health(state).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(body.healthy);
+        assert_eq!(body.status, NodeStatus::Healthy);
         assert!(body.accepting_transactions);
         assert!(body.backpressure_causes.is_empty());
     }
@@ -119,7 +133,7 @@ mod tests {
         state.stop_receiver = rx2;
         let (status, Json(body)) = health(State(state)).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-        assert!(!body.healthy);
+        assert_eq!(body.status, NodeStatus::Terminating);
     }
 
     #[tokio::test]
@@ -141,6 +155,7 @@ mod tests {
         state.acceptance_state = rx;
         let (status, Json(body)) = health(State(state)).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.status, NodeStatus::Backpressure);
         assert!(!body.accepting_transactions);
         assert_eq!(body.backpressure_causes.len(), 1);
         assert_eq!(body.backpressure_causes[0].component, "fri_job_manager");
@@ -169,6 +184,7 @@ mod tests {
         state.acceptance_state = rx;
         let (status, Json(body)) = health(State(state)).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.status, NodeStatus::Backpressure);
         assert_eq!(body.backpressure_causes[0].trigger, "time_lag_too_high");
         assert_eq!(body.backpressure_causes[0].threshold_secs, Some(30.0));
         assert_eq!(body.backpressure_causes[0].actual_secs, Some(45.0));

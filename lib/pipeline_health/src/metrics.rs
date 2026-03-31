@@ -18,6 +18,11 @@ pub struct MonitorMetrics {
     /// Counts transitions from Accepting to NotAccepting (transaction acceptance suspended).
     /// vise appends _total automatically for Counter types.
     pub acceptance_state_changes: Counter<u64>,
+    /// Counts transitions from NotAccepting to Accepting (backpressure cleared).
+    /// Paired with acceptance_state_changes so operators can track both sides.
+    pub acceptance_state_clears: Counter<u64>,
+    /// 1 if the monitor is currently accepting transactions, 0 if backpressure is active.
+    pub accepting: Gauge<u64>,
 }
 
 #[vise::register]

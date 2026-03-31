@@ -126,6 +126,11 @@ pub async fn run_l1_sender<Input: SendToL1>(
         // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
         // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
         // emptied in every iteration, its size never exceeds `self.command_limit`.
+        //
+        // Intentionally using bare `recv_many` (not `recv_many_and_record`): health progress is
+        // reported only after the L1 transactions are mined (see `record_processed` calls below),
+        // not at receive time.  Recording at receive would overstate progress — the batch has been
+        // accepted from the channel but not yet committed on L1.
         let received = inbound
             .recv_many(&mut cmd_buffer, config.command_limit)
             .await;

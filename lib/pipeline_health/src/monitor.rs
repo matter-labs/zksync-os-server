@@ -58,14 +58,29 @@ impl PipelineHealthMonitor {
         self.adjacency
             .iter()
             .map(|&(up, down)| {
-                let up_seq = seqs.get(&up).copied().unwrap_or(0);
-                let down_seq = seqs.get(&down).copied().unwrap_or(0);
+                let up_seq = *seqs.get(&up).unwrap_or_else(|| {
+                    panic!(
+                        "adjacency upstream component {:?} is not registered; \
+                         call register() for every component before register_adjacency()",
+                        up
+                    )
+                });
+                let down_seq = *seqs.get(&down).unwrap_or_else(|| {
+                    panic!(
+                        "adjacency downstream component {:?} is not registered; \
+                         call register() for every component before register_adjacency()",
+                        down
+                    )
+                });
                 (down, up_seq.saturating_sub(down_seq))
             })
             .collect()
     }
 
     pub async fn run(mut self) {
+        // Initial state is Accepting; set the gauge so it is correct before any transition fires.
+        MONITOR_METRICS.accepting.set(1);
+
         // Prometheus metrics timer — independent of health evaluation.
         let mut metrics_tick = tokio::time::interval(self.config.metrics_interval);
         metrics_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -76,8 +91,34 @@ impl PipelineHealthMonitor {
              call register() before run()"
         );
 
+        // Every component referenced in an adjacency pair must be registered.
+        // Unregistered components would silently produce zero seq numbers, causing
+        // huge spurious diffs and false backpressure.
+        {
+            let registered: std::collections::HashSet<ComponentId> =
+                self.components.iter().map(|(id, _)| *id).collect();
+            for &(up, down) in &self.adjacency {
+                assert!(
+                    registered.contains(&up),
+                    "adjacency upstream component {:?} is not registered; \
+                     call register() for every component before register_adjacency()",
+                    up
+                );
+                assert!(
+                    registered.contains(&down),
+                    "adjacency downstream component {:?} is not registered; \
+                     call register() for every component before register_adjacency()",
+                    down
+                );
+            }
+        }
+
         // Build a merged stream of all component health changes.
-        // WatchStream::from_changes only yields on actual changes (not initial values).
+        // WatchStream::from_changes skips the initial value and only yields on subsequent
+        // changes — this is intentional. Components that are stuck at their initial state
+        // (e.g. never processed a block) are detected on the next periodic metrics_tick
+        // (default 5 s) rather than immediately. The trade-off is accepted: the periodic
+        // tick is the safety net for components that do not produce change events.
         let streams = self
             .components
             .iter()
@@ -98,17 +139,27 @@ impl PipelineHealthMonitor {
     }
 
     fn head_state(&self) -> (u64, Option<u64>) {
-        self.components
+        match self
+            .components
             .iter()
             .find(|(id, _)| *id == ComponentId::BlockExecutor)
-            .map(|(_, rx)| {
+        {
+            Some((_, rx)) => {
                 let h = rx.borrow();
                 (
                     h.last_processed_block_number.unwrap_or(0),
                     h.last_processed_block_timestamp,
                 )
-            })
-            .unwrap_or((0, None))
+            }
+            None => {
+                tracing::warn!(
+                    "PipelineHealthMonitor: BlockExecutor is not registered; \
+                     block_lag and time_lag metrics will be unreliable (all components \
+                     will show head-relative lag from block 0)"
+                );
+                (0, None)
+            }
+        }
     }
 
     fn evaluate_and_update(&self) {
@@ -168,6 +219,7 @@ impl PipelineHealthMonitor {
                         "pipeline backpressure: suspending transaction acceptance"
                     );
                     MONITOR_METRICS.acceptance_state_changes.inc();
+                    MONITOR_METRICS.accepting.set(0);
                 }
                 (
                     TransactionAcceptanceState::NotAccepting(_),
@@ -176,8 +228,19 @@ impl PipelineHealthMonitor {
                     tracing::info!(
                         "pipeline backpressure cleared: resuming transaction acceptance"
                     );
+                    MONITOR_METRICS.acceptance_state_clears.inc();
+                    MONITOR_METRICS.accepting.set(1);
                 }
-                // Reason changed while already NotAccepting — update state silently.
+                // Cause set changed while already NotAccepting — log at debug for visibility.
+                (
+                    TransactionAcceptanceState::NotAccepting(_),
+                    TransactionAcceptanceState::NotAccepting(reason),
+                ) => {
+                    tracing::debug!(
+                        ?reason,
+                        "pipeline backpressure cause set changed while already suspended"
+                    );
+                }
                 _ => {}
             }
             *current = new_state.clone();
@@ -199,8 +262,7 @@ impl PipelineHealthMonitor {
             MONITOR_METRICS.component_time_lag_seconds[id].set(time_lag);
         }
 
-        let diffs = self.compute_adjacent_diffs();
-        for (id, diff) in diffs {
+        for (&id, &diff) in &adjacent_diffs {
             MONITOR_METRICS.component_block_diff_to_upstream[&id].set(diff);
         }
     }
@@ -666,6 +728,24 @@ mod tests {
             TransactionAcceptanceState::Accepting,
             "stale out-of-order report from slow prover must not trigger backpressure"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "adjacency downstream component")]
+    fn unregistered_adjacency_component_panics_in_compute() {
+        // BlockCanonizer is in an adjacency pair but never registered —
+        // compute_adjacent_diffs must panic rather than silently produce diff = up_seq.
+        let config = PipelineHealthConfig::default();
+        let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+
+        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
+        exec_reporter.record_processed(100, None);
+        monitor.register(ComponentId::BlockExecutor, exec_rx);
+        // BlockCanonizer intentionally NOT registered.
+        monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::BlockCanonizer);
+
+        // Must panic because BlockCanonizer is absent from seqs.
+        monitor.compute_adjacent_diffs();
     }
 
     #[tokio::test]

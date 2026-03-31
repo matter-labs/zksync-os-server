@@ -35,18 +35,18 @@ pub struct ThresholdsJson {
 }
 
 pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResponse> {
-    let head_block = state
+    let (head_block, head_ts) = state
         .component_health
         .iter()
         .find(|(id, _)| *id == ComponentId::BlockExecutor)
-        .map(|(_, rx)| rx.borrow().last_processed_block_number.unwrap_or(0))
-        .unwrap_or(0);
-
-    let head_ts = state
-        .component_health
-        .iter()
-        .find(|(id, _)| *id == ComponentId::BlockExecutor)
-        .and_then(|(_, rx)| rx.borrow().last_processed_block_timestamp);
+        .map(|(_, rx)| {
+            let h = rx.borrow();
+            (
+                h.last_processed_block_number.unwrap_or(0),
+                h.last_processed_block_timestamp,
+            )
+        })
+        .unwrap_or((0, None));
 
     let now = tokio::time::Instant::now();
     let components = state
@@ -57,7 +57,7 @@ pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResp
             let elapsed = now.duration_since(h.state_entered_at).as_secs_f64();
             let lag = head_block.saturating_sub(h.last_processed_block_number.unwrap_or(0));
             let time_lag_secs = match (h.last_processed_block_timestamp, head_ts) {
-                (Some(comp_ts), Some(h_ts)) if h_ts > comp_ts => (h_ts - comp_ts) as f64,
+                (Some(comp_ts), Some(h_ts)) => h_ts.saturating_sub(comp_ts) as f64,
                 _ => 0.0,
             };
             let cond = state.pipeline_health_config.condition_for(*id);
