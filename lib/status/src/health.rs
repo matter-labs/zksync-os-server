@@ -1,7 +1,6 @@
 use crate::AppState;
 use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
-use zksync_os_pipeline_health::ComponentId;
 use zksync_os_types::{BackpressureTrigger, NotAcceptingReason, TransactionAcceptanceState};
 
 #[derive(Serialize)]
@@ -10,29 +9,6 @@ pub struct HealthResponse {
     pub accepting_transactions: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub backpressure_causes: Vec<BackpressureCauseJson>,
-    pub pipeline: PipelineSnapshot,
-}
-
-#[derive(Serialize)]
-pub struct PipelineSnapshot {
-    pub head_block: u64,
-    pub components: Vec<ComponentEntry>,
-}
-
-#[derive(Serialize)]
-pub struct ComponentEntry {
-    pub name: &'static str,
-    #[serde(flatten)]
-    pub snapshot: ComponentSnapshot,
-}
-
-#[derive(Serialize)]
-pub struct ComponentSnapshot {
-    pub state: &'static str,
-    pub state_duration_secs: f64,
-    pub last_processed_block: u64,
-    pub block_lag: u64,
-    pub time_lag_secs: f64,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -53,44 +29,6 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
     let is_terminating = *state.stop_receiver.borrow();
     let acceptance = state.acceptance_state.borrow().clone();
     let accepting = matches!(acceptance, TransactionAcceptanceState::Accepting);
-
-    let head_block = state
-        .component_health
-        .iter()
-        .find(|(id, _)| *id == ComponentId::BlockExecutor)
-        .map(|(_, rx)| rx.borrow().last_processed_block_number.unwrap_or(0))
-        .unwrap_or(0);
-
-    let head_ts = state
-        .component_health
-        .iter()
-        .find(|(id, _)| *id == ComponentId::BlockExecutor)
-        .and_then(|(_, rx)| rx.borrow().last_processed_block_timestamp);
-
-    let now = tokio::time::Instant::now();
-    let components: Vec<ComponentEntry> = state
-        .component_health
-        .iter()
-        .map(|(id, rx)| {
-            let h = rx.borrow();
-            let elapsed = now.duration_since(h.state_entered_at).as_secs_f64();
-            let lag = head_block.saturating_sub(h.last_processed_block_number.unwrap_or(0));
-            let time_lag_secs = match (h.last_processed_block_timestamp, head_ts) {
-                (Some(comp_ts), Some(h_ts)) if h_ts > comp_ts => (h_ts - comp_ts) as f64,
-                _ => 0.0,
-            };
-            ComponentEntry {
-                name: id.as_str(),
-                snapshot: ComponentSnapshot {
-                    state: h.state.as_str(),
-                    state_duration_secs: elapsed,
-                    last_processed_block: h.last_processed_block_number.unwrap_or(0),
-                    block_lag: lag,
-                    time_lag_secs,
-                },
-            }
-        })
-        .collect();
 
     let backpressure_causes = match &acceptance {
         TransactionAcceptanceState::NotAccepting(NotAcceptingReason::PipelineBackpressure {
@@ -136,10 +74,6 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
             healthy,
             accepting_transactions: accepting,
             backpressure_causes,
-            pipeline: PipelineSnapshot {
-                head_block,
-                components,
-            },
         }),
     )
 }
@@ -152,7 +86,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::watch;
     use zksync_os_observability::ComponentHealthReporter;
-    use zksync_os_pipeline_health::ComponentId;
+    use zksync_os_pipeline_health::{ComponentId, PipelineHealthConfig};
     use zksync_os_types::TransactionAcceptanceState;
 
     fn make_state() -> AppState {
@@ -164,6 +98,7 @@ mod tests {
             stop_receiver: stop_rx,
             acceptance_state: accept_rx,
             component_health: Arc::new(vec![(ComponentId::BlockExecutor, health_rx)]),
+            pipeline_health_config: PipelineHealthConfig::default(),
         }
     }
 
@@ -175,7 +110,6 @@ mod tests {
         assert!(body.healthy);
         assert!(body.accepting_transactions);
         assert!(body.backpressure_causes.is_empty());
-        assert_eq!(body.pipeline.head_block, 12345);
     }
 
     #[tokio::test]

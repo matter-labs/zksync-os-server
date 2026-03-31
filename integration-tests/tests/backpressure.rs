@@ -106,7 +106,7 @@ async fn health_endpoint_returns_pipeline_snapshot() {
 ///
 /// # How the trigger works
 ///
-/// After the timestamp fixes (Tasks 1–2), the Batcher calls
+/// The Batcher calls
 /// `record_processed(last_block_number, Some(last_block_timestamp))` once per batch.
 /// The monitor tracks:
 ///
@@ -211,10 +211,8 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
     );
 
     // The cause must come from the batcher with a time-lag trigger.
-    // This specifically validates that the Batcher timestamp fix works: Batcher now calls
-    // record_processed(last_block_number, Some(last_block_timestamp)) so the monitor can
-    // compute a real time lag and fire backpressure. Without the fix, block_timestamp()
-    // returned 0 and time_lag was always skipped.
+    // The Batcher calls record_processed(last_block_number, Some(last_block_timestamp))
+    // so the monitor can compute a real time lag and fire backpressure.
     let cause = &causes[0];
     assert_eq!(
         cause["component"].as_str(),

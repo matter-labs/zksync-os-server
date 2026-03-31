@@ -890,6 +890,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 stop_receiver.clone(),
                 combined_acceptance_rx.clone(),
                 component_health.clone(),
+                config.pipeline_health_config.clone(),
             )
         });
     }

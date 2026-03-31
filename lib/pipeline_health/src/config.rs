@@ -55,7 +55,7 @@ impl ComponentId {
 /// Constructed from the public config types by condition_for().
 /// Not part of the public API — callers configure via BlockPipelineCondition /
 /// BatchPipelineCondition.
-pub(crate) struct BackpressureCondition {
+pub struct BackpressureCondition {
     pub max_block_lag: Option<u64>,
     pub max_time_lag: Option<Duration>,
 }
@@ -221,7 +221,7 @@ impl PipelineHealthConfig {
     /// 1. `component_overrides` — if present, fully replaces the group condition.
     /// 2. Group default — block-pipeline components use `block_pipeline`;
     ///    batch-pipeline components use `batch_pipeline` (no max_block_lag).
-    pub(crate) fn condition_for(&self, id: ComponentId) -> BackpressureCondition {
+    pub fn condition_for(&self, id: ComponentId) -> BackpressureCondition {
         // Per-component override takes full precedence over the group default.
         if let Some(o) = self.component_overrides.get(id) {
             return if o.enabled {
