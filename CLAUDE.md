@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Format**: `cargo fmt --all -- --check`
 - **Lint**: `cargo clippy --all-targets --all-features --workspace --exclude zksync_os_integration_tests -- -D warnings`
 - **Unit tests**: `cargo nextest run --workspace --exclude zksync_os_integration_tests`
-- **Integration tests**: `cargo nextest run -p zksync_os_integration_tests` (no live anvil needed — each test manages its own L1/node)
+- **Integration tests**: `cargo nextest run -p zksync_os_integration_tests --profile no-pig` (no live anvil needed — each test manages its own L1/node; `--profile no-pig` disables Prover Input Generation for faster runs)
 
 ### Local Development Setup
 1. Run script: `./run_local.sh ./local-chains/v30.2/default`
@@ -37,7 +37,7 @@ cargo run --release
 1. **Format**: `cargo fmt --all --check`
 2. **Lint**: `cargo clippy --all-targets --all-features --workspace -- -D warnings`
 3. **Unit tests**: `cargo nextest run --release --workspace --exclude zksync_os_integration_tests`
-4. **Integration tests**: `cargo nextest run -p zksync_os_integration_tests` (no live anvil needed — each test manages its own L1/node)
+4. **Integration tests**: `cargo nextest run -p zksync_os_integration_tests` (no live anvil needed — each test manages its own L1/node; use `--profile no-pig` only for a faster lightweight run)
 
 Running every single one of these checks is critically important. CI will catch failures, but catching them locally before pushing saves everyone time and keeps the branch green.
 

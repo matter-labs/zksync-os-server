@@ -142,8 +142,19 @@ impl WriteState for StateHandle {
     where
         J: IntoIterator<Item = (B256, &'a Vec<u8>)>,
     {
-        self.storage_map.add_diff(block_number, storage_diffs);
+        // NOTE: keep this order as "preimages first, storage second".
+        //
+        // Storage also updates `latest_block`, which signals that block N is written to disk (base).
+        // As such, preimages might be missing for a short period (not yet written to disk, but purged from overlay).
+        //
+        // TODO: The right fix here would be to have `block_range_available()` depend on both storage & preimages being written.
+        //
+        // We intentionally defer the proper fix for now.
+        // Whilst we prefer the above, it requires tracking preimages progress for persistent state across restarts.
+        // That implies extra metadata and migration / compatibility work.
+        // Given lack of migration support, we prefer to keep the current behavior and defer the fix until migrations are supported.
         self.persistent_preimages.add(block_number, new_preimages);
+        self.storage_map.add_diff(block_number, storage_diffs);
         Ok(())
     }
 }

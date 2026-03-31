@@ -83,13 +83,16 @@ impl GatewayMigrationWatcher {
             sl_chain_id_subpool,
         };
 
-        Ok(L1Watcher::new(
+        L1Watcher::new(
             zk_chain.provider().clone(),
             next_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
+            l1_chain_id,
             config.poll_interval,
             Box::new(this),
-        ))
+        )
+        .await
     }
 }
 

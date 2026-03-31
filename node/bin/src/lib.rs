@@ -447,6 +447,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
+            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 commit watcher")
@@ -460,6 +461,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
+            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 execute watcher")
@@ -547,6 +549,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                     config.l1_watcher_config.clone().into(),
                     next_cursors.interop_event_index.clone(),
                     interop_roots_subpool.clone(),
+                    node_startup_state.l1_state.l1_chain_id,
                 )
                 .await
                 .expect("failed to start L1 interop roots watcher")
@@ -726,6 +729,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             persistent_batch_storage.clone(),
+            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 batch persist watcher")
@@ -842,6 +846,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state,
             block_replay_storage.clone(),
             runtime,
+            starting_block,
             block_context_provider,
             state.clone(),
             tree_db,
@@ -864,6 +869,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             run_status_server(addr, shutdown)
         });
     }
+
+    // Wait for repositories to be ready to be used in RPC.
+    repositories.wait_for_db_ready_to_process_blocks().await;
 
     // =========== Start JSON RPC ========
     zksync_os_rpc::spawn(
@@ -926,6 +934,8 @@ async fn run_main_node_pipeline(
     );
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::channel(8);
+    let (applied_block_number_sender, applied_block_number_receiver) =
+        watch::channel(starting_block - 1);
 
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ConsensusNodeCommandSource {
@@ -944,6 +954,7 @@ async fn run_main_node_pipeline(
             state: state.clone(),
             config: config.into(),
             tx_acceptance_state_sender,
+            applied_block_number_receiver,
         })
         .pipe(BlockCanonizer {
             consensus: canonization_engine,
@@ -954,6 +965,7 @@ async fn run_main_node_pipeline(
             replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             config: config.into(),
+            applied_block_number_sender,
         })
         .pipe_opt(
             config
@@ -970,6 +982,15 @@ async fn run_main_node_pipeline(
                 }),
         )
         .pipe(TreeManager { tree: tree.clone() });
+
+    if !config.batcher_config.enabled {
+        tracing::warn!(
+            "Batcher subsystem disabled — skipping prover input generation, L1 settlement, and downstream components"
+        );
+        pipeline.pipe(NoOpSink::new()).spawn();
+        return;
+    }
+
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
         .await
@@ -1009,6 +1030,16 @@ async fn run_main_node_pipeline(
         run_fake_snark_provers(&config.prover_api_config, runtime, snark_job_manager);
     }
 
+    if !config.prover_input_generator_config.enable_input_generation {
+        assert!(
+            config.prover_api_config.fake_fri_provers.enabled
+                && config.prover_api_config.fake_snark_provers.enabled,
+            "prover_input_generator_config.enable_input_generation=false requires both \
+             prover_api_config.fake_fri_provers.enabled and \
+             prover_api_config.fake_snark_provers.enabled to be true"
+        );
+    }
+
     let pipeline = pipeline
         .pipe(ProverInputGenerator {
             enable_logging: config.prover_input_generator_config.logging_enabled,
@@ -1018,6 +1049,7 @@ async fn run_main_node_pipeline(
             read_state: state.clone(),
             pubdata_mode,
             runtime: runtime.clone(),
+            disabled: !config.prover_input_generator_config.enable_input_generation,
         })
         .pipe(Batcher {
             startup_config: BatcherStartupConfig {
@@ -1097,6 +1129,7 @@ async fn run_en_pipeline(
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     runtime: &Runtime,
+    starting_block: u64,
     block_context_provider: BlockContextProvider<impl L2Subpool>,
     state: impl ReadStateHistory + WriteState + Clone,
     tree: MerkleTree<RocksDBWrapper>,
@@ -1111,6 +1144,8 @@ async fn run_en_pipeline(
             .rocks_db_path
             .join(INTERNAL_CONFIG_FILE_NAME),
     );
+    let (applied_block_number_sender, applied_block_number_receiver) =
+        watch::channel(starting_block - 1);
 
     Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
@@ -1122,12 +1157,14 @@ async fn run_en_pipeline(
             state: state.clone(),
             config: config.into(),
             tx_acceptance_state_sender,
+            applied_block_number_receiver,
         })
         .pipe(BlockApplier {
             state: state.clone(),
             replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             config: config.into(),
+            applied_block_number_sender,
         })
         .pipe_opt(
             config

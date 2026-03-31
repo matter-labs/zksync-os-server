@@ -33,6 +33,11 @@ where
     /// Controls transaction acceptance state.
     /// When max_blocks_to_produce limit is reached, sequencer sends NotAccepting to stop RPC from accepting new txs.
     pub tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
+    /// TEMPORARY: `BlockExecutor` waits for `BlockApplier` to apply block `N`
+    /// before starting block `N + 1`. This works around an `OverlayBuffer` bug
+    /// that reproduces during rebuilds when the runtime truncates base state.
+    /// Once that bug is fixed, this wait can be removed.
+    pub applied_block_number_receiver: watch::Receiver<u64>,
 }
 
 #[async_trait]
@@ -72,7 +77,6 @@ where
         // `BlockExecutor` doesn't persist/update state after block execution.
         // Instead, we keep the diff in memory - and apply it on top of the last persisted block
         let mut state_overlay_buffer = OverlayBuffer::default();
-
         loop {
             latency_tracker.enter_state(SequencerState::WaitingForCommand);
 
@@ -82,6 +86,11 @@ where
             };
             tracing::info!("Command {cmd} received by BlockExecutor");
             let cmd_type = cmd.command_type();
+            wait_for_block_applier(
+                &mut self.applied_block_number_receiver,
+                self.block_context_provider.next_block_number() - 1,
+            )
+            .await?;
 
             // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
             if matches!(cmd, BlockCommand::Produce(_))
@@ -180,6 +189,40 @@ where
             }
         }
     }
+}
+
+async fn wait_for_block_applier(
+    applied_block_number_receiver: &mut watch::Receiver<u64>,
+    required_block_number: u64,
+) -> anyhow::Result<()> {
+    let applied_block_number = *applied_block_number_receiver.borrow_and_update();
+    if applied_block_number >= required_block_number {
+        tracing::debug!(
+            applied_block_number,
+            required_block_number,
+            "BlockExecutor does not need to wait for BlockApplier"
+        );
+        return Ok(());
+    }
+
+    tracing::debug!(
+        applied_block_number,
+        required_block_number,
+        "BlockExecutor waiting for BlockApplier to catch up"
+    );
+
+    let reached_block_number = applied_block_number_receiver
+        .wait_for(|block_number| *block_number >= required_block_number)
+        .await
+        .context("block applier progress watch closed while executor was waiting")?
+        .to_owned();
+
+    tracing::debug!(
+        reached_block_number,
+        required_block_number,
+        "BlockExecutor resumed after BlockApplier caught up"
+    );
+    Ok(())
 }
 
 /// Checks if block production limit has been reached.

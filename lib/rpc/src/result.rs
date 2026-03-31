@@ -6,7 +6,7 @@
 
 use crate::debug_impl::DebugError;
 use crate::eth_call_handler::EthCallError;
-use crate::eth_filter_impl::EthFilterError;
+use crate::eth_filter::EthFilterError;
 use crate::eth_impl::EthError;
 use crate::tx_handler::{EthSendRawTransactionError, EthSendRawTransactionSyncError};
 use crate::unstable_impl::UnstableError;

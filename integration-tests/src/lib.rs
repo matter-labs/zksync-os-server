@@ -1,6 +1,7 @@
 use crate::config::{ChainLayout, load_chain_config};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
+use crate::node_log::NodeLogState;
 use crate::prover_tester::ProverTester;
 use crate::provider::{ZksyncApi, ZksyncTestingProvider};
 use crate::utils::LockedPort;
@@ -22,6 +23,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::runtime::Handle;
+use tracing::Instrument;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
@@ -45,6 +47,7 @@ pub mod config;
 pub mod contracts;
 pub mod dyn_wallet_provider;
 mod network;
+mod node_log;
 mod prover_tester;
 pub mod provider;
 pub mod upgrade;
@@ -150,8 +153,19 @@ pub struct Tester {
     batch_verification_url: String,
     gateway_rpc_url: Option<String>,
     sl_provider: EthDynProvider,
+    log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
+    enable_prover_input_generation: bool,
     supporting_nodes: Vec<Tester>,
+}
+
+#[derive(Debug)]
+pub struct StoppedTester {
+    l1: AnvilL1,
+    tempdir: Arc<tempfile::TempDir>,
+    log_state: NodeLogState,
+    chain_layout: ChainLayout<'static>,
+    enable_prover_input_generation: bool,
 }
 
 impl Tester {
@@ -203,6 +217,23 @@ impl Tester {
         Self::builder().build().await
     }
 
+    pub async fn setup_with_overrides(
+        config_overrides: impl FnOnce(&mut Config),
+    ) -> anyhow::Result<Self> {
+        let chain_layout = ChainLayout::Default {
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let l1 = AnvilL1::start(chain_layout).await?;
+        Self::launch_node(
+            l1,
+            false,
+            prover_input_generation_enabled(),
+            Some(config_overrides),
+            chain_layout,
+        )
+        .await
+    }
+
     pub fn l2_rpc_url(&self) -> &str {
         &self.l2_rpc_address
     }
@@ -240,6 +271,7 @@ impl Tester {
         Self::launch_node(
             self.l1.clone(),
             false,
+            self.enable_prover_input_generation,
             Some(overrides_fun),
             self.chain_layout,
         )
@@ -251,36 +283,70 @@ impl Tester {
     /// Returns a new `Tester` connected to the restarted node. The original `Tester` is consumed.
     ///
     /// Note that allocated ports might change between old node and new one.
-    pub async fn restart(self) -> anyhow::Result<Self> {
+    pub async fn stop(self) -> anyhow::Result<StoppedTester> {
         // Drop all fields that might rely on node being alive (e.g. alloy provider that uses RPC).
         let Self {
             runtime,
             l1,
             tempdir,
+            log_state,
             chain_layout,
+            enable_prover_input_generation,
             ..
         } = self;
         if !runtime.graceful_shutdown_with_timeout(NODE_SHUTDOWN_TIMEOUT) {
             panic!("node failed to shutdown in time");
         }
-        Self::launch_node_inner(l1, false, None::<fn(&mut Config)>, tempdir, chain_layout).await
+        Ok(StoppedTester {
+            l1,
+            tempdir,
+            log_state,
+            chain_layout,
+            enable_prover_input_generation,
+        })
+    }
+
+    pub async fn restart(self) -> anyhow::Result<Self> {
+        self.stop().await?.start().await
+    }
+
+    pub async fn restart_with_overrides(
+        self,
+        config_overrides: impl FnOnce(&mut Config),
+    ) -> anyhow::Result<Self> {
+        self.stop()
+            .await?
+            .start_with_overrides(config_overrides)
+            .await
     }
 
     async fn launch_node(
         l1: AnvilL1,
         enable_prover: bool,
+        enable_prover_input_generation: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
         chain_layout: ChainLayout<'static>,
     ) -> anyhow::Result<Self> {
         let tempdir = Arc::new(tempfile::tempdir()?);
-        Self::launch_node_inner(l1, enable_prover, config_overrides, tempdir, chain_layout).await
+        Self::launch_node_inner(
+            l1,
+            enable_prover,
+            enable_prover_input_generation,
+            config_overrides,
+            tempdir,
+            None,
+            chain_layout,
+        )
+        .await
     }
 
     async fn launch_node_inner(
         l1: AnvilL1,
         enable_prover: bool,
+        enable_prover_input_generation: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
         tempdir: Arc<TempDir>,
+        log_state: Option<NodeLogState>,
         chain_layout: ChainLayout<'static>,
     ) -> anyhow::Result<Self> {
         // Initialize and **hold** locked ports for the duration of node initialization.
@@ -380,6 +446,7 @@ impl Tester {
             batcher_config: default_config.batcher_config,
             prover_input_generator_config: ProverInputGeneratorConfig {
                 logging_enabled: enable_prover,
+                enable_input_generation: enable_prover_input_generation,
                 ..default_config.prover_input_generator_config
             },
             prover_api_config,
@@ -403,12 +470,23 @@ impl Tester {
         if let Some(f) = config_overrides {
             f(&mut config)
         }
+        let node_role = config.general_config.node_role;
+        let log_state = log_state.unwrap_or_else(|| NodeLogState::fresh(node_role));
+        let log_tag = log_state.tag();
         let gateway_rpc_url = config.general_config.gateway_rpc_url.clone();
 
         let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
             .build()
             .expect("failed to build runtime");
-        zksync_os_server::run::<FullDiffsState>(&runtime, config).await;
+        let node_span = tracing::info_span!(
+            "node",
+            node = %log_tag,
+            role = %node_role,
+        );
+        tracing::info!(parent: &node_span, "Launching test node");
+        zksync_os_server::run::<FullDiffsState>(&runtime, config)
+            .instrument(node_span)
+            .await;
 
         #[cfg(feature = "prover-tests")]
         if enable_prover {
@@ -541,10 +619,55 @@ impl Tester {
             gateway_rpc_url,
             sl_provider,
             node_record,
+            log_state,
             tempdir: tempdir.clone(),
             chain_layout,
+            enable_prover_input_generation,
             supporting_nodes: Vec::new(),
         })
+    }
+}
+
+impl StoppedTester {
+    pub fn l1_provider(&self) -> &EthDynProvider {
+        &self.l1.provider
+    }
+
+    pub fn l1_wallet(&self) -> &EthereumWallet {
+        &self.l1.wallet
+    }
+
+    pub fn chain_layout(&self) -> ChainLayout<'static> {
+        self.chain_layout
+    }
+
+    pub async fn start(self) -> anyhow::Result<Tester> {
+        Tester::launch_node_inner(
+            self.l1,
+            false,
+            self.enable_prover_input_generation,
+            None::<fn(&mut Config)>,
+            self.tempdir,
+            Some(self.log_state.restarted()),
+            self.chain_layout,
+        )
+        .await
+    }
+
+    pub async fn start_with_overrides(
+        self,
+        config_overrides: impl FnOnce(&mut Config),
+    ) -> anyhow::Result<Tester> {
+        Tester::launch_node_inner(
+            self.l1,
+            false,
+            self.enable_prover_input_generation,
+            Some(config_overrides),
+            self.tempdir,
+            Some(self.log_state.restarted()),
+            self.chain_layout,
+        )
+        .await
     }
 }
 
@@ -644,14 +767,29 @@ async fn ensure_test_wallet_funded(
     .await
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct NodeBuilderOptions {
     enable_prover: bool,
+    enable_prover_input_generation: bool,
     block_time: Option<Duration>,
     batch_verification_threshold: Option<u64>,
     fee_config: Option<FeeConfig>,
     gas_price_scale_factor: Option<f64>,
     estimate_gas_pubdata_price_factor: Option<f64>,
+}
+
+impl Default for NodeBuilderOptions {
+    fn default() -> Self {
+        Self {
+            enable_prover: false,
+            enable_prover_input_generation: true,
+            block_time: None,
+            batch_verification_threshold: None,
+            fee_config: None,
+            gas_price_scale_factor: None,
+            estimate_gas_pubdata_price_factor: None,
+        }
+    }
 }
 
 impl NodeBuilderOptions {
@@ -741,20 +879,28 @@ impl TesterBuilder {
                     protocol_version: self.protocol_version,
                 };
                 let l1 = AnvilL1::start(chain_layout).await?;
-                let options = self.options;
+                let mut options = self.options;
+                if !prover_input_generation_enabled() {
+                    options.enable_prover_input_generation = false;
+                }
                 Tester::launch_node(
                     l1,
                     options.enable_prover,
+                    options.enable_prover_input_generation,
                     Some(move |config: &mut Config| options.apply_to_config(config)),
                     chain_layout,
                 )
                 .await
             }
             SettlementLayer::Gateway => {
+                let mut options = self.options;
+                if !prover_input_generation_enabled() {
+                    options.enable_prover_input_generation = false;
+                }
                 let gateway_tester = GatewayTester::builder()
                     .protocol_version(self.protocol_version)
                     .num_chains(1)
-                    .chain_options(self.options)
+                    .chain_options(options)
                     .build()
                     .await?;
                 Ok(gateway_tester.into_primary_chain())
@@ -857,6 +1003,7 @@ impl GatewayTesterBuilder {
         let gateway = Tester::launch_node(
             l1.clone(),
             false,
+            self.chain_options.enable_prover_input_generation,
             None::<fn(&mut Config)>,
             ChainLayout::Gateway { protocol_version },
         )
@@ -882,6 +1029,7 @@ impl GatewayTesterBuilder {
             let tester = Tester::launch_node(
                 l1.clone(),
                 chain_options.enable_prover,
+                chain_options.enable_prover_input_generation,
                 Some(move |config: &mut Config| {
                     config.general_config.gateway_rpc_url = Some(gateway_rpc_url.clone());
                     chain_options.apply_to_config(config);
@@ -909,6 +1057,10 @@ impl GatewayTesterBuilder {
             chains,
         })
     }
+}
+
+fn prover_input_generation_enabled() -> bool {
+    std::env::var("NEXTEST_PROFILE").as_deref() != Ok("no-pig")
 }
 
 async fn wait_for_gateway_readiness(

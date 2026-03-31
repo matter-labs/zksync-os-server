@@ -107,8 +107,10 @@ pub struct PreparedBlockCommand<'a> {
 /// Behaviour when VM returns an InvalidTransaction error.
 #[derive(Clone, Copy, Debug)]
 pub enum InvalidTxPolicy {
-    /// Invalid tx is skipped in block and discarded from mempool. Used when building a block.
-    RejectAndContinue,
+    /// Invalid tx is skipped in block; optionally marked as invalid in the tx source.
+    /// During block rebuild we keep `mark_in_source = false`, because rebuild should only
+    /// reprocess historical blocks and must not affect the current tx source state.
+    RejectAndContinue { mark_in_source: bool },
     /// Bubble the error up and abort the whole block. Used when replaying a block (ReplayLog / Replica / EN)
     Abort,
 }

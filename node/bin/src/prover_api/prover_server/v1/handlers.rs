@@ -7,7 +7,7 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose};
 use http::StatusCode;
-use zksync_os_l1_sender::batcher_model::FriProof;
+use zksync_os_l1_sender::batcher_model::{FriProof, ProverInput};
 use zksync_os_types::ProvingVersion;
 
 use crate::prover_api::fri_job_manager::SubmitError;
@@ -39,7 +39,10 @@ pub(super) async fn pick_fri_job(
         .await
     {
         Some((fri_job, input)) => {
-            let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let bytes: Vec<u8> = match &input {
+                ProverInput::Real(words) => words.iter().flat_map(|v| v.to_le_bytes()).collect(),
+                ProverInput::Fake => vec![],
+            };
             let prover_input = general_purpose::STANDARD.encode(&bytes);
             PROVER_API_METRICS.pick_job_latency[&(ProverStage::Fri, PickJobResult::NewJob)]
                 .observe(start.elapsed());
@@ -230,7 +233,10 @@ pub(super) async fn peek_fri_job(
 ) -> Response {
     match state.fri_job_manager.peek_batch_data(batch_number).await {
         Some((vk_hash, prover_input)) => {
-            let bytes: Vec<u8> = prover_input.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let bytes: Vec<u8> = match &prover_input {
+                ProverInput::Real(words) => words.iter().flat_map(|v| v.to_le_bytes()).collect(),
+                ProverInput::Fake => vec![],
+            };
             Json(BatchDataPayload {
                 batch_number,
                 vk_hash: vk_hash.to_string(),

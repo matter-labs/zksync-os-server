@@ -2,7 +2,7 @@ use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, BlockNumber};
-use alloy::providers::DynProvider;
+use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,9 +51,12 @@ impl L1TxWatcher {
             zk_chain_l1.provider().clone(),
             next_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
+            zk_chain_l1.provider().get_chain_id().await?,
             config.poll_interval,
             this.into(),
-        );
+        )
+        .await?;
 
         Ok(l1_watcher)
     }
