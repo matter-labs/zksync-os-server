@@ -81,10 +81,18 @@ pub struct BlockPipelineCondition {
 /// L1SenderCommit, SnarkJobManager, GaplessL1ProofSender, L1SenderProve,
 /// PriorityTree, L1SenderExecute.
 ///
-/// max_block_lag is intentionally absent: block lag oscillates 0→batch_size→0 during
-/// normal batch accumulation and is not a meaningful signal for these components.
+/// `max_block_lag` is available but use it carefully: block lag for batch components
+/// oscillates 0→batch_size→0 during normal accumulation. Set the threshold well above
+/// your expected batch size to avoid false positives. Components that submit work
+/// concurrently (FriJobManager, SnarkJobManager, L1SenderCommit, L1SenderProve,
+/// L1SenderExecute) use high-watermark reporting, so out-of-order completions will
+/// not walk the watermark backward and create false positives.
 #[derive(DescribeConfig, DeserializeConfig, Default, Clone, Debug)]
 pub struct BatchPipelineCondition {
+    /// Trigger backpressure when a batch-pipeline component is more than N blocks
+    /// behind the pipeline head. Use a threshold well above your typical batch size
+    /// to avoid false positives during normal batch accumulation.
+    pub max_block_lag: Option<u64>,
     /// Trigger backpressure when the block-timestamp lag for any batch-pipeline component
     /// exceeds this duration. Only evaluated when the component has reported a timestamp
     /// via record_processed(block_number, Some(timestamp)).
@@ -100,9 +108,9 @@ pub struct BatchPipelineCondition {
 /// only way to express an all-None override, since an absent section is indistinguishable
 /// from no override at all.
 ///
-/// Note: setting `max_block_lag` on batch-pipeline components is not recommended —
-/// batch components' block lag oscillates 0→batch_size→0 during normal operation
-/// and will cause false positives. Use `max_time_lag` for batch components instead.
+/// Note: when setting `max_block_lag` on batch-pipeline components via an override,
+/// use a threshold well above your typical batch size — the block lag oscillates
+/// 0→batch_size→0 during normal operation. See `BatchPipelineCondition` for details.
 #[derive(DescribeConfig, DeserializeConfig, Clone, Debug)]
 pub struct ComponentConditionOverride {
     /// When false, backpressure is completely disabled for this component regardless
@@ -201,7 +209,7 @@ pub struct PipelineHealthConfig {
     #[config(nest, default)]
     pub block_pipeline: BlockPipelineCondition,
     /// Thresholds applied to batch-level components.
-    /// max_block_lag is absent by design — it is not meaningful for batch components.
+    /// See `BatchPipelineCondition` for guidance on using `max_block_lag` with batch components.
     #[config(nest, default)]
     pub batch_pipeline: BatchPipelineCondition,
     /// Per-component overrides. A component listed here has its group condition fully
@@ -220,7 +228,7 @@ impl PipelineHealthConfig {
     /// Precedence (highest to lowest):
     /// 1. `component_overrides` — if present, fully replaces the group condition.
     /// 2. Group default — block-pipeline components use `block_pipeline`;
-    ///    batch-pipeline components use `batch_pipeline` (no max_block_lag).
+    ///    batch-pipeline components use `batch_pipeline`.
     pub fn condition_for(&self, id: ComponentId) -> BackpressureCondition {
         // Per-component override takes full precedence over the group default.
         if let Some(o) = self.component_overrides.get(id) {
@@ -246,8 +254,9 @@ impl PipelineHealthConfig {
                 max_block_lag: self.block_pipeline.max_block_lag,
                 max_time_lag: self.block_pipeline.max_time_lag,
             },
-            // All batch-level components: no block lag (oscillates during accumulation),
-            // only time lag.
+            // All batch-level components use time lag as the primary signal.
+            // max_block_lag is also supported but must be set well above batch_size
+            // to avoid oscillation false-positives (see BatchPipelineCondition docs).
             ComponentId::Batcher
             | ComponentId::BatchVerification
             | ComponentId::FriJobManager
@@ -259,7 +268,7 @@ impl PipelineHealthConfig {
             | ComponentId::L1SenderProve
             | ComponentId::PriorityTree
             | ComponentId::L1SenderExecute => BackpressureCondition {
-                max_block_lag: None,
+                max_block_lag: self.batch_pipeline.max_block_lag,
                 max_time_lag: self.batch_pipeline.max_time_lag,
             },
         }
@@ -307,6 +316,7 @@ mod tests {
     fn batch_pipeline_condition_applies_to_all_batch_components() {
         let config = PipelineHealthConfig {
             batch_pipeline: BatchPipelineCondition {
+                max_block_lag: None,
                 max_time_lag: Some(Duration::from_secs(300)),
             },
             ..Default::default()
@@ -327,7 +337,7 @@ mod tests {
             let cond = config.condition_for(id);
             assert!(
                 cond.max_block_lag.is_none(),
-                "batch components must never get max_block_lag; failed for {id:?}"
+                "batch component {id:?} must not get max_block_lag when BatchPipelineCondition.max_block_lag is None"
             );
             assert_eq!(
                 cond.max_time_lag,
@@ -338,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_components_never_get_block_lag_even_if_block_pipeline_configured() {
+    fn batch_components_do_not_inherit_block_lag_from_block_pipeline_config() {
         let config = PipelineHealthConfig {
             block_pipeline: BlockPipelineCondition {
                 max_block_lag: Some(50),
@@ -430,6 +440,7 @@ mod tests {
         // enabled=false fully silences the component regardless of group config
         let config = PipelineHealthConfig {
             batch_pipeline: BatchPipelineCondition {
+                max_block_lag: None,
                 max_time_lag: Some(Duration::from_secs(300)),
             },
             component_overrides: ComponentOverrides {
@@ -480,6 +491,7 @@ mod tests {
     fn component_override_can_give_batch_component_stricter_threshold() {
         let config = PipelineHealthConfig {
             batch_pipeline: BatchPipelineCondition {
+                max_block_lag: None,
                 max_time_lag: Some(Duration::from_secs(300)),
             },
             component_overrides: ComponentOverrides {
@@ -511,5 +523,67 @@ mod tests {
         ] {
             assert!(overrides.get(id).is_none(), "expected None for {id:?}");
         }
+    }
+
+    #[test]
+    fn batch_pipeline_block_lag_applies_to_all_batch_components() {
+        let config = PipelineHealthConfig {
+            batch_pipeline: BatchPipelineCondition {
+                max_block_lag: Some(200),
+                max_time_lag: None,
+            },
+            ..Default::default()
+        };
+        for id in [
+            ComponentId::Batcher,
+            ComponentId::BatchVerification,
+            ComponentId::FriJobManager,
+            ComponentId::GaplessCommitter,
+            ComponentId::UpgradeGatekeeper,
+            ComponentId::L1SenderCommit,
+            ComponentId::SnarkJobManager,
+            ComponentId::GaplessL1ProofSender,
+            ComponentId::L1SenderProve,
+            ComponentId::PriorityTree,
+            ComponentId::L1SenderExecute,
+        ] {
+            let cond = config.condition_for(id);
+            assert_eq!(
+                cond.max_block_lag,
+                Some(200),
+                "batch component {id:?} must receive max_block_lag from BatchPipelineCondition"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_pipeline_block_lag_does_not_affect_block_components() {
+        let config = PipelineHealthConfig {
+            batch_pipeline: BatchPipelineCondition {
+                max_block_lag: Some(200),
+                max_time_lag: None,
+            },
+            ..Default::default()
+        };
+        for id in [
+            ComponentId::BlockExecutor,
+            ComponentId::BlockApplier,
+            ComponentId::TreeManager,
+            ComponentId::BlockCanonizer,
+            ComponentId::ProverInputGenerator,
+        ] {
+            let cond = config.condition_for(id);
+            assert!(
+                cond.max_block_lag.is_none(),
+                "block component {id:?} must not receive max_block_lag from batch_pipeline config"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_pipeline_default_block_lag_is_none() {
+        let config = PipelineHealthConfig::default();
+        let cond = config.condition_for(ComponentId::Batcher);
+        assert!(cond.max_block_lag.is_none());
     }
 }

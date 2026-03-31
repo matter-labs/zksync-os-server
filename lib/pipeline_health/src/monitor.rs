@@ -297,6 +297,16 @@ mod tests {
         }
     }
 
+    fn batch_config_with_block_lag(max_lag: u64) -> PipelineHealthConfig {
+        PipelineHealthConfig {
+            batch_pipeline: crate::config::BatchPipelineCondition {
+                max_block_lag: Some(max_lag),
+                max_time_lag: None,
+            },
+            ..PipelineHealthConfig::default()
+        }
+    }
+
     #[test]
     fn below_lag_threshold_no_trigger() {
         let config = block_config_with_block_lag(10);
@@ -529,5 +539,177 @@ mod tests {
 
         let diffs = monitor.compute_adjacent_diffs();
         assert_eq!(diffs.get(&ComponentId::BlockApplier), Some(&10u64));
+    }
+
+    #[test]
+    fn batch_block_lag_triggers_when_exceeded() {
+        let config = batch_config_with_block_lag(10);
+        let monitor = PipelineHealthMonitor::make_test_monitor(config);
+        // head=100, batcher=85, lag=15 > threshold=10 → must trigger
+        let causes = monitor.evaluate(ComponentId::Batcher, &make_health(85, None), 15, None);
+        assert!(
+            matches!(
+                causes.into_iter().next().map(|c| c.trigger),
+                Some(BackpressureTrigger::BlockLagTooHigh {
+                    threshold: 10,
+                    actual: 15
+                })
+            ),
+            "batch block-lag must trigger when exceeded"
+        );
+    }
+
+    #[test]
+    fn batch_block_lag_no_trigger_below_threshold() {
+        let config = batch_config_with_block_lag(10);
+        let monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let causes = monitor.evaluate(ComponentId::Batcher, &make_health(95, None), 5, None);
+        assert!(causes.is_empty());
+    }
+
+    #[test]
+    fn batch_block_lag_no_trigger_at_exact_threshold() {
+        let config = batch_config_with_block_lag(10);
+        let monitor = PipelineHealthMonitor::make_test_monitor(config);
+        // lag==threshold: strictly greater-than required — must NOT trigger
+        let causes = monitor.evaluate(ComponentId::Batcher, &make_health(90, None), 10, None);
+        assert!(causes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn batch_block_lag_fires_in_evaluate_and_update() {
+        let config = batch_config_with_block_lag(10);
+        let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let (reporter, rx) = ComponentHealthReporter::new("batcher");
+        reporter.record_processed(85, None);
+        monitor.register(ComponentId::Batcher, rx);
+
+        monitor.evaluate_and_update_with_head(100, None);
+        assert!(
+            matches!(
+                *monitor.acceptance_tx.borrow(),
+                TransactionAcceptanceState::NotAccepting(_)
+            ),
+            "batch block-lag must set NotAccepting when lag > threshold"
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_block_lag_high_watermark_prevents_false_positive() {
+        // Simulates FriJobManager-style out-of-order reporting:
+        // batch 2 (block 200) completes before batch 1 (block 100).
+        // After the high-watermark guard, the reporter holds block 200
+        // and ignores the late stale report of block 100.
+        let config = batch_config_with_block_lag(50);
+        let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let (reporter, rx) = ComponentHealthReporter::new("fri_job_manager");
+        monitor.register(ComponentId::FriJobManager, rx);
+
+        // Batch 2 finishes first (higher block number).
+        reporter.record_processed(200, None);
+        // Batch 1 finishes late (lower block number) — must be ignored by high-watermark.
+        reporter.record_processed(100, None);
+
+        // head=210, watermark=200, lag=10 < threshold=50 → must NOT trigger.
+        monitor.evaluate_and_update_with_head(210, None);
+        assert_eq!(
+            *monitor.acceptance_tx.borrow(),
+            TransactionAcceptanceState::Accepting,
+            "high-watermark must prevent false backpressure from stale out-of-order report"
+        );
+    }
+
+    #[tokio::test]
+    async fn fri_job_manager_block_lag_triggers_and_clears() {
+        let config = batch_config_with_block_lag(10);
+        let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let (reporter, rx) = ComponentHealthReporter::new("fri_job_manager");
+        monitor.register(ComponentId::FriJobManager, rx);
+
+        reporter.record_processed(85, None);
+        monitor.evaluate_and_update_with_head(100, None);
+        assert!(
+            matches!(
+                *monitor.acceptance_tx.borrow(),
+                TransactionAcceptanceState::NotAccepting(_)
+            ),
+            "FriJobManager lag=15 must trigger backpressure with threshold=10"
+        );
+
+        // FriJobManager catches up — backpressure must clear.
+        reporter.record_processed(100, None);
+        monitor.evaluate_and_update_with_head(100, None);
+        assert_eq!(
+            *monitor.acceptance_tx.borrow(),
+            TransactionAcceptanceState::Accepting,
+            "FriJobManager catching up must clear backpressure"
+        );
+    }
+
+    #[tokio::test]
+    async fn fri_job_manager_out_of_order_does_not_reinstate_backpressure() {
+        // Two concurrent FRI provers: A finishes batch at block 200 first,
+        // B finishes batch at block 190 second. Head is 210, threshold 50.
+        // With high-watermark: B's report (190 < 200) is discarded;
+        // stored block stays 200, lag=10 < 50 → must NOT trigger.
+        let config = batch_config_with_block_lag(50);
+        let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let (reporter, rx) = ComponentHealthReporter::new("fri_job_manager");
+        monitor.register(ComponentId::FriJobManager, rx);
+
+        reporter.record_processed(200, None);
+        reporter.record_processed(190, None); // stale — must be ignored
+
+        monitor.evaluate_and_update_with_head(210, None);
+        assert_eq!(
+            *monitor.acceptance_tx.borrow(),
+            TransactionAcceptanceState::Accepting,
+            "stale out-of-order report from slow prover must not trigger backpressure"
+        );
+    }
+
+    #[tokio::test]
+    async fn fri_job_manager_many_out_of_order_converge_to_highest() {
+        // Multiple provers finishing batches in scrambled order.
+        // High watermark must track the maximum across all reports.
+        let (reporter, rx) = ComponentHealthReporter::new("fri_job_manager");
+
+        for block in [50u64, 120, 80, 200, 90] {
+            reporter.record_processed(block, None);
+        }
+
+        assert_eq!(
+            rx.borrow().last_processed_block_number,
+            Some(200),
+            "high watermark must be the maximum of all reported block numbers"
+        );
+    }
+
+    #[tokio::test]
+    async fn fri_job_manager_backpressure_cause_identifies_component() {
+        let config = batch_config_with_block_lag(10);
+        let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let (reporter, rx) = ComponentHealthReporter::new("fri_job_manager");
+        monitor.register(ComponentId::FriJobManager, rx);
+
+        reporter.record_processed(85, None);
+        monitor.evaluate_and_update_with_head(100, None);
+
+        if let TransactionAcceptanceState::NotAccepting(
+            NotAcceptingReason::PipelineBackpressure { causes },
+        ) = &*monitor.acceptance_tx.borrow()
+        {
+            assert_eq!(causes.len(), 1);
+            assert_eq!(causes[0].component, "fri_job_manager");
+            assert!(matches!(
+                causes[0].trigger,
+                BackpressureTrigger::BlockLagTooHigh {
+                    threshold: 10,
+                    actual: 15
+                }
+            ));
+        } else {
+            panic!("expected NotAccepting with PipelineBackpressure cause");
+        }
     }
 }

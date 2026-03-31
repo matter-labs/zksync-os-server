@@ -91,6 +91,7 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
     // timestamp advances 1 full second past the Batcher's last sealed timestamp (~1 batch cycle).
     let health_config = PipelineHealthConfig {
         batch_pipeline: BatchPipelineCondition {
+            max_block_lag: None,
             max_time_lag: Some(Duration::from_millis(500)),
         },
         ..PipelineHealthConfig::default()
@@ -273,6 +274,7 @@ async fn pipeline_endpoint_reflects_configured_thresholds() {
             max_time_lag: Some(Duration::from_secs(30)),
         },
         batch_pipeline: BatchPipelineCondition {
+            max_block_lag: None,
             max_time_lag: Some(Duration::from_secs(300)),
         },
         ..PipelineHealthConfig::default()
@@ -339,6 +341,7 @@ async fn component_override_disables_backpressure_for_batcher(
     // Tight threshold on the batch pipeline, but batcher is explicitly silenced.
     let health_config = PipelineHealthConfig {
         batch_pipeline: BatchPipelineCondition {
+            max_block_lag: None,
             max_time_lag: Some(Duration::from_millis(500)),
         },
         component_overrides: ComponentOverrides {
@@ -378,4 +381,57 @@ async fn component_override_disables_backpressure_for_batcher(
     );
 
     Ok(())
+}
+
+/// Verifies that batch_pipeline.max_block_lag is surfaced correctly by /status/pipeline.
+///
+/// Batch-pipeline components must expose max_block_lag in their thresholds.
+/// Block-pipeline components must NOT pick up batch_pipeline settings.
+/// GaplessCommitter is used as the canonical monotonic batch component to
+/// confirm the field is threaded all the way through the live node.
+#[tokio::test]
+async fn batch_block_lag_threshold_surfaced_by_pipeline_endpoint() {
+    let health_config = PipelineHealthConfig {
+        batch_pipeline: BatchPipelineCondition {
+            max_block_lag: Some(500),
+            max_time_lag: None,
+        },
+        ..PipelineHealthConfig::default()
+    };
+
+    let node = TesterBuilder::default()
+        .pipeline_health_config(health_config)
+        .build()
+        .await
+        .expect("failed to start node");
+
+    let pipeline = node.get_pipeline().await;
+    let components = pipeline["components"]
+        .as_array()
+        .expect("'components' must be a JSON array");
+
+    // GaplessCommitter is a monotonic batch component — must expose max_block_lag.
+    let gapless = components
+        .iter()
+        .find(|c| c["name"].as_str() == Some("gapless_committer"))
+        .expect("gapless_committer not found in pipeline components");
+    assert_eq!(
+        gapless["thresholds"]["max_block_lag"].as_u64(),
+        Some(500),
+        "gapless_committer must expose batch_pipeline.max_block_lag threshold"
+    );
+    assert!(
+        gapless["thresholds"]["max_time_lag_secs"].is_null(),
+        "gapless_committer must not expose max_time_lag_secs when not configured"
+    );
+
+    // block_executor is a block-pipeline component — must NOT inherit batch_pipeline settings.
+    let block_executor = components
+        .iter()
+        .find(|c| c["name"].as_str() == Some("block_executor"))
+        .expect("block_executor not found in pipeline components");
+    assert!(
+        block_executor["thresholds"]["max_block_lag"].is_null(),
+        "block_executor must not receive max_block_lag from batch_pipeline config"
+    );
 }

@@ -65,12 +65,24 @@ impl ComponentHealthReporter {
     /// Record the block number and timestamp of the last item successfully processed.
     /// Use `block_timestamp = None` for batch-level components where block timestamps
     /// are not readily available. Time-lag evaluation is skipped for those.
+    ///
+    /// High-watermark semantics: if `block_number` is less than the currently stored
+    /// maximum, the call is a no-op. This prevents concurrent reporters (e.g. parallel
+    /// provers) from walking the watermark backward when an older batch finishes after
+    /// a newer one.
     pub fn record_processed(&self, block_number: u64, block_timestamp: Option<u64>) {
         let now = Instant::now();
-        self.sender.send_modify(|health| {
+        self.sender.send_if_modified(|health| {
+            // High-watermark guard: ignore stale out-of-order reports.
+            if let Some(current_max) = health.last_processed_block_number
+                && block_number < current_max
+            {
+                return false;
+            }
             health.last_processed_block_number = Some(block_number);
             health.last_processed_block_timestamp = block_timestamp;
             health.last_processed_block_at = Some(now);
+            true
         });
     }
 }
@@ -170,5 +182,46 @@ mod tests {
         assert!(rx.borrow().last_processed_block_at.is_none());
         reporter.record_processed(1, None);
         assert!(rx.borrow().last_processed_block_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn record_processed_ignores_lower_block_number() {
+        let (reporter, rx) = ComponentHealthReporter::new("test");
+        reporter.record_processed(100, Some(1_000));
+        let at_before = rx.borrow().last_processed_block_at;
+        reporter.record_processed(80, Some(800));
+        assert_eq!(
+            rx.borrow().last_processed_block_number,
+            Some(100),
+            "block number must not regress"
+        );
+        assert_eq!(
+            rx.borrow().last_processed_block_timestamp,
+            Some(1_000),
+            "timestamp must stay with the highest block"
+        );
+        assert_eq!(
+            rx.borrow().last_processed_block_at,
+            at_before,
+            "last_processed_block_at must not update on stale out-of-order report"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_processed_accepts_equal_block_number() {
+        let (reporter, rx) = ComponentHealthReporter::new("test");
+        reporter.record_processed(50, Some(500));
+        reporter.record_processed(50, Some(501));
+        assert_eq!(rx.borrow().last_processed_block_number, Some(50));
+        assert_eq!(rx.borrow().last_processed_block_timestamp, Some(501));
+    }
+
+    #[tokio::test]
+    async fn record_processed_advances_past_max() {
+        let (reporter, rx) = ComponentHealthReporter::new("test");
+        reporter.record_processed(50, Some(500));
+        reporter.record_processed(60, Some(600));
+        assert_eq!(rx.borrow().last_processed_block_number, Some(60));
+        assert_eq!(rx.borrow().last_processed_block_timestamp, Some(600));
     }
 }
