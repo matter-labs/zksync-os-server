@@ -9,6 +9,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
+use zksync_os_revm_consistency_checker::metrics::RevmDivergenceOutcome;
 use zksync_os_server::config::{
     BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
     ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
@@ -483,7 +484,8 @@ fn load_internal_config(config: &mut Config) {
         .l2_signer_blacklist
         .extend(internal_config.l2_signer_blacklist);
     if let Some(failing_block) = internal_config.failing_block {
-        zksync_os_revm_consistency_checker::metrics::METRICS.record_inconsistency(42);
+        zksync_os_revm_consistency_checker::metrics::METRICS
+            .record_divergence(RevmDivergenceOutcome::Reverted);
         if config.sequencer_config.block_rebuild.is_some() {
             panic!(
                 "External config specifies block rebuild: {:?} and internal config specifies failing block: {}. \
