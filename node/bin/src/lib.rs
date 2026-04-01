@@ -823,7 +823,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    let (pipeline_acceptance_rx, component_health) = if node_role.is_main() {
+    let (pipeline_acceptance_rx, component_health, pipeline_adjacency) = if node_role.is_main() {
         // Main Node
         run_main_node_pipeline(
             &config,
@@ -891,6 +891,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 combined_acceptance_rx.clone(),
                 component_health.clone(),
                 config.pipeline_health_config.clone(),
+                pipeline_adjacency.clone(),
             )
         });
     }
@@ -946,6 +947,7 @@ async fn run_main_node_pipeline(
 ) -> (
     watch::Receiver<TransactionAcceptanceState>,
     Arc<Vec<(ComponentId, watch::Receiver<ComponentHealth>)>>,
+    Arc<Vec<(ComponentId, ComponentId)>>,
 ) {
     let pubdata_mode = config
         .l1_sender_config
@@ -1058,9 +1060,21 @@ async fn run_main_node_pipeline(
         // Only the 4 always-running components are registered; batcher-gated reporters are not
         // created at all, so they cannot appear as stuck-at-0 and trigger spurious backpressure.
         let component_health = Arc::new(health_entries);
+        let registered = pipeline_monitor.registered_component_ids();
+        let adjacency: Arc<Vec<(ComponentId, ComponentId)>> = Arc::new(
+            pipeline
+                .adjacency
+                .iter()
+                .filter(|(up, down)| registered.contains(up) && registered.contains(down))
+                .copied()
+                .collect(),
+        );
+        for &(up, down) in adjacency.iter() {
+            pipeline_monitor.register_adjacency(up, down);
+        }
         pipeline.pipe(NoOpSink::new()).spawn();
         runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
-        return (pipeline_acceptance_rx, component_health);
+        return (pipeline_acceptance_rx, component_health, adjacency);
     }
 
     // Batcher is enabled — create reporters for all downstream components now.
@@ -1277,14 +1291,20 @@ async fn run_main_node_pipeline(
 
     tracing::info!("Launching pipeline");
     let registered = pipeline_monitor.registered_component_ids();
-    for (up, down) in &pipeline.adjacency {
-        if registered.contains(up) && registered.contains(down) {
-            pipeline_monitor.register_adjacency(*up, *down);
-        }
+    let adjacency: Arc<Vec<(ComponentId, ComponentId)>> = Arc::new(
+        pipeline
+            .adjacency
+            .iter()
+            .filter(|(up, down)| registered.contains(up) && registered.contains(down))
+            .copied()
+            .collect(),
+    );
+    for &(up, down) in adjacency.iter() {
+        pipeline_monitor.register_adjacency(up, down);
     }
     runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
     pipeline.spawn();
-    (pipeline_acceptance_rx, component_health)
+    (pipeline_acceptance_rx, component_health, adjacency)
 }
 
 /// Only for EN - we still populate channels destined for the batcher subsystem -
@@ -1309,6 +1329,7 @@ async fn run_en_pipeline(
 ) -> (
     watch::Receiver<TransactionAcceptanceState>,
     Arc<Vec<(ComponentId, watch::Receiver<ComponentHealth>)>>,
+    Arc<Vec<(ComponentId, ComponentId)>>,
 ) {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
@@ -1414,10 +1435,16 @@ async fn run_en_pipeline(
     };
 
     let registered = pipeline_monitor.registered_component_ids();
-    for (up, down) in &pipeline.adjacency {
-        if registered.contains(up) && registered.contains(down) {
-            pipeline_monitor.register_adjacency(*up, *down);
-        }
+    let adjacency: Arc<Vec<(ComponentId, ComponentId)>> = Arc::new(
+        pipeline
+            .adjacency
+            .iter()
+            .filter(|(up, down)| registered.contains(up) && registered.contains(down))
+            .copied()
+            .collect(),
+    );
+    for &(up, down) in adjacency.iter() {
+        pipeline_monitor.register_adjacency(up, down);
     }
     runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
     pipeline.spawn();
@@ -1455,7 +1482,7 @@ async fn run_en_pipeline(
         "clear failing block config",
         clear_failing_block_config_task(finality, internal_config_manager),
     );
-    (pipeline_acceptance_rx, component_health)
+    (pipeline_acceptance_rx, component_health, adjacency)
 }
 
 fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashes {

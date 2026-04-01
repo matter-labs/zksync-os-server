@@ -1,3 +1,4 @@
+use crate::adjacent::compute_adjacent_snapshots;
 use crate::config::{ComponentId, PipelineHealthConfig};
 use crate::metrics::MONITOR_METRICS;
 use futures::stream::{StreamExt, select_all};
@@ -52,35 +53,6 @@ impl PipelineHealthMonitor {
     /// Useful for filtering adjacency pairs before calling [`register_adjacency`].
     pub fn registered_component_ids(&self) -> std::collections::HashSet<ComponentId> {
         self.components.iter().map(|(id, _)| *id).collect()
-    }
-
-    pub(crate) fn compute_adjacent_diffs(&self) -> std::collections::HashMap<ComponentId, u64> {
-        let seqs: std::collections::HashMap<ComponentId, u64> = self
-            .components
-            .iter()
-            .map(|(id, rx)| (*id, rx.borrow().last_processed_block_number.unwrap_or(0)))
-            .collect();
-
-        self.adjacency
-            .iter()
-            .map(|&(up, down)| {
-                let up_seq = *seqs.get(&up).unwrap_or_else(|| {
-                    panic!(
-                        "adjacency upstream component {:?} is not registered; \
-                         call register() for every component before register_adjacency()",
-                        up
-                    )
-                });
-                let down_seq = *seqs.get(&down).unwrap_or_else(|| {
-                    panic!(
-                        "adjacency downstream component {:?} is not registered; \
-                         call register() for every component before register_adjacency()",
-                        down
-                    )
-                });
-                (down, up_seq.saturating_sub(down_seq))
-            })
-            .collect()
     }
 
     pub async fn run(mut self) {
@@ -174,14 +146,30 @@ impl PipelineHealthMonitor {
     }
 
     pub(crate) fn evaluate_and_update_with_head(&self, head_seq: u64, head_ts: Option<u64>) {
-        // Pre-compute adjacent diffs for backpressure evaluation. Using adjacent diff
-        // (upstream_seq − component_seq) instead of head-relative lag prevents cascade
-        // false-positives: a mid-pipeline bottleneck should not cause all downstream
-        // components to appear as independent backpressure causes.
-        // Note: the Prometheus `component_block_lag` metric still uses head-relative lag
-        // for observability (operators can see absolute distance from pipeline head).
-        // The adjacent diff view is exposed separately via `component_block_diff_to_upstream`.
-        let adjacent_diffs = self.compute_adjacent_diffs();
+        // Snapshot seq and timestamp for all components once.
+        // This avoids repeated borrow() calls and provides the pure input for compute_adjacent_snapshots.
+        let snapshots: std::collections::HashMap<ComponentId, (u64, Option<u64>)> = self
+            .components
+            .iter()
+            .map(|(id, rx)| {
+                let h = rx.borrow();
+                (
+                    *id,
+                    (
+                        h.last_processed_block_number.unwrap_or(0),
+                        h.last_processed_block_timestamp,
+                    ),
+                )
+            })
+            .collect();
+
+        // Compute adjacent block and time diffs. Using adjacent diff (upstream − downstream)
+        // instead of head-relative lag prevents cascade false-positives: a mid-pipeline bottleneck
+        // should not cause all downstream components to appear as independent backpressure sources.
+        // Both block_diff and time_diff are now adjacent-aware.
+        // Note: Prometheus `component_block_lag` and `component_time_lag_seconds` still use
+        // head-relative values for operator observability.
+        let adjacent = compute_adjacent_snapshots(&self.adjacency, &snapshots);
 
         let mut active_component_ids: std::collections::HashSet<ComponentId> =
             std::collections::HashSet::new();
@@ -190,10 +178,24 @@ impl PipelineHealthMonitor {
             .iter()
             .flat_map(|(id, rx)| {
                 let health = rx.borrow();
-                let block_lag = adjacent_diffs.get(id).copied().unwrap_or_else(|| {
-                    head_seq.saturating_sub(health.last_processed_block_number.unwrap_or(0))
-                });
-                let causes = self.evaluate(*id, &health, block_lag, head_ts);
+                let &(comp_seq, comp_ts) = snapshots.get(id).expect("id came from self.components");
+                let adj = adjacent.get(id);
+
+                let block_lag = adj
+                    .map(|s| s.block_diff)
+                    .unwrap_or_else(|| head_seq.saturating_sub(comp_seq));
+
+                // time_lag: prefer adjacent diff (upstream_ts − comp_ts).
+                // Fall back to head-relative (head_ts − comp_ts) for components with no upstream.
+                // None when timestamps are unavailable for either side.
+                let time_lag = adj
+                    .and_then(|s| s.time_diff)
+                    .or_else(|| match (comp_ts, head_ts) {
+                        (Some(c), Some(h)) => Some(Duration::from_secs(h.saturating_sub(c))),
+                        _ => None,
+                    });
+
+                let causes = self.evaluate(*id, &health, block_lag, time_lag);
                 if !causes.is_empty() {
                     active_component_ids.insert(*id);
                 }
@@ -268,17 +270,25 @@ impl PipelineHealthMonitor {
             MONITOR_METRICS.component_time_lag_seconds[id].set(time_lag);
         }
 
-        for (&id, &diff) in &adjacent_diffs {
-            MONITOR_METRICS.component_block_diff_to_upstream[&id].set(diff);
+        for (&id, snap) in &adjacent {
+            MONITOR_METRICS.component_block_diff_to_upstream[&id].set(snap.block_diff);
         }
     }
 
+    /// Evaluate backpressure for one component.
+    ///
+    /// `block_lag`: pre-computed adjacent diff (upstream_seq − component_seq) when an adjacency
+    /// is registered, otherwise head_seq − component_seq.
+    ///
+    /// `time_lag`: pre-computed adjacent time diff (upstream_ts − component_ts) when an adjacency
+    /// is registered and both timestamps are available; head-relative time diff otherwise; None
+    /// when timestamps are unavailable.
     pub(crate) fn evaluate(
         &self,
         id: ComponentId,
-        health: &ComponentHealth,
+        _health: &ComponentHealth,
         block_lag: u64,
-        head_ts: Option<u64>,
+        time_lag: Option<Duration>,
     ) -> Vec<BackpressureCause> {
         let condition = self.config.condition_for(id);
         let mut causes = Vec::new();
@@ -297,20 +307,17 @@ impl PipelineHealthMonitor {
             }
         }
 
-        if let Some(max_time_lag) = condition.max_time_lag {
-            // Only evaluate if both timestamps are available (Some).
-            if let (Some(comp_ts), Some(h_ts)) = (health.last_processed_block_timestamp, head_ts) {
-                let lag_secs = h_ts.saturating_sub(comp_ts);
-                let actual = Duration::from_secs(lag_secs);
-                if actual > max_time_lag {
-                    causes.push(BackpressureCause {
-                        component: id.as_str(),
-                        trigger: BackpressureTrigger::TimeLagTooHigh {
-                            threshold: max_time_lag,
-                            actual,
-                        },
-                    });
-                }
+        if let (Some(max_time_lag), Some(actual)) = (condition.max_time_lag, time_lag) {
+            // time_lag is pre-computed by caller: adjacent diff when adjacency is registered,
+            // head-relative otherwise. None when timestamps are unavailable.
+            if actual > max_time_lag {
+                causes.push(BackpressureCause {
+                    component: id.as_str(),
+                    trigger: BackpressureTrigger::TimeLagTooHigh {
+                        threshold: max_time_lag,
+                        actual,
+                    },
+                });
             }
         }
 
@@ -412,12 +419,12 @@ mod tests {
     fn time_lag_triggers_when_exceeded() {
         let config = block_config_with_time_lag(Duration::from_secs(30));
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
-        // head_ts=1000, applier_ts=960, lag=40s > 30s; block_lag irrelevant (no max_block_lag)
+        // adjacent time lag = 40s > threshold 30s; block_lag irrelevant (no max_block_lag)
         let result = monitor.evaluate(
             ComponentId::BlockApplier,
             &make_health(90, Some(960)),
             0,
-            Some(1000),
+            Some(Duration::from_secs(40)),
         );
         assert!(matches!(
             result.into_iter().next().map(|c| c.trigger),
@@ -429,13 +436,8 @@ mod tests {
     fn time_lag_skipped_when_component_timestamp_zero() {
         let config = block_config_with_time_lag(Duration::from_secs(1));
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
-        // component timestamp = None → unavailable, must not trigger
-        let result = monitor.evaluate(
-            ComponentId::BlockApplier,
-            &make_health(90, None),
-            0,
-            Some(1000),
-        );
+        // time_lag = None (timestamps unavailable) → must not trigger
+        let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(90, None), 0, None);
         assert!(result.is_empty());
     }
 
@@ -461,7 +463,7 @@ mod tests {
             ComponentId::BlockApplier,
             &make_health(0, None),
             10_000,
-            Some(999_999),
+            Some(Duration::from_secs(999_999)),
         );
         assert!(result.is_empty());
     }
@@ -521,7 +523,12 @@ mod tests {
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // block_lag=15 (pre-computed), time_lag=40s — both should be returned
         let health = make_health(85, Some(960));
-        let causes = monitor.evaluate(ComponentId::BlockApplier, &health, 15, Some(1000));
+        let causes = monitor.evaluate(
+            ComponentId::BlockApplier,
+            &health,
+            15,
+            Some(Duration::from_secs(40)),
+        );
         assert_eq!(causes.len(), 2);
     }
 
@@ -593,20 +600,16 @@ mod tests {
 
     #[test]
     fn adjacent_block_diff_computed_correctly() {
-        let config = PipelineHealthConfig::default();
-        let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        use crate::adjacent::compute_adjacent_snapshots;
+        use std::collections::HashMap;
 
-        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
-        let (apply_reporter, apply_rx) = ComponentHealthReporter::new("block_applier");
-        exec_reporter.record_processed(100, None);
-        apply_reporter.record_processed(90, None);
+        let mut snapshots = HashMap::new();
+        snapshots.insert(ComponentId::BlockExecutor, (100u64, None));
+        snapshots.insert(ComponentId::BlockApplier, (90u64, None));
+        let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockApplier)];
 
-        monitor.register(ComponentId::BlockExecutor, exec_rx);
-        monitor.register(ComponentId::BlockApplier, apply_rx);
-        monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::BlockApplier);
-
-        let diffs = monitor.compute_adjacent_diffs();
-        assert_eq!(diffs.get(&ComponentId::BlockApplier), Some(&10u64));
+        let result = compute_adjacent_snapshots(&adjacency, &snapshots);
+        assert_eq!(result[&ComponentId::BlockApplier].block_diff, 10);
     }
 
     #[test]
@@ -737,21 +740,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "adjacency downstream component")]
+    #[should_panic(expected = "is not in snapshots")]
     fn unregistered_adjacency_component_panics_in_compute() {
-        // BlockCanonizer is in an adjacency pair but never registered —
-        // compute_adjacent_diffs must panic rather than silently produce diff = up_seq.
-        let config = PipelineHealthConfig::default();
-        let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        use crate::adjacent::compute_adjacent_snapshots;
+        use std::collections::HashMap;
 
-        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
-        exec_reporter.record_processed(100, None);
-        monitor.register(ComponentId::BlockExecutor, exec_rx);
-        // BlockCanonizer intentionally NOT registered.
-        monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::BlockCanonizer);
-
-        // Must panic because BlockCanonizer is absent from seqs.
-        monitor.compute_adjacent_diffs();
+        let mut snapshots = HashMap::new();
+        snapshots.insert(ComponentId::BlockExecutor, (100u64, None));
+        // BlockCanonizer intentionally absent from snapshots.
+        let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
+        compute_adjacent_snapshots(&adjacency, &snapshots);
     }
 
     #[tokio::test]
@@ -796,6 +794,49 @@ mod tests {
             ));
         } else {
             panic!("expected NotAccepting with PipelineBackpressure cause");
+        }
+    }
+
+    #[test]
+    fn mid_pipeline_time_lag_does_not_cascade_to_downstream() {
+        // BlockExecutor ts=2000, BlockCanonizer ts=1950 (adjacent diff=50s > threshold=30s → triggers),
+        // BlockApplier ts=1940 (adjacent diff from Canonizer=10s ≤ threshold=30s → must NOT trigger).
+        // Without adjacent fix, BlockApplier head-relative lag = 2000−1940 = 60s > 30s → false positive.
+        // With adjacent fix, BlockApplier sees lag = 1950−1940 = 10s ≤ 30s → no trigger.
+        let config = PipelineHealthConfig {
+            block_pipeline: crate::config::BlockPipelineCondition {
+                max_block_lag: None,
+                max_time_lag: Some(Duration::from_secs(30)),
+            },
+            ..PipelineHealthConfig::default()
+        };
+        let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+
+        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
+        let (canon_reporter, canon_rx) = ComponentHealthReporter::new("block_canonizer");
+        let (apply_reporter, apply_rx) = ComponentHealthReporter::new("block_applier");
+        exec_reporter.record_processed(200, Some(2000));
+        canon_reporter.record_processed(195, Some(1950));
+        apply_reporter.record_processed(193, Some(1940));
+
+        monitor.register(ComponentId::BlockExecutor, exec_rx);
+        monitor.register(ComponentId::BlockCanonizer, canon_rx);
+        monitor.register(ComponentId::BlockApplier, apply_rx);
+        monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::BlockCanonizer);
+        monitor.register_adjacency(ComponentId::BlockCanonizer, ComponentId::BlockApplier);
+
+        monitor.evaluate_and_update_with_head(200, Some(2000));
+
+        // Only BlockCanonizer should trigger (50s adjacent lag > 30s threshold).
+        // BlockApplier must NOT trigger despite 60s head-relative lag.
+        match &*monitor.acceptance_tx.borrow() {
+            TransactionAcceptanceState::NotAccepting(
+                NotAcceptingReason::PipelineBackpressure { causes },
+            ) => {
+                assert_eq!(causes.len(), 1, "only BlockCanonizer should trigger");
+                assert_eq!(causes[0].component, "block_canonizer");
+            }
+            other => panic!("expected NotAccepting with one cause, got {:?}", other),
         }
     }
 }

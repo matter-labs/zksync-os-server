@@ -1,7 +1,7 @@
 use crate::AppState;
 use axum::{Json, extract::State};
 use serde::Serialize;
-use zksync_os_pipeline_health::ComponentId;
+use zksync_os_pipeline_health::{ComponentId, compute_adjacent_snapshots};
 
 #[derive(Serialize)]
 pub struct PipelineResponse {
@@ -22,8 +22,20 @@ pub struct ComponentSnapshot {
     pub state: &'static str,
     pub state_duration_secs: f64,
     pub last_processed_block: u64,
-    pub block_lag: u64,
-    pub time_lag_secs: f64,
+    /// Blocks behind the pipeline head (BlockExecutor). Always present.
+    pub head_block_lag: u64,
+    /// Blocks behind this component's direct upstream neighbour. This is the value compared
+    /// against `max_block_lag` for backpressure. Absent for components with no registered
+    /// upstream adjacency (e.g. BlockExecutor itself), which are measured head-relative.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjacent_block_lag: Option<u64>,
+    /// Seconds behind the pipeline head measured by block timestamps. Always present.
+    pub head_time_lag_secs: f64,
+    /// Seconds behind this component's direct upstream neighbour measured by block timestamps.
+    /// This is the value compared against `max_time_lag_secs` for backpressure. Absent for
+    /// components with no registered upstream adjacency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjacent_time_lag_secs: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -48,6 +60,26 @@ pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResp
         })
         .unwrap_or((0, None));
 
+    // Snapshot seq and timestamp for each component once.
+    let component_snapshots: std::collections::HashMap<ComponentId, (u64, Option<u64>)> = state
+        .component_health
+        .iter()
+        .map(|(id, rx)| {
+            let h = rx.borrow();
+            (
+                *id,
+                (
+                    h.last_processed_block_number.unwrap_or(0),
+                    h.last_processed_block_timestamp,
+                ),
+            )
+        })
+        .collect();
+
+    // adjacent_snapshot[downstream].block_diff = upstream_seq − downstream_seq
+    // adjacent_snapshot[downstream].time_diff  = upstream_ts  − downstream_ts (when both available)
+    let adjacent = compute_adjacent_snapshots(&state.adjacency, &component_snapshots);
+
     let now = tokio::time::Instant::now();
     let components = state
         .component_health
@@ -55,8 +87,9 @@ pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResp
         .map(|(id, rx)| {
             let h = rx.borrow();
             let elapsed = now.duration_since(h.state_entered_at).as_secs_f64();
-            let lag = head_block.saturating_sub(h.last_processed_block_number.unwrap_or(0));
-            let time_lag_secs = match (h.last_processed_block_timestamp, head_ts) {
+            let head_block_lag =
+                head_block.saturating_sub(h.last_processed_block_number.unwrap_or(0));
+            let head_time_lag_secs = match (h.last_processed_block_timestamp, head_ts) {
                 (Some(comp_ts), Some(h_ts)) => h_ts.saturating_sub(comp_ts) as f64,
                 _ => 0.0,
             };
@@ -67,8 +100,13 @@ pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResp
                     state: h.state.as_str(),
                     state_duration_secs: elapsed,
                     last_processed_block: h.last_processed_block_number.unwrap_or(0),
-                    block_lag: lag,
-                    time_lag_secs,
+                    head_block_lag,
+                    adjacent_block_lag: adjacent.get(id).map(|s| s.block_diff),
+                    head_time_lag_secs,
+                    adjacent_time_lag_secs: adjacent
+                        .get(id)
+                        .and_then(|s| s.time_diff)
+                        .map(|d| d.as_secs_f64()),
                 },
                 thresholds: ThresholdsJson {
                     max_block_lag: cond.max_block_lag,
@@ -104,6 +142,7 @@ mod tests {
             acceptance_state: accept_rx,
             component_health: Arc::new(vec![(ComponentId::BlockExecutor, health_rx)]),
             pipeline_health_config: config,
+            adjacency: Arc::new(vec![]),
         }
     }
 
@@ -141,5 +180,68 @@ mod tests {
         let t = &body.components[0].thresholds;
         assert!(t.max_block_lag.is_none());
         assert!(t.max_time_lag_secs.is_none());
+    }
+
+    /// upstream_diff must reflect the adjacent diff (upstream_seq − downstream_seq), not the
+    /// head-relative lag, so that operators can compare it directly against max_block_lag.
+    #[tokio::test]
+    async fn upstream_diff_reflects_adjacent_lag_not_head_lag() {
+        let (_stop_tx, stop_rx) = watch::channel(false);
+        let (_accept_tx, accept_rx) = watch::channel(TransactionAcceptanceState::Accepting);
+
+        // head (BlockExecutor) at block 100
+        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
+        exec_reporter.record_processed(100, None);
+
+        // downstream (BlockApplier) at block 90 — head-lag = 10, adjacent diff = 5
+        let (applier_reporter, applier_rx) = ComponentHealthReporter::new("block_applier");
+        applier_reporter.record_processed(90, None);
+
+        // intermediate (BlockCanonizer) at block 95
+        let (canonizer_reporter, canonizer_rx) = ComponentHealthReporter::new("block_canonizer");
+        canonizer_reporter.record_processed(95, None);
+
+        let state = AppState {
+            stop_receiver: stop_rx,
+            acceptance_state: accept_rx,
+            component_health: Arc::new(vec![
+                (ComponentId::BlockExecutor, exec_rx),
+                (ComponentId::BlockCanonizer, canonizer_rx),
+                (ComponentId::BlockApplier, applier_rx),
+            ]),
+            pipeline_health_config: PipelineHealthConfig::default(),
+            // Canonizer is upstream of Applier; diff = 95 − 90 = 5
+            adjacency: Arc::new(vec![
+                (ComponentId::BlockExecutor, ComponentId::BlockCanonizer),
+                (ComponentId::BlockCanonizer, ComponentId::BlockApplier),
+            ]),
+        };
+
+        let Json(body) = pipeline(State(state)).await;
+
+        let exec = body
+            .components
+            .iter()
+            .find(|c| c.name == "block_executor")
+            .unwrap();
+        let canonizer = body
+            .components
+            .iter()
+            .find(|c| c.name == "block_canonizer")
+            .unwrap();
+        let applier = body
+            .components
+            .iter()
+            .find(|c| c.name == "block_applier")
+            .unwrap();
+
+        // BlockExecutor has no upstream adjacency — adjacent_block_lag must be absent
+        assert!(exec.snapshot.adjacent_block_lag.is_none());
+        // BlockCanonizer upstream is BlockExecutor (100); diff = 100 − 95 = 5
+        assert_eq!(canonizer.snapshot.adjacent_block_lag, Some(5));
+        // BlockApplier upstream is BlockCanonizer (95); diff = 95 − 90 = 5
+        assert_eq!(applier.snapshot.adjacent_block_lag, Some(5));
+        // head-relative lag is still present and differs from adjacent lag
+        assert_eq!(applier.snapshot.head_block_lag, 10);
     }
 }

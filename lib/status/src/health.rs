@@ -113,6 +113,7 @@ mod tests {
             acceptance_state: accept_rx,
             component_health: Arc::new(vec![(ComponentId::BlockExecutor, health_rx)]),
             pipeline_health_config: PipelineHealthConfig::default(),
+            adjacency: Arc::new(vec![]),
         }
     }
 

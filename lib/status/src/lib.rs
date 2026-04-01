@@ -18,6 +18,7 @@ pub(crate) struct AppState {
     pub acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     pub component_health: Arc<Vec<(ComponentId, watch::Receiver<ComponentHealth>)>>,
     pub pipeline_health_config: PipelineHealthConfig,
+    pub adjacency: Arc<Vec<(ComponentId, ComponentId)>>,
 }
 
 pub async fn run_status_server(
@@ -27,6 +28,7 @@ pub async fn run_status_server(
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     component_health: Arc<Vec<(ComponentId, watch::Receiver<ComponentHealth>)>>,
     pipeline_health_config: PipelineHealthConfig,
+    adjacency: Arc<Vec<(ComponentId, ComponentId)>>,
 ) {
     let app = Router::new()
         .route("/status/health", get(health))
@@ -36,6 +38,7 @@ pub async fn run_status_server(
             acceptance_state,
             component_health,
             pipeline_health_config,
+            adjacency,
         });
 
     let listener = TcpListener::bind(addr)
