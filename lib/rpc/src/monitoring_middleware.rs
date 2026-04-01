@@ -49,7 +49,6 @@ impl CallGuard {
 
 /// Ensures batch-level metrics are recorded even if the future is dropped mid-flight (client disconnected).
 struct BatchGuard {
-    batch_size: usize,
     batch_input_size: usize,
     request_counts: HashMap<String, u64>,
     started: Instant,
@@ -59,12 +58,10 @@ struct BatchGuard {
 
 impl BatchGuard {
     fn new(
-        batch_size: usize,
         batch_input_size: usize,
         request_counts: HashMap<String, u64>,
     ) -> Self {
         Self {
-            batch_size,
             batch_input_size,
             request_counts,
             started: Instant::now(),
@@ -138,7 +135,6 @@ impl RpcServiceT for Monitoring {
 
     fn batch<'a>(&self, batch: Batch<'a>) -> impl Future<Output = Self::BatchResponse> + Send + 'a {
         // Collect some metrics about the batch
-        let batch_size = batch.len();
         let batch_input_size: usize = batch
             .iter()
             .filter_map(|x| {
@@ -167,7 +163,7 @@ impl RpcServiceT for Monitoring {
         let mut batch_rp = BatchResponseBuilder::new_with_limit(self.max_response_size_bytes);
         let service = self.clone();
         async move {
-            let mut guard = BatchGuard::new(batch_size, batch_input_size, request_counts);
+            let mut guard = BatchGuard::new(batch_input_size, request_counts);
             let mut got_notification = false;
 
             for batch_entry in batch.into_iter() {
