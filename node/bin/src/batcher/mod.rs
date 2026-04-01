@@ -5,7 +5,8 @@ use alloy::primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
 use std::pin::Pin;
-use tokio::sync::mpsc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::{mpsc, watch};
 use tokio::time::{Instant, Sleep};
 use tracing;
 use zksync_os_batch_types::{BlockMerkleTreeData, DiscoveredCommittedBatch};
@@ -25,6 +26,7 @@ use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::PubdataMode;
 
 pub mod batch_builder;
+pub mod execute_timestamp_notifier;
 mod seal_criteria;
 pub mod util;
 
@@ -39,6 +41,10 @@ pub struct BatcherStartupConfig {
     /// timer the `should_seal_by_timeout` will often return `true`
     /// (because those blocks were produced during the previous run of the node - maybe some time ago)
     pub last_persisted_block: u64,
+    /// L1 timestamp (unix seconds) of the block containing the last `executeBatches` event.
+    /// `None` for fresh chains where no batch has been executed yet.
+    /// Used to compute SLI-based batch deadlines that survive server restarts.
+    pub last_execute_l1_timestamp: Option<u64>,
 }
 
 /// Batcher component - handles batching logic, receives blocks and prepares batch data
@@ -53,6 +59,9 @@ pub struct Batcher<ReadState> {
     pub sidecar_sender: mpsc::Sender<BlobTransactionSidecar>,
     pub committed_batch_provider: CommittedBatchProvider,
     pub read_state: ReadState,
+    /// Receives updated L1 execute timestamps (unix seconds) when `executeBatches` txs are mined.
+    /// Used to dynamically recompute SLI-based batch deadlines.
+    pub execute_timestamp_receiver: watch::Receiver<Option<u64>>,
 }
 
 #[async_trait]
@@ -247,6 +256,8 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
             self.batcher_config.interop_roots_per_batch_limit,
         );
 
+        let use_sli_deadline = self.batcher_config.settlement_sli.is_some();
+
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             tokio::select! {
@@ -259,6 +270,21 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                     BATCHER_METRICS.seal_reason[&"timeout"].inc();
                     tracing::debug!(batch_number, "Timeout reached, sealing the batch.");
                     break;
+                }
+
+                /* ---------- react to execute timestamp updates ---------- */
+                result = self.execute_timestamp_receiver.changed(), if deadline.is_some() && use_sli_deadline => {
+                    if result.is_ok() {
+                        // A new executeBatches was mined — recompute the deadline.
+                        if let Some(new_instant) = self.compute_sli_deadline() {
+                            tracing::debug!(
+                                batch_number,
+                                "Recomputing batch deadline after new executeBatches on L1."
+                            );
+                            deadline = Some(Box::pin(tokio::time::sleep_until(new_instant)));
+                        }
+                    }
+                    // If the sender was dropped we just keep the existing deadline.
                 }
 
                 /* ---------- collect blocks ---------- */
@@ -306,7 +332,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                             // than last persisted one - we don't want to seal on timeout if we know that there are still pending blocks in the inbound channel
                             if deadline.is_none() {
                                 if block_number >= self.startup_config.last_persisted_block {
-                                    deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
+                                    deadline = Some(Box::pin(self.make_batch_deadline()));
                                 } else {
                                     tracing::debug!(
                                         block_number,
@@ -440,5 +466,45 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         }
 
         Ok(Some(rebuilt_batch))
+    }
+
+    /// Compute the `tokio::time::Instant` at which the current batch should be sealed.
+    ///
+    /// When `settlement_sli` is configured and an L1 execute timestamp is available, the
+    /// deadline is: `last_execute_ts + settlement_sli - proving_buffer`.
+    /// Otherwise falls back to `batch_timeout`.
+    fn make_batch_deadline(&self) -> Sleep {
+        if let Some(instant) = self.compute_sli_deadline() {
+            tokio::time::sleep_until(instant)
+        } else {
+            tokio::time::sleep(self.batcher_config.batch_timeout)
+        }
+    }
+
+    /// Try to compute an absolute deadline from the settlement SLI config and the latest
+    /// L1 execute timestamp. Returns `None` when either `settlement_sli` is not configured
+    /// or no execute timestamp is available yet.
+    fn compute_sli_deadline(&self) -> Option<Instant> {
+        let settlement_sli = self.batcher_config.settlement_sli?;
+        let proving_buffer = self.batcher_config.proving_buffer;
+        let last_execute_ts = (*self.execute_timestamp_receiver.borrow())?;
+
+        // Target wall-clock deadline (unix seconds).
+        let deadline_unix = last_execute_ts
+            .saturating_add(settlement_sli.as_secs())
+            .saturating_sub(proving_buffer.as_secs());
+
+        let now_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX epoch")
+            .as_secs();
+
+        if deadline_unix <= now_unix {
+            // Deadline already passed — seal immediately.
+            Some(Instant::now())
+        } else {
+            let remaining = Duration::from_secs(deadline_unix - now_unix);
+            Some(Instant::now() + remaining)
+        }
     }
 }
