@@ -1,6 +1,7 @@
 #![feature(allocator_api)]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
+mod acceptance;
 mod batch_sink;
 pub mod batcher;
 mod command_source;
@@ -868,13 +869,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .await
     };
 
-    // Merge pipeline acceptance state (PipelineBackpressure) with tx_acceptance_state_receiver
-    // (BlockProductionDisabled) into a single combined receiver for the RPC server.
-    let combined_acceptance_rx = merge_acceptance_receivers(
-        tx_acceptance_state_receiver,
-        pipeline_health.acceptance_rx,
-        runtime,
-    );
+    // Aggregate all "not accepting" signals into a single combined receiver for the RPC server.
+    // Register additional sources here as needed — no other logic changes required.
+    let combined_acceptance_rx = {
+        let (mut gate, rx) = acceptance::TxAcceptanceGate::new();
+        gate.register(tx_acceptance_state_receiver); // BlockProductionDisabled
+        gate.register(pipeline_health.acceptance_rx); // PipelineBackpressure
+        runtime.spawn_critical_task("tx acceptance gate", gate.run());
+        rx
+    };
 
     // ======== Start Status Server ========
     if config.status_server_config.enabled {
@@ -1517,44 +1520,6 @@ fn make_reporter(
     reporter
 }
 
-/// Merges two `TransactionAcceptanceState` receivers into one.
-///
-/// The combined receiver reflects `NotAccepting` if either source signals `NotAccepting`.
-/// `BlockProductionDisabled` takes priority over `PipelineBackpressure` in the combined signal.
-fn merge_acceptance_receivers(
-    mut block_production_rx: watch::Receiver<TransactionAcceptanceState>,
-    mut pipeline_rx: watch::Receiver<TransactionAcceptanceState>,
-    runtime: &Runtime,
-) -> watch::Receiver<TransactionAcceptanceState> {
-    let (combined_tx, combined_rx) = watch::channel(TransactionAcceptanceState::Accepting);
-    runtime.spawn_critical_task("merge acceptance receivers", async move {
-        loop {
-            let combined = {
-                let bp = block_production_rx.borrow().clone();
-                let pl = pipeline_rx.borrow().clone();
-                match (bp, pl) {
-                    (TransactionAcceptanceState::NotAccepting(r), _) => {
-                        TransactionAcceptanceState::NotAccepting(r)
-                    }
-                    (_, TransactionAcceptanceState::NotAccepting(r)) => {
-                        TransactionAcceptanceState::NotAccepting(r)
-                    }
-                    _ => TransactionAcceptanceState::Accepting,
-                }
-            };
-            let _ = combined_tx.send(combined);
-            tokio::select! {
-                result = block_production_rx.changed() => {
-                    if result.is_err() { return; }
-                }
-                result = pipeline_rx.changed() => {
-                    if result.is_err() { return; }
-                }
-            }
-        }
-    });
-    combined_rx
-}
 fn init_and_report_internal_config_manager(
     internal_config_path: std::path::PathBuf,
 ) -> InternalConfigManager {

@@ -156,9 +156,9 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
 
     // The response must carry at least one backpressure cause.
     let causes = backpressure_health
-        .get("backpressure_causes")
+        .get("causes")
         .and_then(|v| v.as_array())
-        .expect("'backpressure_causes' must be a JSON array when not accepting");
+        .expect("'causes' must be a JSON array when not accepting");
     assert!(
         !causes.is_empty(),
         "Expected at least one backpressure cause but got none; health: {backpressure_health}"
@@ -333,10 +333,10 @@ async fn pipeline_endpoint_reflects_configured_thresholds() {
 /// ~1 s, but disables it specifically for the batcher. We wait long enough that the batcher
 /// lag would normally exceed the threshold, then assert the node remains accepting.
 ///
-/// Note: other batch-pipeline components (e.g. batch_verification) are not disabled, so they
-/// may still trigger. To isolate the override behaviour we also disable all other batch
-/// components that report timestamps. The goal is to confirm that the batcher specifically
-/// does not appear in backpressure_causes.
+/// Note: other batch-pipeline components (e.g. batch_verification) are not disabled here.
+/// The test relies on those components not reporting a non-zero timestamp within the short
+/// wait window. The goal is to confirm that the batcher specifically does not appear in
+/// backpressure_causes when its override is set to enabled=false.
 #[test_multisetup([CURRENT_TO_L1])]
 async fn component_override_disables_backpressure_for_batcher(
     builder: TesterBuilder,
@@ -395,7 +395,7 @@ async fn component_override_disables_backpressure_for_batcher(
 
     // The batcher must not appear in any backpressure causes.
     let causes = health
-        .get("backpressure_causes")
+        .get("causes")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
@@ -403,7 +403,7 @@ async fn component_override_disables_backpressure_for_batcher(
         causes
             .iter()
             .all(|c| c["component"].as_str() != Some("batcher")),
-        "batcher must not appear in backpressure_causes when its override is enabled=false; \
+        "batcher must not appear in causes when its override is enabled=false; \
          health: {health}"
     );
 
@@ -460,5 +460,58 @@ async fn batch_block_lag_threshold_surfaced_by_pipeline_endpoint() {
     assert!(
         block_executor["thresholds"]["max_block_lag"].is_null(),
         "block_executor must not receive max_block_lag from batch_pipeline config"
+    );
+}
+
+/// Verifies that when block production is disabled via `sequencer_max_blocks_to_produce`,
+/// the /status/health endpoint reports `causes` containing a `block_production_disabled` entry
+/// and does NOT return an empty `causes` array alongside a non-accepting status.
+///
+/// # How it works
+///
+/// Setting `max_blocks_to_produce = 1` causes the BlockExecutor to stop after producing
+/// one block and send `NotAccepting(BlockProductionDisabled)` on the acceptance channel.
+/// The TxAcceptanceGate aggregates this into the combined acceptance state. The health
+/// endpoint must reflect it in the `causes` array.
+#[tokio::test]
+async fn block_production_disabled_reported_in_health() {
+    let node = TesterBuilder::default()
+        .max_blocks_to_produce(1)
+        .build()
+        .await
+        .expect("failed to start node");
+
+    // Poll until block production stops (accepting_transactions becomes false).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let health = loop {
+        let health = node.get_health().await;
+        let accepting = health["accepting_transactions"]
+            .as_bool()
+            .expect("'accepting_transactions' must be a bool");
+        if !accepting {
+            break health;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("block production did not stop within 30 s; last health: {health}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+
+    // The causes array must be non-empty and contain block_production_disabled.
+    let causes = health
+        .get("causes")
+        .and_then(|v| v.as_array())
+        .expect("'causes' must be a JSON array");
+
+    assert!(
+        !causes.is_empty(),
+        "Expected non-empty 'causes' when block production is disabled; health: {health}"
+    );
+
+    assert!(
+        causes
+            .iter()
+            .any(|c| c["trigger"].as_str() == Some("block_production_disabled")),
+        "Expected a cause with trigger 'block_production_disabled'; causes: {causes:?}; health: {health}"
     );
 }

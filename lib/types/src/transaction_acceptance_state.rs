@@ -4,7 +4,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransactionAcceptanceState {
     Accepting,
-    NotAccepting(NotAcceptingReason),
+    NotAccepting(Vec<NotAcceptingReason>),
 }
 
 /// Reason why the node is not accepting transactions
@@ -52,16 +52,12 @@ mod tests {
                 actual: 782,
             },
         };
-        let state =
-            TransactionAcceptanceState::NotAccepting(NotAcceptingReason::PipelineBackpressure {
+        let state = TransactionAcceptanceState::NotAccepting(vec![
+            NotAcceptingReason::PipelineBackpressure {
                 causes: vec![cause.clone()],
-            });
-        assert!(matches!(
-            state,
-            TransactionAcceptanceState::NotAccepting(
-                NotAcceptingReason::PipelineBackpressure { .. }
-            )
-        ));
+            },
+        ]);
+        assert!(matches!(state, TransactionAcceptanceState::NotAccepting(_)));
         assert_eq!(cause.component, "fri_job_manager");
     }
 

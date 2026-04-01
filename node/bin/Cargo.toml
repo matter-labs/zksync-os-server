@@ -77,7 +77,7 @@ alloy = { workspace = true, default-features = false, features = [
 blake2.workspace = true
 clap = { workspace = true, features = ["derive", "wrap_help"] }
 ruint.workspace = true
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-stream.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true

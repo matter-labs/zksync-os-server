@@ -234,9 +234,9 @@ async fn check_block_production_limit(
         );
 
         // Signal to RPC that we're no longer accepting transactions
-        let _ = tx_acceptance_state_sender.send(TransactionAcceptanceState::NotAccepting(
+        let _ = tx_acceptance_state_sender.send(TransactionAcceptanceState::NotAccepting(vec![
             NotAcceptingReason::BlockProductionDisabled,
-        ));
+        ]));
 
         // Idle: component is parked (not processing). Using Active here would
         // be misleading — the executor is idle by design, not actively doing work.

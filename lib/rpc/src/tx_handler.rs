@@ -46,13 +46,14 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         &self,
         tx_bytes: Bytes,
     ) -> Result<B256, EthSendRawTransactionError> {
-        if let TransactionAcceptanceState::NotAccepting(reason) = &*self.acceptance_state.borrow() {
+        if let TransactionAcceptanceState::NotAccepting(reasons) = &*self.acceptance_state.borrow()
+        {
             tracing::warn!(
-                reason = ?reason,
+                reasons = ?reasons,
                 "transaction rejected: pipeline backpressure active"
             );
             return Err(EthSendRawTransactionError::NotAcceptingTransactions(
-                reason.clone(),
+                reasons.clone(),
             ));
         }
 
@@ -148,8 +149,8 @@ pub enum EthSendRawTransactionError {
     #[error("invalid transaction signature")]
     InvalidTransactionSignature,
     /// When the node is not accepting new transactions
-    #[error(transparent)]
-    NotAcceptingTransactions(NotAcceptingReason),
+    #[error("{}", .0.iter().map(|r| r.to_string()).collect::<Vec<_>>().join("; "))]
+    NotAcceptingTransactions(Vec<NotAcceptingReason>),
     /// Errors related to the transaction pool
     #[error(transparent)]
     PoolError(#[from] PoolError),

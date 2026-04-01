@@ -102,6 +102,13 @@ impl PipelineHealthMonitor {
              call register() for BlockExecutor before run()"
         );
 
+        // Guard against a race where stop is already set before run() is entered.
+        // changed() only waits for the *next* change, so without this check the monitor
+        // would hang indefinitely if the sender was already dropped or set to true.
+        if *self.stop_receiver.borrow_and_update() {
+            return;
+        }
+
         // Snapshot current state immediately so operators see accurate lag at monitor startup
         // rather than waiting up to metrics_interval for the first periodic tick.
         // WatchStream::from_changes skips the initial value, so without this call the monitor
@@ -221,9 +228,11 @@ impl PipelineHealthMonitor {
         let new_state = if active_causes.is_empty() {
             TransactionAcceptanceState::Accepting
         } else {
-            TransactionAcceptanceState::NotAccepting(NotAcceptingReason::PipelineBackpressure {
-                causes: active_causes,
-            })
+            TransactionAcceptanceState::NotAccepting(vec![
+                NotAcceptingReason::PipelineBackpressure {
+                    causes: active_causes,
+                },
+            ])
         };
 
         self.acceptance_tx.send_if_modified(|current| {
@@ -233,10 +242,10 @@ impl PipelineHealthMonitor {
             match (&*current, &new_state) {
                 (
                     TransactionAcceptanceState::Accepting,
-                    TransactionAcceptanceState::NotAccepting(reason),
+                    TransactionAcceptanceState::NotAccepting(reasons),
                 ) => {
                     tracing::warn!(
-                        ?reason,
+                        ?reasons,
                         "pipeline backpressure: suspending transaction acceptance"
                     );
                     MONITOR_METRICS.acceptance_state_changes.inc();
@@ -255,10 +264,10 @@ impl PipelineHealthMonitor {
                 // Cause set changed while already NotAccepting — log at debug for visibility.
                 (
                     TransactionAcceptanceState::NotAccepting(_),
-                    TransactionAcceptanceState::NotAccepting(reason),
+                    TransactionAcceptanceState::NotAccepting(reasons),
                 ) => {
                     tracing::debug!(
-                        ?reason,
+                        ?reasons,
                         "pipeline backpressure cause set changed while already suspended"
                     );
                 }
@@ -781,19 +790,22 @@ mod tests {
         reporter.record_processed(85, None);
         monitor.evaluate_and_update_with_head(100, None);
 
-        if let TransactionAcceptanceState::NotAccepting(
-            NotAcceptingReason::PipelineBackpressure { causes },
-        ) = &*monitor.acceptance_tx.borrow()
+        if let TransactionAcceptanceState::NotAccepting(reasons) = &*monitor.acceptance_tx.borrow()
         {
-            assert_eq!(causes.len(), 1);
-            assert_eq!(causes[0].component, "fri_job_manager");
-            assert!(matches!(
-                causes[0].trigger,
-                BackpressureTrigger::BlockLagTooHigh {
-                    threshold: 10,
-                    actual: 15
-                }
-            ));
+            assert_eq!(reasons.len(), 1);
+            if let NotAcceptingReason::PipelineBackpressure { causes } = &reasons[0] {
+                assert_eq!(causes.len(), 1);
+                assert_eq!(causes[0].component, "fri_job_manager");
+                assert!(matches!(
+                    causes[0].trigger,
+                    BackpressureTrigger::BlockLagTooHigh {
+                        threshold: 10,
+                        actual: 15
+                    }
+                ));
+            } else {
+                panic!("expected PipelineBackpressure reason");
+            }
         } else {
             panic!("expected NotAccepting with PipelineBackpressure cause");
         }
@@ -832,11 +844,14 @@ mod tests {
         // Only BlockCanonizer should trigger (50s adjacent lag > 30s threshold).
         // BlockApplier must NOT trigger despite 60s head-relative lag.
         match &*monitor.acceptance_tx.borrow() {
-            TransactionAcceptanceState::NotAccepting(
-                NotAcceptingReason::PipelineBackpressure { causes },
-            ) => {
-                assert_eq!(causes.len(), 1, "only BlockCanonizer should trigger");
-                assert_eq!(causes[0].component, "block_canonizer");
+            TransactionAcceptanceState::NotAccepting(reasons) => {
+                assert_eq!(reasons.len(), 1, "expected exactly one NotAcceptingReason");
+                if let NotAcceptingReason::PipelineBackpressure { causes } = &reasons[0] {
+                    assert_eq!(causes.len(), 1, "only BlockCanonizer should trigger");
+                    assert_eq!(causes[0].component, "block_canonizer");
+                } else {
+                    panic!("expected PipelineBackpressure reason");
+                }
             }
             other => panic!("expected NotAccepting with one cause, got {:?}", other),
         }

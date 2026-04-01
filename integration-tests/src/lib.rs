@@ -810,6 +810,7 @@ struct NodeBuilderOptions {
     gas_price_scale_factor: Option<f64>,
     estimate_gas_pubdata_price_factor: Option<f64>,
     pipeline_health_config: Option<PipelineHealthConfig>,
+    max_blocks_to_produce: Option<u64>,
 }
 
 impl Default for NodeBuilderOptions {
@@ -823,6 +824,7 @@ impl Default for NodeBuilderOptions {
             gas_price_scale_factor: None,
             estimate_gas_pubdata_price_factor: None,
             pipeline_health_config: None,
+            max_blocks_to_produce: None,
         }
     }
 }
@@ -847,6 +849,9 @@ impl NodeBuilderOptions {
         }
         if let Some(phc) = self.pipeline_health_config.clone() {
             config.pipeline_health_config = phc;
+        }
+        if let Some(max_blocks) = self.max_blocks_to_produce {
+            config.sequencer_config.max_blocks_to_produce = Some(max_blocks);
         }
     }
 }
@@ -902,6 +907,11 @@ impl TesterBuilder {
 
     pub fn pipeline_health_config(mut self, phc: PipelineHealthConfig) -> Self {
         self.options.pipeline_health_config = Some(phc);
+        self
+    }
+
+    pub fn max_blocks_to_produce(mut self, limit: u64) -> Self {
+        self.options.max_blocks_to_produce = Some(limit);
         self
     }
 

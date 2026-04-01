@@ -15,12 +15,13 @@ pub enum NodeStatus {
 pub struct HealthResponse {
     pub status: NodeStatus,
     pub accepting_transactions: bool,
-    pub backpressure_causes: Vec<BackpressureCauseJson>,
+    pub causes: Vec<CauseJson>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
-pub struct BackpressureCauseJson {
-    pub component: &'static str,
+pub(crate) struct CauseJson {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component: Option<&'static str>,
     pub trigger: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold_secs: Option<f64>,
@@ -37,35 +38,44 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
     let acceptance = state.acceptance_state.borrow().clone();
     let accepting = matches!(acceptance, TransactionAcceptanceState::Accepting);
 
-    let backpressure_causes = match &acceptance {
-        TransactionAcceptanceState::NotAccepting(NotAcceptingReason::PipelineBackpressure {
-            causes,
-        }) => causes
+    let causes: Vec<CauseJson> = match &acceptance {
+        TransactionAcceptanceState::NotAccepting(reasons) => reasons
             .iter()
-            .map(|c| match &c.trigger {
-                BackpressureTrigger::TimeLagTooHigh { threshold, actual } => {
-                    BackpressureCauseJson {
-                        component: c.component,
-                        trigger: "time_lag_too_high",
-                        threshold_secs: Some(threshold.as_secs_f64()),
-                        actual_secs: Some(actual.as_secs_f64()),
-                        threshold_blocks: None,
-                        actual_blocks: None,
-                    }
-                }
-                BackpressureTrigger::BlockLagTooHigh { threshold, actual } => {
-                    BackpressureCauseJson {
-                        component: c.component,
-                        trigger: "block_lag_too_high",
+            .flat_map(|reason| match reason {
+                NotAcceptingReason::BlockProductionDisabled => {
+                    vec![CauseJson {
+                        component: None,
+                        trigger: "block_production_disabled",
                         threshold_secs: None,
                         actual_secs: None,
-                        threshold_blocks: Some(*threshold),
-                        actual_blocks: Some(*actual),
-                    }
+                        threshold_blocks: None,
+                        actual_blocks: None,
+                    }]
                 }
+                NotAcceptingReason::PipelineBackpressure { causes } => causes
+                    .iter()
+                    .map(|c| match &c.trigger {
+                        BackpressureTrigger::TimeLagTooHigh { threshold, actual } => CauseJson {
+                            component: Some(c.component),
+                            trigger: "time_lag_too_high",
+                            threshold_secs: Some(threshold.as_secs_f64()),
+                            actual_secs: Some(actual.as_secs_f64()),
+                            threshold_blocks: None,
+                            actual_blocks: None,
+                        },
+                        BackpressureTrigger::BlockLagTooHigh { threshold, actual } => CauseJson {
+                            component: Some(c.component),
+                            trigger: "block_lag_too_high",
+                            threshold_secs: None,
+                            actual_secs: None,
+                            threshold_blocks: Some(*threshold),
+                            actual_blocks: Some(*actual),
+                        },
+                    })
+                    .collect(),
             })
             .collect(),
-        _ => vec![],
+        TransactionAcceptanceState::Accepting => vec![],
     };
 
     let node_status = if is_terminating {
@@ -87,7 +97,7 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
         Json(HealthResponse {
             status: node_status,
             accepting_transactions: accepting,
-            backpressure_causes,
+            causes,
         }),
     )
 }
@@ -124,7 +134,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, NodeStatus::Healthy);
         assert!(body.accepting_transactions);
-        assert!(body.backpressure_causes.is_empty());
+        assert!(body.causes.is_empty());
     }
 
     #[tokio::test]
@@ -148,21 +158,21 @@ mod tests {
                 actual: 782,
             },
         };
-        let (_tx, rx) = watch::channel(TransactionAcceptanceState::NotAccepting(
+        let (_tx, rx) = watch::channel(TransactionAcceptanceState::NotAccepting(vec![
             NotAcceptingReason::PipelineBackpressure {
                 causes: vec![cause],
             },
-        ));
+        ]));
         state.acceptance_state = rx;
         let (status, Json(body)) = health(State(state)).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body.status, NodeStatus::Backpressure);
         assert!(!body.accepting_transactions);
-        assert_eq!(body.backpressure_causes.len(), 1);
-        assert_eq!(body.backpressure_causes[0].component, "fri_job_manager");
-        assert_eq!(body.backpressure_causes[0].trigger, "block_lag_too_high");
-        assert_eq!(body.backpressure_causes[0].threshold_blocks, Some(500));
-        assert_eq!(body.backpressure_causes[0].actual_blocks, Some(782));
+        assert_eq!(body.causes.len(), 1);
+        assert_eq!(body.causes[0].component, Some("fri_job_manager"));
+        assert_eq!(body.causes[0].trigger, "block_lag_too_high");
+        assert_eq!(body.causes[0].threshold_blocks, Some(500));
+        assert_eq!(body.causes[0].actual_blocks, Some(782));
     }
 
     #[tokio::test]
@@ -177,17 +187,71 @@ mod tests {
                 actual: Duration::from_secs(45),
             },
         };
-        let (_tx, rx) = watch::channel(TransactionAcceptanceState::NotAccepting(
+        let (_tx, rx) = watch::channel(TransactionAcceptanceState::NotAccepting(vec![
             NotAcceptingReason::PipelineBackpressure {
                 causes: vec![cause],
             },
-        ));
+        ]));
         state.acceptance_state = rx;
         let (status, Json(body)) = health(State(state)).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body.status, NodeStatus::Backpressure);
-        assert_eq!(body.backpressure_causes[0].trigger, "time_lag_too_high");
-        assert_eq!(body.backpressure_causes[0].threshold_secs, Some(30.0));
-        assert_eq!(body.backpressure_causes[0].actual_secs, Some(45.0));
+        assert_eq!(body.causes[0].trigger, "time_lag_too_high");
+        assert_eq!(body.causes[0].threshold_secs, Some(30.0));
+        assert_eq!(body.causes[0].actual_secs, Some(45.0));
+    }
+
+    #[tokio::test]
+    async fn block_production_disabled_returns_503_with_cause() {
+        use zksync_os_types::NotAcceptingReason;
+        let mut state = make_state();
+        let (_tx, rx) = watch::channel(TransactionAcceptanceState::NotAccepting(vec![
+            NotAcceptingReason::BlockProductionDisabled,
+        ]));
+        state.acceptance_state = rx;
+        let (status, Json(body)) = health(State(state)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.status, NodeStatus::Backpressure);
+        assert!(!body.accepting_transactions);
+        assert_eq!(body.causes.len(), 1);
+        assert_eq!(body.causes[0].trigger, "block_production_disabled");
+        assert!(body.causes[0].component.is_none());
+        assert!(body.causes[0].threshold_blocks.is_none());
+        assert!(body.causes[0].actual_blocks.is_none());
+        assert!(body.causes[0].threshold_secs.is_none());
+        assert!(body.causes[0].actual_secs.is_none());
+    }
+
+    #[tokio::test]
+    async fn both_reasons_active_shows_all_causes() {
+        use zksync_os_types::{BackpressureCause, BackpressureTrigger, NotAcceptingReason};
+        let mut state = make_state();
+        let pipeline_cause = BackpressureCause {
+            component: "batcher",
+            trigger: BackpressureTrigger::BlockLagTooHigh {
+                threshold: 100,
+                actual: 200,
+            },
+        };
+        let (_tx, rx) = watch::channel(TransactionAcceptanceState::NotAccepting(vec![
+            NotAcceptingReason::BlockProductionDisabled,
+            NotAcceptingReason::PipelineBackpressure {
+                causes: vec![pipeline_cause],
+            },
+        ]));
+        state.acceptance_state = rx;
+        let (status, Json(body)) = health(State(state)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.causes.len(), 2);
+        assert!(
+            body.causes
+                .iter()
+                .any(|c| c.trigger == "block_production_disabled")
+        );
+        assert!(
+            body.causes
+                .iter()
+                .any(|c| c.trigger == "block_lag_too_high")
+        );
     }
 }
