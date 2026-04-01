@@ -91,12 +91,16 @@ impl PipelineHealthMonitor {
             }
         }
 
+        // Snapshot current state immediately so operators see accurate lag at monitor startup
+        // rather than waiting up to metrics_interval for the first periodic tick.
+        // WatchStream::from_changes skips the initial value, so without this call the monitor
+        // would silently report 0 lag for up to 5 s even if the pipeline is already behind
+        // (e.g. during replay from block 1).
+        self.evaluate_and_update();
+
         // Build a merged stream of all component health changes.
-        // WatchStream::from_changes skips the initial value and only yields on subsequent
-        // changes — this is intentional. Components that are stuck at their initial state
-        // (e.g. never processed a block) are detected on the next periodic metrics_tick
-        // (default 5 s) rather than immediately. The trade-off is accepted: the periodic
-        // tick is the safety net for components that do not produce change events.
+        // WatchStream::from_changes only yields on subsequent changes; the periodic
+        // metrics_tick is the safety net for components that do not produce change events.
         let streams = self
             .components
             .iter()
@@ -130,12 +134,11 @@ impl PipelineHealthMonitor {
                 )
             }
             None => {
-                tracing::warn!(
+                panic!(
                     "PipelineHealthMonitor: BlockExecutor is not registered; \
-                     block_lag and time_lag metrics will be unreliable (all components \
-                     will show head-relative lag from block 0)"
+                     BlockExecutor is the required head-of-pipeline source of truth — \
+                     call register() for BlockExecutor before run()"
                 );
-                (0, None)
             }
         }
     }
