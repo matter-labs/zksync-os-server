@@ -1276,8 +1276,11 @@ async fn run_main_node_pipeline(
         .pipe(BatchSink::new(internal_config_manager));
 
     tracing::info!("Launching pipeline");
+    let registered = pipeline_monitor.registered_component_ids();
     for (up, down) in &pipeline.adjacency {
-        pipeline_monitor.register_adjacency(*up, *down);
+        if registered.contains(up) && registered.contains(down) {
+            pipeline_monitor.register_adjacency(*up, *down);
+        }
     }
     runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
     pipeline.spawn();
@@ -1410,8 +1413,11 @@ async fn run_en_pipeline(
         pipeline.pipe(NoOpSink::new())
     };
 
+    let registered = pipeline_monitor.registered_component_ids();
     for (up, down) in &pipeline.adjacency {
-        pipeline_monitor.register_adjacency(*up, *down);
+        if registered.contains(up) && registered.contains(down) {
+            pipeline_monitor.register_adjacency(*up, *down);
+        }
     }
     runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
     pipeline.spawn();

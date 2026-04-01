@@ -48,6 +48,12 @@ impl PipelineHealthMonitor {
         self.adjacency.push((upstream, downstream));
     }
 
+    /// Returns the set of component IDs that have been registered via [`register`].
+    /// Useful for filtering adjacency pairs before calling [`register_adjacency`].
+    pub fn registered_component_ids(&self) -> std::collections::HashSet<ComponentId> {
+        self.components.iter().map(|(id, _)| *id).collect()
+    }
+
     pub(crate) fn compute_adjacent_diffs(&self) -> std::collections::HashMap<ComponentId, u64> {
         let seqs: std::collections::HashMap<ComponentId, u64> = self
             .components
