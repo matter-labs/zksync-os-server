@@ -89,12 +89,8 @@ impl Drop for BatchGuard {
         }
         tracing::debug!(
             target: "rpc::monitoring::batch",
-            batch_size = self.batch_size,
-            elapsed = ?elapsed,
-            batch_input_size = self.batch_input_size,
-            response_size,
             cancelled,
-            "rpc batch call completed"
+            "rpc batch call completed cancelled={}", cancelled
         );
     }
 }
@@ -235,32 +231,6 @@ impl RpcServiceT for Monitoring {
     }
 }
 
-/// Macro to statically dispatch debug logs to different targets based on the method name.
-macro_rules! debug_dispatch {
-    (
-        targets: match $method:ident { $($method_arm:literal => $target_arm:literal,)* _ => $fallback:literal },
-        fields: $fields:tt,
-        message: $message:literal,
-    ) => {
-        match $method {
-            $($method_arm => {
-                tracing::debug!(
-                    target: $target_arm,
-                    $fields,
-                    $message
-                );
-            })*
-            _ => {
-                tracing::debug!(
-                    target: $fallback,
-                    $fields,
-                    $message
-                );
-            }
-        }
-    };
-}
-
 fn log_and_report(
     kind: CallKind,
     method: &str,
@@ -277,21 +247,21 @@ fn log_and_report(
         API_METRICS.errors[&(method.to_owned(), code)].inc();
     }
 
-    debug_dispatch!(
-        targets: match method {
-            "eth_call" => "rpc::monitoring::eth::call",
-            "eth_sendRawTransaction" => "rpc::monitoring::eth::sendRawTransaction",
-            "debug_traceTransaction" => "rpc::monitoring::debug::traceTransaction",
-            _ => "rpc::monitoring::call"
-        },
-        fields: {
-            method,
-            ?kind,
-            ?elapsed,
-            request_size,
-            output_size_bytes,
-            cancelled,
-        },
-        message: "rpc call completed",
-    );
+    macro_rules! log {
+        ($target:literal) => {
+            tracing::debug!(
+                target: $target,
+                ?kind,
+                cancelled,
+                "rpc call completed kind={:?} cancelled={}", kind, cancelled
+            )
+        };
+    }
+
+    match method {
+        "eth_call" => log!("rpc::monitoring::eth::call"),
+        "eth_sendRawTransaction" => log!("rpc::monitoring::eth::sendRawTransaction"),
+        "debug_traceTransaction" => log!("rpc::monitoring::debug::traceTransaction"),
+        _ => log!("rpc::monitoring::call"),
+    }
 }
