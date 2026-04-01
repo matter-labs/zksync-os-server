@@ -230,27 +230,33 @@ async fn handle_delayed_termination(runtime: Runtime) {
 }
 
 fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
-    let original_path = config.general_config.rocks_db_path.clone();
-    if original_path != Path::new(DEFAULT_ROCKS_DB_PATH) {
-        tracing::warn!(
-            original_path = %original_path.display(),
-            "general_rocks_db_path parameter is ignored in ephemeral mode"
+    let tempdir = if !config.general_config.semi_ephemeral {
+        let original_path = config.general_config.rocks_db_path.clone();
+        if original_path != Path::new(DEFAULT_ROCKS_DB_PATH) {
+            tracing::warn!(
+                original_path = %original_path.display(),
+                "general_rocks_db_path parameter is ignored in ephemeral mode"
+            );
+        }
+
+        let tempdir = tempfile::tempdir()
+            .expect("Failed to create temporary RocksDB directory for ephemeral mode");
+        let tempdir_path = tempdir.path();
+        tracing::info!(
+            path = %tempdir_path.display(),
+            "Ephemeral mode enabled. Using temporary directory for RocksDB and proof storage"
         );
-    }
 
-    let tempdir = tempfile::tempdir()
-        .expect("Failed to create temporary RocksDB directory for ephemeral mode");
-    let tempdir_path = tempdir.path();
-    tracing::info!(
-        path = %tempdir_path.display(),
-        "Ephemeral mode enabled. Using temporary directory for RocksDB and proof storage"
-    );
+        // Update config to use temporary directory
+        config.general_config.rocks_db_path = tempdir_path.join("node");
+        config.prover_api_config.proof_storage = ProofStorageConfig {
+            path: tempdir_path.join("fri_proofs"),
+            ..ProofStorageConfig::default()
+        };
 
-    // Update config to use temporary directory
-    config.general_config.rocks_db_path = tempdir_path.join("node");
-    config.prover_api_config.proof_storage = ProofStorageConfig {
-        path: tempdir_path.join("fri_proofs"),
-        ..ProofStorageConfig::default()
+        Some(tempdir)
+    } else {
+        None
     };
 
     // Disable services that are not needed in ephemeral mode
@@ -267,7 +273,7 @@ fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
         );
     }
 
-    Some(tempdir)
+    tempdir
 }
 
 fn load_internal_config(config: &mut Config) {
