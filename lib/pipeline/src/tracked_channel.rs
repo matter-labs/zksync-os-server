@@ -153,7 +153,7 @@ impl<T: HasBlockSeq> TrackedUnboundedReceiver<T> {
         reporter: &zksync_os_observability::ComponentHealthReporter,
     ) -> Option<T> {
         let item = self.recv().await?;
-        reporter.record_processed(item.block_seq(), Some(item.block_timestamp()));
+        reporter.record_processed(item.block_seq(), item.block_timestamp());
         Some(item)
     }
 
@@ -188,7 +188,7 @@ impl<T: HasBlockSeq> TrackedUnboundedReceiver<T> {
             // The last one (index `start + n - 1`) has the highest sequence number
             // because the channel preserves send order.
             let last = &buf[start + n - 1];
-            reporter.record_processed(last.block_seq(), Some(last.block_timestamp()));
+            reporter.record_processed(last.block_seq(), last.block_timestamp());
         }
         n
     }
@@ -272,8 +272,8 @@ mod tests {
             fn block_seq(&self) -> u64 {
                 self.seq
             }
-            fn block_timestamp(&self) -> u64 {
-                self.ts
+            fn block_timestamp(&self) -> Option<u64> {
+                Some(self.ts)
             }
         }
 
@@ -305,8 +305,8 @@ mod tests {
             fn block_seq(&self) -> u64 {
                 self.seq
             }
-            fn block_timestamp(&self) -> u64 {
-                self.ts
+            fn block_timestamp(&self) -> Option<u64> {
+                Some(self.ts)
             }
         }
 

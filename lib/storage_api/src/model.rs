@@ -117,7 +117,7 @@ impl HasBlockSeq for ReplayRecord {
     fn block_seq(&self) -> u64 {
         self.block_context.block_number
     }
-    fn block_timestamp(&self) -> u64 {
-        self.block_context.timestamp
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.block_context.timestamp)
     }
 }

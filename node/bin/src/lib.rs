@@ -980,6 +980,14 @@ async fn run_main_node_pipeline(
     let (block_applier_reporter, block_applier_rx) =
         make_reporter(&mut pipeline_monitor, ComponentId::BlockApplier);
     health_entries.push((ComponentId::BlockApplier, block_applier_rx));
+    let revm_checker_reporter = if config.sequencer_config.revm_consistency_checker_enabled {
+        let (reporter, rx) =
+            make_reporter(&mut pipeline_monitor, ComponentId::RevmConsistencyChecker);
+        health_entries.push((ComponentId::RevmConsistencyChecker, rx));
+        Some(reporter)
+    } else {
+        None
+    };
     let (tree_manager_reporter, tree_manager_rx) =
         make_reporter(&mut pipeline_monitor, ComponentId::TreeManager);
     health_entries.push((ComponentId::TreeManager, tree_manager_rx));
@@ -1033,6 +1041,7 @@ async fn run_main_node_pipeline(
                         config
                             .sequencer_config
                             .revm_consistency_checker_revert_on_divergence,
+                        revm_checker_reporter.expect("reporter created when checker is enabled"),
                     )
                 }),
         )
@@ -1306,6 +1315,14 @@ async fn run_en_pipeline(
     let (block_applier_reporter, block_applier_rx) =
         make_reporter(&mut pipeline_monitor, ComponentId::BlockApplier);
     health_entries.push((ComponentId::BlockApplier, block_applier_rx));
+    let revm_checker_reporter = if config.sequencer_config.revm_consistency_checker_enabled {
+        let (reporter, rx) =
+            make_reporter(&mut pipeline_monitor, ComponentId::RevmConsistencyChecker);
+        health_entries.push((ComponentId::RevmConsistencyChecker, rx));
+        Some(reporter)
+    } else {
+        None
+    };
     let (tree_manager_reporter, tree_manager_rx) =
         make_reporter(&mut pipeline_monitor, ComponentId::TreeManager);
     health_entries.push((ComponentId::TreeManager, tree_manager_rx));
@@ -1352,6 +1369,7 @@ async fn run_en_pipeline(
                         config
                             .sequencer_config
                             .revm_consistency_checker_revert_on_divergence,
+                        revm_checker_reporter.expect("reporter created when checker is enabled"),
                     )
                 }),
         )

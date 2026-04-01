@@ -48,13 +48,9 @@ impl<C: SendToL1 + Send + 'static> HasBlockSeq for L1SenderCommand<C> {
     fn block_seq(&self) -> u64 {
         self.last_block_number()
     }
-    fn block_timestamp(&self) -> u64 {
+    fn block_timestamp(&self) -> Option<u64> {
         match self {
-            Self::SendToL1(cmd) => cmd
-                .as_ref()
-                .last()
-                .map(|e| e.block_timestamp())
-                .unwrap_or(0),
+            Self::SendToL1(cmd) => cmd.as_ref().last().and_then(|e| e.block_timestamp()),
             Self::Passthrough(envelope) => envelope.block_timestamp(),
         }
     }

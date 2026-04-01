@@ -46,8 +46,8 @@ impl HasBlockSeq for BlockPayload {
     fn block_seq(&self) -> u64 {
         self.record.block_context.block_number
     }
-    fn block_timestamp(&self) -> u64 {
-        self.record.block_context.timestamp
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.record.block_context.timestamp)
     }
 }
 
@@ -64,8 +64,8 @@ impl HasBlockSeq for AppliedBlock {
     fn block_seq(&self) -> u64 {
         self.record.block_context.block_number
     }
-    fn block_timestamp(&self) -> u64 {
-        self.record.block_context.timestamp
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.record.block_context.timestamp)
     }
 }
 
@@ -209,7 +209,7 @@ mod tests {
             command_type: BlockCommandType::Produce,
         };
         assert_eq!(payload.block_seq(), 42);
-        assert_eq!(payload.block_timestamp(), 1_700_000_000);
+        assert_eq!(payload.block_timestamp(), Some(1_700_000_000));
     }
 
     #[test]
@@ -220,6 +220,6 @@ mod tests {
             record: r,
         };
         assert_eq!(block.block_seq(), 100);
-        assert_eq!(block.block_timestamp(), 1_700_000_100);
+        assert_eq!(block.block_timestamp(), Some(1_700_000_100));
     }
 }

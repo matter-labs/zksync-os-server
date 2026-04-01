@@ -91,6 +91,17 @@ impl PipelineHealthMonitor {
             }
         }
 
+        // BlockExecutor must be registered: it is the head-of-pipeline source of truth used by
+        // head_state() on every evaluation tick. Fail fast here rather than panicking in the loop.
+        assert!(
+            self.components
+                .iter()
+                .any(|(id, _)| *id == ComponentId::BlockExecutor),
+            "PipelineHealthMonitor::run called without BlockExecutor registered; \
+             BlockExecutor is the required head-of-pipeline source of truth — \
+             call register() for BlockExecutor before run()"
+        );
+
         // Snapshot current state immediately so operators see accurate lag at monitor startup
         // rather than waiting up to metrics_interval for the first periodic tick.
         // WatchStream::from_changes skips the initial value, so without this call the monitor
@@ -740,6 +751,22 @@ mod tests {
             TransactionAcceptanceState::Accepting,
             "stale out-of-order report from slow prover must not trigger backpressure"
         );
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "BlockExecutor is the required head-of-pipeline source of truth")]
+    async fn run_panics_when_block_executor_not_registered() {
+        // A pipeline with only BlockApplier registered (no BlockExecutor) must fail fast
+        // in run(), not crash inside the hot evaluation loop.
+        let config = PipelineHealthConfig::default();
+        let (_stop_tx, stop_rx) = watch::channel(false);
+        let (mut monitor, _) = PipelineHealthMonitor::new(config, stop_rx);
+
+        let (reporter, rx) = ComponentHealthReporter::new("block_applier");
+        reporter.record_processed(10, None);
+        monitor.register(ComponentId::BlockApplier, rx);
+
+        monitor.run().await;
     }
 
     #[test]

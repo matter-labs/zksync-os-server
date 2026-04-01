@@ -24,6 +24,7 @@ where
     state: State,
     internal_config_manager: InternalConfigManager,
     revert_enabled: bool,
+    pub health_reporter: ComponentHealthReporter,
 }
 
 impl<State> RevmConsistencyChecker<State>
@@ -34,11 +35,13 @@ where
         state: State,
         internal_config_manager: InternalConfigManager,
         revert_enabled: bool,
+        health_reporter: ComponentHealthReporter,
     ) -> Self {
         Self {
             state,
             internal_config_manager,
             revert_enabled,
+            health_reporter,
         }
     }
 
@@ -48,9 +51,25 @@ where
         replay_record: &ReplayRecord,
         report: &CompareReport,
     ) -> anyhow::Result<()> {
+        Self::handle_report_with(
+            block_output,
+            replay_record,
+            report,
+            self.revert_enabled,
+            &self.internal_config_manager,
+        )
+    }
+
+    fn handle_report_with(
+        block_output: &BlockOutput,
+        replay_record: &ReplayRecord,
+        report: &CompareReport,
+        revert_enabled: bool,
+        internal_config_manager: &InternalConfigManager,
+    ) -> anyhow::Result<()> {
         report.log_tracing(20);
-        if self.revert_enabled && !report.is_empty() {
-            let mut config = self.internal_config_manager.read_config()?;
+        if revert_enabled && !report.is_empty() {
+            let mut config = internal_config_manager.read_config()?;
             config.failing_block = Some(replay_record.block_context.block_number);
 
             let initial_blacklist_size = config.l2_signer_blacklist.len();
@@ -68,8 +87,7 @@ where
                 replay_record.block_context.block_number,
                 block_output.header.hash(),
             );
-            self.internal_config_manager
-                .write_config_and_panic(&config, &message)?;
+            internal_config_manager.write_config_and_panic(&config, &message)?;
         }
 
         Ok(())
@@ -88,13 +106,16 @@ where
         zksync_os_pipeline::ComponentId::RevmConsistencyChecker;
 
     async fn run(
-        mut self,
+        self,
         mut input: TrackedUnboundedReceiver<Self::Input>,
         output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
-        // NOTE: RevmConsistencyChecker has no ComponentId and is not registered with
-        // PipelineHealthMonitor, but we still use ComponentHealthReporter for metrics benefits.
-        let (health_reporter, _rx) = ComponentHealthReporter::new("revm_consistency_checker");
+        let Self {
+            state,
+            internal_config_manager,
+            revert_enabled,
+            health_reporter,
+        } = self;
         // Remember unsupported execution versions to log only one warning for it.
         let mut warned_unsupported_versions: HashSet<u32> = HashSet::new();
 
@@ -136,8 +157,7 @@ where
             health_reporter.enter_state(GenericComponentState::Active);
             let state_block_number = replay_record.block_context.block_number - 1;
             let block_hashes = replay_record.block_context.block_hashes;
-            let state_view = self
-                .state
+            let state_view = state
                 .state_view_at(state_block_number)
                 .map_err(anyhow::Error::from)?;
 
@@ -186,7 +206,13 @@ where
                     &block_output.storage_writes,
                     &block_output.account_diffs,
                 )?;
-                self.handle_report(&block_output, &replay_record, &compare_report)?;
+                Self::handle_report_with(
+                    &block_output,
+                    &replay_record,
+                    &compare_report,
+                    revert_enabled,
+                    &internal_config_manager,
+                )?;
             }
 
             if output

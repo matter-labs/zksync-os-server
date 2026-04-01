@@ -318,8 +318,8 @@ impl<E: Send + 'static, S: Send + 'static> HasBlockSeq for BatchEnvelope<E, S> {
     fn block_seq(&self) -> u64 {
         self.batch.last_block_number
     }
-    fn block_timestamp(&self) -> u64 {
-        self.batch.batch_info.last_block_timestamp
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.batch.batch_info.last_block_timestamp)
     }
 }
 
@@ -343,8 +343,8 @@ mod tests {
         let b = serde_json::from_str::<SignedBatchEnvelope<FriProof>>(data).unwrap();
         assert_eq!(
             b.block_timestamp(),
-            1758116549,
-            "block_timestamp() must return last_block_timestamp from commit_batch_info, not 0"
+            Some(1758116549),
+            "block_timestamp() must return last_block_timestamp from commit_batch_info, not None"
         );
     }
 }
