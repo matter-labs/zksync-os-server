@@ -57,10 +57,7 @@ struct BatchGuard {
 }
 
 impl BatchGuard {
-    fn new(
-        batch_input_size: usize,
-        request_counts: HashMap<String, u64>,
-    ) -> Self {
+    fn new(batch_input_size: usize, request_counts: HashMap<String, u64>) -> Self {
         Self {
             batch_input_size,
             request_counts,
