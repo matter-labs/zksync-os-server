@@ -44,19 +44,9 @@ impl CommittedBatchProvider {
         // todo: this can take a while and should ideally happen in the background
         // Ignore genesis here as it was handled above
         for batch_number in l1_state.last_executed_batch.max(1)..=l1_state.last_committed_batch {
-            let sl_block_with_commit = util::find_l1_commit_block_by_batch_number(
-                l1_state.diamond_proxy_sl.clone(),
-                batch_number,
-                max_l1_blocks_to_scan,
-            )
-            .await?;
-            let discovered_batch = util::fetch_stored_batch_data(
-                &l1_state.diamond_proxy_sl,
-                sl_block_with_commit,
-                batch_number,
-            )
-            .await?
-            .with_context(|| format!("failed to find committed batch {batch_number} on L1"))?;
+            let discovered_batch =
+                discover_committed_batch_for_startup(l1_state, batch_number, max_l1_blocks_to_scan)
+                    .await?;
             tracing::info!(
                 batch_number = discovered_batch.number(),
                 "discovered committed batch on startup"
@@ -95,4 +85,67 @@ impl Inner {
             .insert(batch.block_range.clone(), batch.number());
         self.batches.insert(batch.number(), batch);
     }
+}
+
+/// For chains that migrated from L1 settlement to a gateway, pre-migration commit events are on
+/// `diamond_proxy_l1`; post-migration commits are on `diamond_proxy_sl`.
+async fn discover_committed_batch_for_startup(
+    l1_state: &L1State,
+    batch_number: u64,
+    max_l1_blocks_to_scan: u64,
+) -> anyhow::Result<DiscoveredCommittedBatch> {
+    // Same diamond address can appear on L1 and on the gateway L2; use chain IDs, not addresses.
+    let settle_on_l1 = l1_state.l1_chain_id == l1_state.sl_chain_id;
+    if settle_on_l1 {
+        let block = util::find_l1_commit_block_by_batch_number(
+            l1_state.diamond_proxy_sl.clone(),
+            batch_number,
+            max_l1_blocks_to_scan,
+        )
+        .await?;
+        let discovered =
+            util::fetch_stored_batch_data(&l1_state.diamond_proxy_sl, block, batch_number)
+                .await?
+                .with_context(|| format!("failed to find committed batch {batch_number} on L1"))?;
+        return Ok(discovered);
+    }
+    match util::find_l1_commit_block_by_batch_number(
+        l1_state.diamond_proxy_l1.clone(),
+        batch_number,
+        max_l1_blocks_to_scan,
+    )
+    .await
+    {
+        Ok(block) => {
+            if let Some(batch) =
+                util::fetch_stored_batch_data(&l1_state.diamond_proxy_l1, block, batch_number)
+                    .await?
+            {
+                tracing::debug!(batch_number, "found committed batch on L1 diamond proxy");
+                return Ok(batch);
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                batch_number,
+                ?err,
+                "failed to find commit block on L1 diamond proxy, falling back to settlement layer"
+            );
+        }
+    }
+    let block = util::find_l1_commit_block_by_batch_number(
+        l1_state.diamond_proxy_sl.clone(),
+        batch_number,
+        max_l1_blocks_to_scan,
+    )
+    .await?;
+    let batch = util::fetch_stored_batch_data(&l1_state.diamond_proxy_sl, block, batch_number)
+        .await?
+        .with_context(|| {
+            format!(
+                "failed to find committed batch {batch_number} on L1 diamond or settlement-layer chain"
+            )
+        })?;
+    tracing::debug!(batch_number, "found committed batch on settlement layer");
+    Ok(batch)
 }
