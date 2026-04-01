@@ -96,7 +96,7 @@ use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider
 use zksync_os_sequencer::execution::{
     BlockApplier, BlockCanonizer, BlockExecutor, FeeParams, FeeProvider,
 };
-use zksync_os_status_server::run_status_server;
+use zksync_os_status_server::{PipelineHealth, StatusServerState, run_status_server};
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
@@ -823,7 +823,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    let (pipeline_acceptance_rx, component_health, pipeline_adjacency) = if node_role.is_main() {
+    let pipeline_health = if node_role.is_main() {
         // Main Node
         run_main_node_pipeline(
             &config,
@@ -872,7 +872,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // (BlockProductionDisabled) into a single combined receiver for the RPC server.
     let combined_acceptance_rx = merge_acceptance_receivers(
         tx_acceptance_state_receiver,
-        pipeline_acceptance_rx,
+        pipeline_health.acceptance_rx,
         runtime,
     );
 
@@ -883,16 +883,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .address
             .parse()
             .expect("malformed `status_server.address`");
+        let status_state = StatusServerState {
+            stop_receiver: stop_receiver.clone(),
+            acceptance_state: combined_acceptance_rx.clone(),
+            component_health: pipeline_health.component_health.clone(),
+            pipeline_health_config: config.pipeline_health_config.clone(),
+            adjacency: pipeline_health.adjacency.clone(),
+        };
         runtime.spawn_critical_with_graceful_shutdown_signal("status server", |shutdown| {
-            run_status_server(
-                addr,
-                shutdown,
-                stop_receiver.clone(),
-                combined_acceptance_rx.clone(),
-                component_health.clone(),
-                config.pipeline_health_config.clone(),
-                pipeline_adjacency.clone(),
-            )
+            run_status_server(addr, shutdown, status_state)
         });
     }
 
@@ -944,11 +943,7 @@ async fn run_main_node_pipeline(
     canonization_engine: BlockCanonizationEngine,
     leadership: LeadershipSignal,
     stop_receiver: watch::Receiver<bool>,
-) -> (
-    watch::Receiver<TransactionAcceptanceState>,
-    Arc<Vec<(ComponentId, watch::Receiver<ComponentHealth>)>>,
-    Arc<Vec<(ComponentId, ComponentId)>>,
-) {
+) -> PipelineHealth {
     let pubdata_mode = config
         .l1_sender_config
         .pubdata_mode
@@ -971,26 +966,36 @@ async fn run_main_node_pipeline(
     // Reporters for components that always run (block pipeline).
     let mut health_entries: Vec<(ComponentId, watch::Receiver<ComponentHealth>)> = vec![];
 
-    let (block_executor_reporter, block_executor_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::BlockExecutor);
-    health_entries.push((ComponentId::BlockExecutor, block_executor_rx));
-    let (block_canonizer_reporter, block_canonizer_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::BlockCanonizer);
-    health_entries.push((ComponentId::BlockCanonizer, block_canonizer_rx));
-    let (block_applier_reporter, block_applier_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::BlockApplier);
-    health_entries.push((ComponentId::BlockApplier, block_applier_rx));
-    let revm_checker_reporter = if config.sequencer_config.revm_consistency_checker_enabled {
-        let (reporter, rx) =
-            make_reporter(&mut pipeline_monitor, ComponentId::RevmConsistencyChecker);
-        health_entries.push((ComponentId::RevmConsistencyChecker, rx));
-        Some(reporter)
-    } else {
-        None
-    };
-    let (tree_manager_reporter, tree_manager_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::TreeManager);
-    health_entries.push((ComponentId::TreeManager, tree_manager_rx));
+    let block_executor_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::BlockExecutor,
+    );
+    let block_canonizer_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::BlockCanonizer,
+    );
+    let block_applier_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::BlockApplier,
+    );
+    let revm_checker_reporter = config
+        .sequencer_config
+        .revm_consistency_checker_enabled
+        .then(|| {
+            make_reporter(
+                &mut pipeline_monitor,
+                &mut health_entries,
+                ComponentId::RevmConsistencyChecker,
+            )
+        });
+    let tree_manager_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::TreeManager,
+    );
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::channel(8);
     let (applied_block_number_sender, applied_block_number_receiver) =
@@ -1071,48 +1076,74 @@ async fn run_main_node_pipeline(
         }
         pipeline.pipe(NoOpSink::new()).spawn();
         runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
-        return (pipeline_acceptance_rx, component_health, adjacency);
+        return PipelineHealth {
+            acceptance_rx: pipeline_acceptance_rx,
+            component_health,
+            adjacency,
+        };
     }
 
     // Batcher is enabled — create reporters for all downstream components now.
-    let (prover_input_generator_reporter, prover_input_generator_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::ProverInputGenerator);
-    health_entries.push((ComponentId::ProverInputGenerator, prover_input_generator_rx));
-    let (batcher_reporter, batcher_rx) = make_reporter(&mut pipeline_monitor, ComponentId::Batcher);
-    health_entries.push((ComponentId::Batcher, batcher_rx));
-    let (batch_verification_reporter, batch_verification_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::BatchVerification);
-    health_entries.push((ComponentId::BatchVerification, batch_verification_rx));
-    let (fri_job_manager_reporter, fri_job_manager_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::FriJobManager);
-    health_entries.push((ComponentId::FriJobManager, fri_job_manager_rx));
-    let (gapless_committer_reporter, gapless_committer_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::GaplessCommitter);
-    health_entries.push((ComponentId::GaplessCommitter, gapless_committer_rx));
-    let (upgrade_gatekeeper_reporter, upgrade_gatekeeper_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::UpgradeGatekeeper);
-    health_entries.push((ComponentId::UpgradeGatekeeper, upgrade_gatekeeper_rx));
-    let (l1_sender_commit_reporter, l1_sender_commit_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::L1SenderCommit);
-    health_entries.push((ComponentId::L1SenderCommit, l1_sender_commit_rx));
-    let (snark_job_manager_reporter, snark_job_manager_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::SnarkJobManager);
-    health_entries.push((ComponentId::SnarkJobManager, snark_job_manager_rx));
-    let (gapless_l1_proof_sender_reporter, gapless_l1_proof_sender_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::GaplessL1ProofSender);
-    health_entries.push((
+    let prover_input_generator_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::ProverInputGenerator,
+    );
+    let batcher_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::Batcher,
+    );
+    let batch_verification_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::BatchVerification,
+    );
+    let fri_job_manager_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::FriJobManager,
+    );
+    let gapless_committer_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::GaplessCommitter,
+    );
+    let upgrade_gatekeeper_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::UpgradeGatekeeper,
+    );
+    let l1_sender_commit_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::L1SenderCommit,
+    );
+    let snark_job_manager_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::SnarkJobManager,
+    );
+    let gapless_l1_proof_sender_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
         ComponentId::GaplessL1ProofSender,
-        gapless_l1_proof_sender_rx,
-    ));
-    let (l1_sender_prove_reporter, l1_sender_prove_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::L1SenderProve);
-    health_entries.push((ComponentId::L1SenderProve, l1_sender_prove_rx));
-    let (priority_tree_reporter, priority_tree_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::PriorityTree);
-    health_entries.push((ComponentId::PriorityTree, priority_tree_rx));
-    let (l1_sender_execute_reporter, l1_sender_execute_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::L1SenderExecute);
-    health_entries.push((ComponentId::L1SenderExecute, l1_sender_execute_rx));
+    );
+    let l1_sender_prove_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::L1SenderProve,
+    );
+    let priority_tree_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::PriorityTree,
+    );
+    let l1_sender_execute_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::L1SenderExecute,
+    );
 
     let component_health = Arc::new(health_entries);
 
@@ -1267,7 +1298,11 @@ async fn run_main_node_pipeline(
     }
     runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
     pipeline.spawn();
-    (pipeline_acceptance_rx, component_health, adjacency)
+    PipelineHealth {
+        acceptance_rx: pipeline_acceptance_rx,
+        component_health,
+        adjacency,
+    }
 }
 
 /// Only for EN - we still populate channels destined for the batcher subsystem -
@@ -1289,11 +1324,7 @@ async fn run_en_pipeline(
     stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
-) -> (
-    watch::Receiver<TransactionAcceptanceState>,
-    Arc<Vec<(ComponentId, watch::Receiver<ComponentHealth>)>>,
-    Arc<Vec<(ComponentId, ComponentId)>>,
-) {
+) -> PipelineHealth {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
             .general_config
@@ -1309,39 +1340,46 @@ async fn run_en_pipeline(
 
     let mut health_entries: Vec<(ComponentId, watch::Receiver<ComponentHealth>)> = vec![];
 
-    let (block_executor_reporter, block_executor_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::BlockExecutor);
-    health_entries.push((ComponentId::BlockExecutor, block_executor_rx));
-    let (block_applier_reporter, block_applier_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::BlockApplier);
-    health_entries.push((ComponentId::BlockApplier, block_applier_rx));
-    let revm_checker_reporter = if config.sequencer_config.revm_consistency_checker_enabled {
-        let (reporter, rx) =
-            make_reporter(&mut pipeline_monitor, ComponentId::RevmConsistencyChecker);
-        health_entries.push((ComponentId::RevmConsistencyChecker, rx));
-        Some(reporter)
-    } else {
-        None
-    };
-    let (tree_manager_reporter, tree_manager_rx) =
-        make_reporter(&mut pipeline_monitor, ComponentId::TreeManager);
-    health_entries.push((ComponentId::TreeManager, tree_manager_rx));
-
-    let batch_verification_client_reporter = if config.batch_verification_config.client_enabled {
-        let (reporter, rx) = make_reporter(&mut pipeline_monitor, ComponentId::BatchVerification);
-        health_entries.push((ComponentId::BatchVerification, rx));
-        Some(reporter)
-    } else {
-        None
-    };
-
-    let priority_tree_reporter = if config.general_config.run_priority_tree {
-        let (reporter, rx) = make_reporter(&mut pipeline_monitor, ComponentId::PriorityTree);
-        health_entries.push((ComponentId::PriorityTree, rx));
-        Some(reporter)
-    } else {
-        None
-    };
+    let block_executor_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::BlockExecutor,
+    );
+    let block_applier_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::BlockApplier,
+    );
+    let revm_checker_reporter = config
+        .sequencer_config
+        .revm_consistency_checker_enabled
+        .then(|| {
+            make_reporter(
+                &mut pipeline_monitor,
+                &mut health_entries,
+                ComponentId::RevmConsistencyChecker,
+            )
+        });
+    let tree_manager_reporter = make_reporter(
+        &mut pipeline_monitor,
+        &mut health_entries,
+        ComponentId::TreeManager,
+    );
+    let batch_verification_client_reporter =
+        config.batch_verification_config.client_enabled.then(|| {
+            make_reporter(
+                &mut pipeline_monitor,
+                &mut health_entries,
+                ComponentId::BatchVerification,
+            )
+        });
+    let priority_tree_reporter = config.general_config.run_priority_tree.then(|| {
+        make_reporter(
+            &mut pipeline_monitor,
+            &mut health_entries,
+            ComponentId::PriorityTree,
+        )
+    });
 
     let component_health = Arc::new(health_entries);
 
@@ -1449,7 +1487,11 @@ async fn run_en_pipeline(
         "clear failing block config",
         clear_failing_block_config_task(finality, internal_config_manager),
     );
-    (pipeline_acceptance_rx, component_health, adjacency)
+    PipelineHealth {
+        acceptance_rx: pipeline_acceptance_rx,
+        component_health,
+        adjacency,
+    }
 }
 
 fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashes {
@@ -1462,15 +1504,17 @@ fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashe
     block_hashes
 }
 
-/// Creates a `ComponentHealthReporter` and registers its receiver with the `PipelineHealthMonitor`.
-/// Returns both the reporter (for the component) and a receiver clone (for the status server).
+/// Creates a `ComponentHealthReporter`, registers its receiver with the `PipelineHealthMonitor`,
+/// and adds it to `health_entries` for the status server.
 fn make_reporter(
     monitor: &mut PipelineHealthMonitor,
+    health_entries: &mut Vec<(ComponentId, watch::Receiver<ComponentHealth>)>,
     id: ComponentId,
-) -> (ComponentHealthReporter, watch::Receiver<ComponentHealth>) {
+) -> ComponentHealthReporter {
     let (reporter, rx) = ComponentHealthReporter::new(id.as_str());
     monitor.register(id, rx.clone());
-    (reporter, rx)
+    health_entries.push((id, rx));
+    reporter
 }
 
 /// Merges two `TransactionAcceptanceState` receivers into one.

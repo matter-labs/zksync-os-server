@@ -12,8 +12,18 @@ use zksync_os_observability::ComponentHealth;
 use zksync_os_pipeline_health::{ComponentId, PipelineHealthConfig};
 use zksync_os_types::TransactionAcceptanceState;
 
+/// Outputs of setting up the pipeline health monitoring system.
+/// Returned by `run_main_node_pipeline` and `run_en_pipeline`, then
+/// used to construct [`StatusServerState`] for the status server.
 #[derive(Clone)]
-pub(crate) struct AppState {
+pub struct PipelineHealth {
+    pub acceptance_rx: watch::Receiver<TransactionAcceptanceState>,
+    pub component_health: Arc<Vec<(ComponentId, watch::Receiver<ComponentHealth>)>>,
+    pub adjacency: Arc<Vec<(ComponentId, ComponentId)>>,
+}
+
+#[derive(Clone)]
+pub struct StatusServerState {
     pub stop_receiver: watch::Receiver<bool>,
     pub acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     pub component_health: Arc<Vec<(ComponentId, watch::Receiver<ComponentHealth>)>>,
@@ -21,25 +31,17 @@ pub(crate) struct AppState {
     pub adjacency: Arc<Vec<(ComponentId, ComponentId)>>,
 }
 
+pub(crate) type AppState = StatusServerState;
+
 pub async fn run_status_server(
     addr: SocketAddr,
     shutdown: GracefulShutdown,
-    stop_receiver: watch::Receiver<bool>,
-    acceptance_state: watch::Receiver<TransactionAcceptanceState>,
-    component_health: Arc<Vec<(ComponentId, watch::Receiver<ComponentHealth>)>>,
-    pipeline_health_config: PipelineHealthConfig,
-    adjacency: Arc<Vec<(ComponentId, ComponentId)>>,
+    state: StatusServerState,
 ) {
     let app = Router::new()
         .route("/status/health", get(health))
         .route("/status/pipeline", get(pipeline))
-        .with_state(AppState {
-            stop_receiver,
-            acceptance_state,
-            component_health,
-            pipeline_health_config,
-            adjacency,
-        });
+        .with_state(state);
 
     let listener = TcpListener::bind(addr)
         .await

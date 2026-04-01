@@ -21,6 +21,9 @@ pub struct ComponentEntryWithThresholds {
 pub struct ComponentSnapshot {
     pub state: &'static str,
     pub state_duration_secs: f64,
+    /// Last block number received by this component. Recorded at **receive time**, before any
+    /// storage writes or downstream population complete. Do not treat this as a durability
+    /// guarantee — a block may appear here while it is still being persisted.
     pub last_processed_block: u64,
     /// Blocks behind the pipeline head (BlockExecutor). Always present.
     pub head_block_lag: u64,
