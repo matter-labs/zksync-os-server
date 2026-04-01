@@ -17,4 +17,4 @@ zkstack-cli:
 zksync-os-scripts:
   # TODO: remove branch and put tag and sha when the release is done
 #  tag: "TBD"
-  sha: "544c8c31a6e5e76ffb307f6c921596ca920b7fc6"
+  sha: "3bfb8af7ca21adbf57cd23acb98305ed5e12ff86"
