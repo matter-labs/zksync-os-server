@@ -991,8 +991,8 @@ async fn run_main_node_pipeline(
         return;
     }
 
-    // Fetch the L1 timestamp of the last executeBatches event for SLI-based batch deadlines.
-    let last_execute_l1_timestamp = if config.batcher_config.settlement_sli.is_some()
+    // Fetch the L1 timestamp of the last executeBatches event for settlement-deadline-based batch deadlines.
+    let last_execute_l1_timestamp = if config.batcher_config.settlement_deadline.is_some()
         && node_state_on_startup.l1_state.last_executed_batch > 0
     {
         let execute_l1_block = zksync_os_l1_watcher::util::find_l1_execute_block_by_batch_number(

@@ -8,7 +8,7 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 ///
 /// For each batch that passes through (i.e., has been successfully executed on L1),
 /// it notifies the batcher of the current wall-clock timestamp via a `watch` channel.
-/// The batcher uses this timestamp to compute SLI-based batch deadlines.
+/// The batcher uses this timestamp to compute absolute batch deadlines.
 pub struct ExecuteTimestampNotifier {
     pub sender: watch::Sender<Option<u64>>,
 }

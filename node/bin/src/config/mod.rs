@@ -857,16 +857,17 @@ pub struct BatcherConfig {
     #[config(default_t = true)]
     pub assert_rebuilt_batch_hashes: bool,
 
-    /// Settlement SLI target duration. When set, the batch deadline is computed as:
-    ///   `last_execute_timestamp + settlement_sli - proving_buffer`
+    /// Target duration within which a block must be settled on L1. When set, the batch seal
+    /// deadline is computed as:
+    ///   `last_execute_timestamp + settlement_deadline - proving_buffer`
     /// This makes the deadline restart-resilient: it is an absolute wall-clock timestamp
     /// derived from L1 state, not a relative timer.
     /// Falls back to `batch_timeout` when no L1 execute timestamp is available yet.
-    pub settlement_sli: Option<Duration>,
+    pub settlement_deadline: Option<Duration>,
 
-    /// Buffer subtracted from `settlement_sli` to account for proving and L1 submission time.
-    /// Only meaningful when `settlement_sli` is set. Defaults to 0.
-    #[config(default_t = 0 * TimeUnit::Seconds)]
+    /// Buffer subtracted from `settlement_deadline` to account for proving and L1 submission time.
+    /// Only meaningful when `settlement_deadline` is set.
+    #[config(default_t = 5 * TimeUnit::Minutes)]
     pub proving_buffer: Duration,
 }
 

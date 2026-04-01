@@ -43,7 +43,7 @@ pub struct BatcherStartupConfig {
     pub last_persisted_block: u64,
     /// L1 timestamp (unix seconds) of the block containing the last `executeBatches` event.
     /// `None` for fresh chains where no batch has been executed yet.
-    /// Used to compute SLI-based batch deadlines that survive server restarts.
+    /// Used to compute absolute batch deadlines that survive server restarts.
     pub last_execute_l1_timestamp: Option<u64>,
 }
 
@@ -60,7 +60,7 @@ pub struct Batcher<ReadState> {
     pub committed_batch_provider: CommittedBatchProvider,
     pub read_state: ReadState,
     /// Receives updated L1 execute timestamps (unix seconds) when `executeBatches` txs are mined.
-    /// Used to dynamically recompute SLI-based batch deadlines.
+    /// Used to dynamically recompute absolute batch deadlines.
     pub execute_timestamp_receiver: watch::Receiver<Option<u64>>,
 }
 
@@ -256,7 +256,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
             self.batcher_config.interop_roots_per_batch_limit,
         );
 
-        let use_sli_deadline = self.batcher_config.settlement_sli.is_some();
+        let use_settlement_deadline = self.batcher_config.settlement_deadline.is_some();
 
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
@@ -273,10 +273,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 }
 
                 /* ---------- react to execute timestamp updates ---------- */
-                result = self.execute_timestamp_receiver.changed(), if deadline.is_some() && use_sli_deadline => {
+                result = self.execute_timestamp_receiver.changed(), if deadline.is_some() && use_settlement_deadline => {
                     if result.is_ok() {
                         // A new executeBatches was mined — recompute the deadline.
-                        if let Some(new_instant) = self.compute_sli_deadline() {
+                        if let Some(new_instant) = self.compute_settlement_deadline() {
                             tracing::debug!(
                                 batch_number,
                                 "Recomputing batch deadline after new executeBatches on L1."
@@ -470,28 +470,28 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
 
     /// Compute the `tokio::time::Instant` at which the current batch should be sealed.
     ///
-    /// When `settlement_sli` is configured and an L1 execute timestamp is available, the
-    /// deadline is: `last_execute_ts + settlement_sli - proving_buffer`.
+    /// When `settlement_deadline` is configured and an L1 execute timestamp is available, the
+    /// deadline is: `last_execute_ts + settlement_deadline - proving_buffer`.
     /// Otherwise falls back to `batch_timeout`.
     fn make_batch_deadline(&self) -> Sleep {
-        if let Some(instant) = self.compute_sli_deadline() {
+        if let Some(instant) = self.compute_settlement_deadline() {
             tokio::time::sleep_until(instant)
         } else {
             tokio::time::sleep(self.batcher_config.batch_timeout)
         }
     }
 
-    /// Try to compute an absolute deadline from the settlement SLI config and the latest
-    /// L1 execute timestamp. Returns `None` when either `settlement_sli` is not configured
+    /// Try to compute an absolute deadline from the settlement deadline config and the latest
+    /// L1 execute timestamp. Returns `None` when either `settlement_deadline` is not configured
     /// or no execute timestamp is available yet.
-    fn compute_sli_deadline(&self) -> Option<Instant> {
-        let settlement_sli = self.batcher_config.settlement_sli?;
+    fn compute_settlement_deadline(&self) -> Option<Instant> {
+        let settlement_deadline = self.batcher_config.settlement_deadline?;
         let proving_buffer = self.batcher_config.proving_buffer;
         let last_execute_ts = (*self.execute_timestamp_receiver.borrow())?;
 
         // Target wall-clock deadline (unix seconds).
         let deadline_unix = last_execute_ts
-            .saturating_add(settlement_sli.as_secs())
+            .saturating_add(settlement_deadline.as_secs())
             .saturating_sub(proving_buffer.as_secs());
 
         let now_unix = SystemTime::now()
