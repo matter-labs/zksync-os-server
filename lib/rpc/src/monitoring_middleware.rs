@@ -87,16 +87,15 @@ impl Drop for BatchGuard {
         for (method, count) in &self.request_counts {
             API_METRICS.requests_in_batch_count[method.as_str()].observe(*count);
         }
-        if !cancelled {
-            tracing::debug!(
-                target: "rpc::monitoring::batch",
-                batch_size = self.batch_size,
-                elapsed = ?elapsed,
-                batch_input_size = self.batch_input_size,
-                response_size,
-                "rpc batch call completed"
-            );
-        }
+        tracing::debug!(
+            target: "rpc::monitoring::batch",
+            batch_size = self.batch_size,
+            elapsed = ?elapsed,
+            batch_input_size = self.batch_input_size,
+            response_size,
+            cancelled,
+            "rpc batch call completed"
+        );
     }
 }
 
