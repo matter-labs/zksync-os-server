@@ -2,276 +2,277 @@ pub mod batcher_metrics;
 pub mod batcher_model;
 pub mod commands;
 pub mod config;
+pub mod error;
 mod metrics;
 pub mod pipeline_component;
+pub mod types;
 pub mod upgrade_gatekeeper;
 
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
+use crate::types::{Backoff, GasParams};
 use alloy::consensus::BlobTransactionValidationError;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, Encodable2718};
 use alloy::network::{Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844};
-use alloy::primitives::Address;
 use alloy::primitives::utils::{format_ether, format_units};
+use alloy::primitives::{Address, TxHash};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
-use alloy::providers::{PendingTransactionError, Provider, WalletProvider};
+use alloy::providers::{Provider, WalletProvider};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
-use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryStreamExt};
-use std::time::Duration;
+use anyhow::Context as _;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
+use tokio::sync::oneshot;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_pipeline::PeekableReceiver;
 
-/// Maximum time to wait for a transaction to be included on L1.
-///
-/// Normally 15-30 seconds is enough for normal priority transactions, and 60-120 is enough for
-/// lower gas price transactions. We picked 300 seconds conservatively as it should cover most
-/// scenarios with network congestion.
-const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(300);
+// ==============================================================================
+// Public entry point
+// ==============================================================================
 
-/// Future that resolves into a (fallible) transaction receipt.
-type TransactionReceiptFuture =
-    BoxFuture<'static, Result<TransactionReceipt, PendingTransactionError>>;
-
-/// Process responsible for sending transactions to L1.
-/// Handles one type of l1 command (e.g. Commit or Prove).
-/// Loads up to `command_limit` commands from the channel and sends them to L1 in parallel.
-/// Waits for all transactions to be mined, sends them to the output channel
-/// and then starts with the next `command_limit` commands.
+/// Runs the L1 sender loop for a single transaction type (commit, prove, or execute).
 ///
-/// Important: the same provider (sender address) must not be used outside this process.
-///     Otherwise, there will be a nonce conflict and a failed L1 transaction
-///     (recoverable on restart)
+/// ## Design
 ///
-/// Known issues:
-///   * Crashes when there is a gap in incoming L1 blocks (happens periodically with Infura provider)
-///   * Does not attempt to detect in-flight L1 transactions on startup - just crashes if they get mined
+/// The main loop collects up to `command_limit` commands per iteration, then processes
+/// each one:
 ///
-/// Note: we pass `to_address` - L1 contract address to send transactions to.
-/// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
-pub async fn run_l1_sender<Input: SendToL1>(
-    // == plumbing ==
+/// - **Passthrough** commands are forwarded immediately — no L1 transaction is needed.
+/// - **SendToL1** commands each get a nonce assigned and are spawned as an independent
+///   Tokio task via [`submit_and_confirm`].  Fee-cap blocking
+///   ([`estimate_gas_within_caps`]) happens in the main loop so that no nonce is consumed
+///   while network fees exceed the operator's configured cap.
+///
+/// The `oneshot` receivers from all spawned tasks are awaited in submission order, which
+/// preserves ordering on the `outbound` channel (L1 ordering is guaranteed by nonce, not
+/// submission order, but we preserve it here for consistency with downstream consumers).
+///
+/// ## Important
+///
+/// The same provider (sender address) must not be used outside this process. Otherwise
+/// there will be a nonce conflict and a failed L1 transaction (recoverable on restart).
+pub async fn run_l1_sender<Input, F, P>(
     mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
     outbound: Sender<SignedBatchEnvelope<FriProof>>,
-
-    // == command-specific settings ==
     to_address: Address,
-
-    // == config ==
-    mut provider: FillProvider<
-        impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
-        impl Provider<Ethereum>,
-    >,
+    mut provider: FillProvider<F, P>,
     config: L1SenderConfig<Input>,
     gateway: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    Input: SendToL1 + Clone + Send + Sync + 'static,
+    F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone + Send + 'static,
+    P: Provider<Ethereum> + Clone + Send + Sync + 'static,
+{
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
     let command_name = Input::NAME;
 
-    let operator_address =
-        register_operator::<_, Input>(&mut provider, config.operator_signer).await?;
+    let (operator_address, mut next_nonce) =
+        register_operator::<_, Input>(&mut provider, config.operator_signer.clone()).await?;
+
     let mut cmd_buffer = Vec::with_capacity(config.command_limit);
 
-    // Process all potential passthrough commands first
-    if process_prepending_passthrough_commands(
-        &mut inbound,
-        &outbound,
-        &latency_tracker,
-        command_name,
-    )
-    .await?
-    .is_none()
-    {
-        tracing::info!("inbound channel closed");
-        return Ok(());
-    }
-    // At this point, only actual SendToL1 commands are expected
     loop {
         latency_tracker.enter_state(L1SenderState::WaitingRecv);
-        // This sleeps until **at least one** command is received from the channel. Additionally,
-        // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
-        // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
-        // emptied in every iteration, its size never exceeds `self.command_limit`.
         let received = inbound
             .recv_many(&mut cmd_buffer, config.command_limit)
             .await;
-        let mut commands = cmd_buffer
-            .drain(..)
-            .map(|cmd| -> anyhow::Result<Input> {
-                match cmd {
-                    L1SenderCommand::SendToL1(command) => Ok(command),
-                    L1SenderCommand::Passthrough(batch) => anyhow::bail!(
-                        "Unexpected passthrough command for batch {:?}. \
-                    No passthrough commands are expected after the first `SendToL1`.",
-                        batch.batch_number()
-                    ),
-                }
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        // This method only returns `0` if the channel has been closed and there are no more items
-        // in the queue.
         if received == 0 {
-            tracing::info!("inbound channel closed");
+            tracing::info!(command_name, "inbound channel closed");
             return Ok(());
         }
+
+        // Collect oneshot receivers in submission order so we can await them in that
+        // same order below, guaranteeing `outbound` sees envelopes in nonce order.
+        let mut receivers: Vec<
+            oneshot::Receiver<anyhow::Result<Vec<SignedBatchEnvelope<FriProof>>>>,
+        > = Vec::with_capacity(cmd_buffer.len());
+
         latency_tracker.enter_state(L1SenderState::SendingToL1);
-        let range = Input::display_range(&commands); // Only for logging
-        tracing::info!(command_name, range, "sending L1 transactions");
-        L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
-        // It's important to preserve the order of commands -
-        // so that we send them downstream also in order.
-        // This holds true because l1 transactions are included in the order of sender nonce.
-        // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
-        let pending_txs: Vec<(TransactionReceiptFuture, Input)> =
-            futures::stream::iter(commands.drain(..))
-                .then(|mut cmd| async {
-                    let mut tx_request = tx_request_with_gas_fields(
-                        &provider,
-                        operator_address,
-                        config.max_fee_per_gas_wei,
-                        config.max_priority_fee_per_gas_wei,
-                    )
-                    .await?
-                    .with_to(to_address)
-                    .with_input(cmd.solidity_call(gateway, &operator_address));
+        for cmd in cmd_buffer.drain(..) {
+            match cmd {
+                // Passthrough commands represent batches that were already committed or
+                // proved in a previous run.  Forward them immediately without submitting
+                // a new L1 transaction.
+                L1SenderCommand::Passthrough(envelope) => {
+                    tracing::info!(
+                        command_name,
+                        batch_number = envelope.batch_number(),
+                        "Not actually sending to L1, just passing through",
+                    );
+                    let forwarded = (*envelope).with_stage(Input::PASSTHROUGH_STAGE);
+                    outbound
+                        .send(forwarded)
+                        .await
+                        .context("outbound channel closed")?;
+                }
 
-                    if let Some(blob_sidecar) = cmd.blob_sidecar() {
-                        let fee_per_blob_gas = provider.get_blob_base_fee().await?;
-                        L1_SENDER_METRICS
-                            .report_blob_base_fee(fee_per_blob_gas)?;
-                        let max_fee_per_blob_gas = config.max_fee_per_blob_gas_wei;
+                L1SenderCommand::SendToL1(mut command) => {
+                    // Fee-cap blocking stays in the main loop so that no nonces are
+                    // consumed while network fees are above the operator's configured cap.
+                    let gas_params =
+                        estimate_gas_within_caps(&provider, &config, &latency_tracker).await?;
 
-                        if fee_per_blob_gas > max_fee_per_blob_gas {
-                            tracing::warn!(
-                                max_fee_per_blob_gas,
-                                fee_per_blob_gas,
-                                "L1 sender's configured maxFeePerBlobGas is lower than the one estimated from network"
-                            );
-                        }
-                        tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
-                        tx_request.set_blob_sidecar(blob_sidecar);
-                    };
+                    let nonce = next_nonce;
+                    next_nonce += 1;
 
-                    // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an
-                    // envelope.
-                    let envelope = provider.fill(tx_request).await?.try_into_envelope()?.try_into_pooled()?;
-
-                    let pending_block = provider.get_block(BlockId::pending()).await?.expect("no pending block");
-                    // todo: make conversion unconditional (and remove respective config) once anvil
-                    //       supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
-                    let tx = if config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
-                        // Convert the envelope into an EIP-7594 transaction by converting the sidecar
-                        envelope.try_map_eip4844(|tx| {
-                            tx.try_map_sidecar(|sidecar| {
-                                Ok::<_, BlobTransactionValidationError>(
-                                    BlobTransactionSidecarVariant::Eip7594(sidecar.try_into_eip7594()?)
-                                )
-                            })
-                        })?
-                    } else {
-                        // Keep the regular EIP-4844 sidecar
-                        envelope
-                    };
-
-                    // We don't wait for receipt here, instead we register an alloy watcher that
-                    // polls for the receipt in the background. This future resolves when the watcher
-                    // finds it.
-                    let receipt_fut = provider
-                        .send_raw_transaction(&tx.encoded_2718())
-                        .await?
-                        // We are being optimistic with our transaction inclusion here. But, even if
-                        // reorg happens and transaction will not be included in the new fork (very-very
-                        // unlikely), L1 sender will crash at some point (because a consequent L1
-                        // transactions will fail) and recover from the new L1 state after restart.
-                        .with_required_confirmations(1)
-                        // Ensure we don't wait indefinitely and crash if the transaction is not
-                        // included on L1 in a reasonable time.
-                        .with_timeout(Some(TRANSACTION_TIMEOUT))
-                        .get_receipt()
-                        .boxed();
-                    cmd.as_mut()
+                    // Mark envelopes as sent before spawning so stage changes are
+                    // visible in metrics immediately.
+                    command
+                        .as_mut()
                         .iter_mut()
-                        .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
-                    anyhow::Ok((receipt_fut, cmd))
-                })
-                // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
-                // but this is not necessary for now - we wait for them to be included in parallel
-                .try_collect::<Vec<_>>()
-                .await?;
-        tracing::info!(command_name, range, "sent to L1, waiting for inclusion");
-        latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
+                        .for_each(|e| e.set_stage(Input::SENT_STAGE));
 
-        let mut completed_commands = Vec::with_capacity(pending_txs.len());
-        for (receipt_fut, command) in pending_txs {
-            let receipt = receipt_fut.await?;
-            validate_tx_receipt(&provider, &command, receipt).await?;
-            completed_commands.push(command);
+                    let (tx, rx) = oneshot::channel();
+                    let provider = provider.clone();
+                    let config = config.clone();
+                    tokio::spawn(async move {
+                        let result = submit_and_confirm(
+                            command,
+                            nonce,
+                            gas_params,
+                            provider,
+                            config,
+                            to_address,
+                            operator_address,
+                            gateway,
+                        )
+                        .await;
+                        // Ignore send errors: the receiver is dropped when the main loop
+                        // exits early (e.g., after a different task's error propagates).
+                        let _ = tx.send(result);
+                    });
+                    receivers.push(rx);
+                }
+            }
         }
 
-        let balance = format_ether(provider.get_balance(operator_address).await?);
-        let nonce = provider.get_transaction_count(operator_address).await?;
-        tracing::info!(
-            command_name,
-            range,
-            balance,
-            nonce,
-            "all transactions included, sending downstream",
-        );
-        L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
-        L1_SENDER_METRICS.nonce[&command_name].set(nonce);
-        latency_tracker.enter_state(L1SenderState::WaitingSend);
-        for command in completed_commands {
-            for mut output_envelope in command.into() {
-                output_envelope.set_stage(Input::MINED_STAGE);
-                outbound.send(output_envelope).await?;
+        // Await in submission order to preserve nonce ordering on `outbound`.
+        latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
+        L1_SENDER_METRICS.parallel_transactions[&command_name].set(receivers.len() as u64);
+
+        for rx in receivers {
+            let envelopes = rx.await.context("submit_and_confirm task panicked")??;
+            latency_tracker.enter_state(L1SenderState::WaitingSend);
+            for envelope in envelopes {
+                outbound
+                    .send(envelope)
+                    .await
+                    .context("outbound channel closed")?;
             }
+            latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
         }
     }
 }
 
-async fn process_prepending_passthrough_commands<Input: SendToL1>(
-    inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
-    outbound: &Sender<SignedBatchEnvelope<FriProof>>,
-    latency_tracker: &ComponentStateHandle<L1SenderState>,
-    command_name: &str,
-) -> anyhow::Result<Option<()>> {
+// ==============================================================================
+// Per-transaction task
+// ==============================================================================
+
+/// Submits a single L1 transaction and waits for it to be confirmed.
+///
+/// If the transaction is not mined within `config.transaction_timeout`, the function
+/// re-estimates gas and optionally sends a replacement transaction (EIP-1559 replacement
+/// requires a ≥ 10% fee bump on both fee fields).  This loop continues until a receipt
+/// is found.
+///
+/// Returns the confirmed envelopes with the `MINED_STAGE` set.
+#[allow(clippy::too_many_arguments)]
+async fn submit_and_confirm<Input, F, P>(
+    command: Input,
+    nonce: u64,
+    initial_gas_params: GasParams,
+    provider: FillProvider<F, P>,
+    config: L1SenderConfig<Input>,
+    to_address: Address,
+    operator_address: Address,
+    gateway: bool,
+) -> anyhow::Result<Vec<SignedBatchEnvelope<FriProof>>>
+where
+    Input: SendToL1,
+    F: TxFiller<Ethereum>,
+    P: Provider<Ethereum> + Clone,
+{
+    let command_name = Input::NAME;
+
+    let (mut tx_hash, mut gas_params) = build_and_send(
+        &command,
+        &initial_gas_params,
+        nonce,
+        &provider,
+        &config,
+        to_address,
+        operator_address,
+        gateway,
+    )
+    .await?;
+
     loop {
-        latency_tracker.enter_state(L1SenderState::WaitingRecv);
-        match inbound
-            .peek_recv(|command| matches!(command, L1SenderCommand::Passthrough(_)))
-            .await
+        match poll_for_receipt(
+            tx_hash,
+            config.transaction_timeout,
+            &provider,
+            config.poll_interval,
+        )
+        .await?
         {
-            None => return Ok(None),
-            // command is SendToL1 (not passthrough)
-            // we don't expect anymore passthroughs and can proceed with normal operations
-            Some(false) => return Ok(Some(())),
-            // command is passthrough
-            Some(true) => {
-                let Some(next_command) = inbound.recv().await else {
-                    return Ok(None);
-                };
-                match next_command {
-                    L1SenderCommand::SendToL1(_) => {
-                        anyhow::bail!("Mismatch between peeked and received command")
-                    }
-                    L1SenderCommand::Passthrough(batch) => {
+            PollOutcome::Receipt(receipt) => {
+                let receipt = *receipt;
+                validate_tx_receipt(&provider, &command, receipt).await?;
+                report_post_confirmation(command_name, operator_address, &provider).await;
+                let mut envelopes: Vec<SignedBatchEnvelope<FriProof>> = command.into();
+                envelopes
+                    .iter_mut()
+                    .for_each(|e| e.set_stage(Input::MINED_STAGE));
+                return Ok(envelopes);
+            }
+
+            PollOutcome::TimedOut => {
+                tracing::warn!(
+                    command_name,
+                    tx_hash = ?tx_hash,
+                    nonce,
+                    "transaction timed out — evaluating resubmission",
+                );
+
+                // Raw fee estimate — no cap blocking.  The nonce slot is already reserved;
+                // blocking here would leave the pipeline stuck with an unconfirmed tx.
+                let fresh = estimate_gas_params(&provider).await?;
+
+                match resubmission_action(&gas_params, &fresh) {
+                    ResubmitAction::SendReplacement => {
                         tracing::info!(
                             command_name,
-                            batch_number = batch.batch_number(),
-                            "Not actually sending to L1, just passing through"
+                            nonce,
+                            "fees rose enough — sending replacement tx",
                         );
-                        latency_tracker.enter_state(L1SenderState::WaitingSend);
-                        outbound
-                            .send((*batch).with_stage(Input::PASSTHROUGH_STAGE))
-                            .await?;
+                        let (new_hash, new_gas) = build_and_send(
+                            &command,
+                            &fresh,
+                            nonce,
+                            &provider,
+                            &config,
+                            to_address,
+                            operator_address,
+                            gateway,
+                        )
+                        .await?;
+                        tx_hash = new_hash;
+                        gas_params = new_gas;
+                    }
+                    ResubmitAction::RewatchOriginal => {
+                        tracing::info!(
+                            command_name,
+                            tx_hash = ?tx_hash,
+                            "fees unchanged — re-watching original tx",
+                        );
                     }
                 }
             }
@@ -279,66 +280,323 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
     }
 }
 
-async fn tx_request_with_gas_fields(
-    provider: &dyn Provider,
-    operator_address: Address,
-    max_fee_per_gas: u128,
-    max_priority_fee_per_gas: u128,
-) -> anyhow::Result<TransactionRequest> {
-    let eip1559_est = provider.estimate_eip1559_fees().await?;
-    L1_SENDER_METRICS.report_l1_eip_1559_estimation(eip1559_est)?;
-    tracing::debug!(
-        max_priority_fee_per_gas_gwei = ?format_units(eip1559_est.max_priority_fee_per_gas, "gwei"),
-        max_fee_per_gas_gwei = ?format_units(eip1559_est.max_fee_per_gas, "gwei"),
-        "estimated priority and max fees"
-    );
-    // Use the minimum of estimated and configured values for gas fields
-    let capped_max_fee_per_gas = if eip1559_est.max_fee_per_gas > max_fee_per_gas {
-        tracing::warn!(
-            "L1 sender's configured maxFeePerGas ({max_fee_per_gas}) \
-             is lower than the one estimated from network  ({}), \
-             using the configured base fee value ({max_fee_per_gas}) - this may result in inclusion delay.",
-            eip1559_est.max_fee_per_gas
-        );
-        max_fee_per_gas
-    } else {
-        eip1559_est.max_fee_per_gas
-    };
-    let capped_max_priority_fee_per_gas = if eip1559_est.max_priority_fee_per_gas
-        > max_priority_fee_per_gas
-    {
-        tracing::warn!(
-            "L1 sender's configured max_priority_fee_per_gas ({max_priority_fee_per_gas}) \
-             is lower than the one estimated from network  ({}), \
-             using the configured priority fee value ({max_priority_fee_per_gas}) - this may result in inclusion delay.",
-            eip1559_est.max_priority_fee_per_gas
-        );
-        max_priority_fee_per_gas
-    } else {
-        eip1559_est.max_priority_fee_per_gas
-    };
+// ==============================================================================
+// Resubmission decision
+// ==============================================================================
 
-    let tx = TransactionRequest::default()
-        .with_from(operator_address)
-        .with_max_fee_per_gas(capped_max_fee_per_gas)
-        .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas)
-        // Default value for `max_aggregated_tx_gas` from zksync-era, should always be enough
-        .with_gas_limit(15000000);
-    Ok(tx)
+/// What to do when a transaction times out waiting for inclusion.
+enum ResubmitAction {
+    /// Network fees rose enough to justify a replacement transaction with fresh fees.
+    SendReplacement,
+    /// Fees have not moved significantly — keep watching the original transaction hash.
+    RewatchOriginal,
 }
 
+/// Pure decision function: should we send a replacement transaction or rewatch the original?
+///
+/// A replacement is warranted only when the fresh estimate satisfies the EIP-1559 mempool
+/// bump rule (≥ 10% increase on both fee fields) relative to what was already sent.
+fn resubmission_action(current: &GasParams, fresh: &GasParams) -> ResubmitAction {
+    if fresh.is_sufficient_replacement(current) {
+        ResubmitAction::SendReplacement
+    } else {
+        ResubmitAction::RewatchOriginal
+    }
+}
+
+// ==============================================================================
+// Gas estimation
+// ==============================================================================
+
+/// Estimates EIP-1559 gas parameters and blocks until they fall within the operator's
+/// configured fee caps.
+///
+/// Called in the main loop (before spawning each task) so fee-cap blocking is global:
+/// no nonce is consumed while fees exceed the cap.
+async fn estimate_gas_within_caps<Input: SendToL1>(
+    provider: &impl Provider,
+    config: &L1SenderConfig<Input>,
+    latency_tracker: &ComponentStateHandle<L1SenderState>,
+) -> anyhow::Result<GasParams> {
+    loop {
+        let params = estimate_gas_params(provider).await?;
+
+        let fee_ok = params.max_fee_per_gas <= config.max_fee_per_gas_wei;
+        let priority_ok = params.max_priority_fee_per_gas <= config.max_priority_fee_per_gas_wei;
+
+        if fee_ok && priority_ok {
+            return Ok(params);
+        }
+
+        if !fee_ok {
+            tracing::warn!(
+                command_name = Input::NAME,
+                configured_cap = config.max_fee_per_gas_wei,
+                estimated = params.max_fee_per_gas,
+                "network max_fee_per_gas exceeds configured cap — waiting",
+            );
+        }
+        if !priority_ok {
+            tracing::warn!(
+                command_name = Input::NAME,
+                configured_cap = config.max_priority_fee_per_gas_wei,
+                estimated = params.max_priority_fee_per_gas,
+                "network max_priority_fee_per_gas exceeds configured cap — waiting",
+            );
+        }
+
+        latency_tracker.enter_state(L1SenderState::WaitingRecv);
+        tokio::time::sleep(config.poll_interval).await;
+    }
+}
+
+/// Raw EIP-1559 fee estimate with no cap check.
+///
+/// Used inside [`submit_and_confirm`] for resubmission decisions where the nonce is
+/// already reserved and blocking on the cap would leave the pipeline stuck.
+async fn estimate_gas_params(provider: &impl Provider) -> anyhow::Result<GasParams> {
+    let est = provider
+        .estimate_eip1559_fees()
+        .await
+        .context("estimate EIP-1559 fees")?;
+    L1_SENDER_METRICS.report_l1_eip_1559_estimation(est)?;
+    tracing::debug!(
+        max_priority_fee_per_gas_gwei = ?format_units(est.max_priority_fee_per_gas, "gwei"),
+        max_fee_per_gas_gwei = ?format_units(est.max_fee_per_gas, "gwei"),
+        "estimated EIP-1559 fees",
+    );
+    Ok(GasParams {
+        max_fee_per_gas: est.max_fee_per_gas,
+        max_priority_fee_per_gas: est.max_priority_fee_per_gas,
+    })
+}
+
+// ==============================================================================
+// Transaction building and sending
+// ==============================================================================
+
+/// Builds an L1 transaction from `command` and broadcasts it.
+///
+/// Returns `(tx_hash, gas_params_used)` on success.  The returned `GasParams` are the
+/// values actually embedded in the signed transaction — callers use them for the
+/// resubmission bump check.
+#[allow(clippy::too_many_arguments)]
+async fn build_and_send<Input, F, P>(
+    command: &Input,
+    gas_params: &GasParams,
+    nonce: u64,
+    provider: &FillProvider<F, P>,
+    config: &L1SenderConfig<Input>,
+    to_address: Address,
+    operator_address: Address,
+    gateway: bool,
+) -> anyhow::Result<(TxHash, GasParams)>
+where
+    Input: SendToL1,
+    F: TxFiller<Ethereum>,
+    P: Provider<Ethereum>,
+{
+    // Build the base EIP-1559 request.  The nonce is set explicitly so the provider's
+    // automatic nonce filler does not interfere with our manual nonce tracking.
+    let mut tx_request = TransactionRequest::default()
+        .with_from(operator_address)
+        .with_to(to_address)
+        .with_nonce(nonce)
+        .with_max_fee_per_gas(gas_params.max_fee_per_gas)
+        .with_max_priority_fee_per_gas(gas_params.max_priority_fee_per_gas)
+        // Default value for `max_aggregated_tx_gas` from zksync-era — should always be enough.
+        .with_gas_limit(15_000_000)
+        .with_input(command.solidity_call(gateway, &operator_address));
+
+    if let Some(blob_sidecar) = command.blob_sidecar() {
+        let fee_per_blob_gas = provider
+            .get_blob_base_fee()
+            .await
+            .context("get blob base fee")?;
+        L1_SENDER_METRICS.report_blob_base_fee(fee_per_blob_gas)?;
+
+        if fee_per_blob_gas > config.max_fee_per_blob_gas_wei {
+            tracing::warn!(
+                max_fee_per_blob_gas = config.max_fee_per_blob_gas_wei,
+                fee_per_blob_gas,
+                "configured maxFeePerBlobGas is lower than the network estimate — \
+                 inclusion may be delayed",
+            );
+        }
+        tx_request.set_max_fee_per_blob_gas(config.max_fee_per_blob_gas_wei);
+        tx_request.set_blob_sidecar(blob_sidecar);
+    }
+
+    // Fill remaining fields (chain-id, access-list, …) and sign the transaction.
+    let envelope = provider
+        .fill(tx_request)
+        .await
+        .context("fill transaction")?
+        .try_into_envelope()
+        .context("convert to typed envelope")?
+        .try_into_pooled()
+        .context("convert to pooled envelope")?;
+
+    // If the Fusaka upgrade has activated, convert the EIP-4844 blob sidecar to EIP-7594.
+    // TODO: make this conversion unconditional once anvil supports EIP-7594 blobs
+    //       (see https://github.com/foundry-rs/foundry/issues/12222).
+    let pending_block = provider
+        .get_block(BlockId::pending())
+        .await
+        .context("get pending block")?
+        .expect("pending block must always be present");
+
+    let tx = if config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
+        envelope
+            .try_map_eip4844(|tx| {
+                tx.try_map_sidecar(|sidecar| {
+                    Ok::<_, BlobTransactionValidationError>(BlobTransactionSidecarVariant::Eip7594(
+                        sidecar.try_into_eip7594()?,
+                    ))
+                })
+            })
+            .context("convert blob sidecar to EIP-7594")?
+    } else {
+        envelope
+    };
+
+    let tx_hash = provider
+        .send_raw_transaction(&tx.encoded_2718())
+        .await
+        .context("send raw transaction")?
+        .tx_hash()
+        .to_owned();
+
+    tracing::info!(
+        command_name = Input::NAME,
+        tx_hash = ?tx_hash,
+        nonce,
+        max_fee_per_gas = gas_params.max_fee_per_gas,
+        max_priority_fee_per_gas = gas_params.max_priority_fee_per_gas,
+        "L1 transaction submitted",
+    );
+
+    Ok((tx_hash, gas_params.clone()))
+}
+
+// ==============================================================================
+// Receipt polling
+// ==============================================================================
+
+/// Outcome of a [`poll_for_receipt`] call.
+enum PollOutcome {
+    /// A confirmed receipt (block number is set) was found.
+    Receipt(Box<TransactionReceipt>),
+    /// The deadline elapsed without a receipt appearing.
+    TimedOut,
+}
+
+/// Polls for a transaction receipt until it appears or the `timeout` deadline passes.
+///
+/// Uses an exponential backoff starting at `poll_interval`, capped at 4× that value,
+/// so that a short `poll_interval` does not spam the RPC node during high-load periods.
+async fn poll_for_receipt(
+    tx_hash: TxHash,
+    timeout: Duration,
+    provider: &impl Provider<Ethereum>,
+    poll_interval: Duration,
+) -> anyhow::Result<PollOutcome> {
+    let mut backoff = Backoff::new(poll_interval, poll_interval * 4, 2);
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        match provider
+            .get_transaction_receipt(tx_hash)
+            .await
+            .context("get transaction receipt")?
+        {
+            Some(receipt) if receipt.block_number.is_some() => {
+                return Ok(PollOutcome::Receipt(Box::new(receipt)));
+            }
+            _ => {}
+        }
+
+        if Instant::now() >= deadline {
+            return Ok(PollOutcome::TimedOut);
+        }
+
+        tokio::time::sleep(backoff.next_duration()).await;
+    }
+}
+
+// ==============================================================================
+// Post-confirmation reporting (non-fatal)
+// ==============================================================================
+
+/// Logs operator balance and nonce after a transaction is confirmed.
+///
+/// Failures are logged as warnings and do not abort the pipeline — metrics are
+/// best-effort and should not block critical processing.
+async fn report_post_confirmation(
+    command_name: &'static str,
+    operator_address: Address,
+    provider: &impl Provider<Ethereum>,
+) {
+    if let Err(err) = try_report_post_confirmation(command_name, operator_address, provider).await {
+        tracing::warn!(%err, command_name, "failed to report post-confirmation metrics");
+    }
+}
+
+async fn try_report_post_confirmation(
+    command_name: &'static str,
+    operator_address: Address,
+    provider: &impl Provider<Ethereum>,
+) -> anyhow::Result<()> {
+    let balance = provider
+        .get_balance(operator_address)
+        .await
+        .context("get operator balance")?;
+    let nonce = provider
+        .get_transaction_count(operator_address)
+        .await
+        .context("get operator nonce")?;
+    let balance_eth = format_ether(balance);
+    tracing::info!(
+        command_name,
+        balance_eth,
+        nonce,
+        "post-confirmation operator state",
+    );
+    L1_SENDER_METRICS.balance[&command_name].set(balance_eth.parse()?);
+    L1_SENDER_METRICS.nonce[&command_name].set(nonce);
+    Ok(())
+}
+
+// ==============================================================================
+// Operator registration
+// ==============================================================================
+
+/// Registers the operator signer with the provider wallet and returns `(address, nonce)`.
+///
+/// The nonce is fetched once at startup so the main loop can track it manually.  We
+/// set `.with_nonce` on every outgoing transaction to bypass alloy's automatic nonce
+/// filler, which would otherwise interfere with our manual counter.
 async fn register_operator<
-    P: Provider + WalletProvider<Wallet = EthereumWallet>,
+    P: Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
     Input: SendToL1,
 >(
     provider: &mut P,
     signer_config: SignerConfig,
-) -> anyhow::Result<Address> {
+) -> anyhow::Result<(Address, u64)> {
     let address = signer_config
         .register_with_wallet(provider.wallet_mut())
-        .await?;
+        .await
+        .context("register operator with wallet")?;
 
-    let balance = provider.get_balance(address).await?;
+    let balance = provider
+        .get_balance(address)
+        .await
+        .context("get operator balance")?;
+    let nonce = provider
+        .get_transaction_count(address)
+        .await
+        .context("get operator nonce")?;
+
     L1_SENDER_METRICS.balance[&Input::NAME].set(format_ether(balance).parse()?);
     let address_string: &'static str = address.to_string().leak();
     L1_SENDER_METRICS.l1_operator_address[&(Input::NAME, address_string)].set(1);
@@ -351,18 +609,26 @@ async fn register_operator<
         command_name = Input::NAME,
         balance_eth = format_ether(balance),
         %address,
+        nonce,
         "initialized L1 sender",
     );
-    Ok(address)
+    Ok((address, nonce))
 }
 
+// ==============================================================================
+// Receipt validation
+// ==============================================================================
+
+/// Validates a confirmed transaction receipt.
+///
+/// Successful receipts: records gas/cost metrics and returns `Ok(())`.
+/// Reverted transactions: logs the error with an optional debug trace and returns `Err`.
 async fn validate_tx_receipt<Input: SendToL1>(
     provider: &impl Provider,
     command: &Input,
     receipt: TransactionReceipt,
 ) -> anyhow::Result<()> {
     if receipt.status() {
-        // Transaction succeeded - log output and return OK(())
         L1_SENDER_METRICS.report_tx_receipt(command, receipt)?;
         Ok(())
     } else {
@@ -370,7 +636,7 @@ async fn validate_tx_receipt<Input: SendToL1>(
             %command,
             tx_hash = ?receipt.transaction_hash,
             l1_block_number = receipt.block_number.unwrap(),
-            "Transaction failed on L1",
+            "transaction failed on L1",
         );
         if let Ok(trace) = provider
             .debug_trace_transaction(
@@ -382,20 +648,55 @@ async fn validate_tx_receipt<Input: SendToL1>(
             let call_frame = trace
                 .try_into_call_frame()
                 .expect("requested call tracer but received a different call frame type");
-            // We print top-level call frame's output as it likely contains serialized custom
-            // error pointing to the underlying problem (i.e. starts with the error's 4byte
-            // signature).
             tracing::error!(
                 ?call_frame.output,
                 ?call_frame.error,
                 ?call_frame.revert_reason,
-                "Failed transaction's top-level call frame"
+                "failed transaction's top-level call frame",
             );
         }
         anyhow::bail!(
-            "{} L1 command transaction failed, see L1 transaction's trace for more details (tx_hash='{:?}')",
+            "{} L1 command transaction failed (tx_hash='{:?}')",
             command,
-            receipt.transaction_hash
+            receipt.transaction_hash,
         );
     }
 }
+
+#[cfg(test)]
+mod resubmission_tests {
+    use super::*;
+
+    fn gas(fee: u128, priority: u128) -> GasParams {
+        GasParams {
+            max_fee_per_gas: fee,
+            max_priority_fee_per_gas: priority,
+        }
+    }
+
+    #[test]
+    fn resubmission_action_sends_replacement_when_fees_rise() {
+        assert!(matches!(
+            resubmission_action(&gas(100, 10), &gas(110, 11)),
+            ResubmitAction::SendReplacement
+        ));
+    }
+
+    #[test]
+    fn resubmission_action_rewatches_when_fees_unchanged() {
+        assert!(matches!(
+            resubmission_action(&gas(100, 10), &gas(100, 10)),
+            ResubmitAction::RewatchOriginal
+        ));
+    }
+
+    #[test]
+    fn resubmission_action_rewatches_when_only_one_field_bumped() {
+        // Only max_fee bumped but not priority fee → not a sufficient replacement.
+        assert!(matches!(
+            resubmission_action(&gas(100, 10), &gas(110, 10)),
+            ResubmitAction::RewatchOriginal
+        ));
+    }
+}
+

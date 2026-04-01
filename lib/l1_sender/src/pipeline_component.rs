@@ -22,9 +22,9 @@ pub struct L1Sender<F: TxFiller<Ethereum>, P: Provider<Ethereum>, C> {
 #[async_trait]
 impl<F, P, C> PipelineComponent for L1Sender<F, P, C>
 where
-    F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
+    F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
     P: Provider<Ethereum> + Clone + 'static,
-    C: SendToL1 + Send + Sync + 'static,
+    C: SendToL1 + Clone + Send + Sync + 'static,
 {
     type Input = L1SenderCommand<C>;
     type Output = SignedBatchEnvelope<FriProof>;

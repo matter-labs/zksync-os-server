@@ -92,7 +92,7 @@ pub enum BatchSignatureData {
     NotNeeded,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BatchEnvelope<E, S> {
     pub batch: BatchMetadata,
     pub data: E,
