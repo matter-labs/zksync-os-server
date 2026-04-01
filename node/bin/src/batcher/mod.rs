@@ -61,7 +61,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     type Input = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
     type Output = BatchEnvelope<ProverInput, MissingSignature>;
 
-    const NAME: &'static str = "batcher";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId = zksync_os_pipeline::ComponentId::Batcher;
 
     async fn run(
         mut self,

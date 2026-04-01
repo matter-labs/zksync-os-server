@@ -78,7 +78,8 @@ where
     /// Output to BlockApplier
     type Output = BlockPayload;
 
-    const NAME: &'static str = "block_canonizer";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::BlockCanonizer;
 
     async fn run(
         mut self,

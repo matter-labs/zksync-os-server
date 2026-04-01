@@ -29,7 +29,8 @@ impl PipelineComponent for TreeManager {
         zksync_os_storage_api::ReplayRecord,
         BlockMerkleTreeData,
     );
-    const NAME: &'static str = "merkle_tree";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::TreeManager;
 
     async fn run(
         self,

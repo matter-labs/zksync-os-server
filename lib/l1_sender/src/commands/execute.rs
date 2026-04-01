@@ -30,7 +30,8 @@ impl ExecuteCommand {
 }
 
 impl SendToL1 for ExecuteCommand {
-    const NAME: &'static str = "execute";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::L1SenderExecute;
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxMined;
 

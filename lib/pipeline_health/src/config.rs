@@ -1,60 +1,7 @@
 use smart_config::{DescribeConfig, DeserializeConfig};
 use std::time::Duration;
-use vise::{EncodeLabelSet, EncodeLabelValue};
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EncodeLabelValue, EncodeLabelSet,
-)]
-#[metrics(rename_all = "snake_case", label = "component")]
-pub enum ComponentId {
-    // Both pipelines
-    BlockExecutor,
-    BlockApplier,
-    TreeManager,
-    // Main node — consensus
-    BlockCanonizer,
-    // Main node — proving and settlement
-    ProverInputGenerator,
-    Batcher,
-    BatchVerification,
-    FriJobManager,
-    GaplessCommitter,
-    UpgradeGatekeeper,
-    L1SenderCommit,
-    SnarkJobManager,
-    GaplessL1ProofSender,
-    L1SenderProve,
-    PriorityTree,
-    L1SenderExecute,
-}
-
-impl ComponentId {
-    /// Returns the component name as a snake_case string.
-    ///
-    /// **Must stay in sync with `rename_all = "snake_case"` on the `EncodeLabelValue` derive
-    /// above.** If these diverge, Prometheus metrics and JSON API responses will use different
-    /// names for the same component. The test `as_str_matches_snake_case_derive` guards this.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::BlockExecutor => "block_executor",
-            Self::BlockApplier => "block_applier",
-            Self::TreeManager => "tree_manager",
-            Self::BlockCanonizer => "block_canonizer",
-            Self::ProverInputGenerator => "prover_input_generator",
-            Self::Batcher => "batcher",
-            Self::BatchVerification => "batch_verification",
-            Self::FriJobManager => "fri_job_manager",
-            Self::GaplessCommitter => "gapless_committer",
-            Self::UpgradeGatekeeper => "upgrade_gatekeeper",
-            Self::L1SenderCommit => "l1_sender_commit",
-            Self::SnarkJobManager => "snark_job_manager",
-            Self::GaplessL1ProofSender => "gapless_l1_proof_sender",
-            Self::L1SenderProve => "l1_sender_prove",
-            Self::PriorityTree => "priority_tree",
-            Self::L1SenderExecute => "l1_sender_execute",
-        }
-    }
-}
+pub use zksync_os_pipeline::ComponentId;
 
 /// Internal evaluation condition used by the monitor's evaluate() logic.
 /// Constructed from the public config types by condition_for().
@@ -186,6 +133,12 @@ impl ComponentOverrides {
             ComponentId::L1SenderProve => self.l1_sender_prove.as_ref(),
             ComponentId::PriorityTree => self.priority_tree.as_ref(),
             ComponentId::L1SenderExecute => self.l1_sender_execute.as_ref(),
+            // Unmonitored components have no per-component override config.
+            ComponentId::ConsensusNodeCommandSource
+            | ComponentId::ExternalNodeCommandSource
+            | ComponentId::BatchSink
+            | ComponentId::NoOpSink
+            | ComponentId::RevmConsistencyChecker => None,
         }
     }
 }
@@ -275,6 +228,15 @@ impl PipelineHealthConfig {
             | ComponentId::L1SenderExecute => BackpressureCondition {
                 max_block_lag: self.batch_pipeline.max_block_lag,
                 max_time_lag: self.batch_pipeline.max_time_lag,
+            },
+            // Unmonitored components are never subject to backpressure.
+            ComponentId::ConsensusNodeCommandSource
+            | ComponentId::ExternalNodeCommandSource
+            | ComponentId::BatchSink
+            | ComponentId::NoOpSink
+            | ComponentId::RevmConsistencyChecker => BackpressureCondition {
+                max_block_lag: None,
+                max_time_lag: None,
             },
         }
     }
@@ -398,16 +360,6 @@ mod tests {
     fn metrics_interval_default_is_five_seconds() {
         let config = PipelineHealthConfig::default();
         assert_eq!(config.metrics_interval, Duration::from_secs(5));
-    }
-
-    #[test]
-    fn as_str_returns_snake_case() {
-        assert_eq!(ComponentId::BlockExecutor.as_str(), "block_executor");
-        assert_eq!(ComponentId::FriJobManager.as_str(), "fri_job_manager");
-        assert_eq!(
-            ComponentId::GaplessL1ProofSender.as_str(),
-            "gapless_l1_proof_sender"
-        );
     }
 
     #[test]
@@ -590,40 +542,5 @@ mod tests {
         let config = PipelineHealthConfig::default();
         let cond = config.condition_for(ComponentId::Batcher);
         assert!(cond.max_block_lag.is_none());
-    }
-
-    /// Guards against as_str() and the EncodeLabelValue derive diverging.
-    ///
-    /// Both must produce the same snake_case string for each variant. If they diverge,
-    /// Prometheus metrics and JSON API responses will use different component names.
-    /// Adding a new variant requires a match arm in as_str() (compile error) AND a new
-    /// case here (test failure), making divergence impossible to miss.
-    #[test]
-    fn as_str_matches_snake_case_derive() {
-        let cases: &[(ComponentId, &str)] = &[
-            (ComponentId::BlockExecutor, "block_executor"),
-            (ComponentId::BlockApplier, "block_applier"),
-            (ComponentId::TreeManager, "tree_manager"),
-            (ComponentId::BlockCanonizer, "block_canonizer"),
-            (ComponentId::ProverInputGenerator, "prover_input_generator"),
-            (ComponentId::Batcher, "batcher"),
-            (ComponentId::BatchVerification, "batch_verification"),
-            (ComponentId::FriJobManager, "fri_job_manager"),
-            (ComponentId::GaplessCommitter, "gapless_committer"),
-            (ComponentId::UpgradeGatekeeper, "upgrade_gatekeeper"),
-            (ComponentId::L1SenderCommit, "l1_sender_commit"),
-            (ComponentId::SnarkJobManager, "snark_job_manager"),
-            (ComponentId::GaplessL1ProofSender, "gapless_l1_proof_sender"),
-            (ComponentId::L1SenderProve, "l1_sender_prove"),
-            (ComponentId::PriorityTree, "priority_tree"),
-            (ComponentId::L1SenderExecute, "l1_sender_execute"),
-        ];
-        for &(id, expected) in cases {
-            assert_eq!(
-                id.as_str(),
-                expected,
-                "as_str() for {id:?} must match the EncodeLabelValue snake_case encoding"
-            );
-        }
     }
 }

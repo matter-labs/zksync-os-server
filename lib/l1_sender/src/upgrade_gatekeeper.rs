@@ -88,7 +88,8 @@ impl PipelineComponent for UpgradeGatekeeper {
     type Input = L1SenderCommand<CommitCommand>;
     type Output = L1SenderCommand<CommitCommand>;
 
-    const NAME: &'static str = "upgrade_gatekeeper";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::UpgradeGatekeeper;
 
     async fn run(
         self,

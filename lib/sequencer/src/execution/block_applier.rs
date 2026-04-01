@@ -34,7 +34,8 @@ where
     type Input = BlockPayload;
     type Output = AppliedBlock;
 
-    const NAME: &'static str = "block_applier";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::BlockApplier;
 
     async fn run(
         mut self,

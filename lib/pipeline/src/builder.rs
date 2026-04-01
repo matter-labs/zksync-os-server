@@ -1,3 +1,4 @@
+use crate::ComponentId;
 use crate::PipelineComponent;
 use crate::tracked_channel::{TrackedUnboundedReceiver, tracked_unbounded_channel};
 use reth_tasks::Runtime;
@@ -11,10 +12,10 @@ pub struct Pipeline<Output: Send + 'static> {
     spawned_tasks: HashSet<&'static str>,
     shutdown_sender: mpsc::Sender<&'static str>,
     shutdown_receiver: mpsc::Receiver<&'static str>,
-    /// Ordered list of (upstream_component_name, downstream_component_name) pairs.
-    /// Derived automatically from pipe() call order.
-    pub adjacency: Vec<(&'static str, &'static str)>,
-    last_component_name: Option<&'static str>,
+    /// Ordered list of (upstream, downstream) ComponentId pairs for health-monitor adjacency.
+    /// Built from every consecutive pipe() call.
+    pub adjacency: Vec<(ComponentId, ComponentId)>,
+    last_component_id: Option<ComponentId>,
 }
 
 impl Pipeline<()> {
@@ -28,7 +29,7 @@ impl Pipeline<()> {
             shutdown_sender,
             shutdown_receiver,
             adjacency: vec![],
-            last_component_name: None,
+            last_component_id: None,
         }
     }
 
@@ -76,33 +77,30 @@ impl<Output: Send + 'static> Pipeline<Output> {
     where
         C: PipelineComponent<Input = Output>,
     {
+        let name = C::COMPONENT_ID.as_str();
         let (output_sender, output_receiver) = tracked_unbounded_channel::<C::Output>();
         let input_receiver = self.receiver;
 
         let shutdown_sender = self.shutdown_sender.clone();
         self.runtime
-            .spawn_critical_with_graceful_shutdown_signal(C::NAME, |shutdown| async move {
+            .spawn_critical_with_graceful_shutdown_signal(name, |shutdown| async move {
                 tokio::select! {
-                    // Segments are expected to run until shutdown, but if this one exits early (for
-                    // example because a channel closed), deregister it so shutdown does not wait
-                    // for it forever.
                     res = component.run(input_receiver, output_sender) => {
                         res.expect("pipeline segment failed");
-                        tracing::debug!(name = C::NAME, "segment finished running");
-                        shutdown_sender.send(C::NAME).await.expect("failed to send shutdown status");
+                        tracing::debug!(name, "segment finished running");
+                        shutdown_sender.send(name).await.expect("failed to send shutdown status");
                     }
-                    // Graceful shutdown started before the segment exited on its own; deregister it now.
                     _guard = shutdown => {
-                        tracing::debug!(name = C::NAME, "segment shutting down");
-                        shutdown_sender.send(C::NAME).await.expect("failed to send shutdown status");
+                        tracing::debug!(name, "segment shutting down");
+                        shutdown_sender.send(name).await.expect("failed to send shutdown status");
                     }
                 }
             });
-        self.spawned_tasks.insert(C::NAME);
+        self.spawned_tasks.insert(name);
 
         let mut adjacency = self.adjacency;
-        if let Some(prev) = self.last_component_name {
-            adjacency.push((prev, C::NAME));
+        if let Some(prev_id) = self.last_component_id {
+            adjacency.push((prev_id, C::COMPONENT_ID));
         }
 
         Pipeline {
@@ -112,7 +110,7 @@ impl<Output: Send + 'static> Pipeline<Output> {
             shutdown_sender: self.shutdown_sender,
             shutdown_receiver: self.shutdown_receiver,
             adjacency,
-            last_component_name: Some(C::NAME),
+            last_component_id: Some(C::COMPONENT_ID),
         }
     }
 
@@ -147,50 +145,59 @@ impl<Output: Send + 'static> Pipeline<Output> {
 
 #[cfg(test)]
 mod tests {
-    /// Verify that adjacency pairs reflect pipe() call order.
-    ///
-    /// The `Pipeline` struct's runtime field cannot be constructed without a live tokio executor,
-    /// so instead we directly test the adjacency accumulation logic that `pipe()` uses.
+    use super::*;
+
     #[test]
     fn adjacency_reflects_pipe_order() {
-        let mut adjacency: Vec<(&'static str, &'static str)> = vec![];
-        let mut last: Option<&'static str> = None;
+        let mut adjacency: Vec<(ComponentId, ComponentId)> = vec![];
+        let mut last: Option<ComponentId> = None;
 
-        // Simulate: pipe(A), pipe(B), pipe(C)
-        for name in ["a", "b", "c"] {
+        // Simulate: pipe(A), pipe(B), pipe(C) — all have COMPONENT_ID
+        for id in [
+            ComponentId::BlockExecutor,
+            ComponentId::BlockCanonizer,
+            ComponentId::BlockApplier,
+        ] {
             if let Some(prev) = last {
-                adjacency.push((prev, name));
+                adjacency.push((prev, id));
             }
-            last = Some(name);
+            last = Some(id);
         }
 
-        assert_eq!(adjacency, vec![("a", "b"), ("b", "c")]);
+        assert_eq!(
+            adjacency,
+            vec![
+                (ComponentId::BlockExecutor, ComponentId::BlockCanonizer),
+                (ComponentId::BlockCanonizer, ComponentId::BlockApplier),
+            ]
+        );
     }
 
-    /// Verify that skipping a pipe_opt(None) does not add an adjacency entry between
-    /// the component before None and the one after.
     #[test]
     fn pipe_opt_none_skips_adjacency() {
-        let mut adjacency: Vec<(&'static str, &'static str)> = vec![];
-        let mut last: Option<&'static str> = None;
+        let mut adjacency: Vec<(ComponentId, ComponentId)> = vec![];
+        let mut last: Option<ComponentId> = None;
 
-        // Simulate: pipe(A), pipe_opt(None), pipe(C)
         // pipe(A):
+        let a = ComponentId::BlockExecutor;
         if let Some(prev) = last {
-            adjacency.push((prev, "a"));
+            adjacency.push((prev, a));
         }
-        last = Some("a");
+        last = Some(a);
 
         // pipe_opt(None): no-op — last unchanged, no adjacency pushed
 
         // pipe(C):
+        let c = ComponentId::BlockApplier;
         if let Some(prev) = last {
-            adjacency.push((prev, "c"));
+            adjacency.push((prev, c));
         }
-        last = Some("c");
+        last = Some(c);
 
-        // Expect ("a","c") — no intermediate edge because None was skipped
-        assert_eq!(adjacency, vec![("a", "c")]);
+        assert_eq!(
+            adjacency,
+            vec![(ComponentId::BlockExecutor, ComponentId::BlockApplier)]
+        );
         let _ = last;
     }
 }

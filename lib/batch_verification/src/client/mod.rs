@@ -329,7 +329,8 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
     type Input = VerificationInput;
     type Output = ();
 
-    const NAME: &'static str = "batch_verification_client";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::BatchVerification;
 
     async fn run(
         mut self,

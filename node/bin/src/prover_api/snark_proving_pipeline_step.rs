@@ -59,7 +59,8 @@ impl PipelineComponent for SnarkProvingPipelineStep {
     type Input = SignedBatchEnvelope<FriProof>;
     type Output = L1SenderCommand<ProofCommand>;
 
-    const NAME: &'static str = "snark_proving";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::SnarkJobManager;
 
     async fn run(
         mut self,

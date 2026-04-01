@@ -84,7 +84,8 @@ where
     type Input = AppliedBlock;
     type Output = AppliedBlock;
 
-    const NAME: &'static str = "revm_consistency_checker";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::RevmConsistencyChecker;
 
     async fn run(
         mut self,

@@ -30,7 +30,7 @@ where
     type Input = L1SenderCommand<C>;
     type Output = SignedBatchEnvelope<FriProof>;
 
-    const NAME: &'static str = C::NAME;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId = C::COMPONENT_ID;
 
     async fn run(
         self,

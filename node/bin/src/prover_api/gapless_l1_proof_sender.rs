@@ -26,7 +26,8 @@ impl PipelineComponent for GaplessL1ProofSender {
     type Input = L1SenderCommand<ProofCommand>;
     type Output = L1SenderCommand<ProofCommand>;
 
-    const NAME: &'static str = "gapless_l1_proof_sender";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::GaplessL1ProofSender;
 
     async fn run(
         self,

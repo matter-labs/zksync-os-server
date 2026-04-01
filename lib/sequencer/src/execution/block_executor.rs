@@ -53,7 +53,8 @@ where
     ///  new blocks need to be canonized by network (enforced by `BlockCanonizer`)
     type Output = BlockPayload;
 
-    const NAME: &'static str = "block_executor";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::BlockExecutor;
 
     async fn run(
         mut self,

@@ -30,7 +30,8 @@ impl PipelineComponent for GaplessCommitter {
     type Input = SignedBatchEnvelope<FriProof>;
     type Output = L1SenderCommand<CommitCommand>;
 
-    const NAME: &'static str = "gapless_committer";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::GaplessCommitter;
 
     async fn run(
         self,

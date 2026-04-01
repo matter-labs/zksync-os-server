@@ -100,7 +100,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
     gateway: bool,
     health_reporter: ComponentHealthReporter,
 ) -> anyhow::Result<()> {
-    let command_name = Input::NAME;
+    let command_name = Input::COMPONENT_ID.as_str();
 
     let operator_address =
         register_operator::<_, Input>(&mut provider, config.operator_signer).await?;
@@ -384,16 +384,16 @@ async fn register_operator<
         .await?;
 
     let balance = provider.get_balance(address).await?;
-    L1_SENDER_METRICS.balance[&Input::NAME].set(format_ether(balance).parse()?);
+    L1_SENDER_METRICS.balance[&Input::COMPONENT_ID.as_str()].set(format_ether(balance).parse()?);
     let address_string: &'static str = address.to_string().leak();
-    L1_SENDER_METRICS.l1_operator_address[&(Input::NAME, address_string)].set(1);
+    L1_SENDER_METRICS.l1_operator_address[&(Input::COMPONENT_ID.as_str(), address_string)].set(1);
 
     if balance.is_zero() {
         anyhow::bail!("L1 sender's address {address} has zero balance");
     }
 
     tracing::info!(
-        command_name = Input::NAME,
+        command_name = Input::COMPONENT_ID.as_str(),
         balance_eth = format_ether(balance),
         %address,
         "initialized L1 sender",

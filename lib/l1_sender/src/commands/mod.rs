@@ -66,7 +66,7 @@ pub trait SendToL1:
     + AsMut<[SignedBatchEnvelope<FriProof>]>
     + Display
 {
-    const NAME: &'static str;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId;
     const SENT_STAGE: BatchExecutionStage;
     const MINED_STAGE: BatchExecutionStage;
     const PASSTHROUGH_STAGE: BatchExecutionStage;

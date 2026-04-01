@@ -41,7 +41,8 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     type Input = (BlockOutput, ReplayRecord, BlockMerkleTreeData);
     type Output = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
 
-    const NAME: &'static str = "prover_input_generator";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::ProverInputGenerator;
 
     /// Works on multiple blocks in parallel, up to [Self::maximum_in_flight_blocks].
     /// Each computation runs on the blocking pool and is tracked as a graceful task so

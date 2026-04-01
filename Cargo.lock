@@ -14454,6 +14454,7 @@ dependencies = [
  "reth-tasks",
  "tokio",
  "tracing",
+ "vise",
  "zksync_os_observability",
 ]
 
@@ -14468,6 +14469,7 @@ dependencies = [
  "tracing",
  "vise",
  "zksync_os_observability",
+ "zksync_os_pipeline",
  "zksync_os_types",
 ]
 

@@ -46,7 +46,8 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
     type Input = ();
     type Output = BlockCommand;
 
-    const NAME: &'static str = "consensus_node_command_source";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::ConsensusNodeCommandSource;
 
     async fn run(
         mut self,
@@ -195,7 +196,8 @@ impl PipelineComponent for ExternalNodeCommandSource {
     type Input = ();
     type Output = BlockCommand;
 
-    const NAME: &'static str = "external_node_command_source";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::ExternalNodeCommandSource;
 
     async fn run(
         mut self,

@@ -85,7 +85,8 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
     type Input = BatchForSigning<E>;
     type Output = SignedBatchEnvelope<E>;
 
-    const NAME: &'static str = "batch_verification";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::BatchVerification;
 
     async fn run(
         self,

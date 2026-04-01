@@ -96,20 +96,20 @@ impl L1SenderMetrics {
             l1_transaction_fee_ether_per_l2_tx,
             "succeeded on L1",
         );
-        self.gas_used[&Input::NAME].observe(receipt.gas_used);
+        self.gas_used[&Input::COMPONENT_ID.as_str()].observe(receipt.gas_used);
         if let Some(gas_used_per_l2_tx) = receipt.gas_used.checked_div(l2_txs_count as u64) {
-            self.gas_used_per_l2_tx[&Input::NAME].observe(gas_used_per_l2_tx);
+            self.gas_used_per_l2_tx[&Input::COMPONENT_ID.as_str()].observe(gas_used_per_l2_tx);
         }
         if let Some(blob_gas_used) = receipt.blob_gas_used {
             self.blob_gas_used.observe(blob_gas_used);
         }
-        self.l1_transaction_fee_ether[&Input::NAME]
+        self.l1_transaction_fee_ether[&Input::COMPONENT_ID.as_str()]
             .observe(format_ether(l1_transaction_fee).parse()?);
         if let Some(l1_transaction_fee_per_l2_tx) = l1_transaction_fee_ether_per_l2_tx {
-            self.l1_transaction_fee_per_l2_tx_ether[&Input::NAME]
+            self.l1_transaction_fee_per_l2_tx_ether[&Input::COMPONENT_ID.as_str()]
                 .observe(l1_transaction_fee_per_l2_tx.parse()?);
         }
-        self.effective_gas_price_gwei[&Input::NAME]
+        self.effective_gas_price_gwei[&Input::COMPONENT_ID.as_str()]
             .set(Self::wei_to_gwei(receipt.effective_gas_price)?);
         if let Some(blob_gas_price) = receipt.blob_gas_price {
             self.effective_blob_gas_price_gwei

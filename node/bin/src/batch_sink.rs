@@ -24,7 +24,8 @@ impl PipelineComponent for BatchSink {
     type Input = SignedBatchEnvelope<FriProof>;
     type Output = ();
 
-    const NAME: &'static str = "batch_sink";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::BatchSink;
 
     async fn run(
         self,
@@ -84,7 +85,7 @@ impl<T: Send + 'static> PipelineComponent for NoOpSink<T> {
     type Input = T;
     type Output = ();
 
-    const NAME: &'static str = "noop_sink";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId = zksync_os_pipeline::ComponentId::NoOpSink;
 
     async fn run(
         self,

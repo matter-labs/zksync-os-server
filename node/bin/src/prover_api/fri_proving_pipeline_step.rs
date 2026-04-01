@@ -61,7 +61,8 @@ impl PipelineComponent for FriProvingPipelineStep {
     type Input = SignedBatchEnvelope<ProverInput>;
     type Output = SignedBatchEnvelope<FriProof>;
 
-    const NAME: &'static str = "fri_proving";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::FriJobManager;
 
     async fn run(
         mut self,

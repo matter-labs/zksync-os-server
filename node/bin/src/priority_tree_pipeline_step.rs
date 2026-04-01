@@ -61,7 +61,8 @@ where
     type Input = SignedBatchEnvelope<FriProof>;
     type Output = L1SenderCommand<ExecuteCommand>;
 
-    const NAME: &'static str = "priority_tree";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::PriorityTree;
 
     async fn run(
         self,

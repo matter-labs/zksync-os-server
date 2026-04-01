@@ -966,6 +966,7 @@ async fn run_main_node_pipeline(
     let (mut pipeline_monitor, pipeline_acceptance_rx) =
         PipelineHealthMonitor::new(config.pipeline_health_config.clone(), stop_receiver);
 
+    // Reporters for components that always run (block pipeline).
     let mut health_entries: Vec<(ComponentId, watch::Receiver<ComponentHealth>)> = vec![];
 
     let (block_executor_reporter, block_executor_rx) = make_reporter(
@@ -992,6 +993,77 @@ async fn run_main_node_pipeline(
         "tree_manager",
     );
     health_entries.push((ComponentId::TreeManager, tree_manager_rx));
+
+    let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::channel(8);
+    let (applied_block_number_sender, applied_block_number_receiver) =
+        watch::channel(starting_block - 1);
+
+    let pipeline = Pipeline::new(runtime.clone())
+        .pipe(ConsensusNodeCommandSource {
+            block_replay_storage: block_replay_storage.clone(),
+            starting_block,
+            rebuild_options: config
+                .sequencer_config
+                .block_rebuild
+                .clone()
+                .map(Into::into),
+            replays_to_execute,
+            leadership,
+            produce_interval: config.sequencer_config.block_time,
+        })
+        .pipe(BlockExecutor {
+            block_context_provider,
+            state: state.clone(),
+            config: config.into(),
+            tx_acceptance_state_sender,
+            applied_block_number_receiver,
+            health_reporter: block_executor_reporter,
+        })
+        .pipe(BlockCanonizer {
+            consensus: canonization_engine,
+            canonized_blocks_for_execution: replays_to_execute_sender,
+            health_reporter: block_canonizer_reporter,
+        })
+        .pipe(BlockApplier {
+            state: state.clone(),
+            replay: block_replay_storage.clone(),
+            repositories: repositories.clone(),
+            config: config.into(),
+            applied_block_number_sender,
+            health_reporter: block_applier_reporter,
+        })
+        .pipe_opt(
+            config
+                .sequencer_config
+                .revm_consistency_checker_enabled
+                .then(|| {
+                    RevmConsistencyChecker::new(
+                        state.clone(),
+                        internal_config_manager.clone(),
+                        config
+                            .sequencer_config
+                            .revm_consistency_checker_revert_on_divergence,
+                    )
+                }),
+        )
+        .pipe(TreeManager {
+            tree: tree.clone(),
+            health_reporter: tree_manager_reporter,
+        });
+
+    if !config.batcher_config.enabled {
+        tracing::warn!(
+            "Batcher subsystem disabled — skipping prover input generation, L1 settlement, and downstream components"
+        );
+        // Only the 4 always-running components are registered; batcher-gated reporters are not
+        // created at all, so they cannot appear as stuck-at-0 and trigger spurious backpressure.
+        let component_health = Arc::new(health_entries);
+        pipeline.pipe(NoOpSink::new()).spawn();
+        runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
+        return (pipeline_acceptance_rx, component_health);
+    }
+
+    // Batcher is enabled — create reporters for all downstream components now.
     let (prover_input_generator_reporter, prover_input_generator_rx) = make_reporter(
         &mut pipeline_monitor,
         ComponentId::ProverInputGenerator,
@@ -1067,71 +1139,6 @@ async fn run_main_node_pipeline(
 
     let component_health = Arc::new(health_entries);
 
-    let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::channel(8);
-    let (applied_block_number_sender, applied_block_number_receiver) =
-        watch::channel(starting_block - 1);
-
-    let pipeline = Pipeline::new(runtime.clone())
-        .pipe(ConsensusNodeCommandSource {
-            block_replay_storage: block_replay_storage.clone(),
-            starting_block,
-            rebuild_options: config
-                .sequencer_config
-                .block_rebuild
-                .clone()
-                .map(Into::into),
-            replays_to_execute,
-            leadership,
-            produce_interval: config.sequencer_config.block_time,
-        })
-        .pipe(BlockExecutor {
-            block_context_provider,
-            state: state.clone(),
-            config: config.into(),
-            tx_acceptance_state_sender,
-            applied_block_number_receiver,
-            health_reporter: block_executor_reporter,
-        })
-        .pipe(BlockCanonizer {
-            consensus: canonization_engine,
-            canonized_blocks_for_execution: replays_to_execute_sender,
-            health_reporter: block_canonizer_reporter,
-        })
-        .pipe(BlockApplier {
-            state: state.clone(),
-            replay: block_replay_storage.clone(),
-            repositories: repositories.clone(),
-            config: config.into(),
-            applied_block_number_sender,
-            health_reporter: block_applier_reporter,
-        })
-        .pipe_opt(
-            config
-                .sequencer_config
-                .revm_consistency_checker_enabled
-                .then(|| {
-                    RevmConsistencyChecker::new(
-                        state.clone(),
-                        internal_config_manager.clone(),
-                        config
-                            .sequencer_config
-                            .revm_consistency_checker_revert_on_divergence,
-                    )
-                }),
-        )
-        .pipe(TreeManager {
-            tree: tree.clone(),
-            health_reporter: tree_manager_reporter,
-        });
-
-    if !config.batcher_config.enabled {
-        tracing::warn!(
-            "Batcher subsystem disabled — skipping prover input generation, L1 settlement, and downstream components"
-        );
-        pipeline.pipe(NoOpSink::new()).spawn();
-        runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
-        return (pipeline_acceptance_rx, component_health);
-    }
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
         .await
@@ -1269,40 +1276,8 @@ async fn run_main_node_pipeline(
         .pipe(BatchSink::new(internal_config_manager));
 
     tracing::info!("Launching pipeline");
-    {
-        use std::collections::HashMap;
-        let name_to_id: HashMap<&'static str, ComponentId> = [
-            ("block_executor", ComponentId::BlockExecutor),
-            ("block_canonizer", ComponentId::BlockCanonizer),
-            ("block_applier", ComponentId::BlockApplier),
-            ("merkle_tree", ComponentId::TreeManager),
-            ("prover_input_generator", ComponentId::ProverInputGenerator),
-            ("batcher", ComponentId::Batcher),
-            ("batch_verification", ComponentId::BatchVerification),
-            ("fri_proving", ComponentId::FriJobManager),
-            ("gapless_committer", ComponentId::GaplessCommitter),
-            ("upgrade_gatekeeper", ComponentId::UpgradeGatekeeper),
-            ("commit", ComponentId::L1SenderCommit),
-            ("snark_proving", ComponentId::SnarkJobManager),
-            ("gapless_l1_proof_sender", ComponentId::GaplessL1ProofSender),
-            ("prove", ComponentId::L1SenderProve),
-            ("priority_tree", ComponentId::PriorityTree),
-            ("execute", ComponentId::L1SenderExecute),
-        ]
-        .into();
-        for (up_name, down_name) in &pipeline.adjacency {
-            let up_id = name_to_id.get(up_name).copied();
-            let down_id = name_to_id.get(down_name).copied();
-            match (up_id, down_id) {
-                (Some(up), Some(down)) => pipeline_monitor.register_adjacency(up, down),
-                _ => tracing::warn!(
-                    upstream = up_name,
-                    downstream = down_name,
-                    "adjacency pair has unmapped component name(s); \
-                     component_block_diff_to_upstream metric will be missing for this pair"
-                ),
-            }
-        }
+    for (up, down) in &pipeline.adjacency {
+        pipeline_monitor.register_adjacency(*up, *down);
     }
     runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
     pipeline.spawn();
@@ -1435,28 +1410,8 @@ async fn run_en_pipeline(
         pipeline.pipe(NoOpSink::new())
     };
 
-    {
-        use std::collections::HashMap;
-        let name_to_id: HashMap<&'static str, ComponentId> = [
-            ("block_executor", ComponentId::BlockExecutor),
-            ("block_applier", ComponentId::BlockApplier),
-            ("merkle_tree", ComponentId::TreeManager),
-            ("batch_verification", ComponentId::BatchVerification),
-        ]
-        .into();
-        for (up_name, down_name) in &pipeline.adjacency {
-            let up_id = name_to_id.get(up_name).copied();
-            let down_id = name_to_id.get(down_name).copied();
-            match (up_id, down_id) {
-                (Some(up), Some(down)) => pipeline_monitor.register_adjacency(up, down),
-                _ => tracing::warn!(
-                    upstream = up_name,
-                    downstream = down_name,
-                    "adjacency pair has unmapped component name(s); \
-                     component_block_diff_to_upstream metric will be missing for this pair"
-                ),
-            }
-        }
+    for (up, down) in &pipeline.adjacency {
+        pipeline_monitor.register_adjacency(*up, *down);
     }
     runtime.spawn_critical_task("pipeline health monitor", pipeline_monitor.run());
     pipeline.spawn();

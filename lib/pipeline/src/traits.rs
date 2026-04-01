@@ -1,3 +1,4 @@
+use crate::component_id::ComponentId;
 use crate::tracked_channel::{TrackedUnboundedReceiver, TrackedUnboundedSender};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -14,8 +15,9 @@ pub trait PipelineComponent: Send + 'static {
     /// The type of messages this component produces
     type Output: Send + 'static;
 
-    /// Human-readable name for logging and metrics
-    const NAME: &'static str;
+    /// Identity of this pipeline component.
+    /// Used as the task name for logging, shutdown tracking, and health-monitor adjacency.
+    const COMPONENT_ID: ComponentId;
 
     /// Run the component, receiving from input and sending to output.
     /// `output.send()` is synchronous and never blocks — the channel is unbounded.
