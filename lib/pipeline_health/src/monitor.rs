@@ -190,8 +190,7 @@ impl PipelineHealthMonitor {
         let mut active_causes: Vec<BackpressureCause> = self
             .components
             .iter()
-            .flat_map(|(id, rx)| {
-                let health = rx.borrow();
+            .flat_map(|(id, _rx)| {
                 let &(comp_seq, comp_ts) = snapshots.get(id).expect("id came from self.components");
                 let adj = adjacent.get(id);
 
@@ -209,7 +208,7 @@ impl PipelineHealthMonitor {
                         _ => None,
                     });
 
-                let causes = self.evaluate(*id, &health, block_lag, time_lag);
+                let causes = self.evaluate(*id, block_lag, time_lag);
                 if !causes.is_empty() {
                     active_component_ids.insert(*id);
                 }
@@ -269,15 +268,16 @@ impl PipelineHealthMonitor {
             true
         });
 
-        // Emit metrics always in sync with current evaluation result.
-        for (id, rx) in &self.components {
-            let health = rx.borrow();
+        // Emit metrics from the same snapshot used for the acceptance decision above.
+        // Re-borrowing here would risk divergence: a component could update its watch value
+        // between the acceptance commit and this loop, causing metric values to contradict
+        // the acceptance state that was just published.
+        for (id, _rx) in &self.components {
+            let &(comp_seq, comp_ts) = snapshots.get(id).expect("id came from self.components");
             MONITOR_METRICS.backpressure_active[id].set(active_component_ids.contains(id) as u64);
-            MONITOR_METRICS.component_last_processed_block[id]
-                .set(health.last_processed_block_number.unwrap_or(0));
-            MONITOR_METRICS.component_block_lag[id]
-                .set(head_seq.saturating_sub(health.last_processed_block_number.unwrap_or(0)));
-            let time_lag = match (health.last_processed_block_timestamp, head_ts) {
+            MONITOR_METRICS.component_last_processed_block[id].set(comp_seq);
+            MONITOR_METRICS.component_block_lag[id].set(head_seq.saturating_sub(comp_seq));
+            let time_lag = match (comp_ts, head_ts) {
                 (Some(comp_ts), Some(h_ts)) => h_ts.saturating_sub(comp_ts) as f64,
                 _ => 0.0,
             };
@@ -286,6 +286,8 @@ impl PipelineHealthMonitor {
 
         for (&id, snap) in &adjacent {
             MONITOR_METRICS.component_block_diff_to_upstream[&id].set(snap.block_diff);
+            let time_diff_secs = snap.time_diff.map(|d| d.as_secs_f64()).unwrap_or(0.0);
+            MONITOR_METRICS.component_time_diff_to_upstream_seconds[&id].set(time_diff_secs);
         }
     }
 
@@ -300,7 +302,6 @@ impl PipelineHealthMonitor {
     pub(crate) fn evaluate(
         &self,
         id: ComponentId,
-        _health: &ComponentHealth,
         block_lag: u64,
         time_lag: Option<Duration>,
     ) -> Vec<BackpressureCause> {
@@ -351,20 +352,8 @@ mod tests {
     use super::*;
     use crate::config::{ComponentId, PipelineHealthConfig};
     use std::time::Duration;
-    use tokio::time::Instant;
-    use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
+    use zksync_os_observability::ComponentHealthReporter;
     use zksync_os_types::BackpressureTrigger;
-
-    fn make_health(seq: u64, ts: Option<u64>) -> ComponentHealth {
-        ComponentHealth {
-            state: GenericComponentState::Active,
-            specific_state: "active",
-            state_entered_at: Instant::now(),
-            last_processed_block_number: Some(seq),
-            last_processed_block_timestamp: ts,
-            last_processed_block_at: None,
-        }
-    }
 
     fn block_config_with_block_lag(max_lag: u64) -> PipelineHealthConfig {
         PipelineHealthConfig {
@@ -401,7 +390,7 @@ mod tests {
         let config = block_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head=100, applier=95, lag=5 < 10
-        let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(95, None), 5, None);
+        let result = monitor.evaluate(ComponentId::BlockApplier, 5, None);
         assert!(result.is_empty());
     }
 
@@ -410,7 +399,7 @@ mod tests {
         let config = block_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head=100, applier=85, lag=15 > 10
-        let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(85, None), 15, None);
+        let result = monitor.evaluate(ComponentId::BlockApplier, 15, None);
         assert!(matches!(
             result.into_iter().next().map(|c| c.trigger),
             Some(BackpressureTrigger::BlockLagTooHigh {
@@ -425,7 +414,7 @@ mod tests {
         let config = block_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // lag == threshold: should NOT trigger (strictly greater than)
-        let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(90, None), 10, None);
+        let result = monitor.evaluate(ComponentId::BlockApplier, 10, None);
         assert!(result.is_empty());
     }
 
@@ -434,12 +423,7 @@ mod tests {
         let config = block_config_with_time_lag(Duration::from_secs(30));
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // adjacent time lag = 40s > threshold 30s; block_lag irrelevant (no max_block_lag)
-        let result = monitor.evaluate(
-            ComponentId::BlockApplier,
-            &make_health(90, Some(960)),
-            0,
-            Some(Duration::from_secs(40)),
-        );
+        let result = monitor.evaluate(ComponentId::BlockApplier, 0, Some(Duration::from_secs(40)));
         assert!(matches!(
             result.into_iter().next().map(|c| c.trigger),
             Some(BackpressureTrigger::TimeLagTooHigh { .. })
@@ -451,7 +435,7 @@ mod tests {
         let config = block_config_with_time_lag(Duration::from_secs(1));
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // time_lag = None (timestamps unavailable) → must not trigger
-        let result = monitor.evaluate(ComponentId::BlockApplier, &make_health(90, None), 0, None);
+        let result = monitor.evaluate(ComponentId::BlockApplier, 0, None);
         assert!(result.is_empty());
     }
 
@@ -460,12 +444,7 @@ mod tests {
         let config = block_config_with_time_lag(Duration::from_secs(1));
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head timestamp = None → unavailable, must not trigger
-        let result = monitor.evaluate(
-            ComponentId::BlockApplier,
-            &make_health(90, Some(900)),
-            0,
-            None,
-        );
+        let result = monitor.evaluate(ComponentId::BlockApplier, 0, None);
         assert!(result.is_empty());
     }
 
@@ -475,7 +454,6 @@ mod tests {
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         let result = monitor.evaluate(
             ComponentId::BlockApplier,
-            &make_health(0, None),
             10_000,
             Some(Duration::from_secs(999_999)),
         );
@@ -536,13 +514,7 @@ mod tests {
         };
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // block_lag=15 (pre-computed), time_lag=40s — both should be returned
-        let health = make_health(85, Some(960));
-        let causes = monitor.evaluate(
-            ComponentId::BlockApplier,
-            &health,
-            15,
-            Some(Duration::from_secs(40)),
-        );
+        let causes = monitor.evaluate(ComponentId::BlockApplier, 15, Some(Duration::from_secs(40)));
         assert_eq!(causes.len(), 2);
     }
 
@@ -631,7 +603,7 @@ mod tests {
         let config = batch_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head=100, batcher=85, lag=15 > threshold=10 → must trigger
-        let causes = monitor.evaluate(ComponentId::Batcher, &make_health(85, None), 15, None);
+        let causes = monitor.evaluate(ComponentId::Batcher, 15, None);
         assert!(
             matches!(
                 causes.into_iter().next().map(|c| c.trigger),
@@ -648,7 +620,7 @@ mod tests {
     fn batch_block_lag_no_trigger_below_threshold() {
         let config = batch_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
-        let causes = monitor.evaluate(ComponentId::Batcher, &make_health(95, None), 5, None);
+        let causes = monitor.evaluate(ComponentId::Batcher, 5, None);
         assert!(causes.is_empty());
     }
 
@@ -657,7 +629,7 @@ mod tests {
         let config = batch_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // lag==threshold: strictly greater-than required — must NOT trigger
-        let causes = monitor.evaluate(ComponentId::Batcher, &make_health(90, None), 10, None);
+        let causes = monitor.evaluate(ComponentId::Batcher, 10, None);
         assert!(causes.is_empty());
     }
 

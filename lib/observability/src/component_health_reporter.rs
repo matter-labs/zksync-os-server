@@ -8,7 +8,9 @@ pub struct ComponentHealth {
     pub state: GenericComponentState,
     /// Fine-grained state string from the component's StateLabel impl.
     pub specific_state: &'static str,
-    /// When the current state was entered (monotonic).
+    /// When the current state was entered (monotonic). This is [`tokio::time::Instant`],
+    /// not `std::time::Instant`; callers computing durations must pair it with
+    /// `tokio::time::Instant::now()`.
     pub state_entered_at: Instant,
     /// Block number of the last item successfully processed. `None` until first call to
     /// `record_processed`.
@@ -18,6 +20,7 @@ pub struct ComponentHealth {
     pub last_processed_block_timestamp: Option<u64>,
     /// When record_processed was last called (None until first call).
     /// Independent from state_entered_at — tracks processing rate, not state duration.
+    /// This is [`tokio::time::Instant`]; pair with `tokio::time::Instant::now()` for durations.
     pub last_processed_block_at: Option<Instant>,
 }
 

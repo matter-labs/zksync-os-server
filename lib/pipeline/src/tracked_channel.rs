@@ -139,7 +139,8 @@ impl<T> TrackedUnboundedReceiver<T> {
     pub fn into_inner(self) -> mpsc::UnboundedReceiver<T> {
         assert!(
             self.buf.is_empty(),
-            "TrackedUnboundedReceiver::into_inner() called with buffered items"
+            "TrackedUnboundedReceiver::into_inner() called with {} buffered items",
+            self.buf.len()
         );
         self.inner
     }

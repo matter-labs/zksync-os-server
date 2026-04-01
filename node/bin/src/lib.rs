@@ -1335,6 +1335,14 @@ async fn run_en_pipeline(
         None
     };
 
+    let priority_tree_reporter = if config.general_config.run_priority_tree {
+        let (reporter, rx) = make_reporter(&mut pipeline_monitor, ComponentId::PriorityTree);
+        health_entries.push((ComponentId::PriorityTree, rx));
+        Some(reporter)
+    } else {
+        None
+    };
+
     let component_health = Arc::new(health_entries);
 
     let pipeline = Pipeline::new(runtime.clone())
@@ -1426,7 +1434,7 @@ async fn run_en_pipeline(
             "priority tree caching",
             |shutdown| async move {
                 tokio::select! {
-                    result = priority_tree_manager.run(None, ComponentHealthReporter::new("priority_tree_manager").0) => {
+                    result = priority_tree_manager.run(None, priority_tree_reporter.expect("reporter created when priority tree is enabled")) => {
                         result.expect("PriorityTreeManager run failed");
                     }
                     _guard = shutdown => {

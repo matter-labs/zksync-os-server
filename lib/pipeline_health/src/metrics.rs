@@ -15,6 +15,10 @@ pub struct MonitorMetrics {
     /// Blocks queued between this component and its upstream neighbour.
     /// Computed as upstream.last_processed_block_number − this.last_processed_block_number.
     pub component_block_diff_to_upstream: Family<ComponentId, Gauge<u64>>,
+    /// Block-timestamp lag in seconds between this component and its upstream neighbour.
+    /// Computed as upstream.last_processed_block_timestamp − this.last_processed_block_timestamp.
+    /// 0 if either timestamp is unavailable.
+    pub component_time_diff_to_upstream_seconds: Family<ComponentId, Gauge<f64>>,
     /// Counts transitions from Accepting to NotAccepting (transaction acceptance suspended).
     /// vise appends _total automatically for Counter types.
     pub acceptance_state_changes: Counter<u64>,

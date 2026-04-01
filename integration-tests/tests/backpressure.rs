@@ -364,8 +364,32 @@ async fn component_override_disables_backpressure_for_batcher(
         .build()
         .await?;
 
-    // Wait long enough that batcher time-lag would normally exceed 500ms threshold.
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    // Wait until the batcher has processed at least one block so the test is not vacuous.
+    // If the batcher never processes anything, comp_ts = None, time_lag = None, and
+    // backpressure cannot fire regardless of the override — making the absence assertion
+    // meaningless. Polling here ensures the batcher actually ran before we assert it did
+    // not appear in causes.
+    let batcher_ran_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let pipeline = node.get_pipeline().await;
+        let batcher_block = pipeline["components"]
+            .as_array()
+            .and_then(|cs| cs.iter().find(|c| c["name"].as_str() == Some("batcher")))
+            .and_then(|c| c["last_processed_block"].as_u64())
+            .unwrap_or(0);
+        if batcher_block > 0 {
+            break;
+        }
+        if tokio::time::Instant::now() >= batcher_ran_deadline {
+            anyhow::bail!(
+                "batcher did not process any blocks within 30 s; pipeline is not running"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    // Wait a bit more so the batcher time-lag would normally exceed the 500ms threshold.
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     let health = node.get_health().await;
 
