@@ -60,11 +60,8 @@ impl<Ok> ToRpcResult<Ok, DebugError> for Result<Ok, DebugError> {
         self.map_err(|err| match err {
             DebugError::UnsupportedDefaultTracer
             | DebugError::UnsupportedTracer(_)
-            | DebugError::UnsupportedTxIndex => rpc_error_with_code(
-                jsonrpsee::types::error::METHOD_NOT_FOUND_CODE,
-                err.to_string(),
-            ),
-            DebugError::InvalidTracerConfig
+            | DebugError::UnsupportedTxIndex
+            | DebugError::InvalidTracerConfig
             | DebugError::TransactionNotFound
             | DebugError::BlockNotFound => invalid_params_rpc_err(err.to_string()),
             DebugError::InternalError | DebugError::Repository(_) | DebugError::State(_) => {
