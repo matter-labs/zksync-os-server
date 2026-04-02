@@ -28,7 +28,7 @@ use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use anyhow::Context as _;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
-use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_pipeline::PeekableReceiver;
@@ -106,11 +106,10 @@ where
             return Ok(());
         }
 
-        // Collect oneshot receivers in submission order so we can await them in that
+        // Collect task handles in submission order so we can await them in that
         // same order below, guaranteeing `outbound` sees envelopes in nonce order.
-        let mut receivers: Vec<
-            oneshot::Receiver<anyhow::Result<Vec<SignedBatchEnvelope<FriProof>>>>,
-        > = Vec::with_capacity(cmd_buffer.len());
+        let mut handles: Vec<JoinHandle<anyhow::Result<Vec<SignedBatchEnvelope<FriProof>>>>> =
+            Vec::with_capacity(cmd_buffer.len());
 
         latency_tracker.enter_state(L1SenderState::SendingToL1);
         for cmd in cmd_buffer.drain(..) {
@@ -137,11 +136,10 @@ where
                         .iter_mut()
                         .for_each(|e| e.set_stage(Input::SENT_STAGE));
 
-                    let (tx, rx) = oneshot::channel();
                     let provider = provider.clone();
                     let config = config.clone();
-                    tokio::spawn(async move {
-                        let result = submit_and_confirm(
+                    let handle = tokio::spawn(async move {
+                        submit_and_confirm(
                             command,
                             nonce,
                             gas_params,
@@ -151,22 +149,19 @@ where
                             operator_address,
                             gateway,
                         )
-                        .await;
-                        // Ignore send errors: the receiver is dropped when the main loop
-                        // exits early (e.g., after a different task's error propagates).
-                        let _ = tx.send(result);
+                        .await
                     });
-                    receivers.push(rx);
+                    handles.push(handle);
                 }
             }
         }
 
         // Await in submission order to preserve nonce ordering on `outbound`.
         latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
-        L1_SENDER_METRICS.parallel_transactions[&command_name].set(receivers.len() as u64);
+        L1_SENDER_METRICS.parallel_transactions[&command_name].set(handles.len() as u64);
 
-        for rx in receivers {
-            let envelopes = rx.await.context("submit_and_confirm task panicked")??;
+        for handle in handles {
+            let envelopes = handle.await.context("submit_and_confirm task panicked")??;
             latency_tracker.enter_state(L1SenderState::WaitingSend);
             for envelope in envelopes {
                 outbound
