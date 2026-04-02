@@ -469,14 +469,21 @@ async fn batch_block_lag_threshold_surfaced_by_pipeline_endpoint() {
 ///
 /// # How it works
 ///
-/// Setting `max_blocks_to_produce = 1` causes the BlockExecutor to stop after producing
-/// one block and send `NotAccepting(BlockProductionDisabled)` on the acceptance channel.
+/// Setting `max_blocks_to_produce = 5` causes the BlockExecutor to stop after producing
+/// five blocks and send `NotAccepting(BlockProductionDisabled)` on the acceptance channel.
 /// The TxAcceptanceGate aggregates this into the combined acceptance state. The health
 /// endpoint must reflect it in the `causes` array.
+///
+/// # Why 5 and not 1
+///
+/// Node startup (`build()`) calls `wait_for_block(2)` to ensure the test wallet is funded
+/// before returning. With a limit of 1, block 2 is never produced and `build()` hangs.
+/// Using 5 allows blocks 1–5 to be produced normally (so setup completes), then the
+/// sixth Produce command triggers the limit and the health endpoint shows the cause.
 #[tokio::test]
 async fn block_production_disabled_reported_in_health() {
     let node = TesterBuilder::default()
-        .max_blocks_to_produce(1)
+        .max_blocks_to_produce(5)
         .build()
         .await
         .expect("failed to start node");
