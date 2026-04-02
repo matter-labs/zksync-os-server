@@ -488,6 +488,27 @@ async fn block_production_disabled_reported_in_health() {
         .await
         .expect("failed to start node");
 
+    // Keep the mempool non-empty so Produce commands keep making progress.
+    // Without this, the first idle Produce after startup can park waiting for
+    // transactions and never advance far enough to hit max_blocks_to_produce.
+    let tx_load = {
+        let provider = node.l2_provider.clone();
+        tokio::spawn(async move {
+            let gas_price = provider
+                .get_gas_price()
+                .await
+                .expect("failed to fetch gas price for block-production test load");
+            loop {
+                let tx = TransactionRequest::default()
+                    .to(Address::random())
+                    .value(U256::from(1u64))
+                    .with_gas_price(gas_price * 10);
+                let _ = provider.send_transaction(tx).await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+    };
+
     // Poll until block production stops (accepting_transactions becomes false).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let health = loop {
@@ -503,6 +524,7 @@ async fn block_production_disabled_reported_in_health() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
+    tx_load.abort();
 
     // The causes array must be non-empty and contain block_production_disabled.
     let causes = health
