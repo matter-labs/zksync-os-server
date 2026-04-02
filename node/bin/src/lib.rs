@@ -875,7 +875,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let (mut gate, rx) = acceptance::TxAcceptanceGate::new();
         gate.register(tx_acceptance_state_receiver); // BlockProductionDisabled
         gate.register(pipeline_health.acceptance_rx); // PipelineBackpressure
-        runtime.spawn_critical_task("tx acceptance gate", gate.run());
+        runtime.spawn_critical_task("tx acceptance gate", gate.run(stop_receiver.clone()));
         rx
     };
 

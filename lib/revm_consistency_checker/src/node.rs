@@ -224,6 +224,10 @@ where
             {
                 anyhow::bail!("Outbound channel closed");
             }
+            health_reporter.record_processed(
+                replay_record.block_context.block_number,
+                Some(replay_record.block_context.timestamp),
+            );
         }
     }
 }

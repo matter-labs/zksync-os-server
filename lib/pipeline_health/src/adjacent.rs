@@ -16,9 +16,10 @@ pub struct AdjacentSnapshot {
 ///
 /// Returns a HashMap keyed by downstream ComponentId. Components with no upstream adjacency
 /// pair are absent from the result — callers fall back to head-relative lag for those.
+/// Adjacency pairs where either component is absent from `snapshots` are silently skipped,
+/// so callers in HTTP handlers or other contexts where a panic is unsafe get a graceful result.
 ///
 /// # Panics
-/// - If any component in an adjacency pair is absent from `snapshots`.
 /// - If a downstream component appears in more than one pair (fan-in topology).
 pub fn compute_adjacent_snapshots(
     adjacency: &[(ComponentId, ComponentId)],
@@ -39,35 +40,21 @@ pub fn compute_adjacent_snapshots(
 
     adjacency
         .iter()
-        .map(|&(up, down)| {
-            let &(up_seq, up_ts) = snapshots.get(&up).unwrap_or_else(|| {
-                panic!(
-                    "adjacency upstream component {:?} is not in snapshots; \
-                     ensure all adjacency components are present before calling \
-                     compute_adjacent_snapshots",
-                    up
-                )
-            });
-            let &(down_seq, down_ts) = snapshots.get(&down).unwrap_or_else(|| {
-                panic!(
-                    "adjacency downstream component {:?} is not in snapshots; \
-                     ensure all adjacency components are present before calling \
-                     compute_adjacent_snapshots",
-                    down
-                )
-            });
+        .filter_map(|&(up, down)| {
+            let &(up_seq, up_ts) = snapshots.get(&up)?;
+            let &(down_seq, down_ts) = snapshots.get(&down)?;
             let block_diff = up_seq.saturating_sub(down_seq);
             let time_diff = match (up_ts, down_ts) {
                 (Some(u), Some(d)) => Some(Duration::from_secs(u.saturating_sub(d))),
                 _ => None,
             };
-            (
+            Some((
                 down,
                 AdjacentSnapshot {
                     block_diff,
                     time_diff,
                 },
-            )
+            ))
         })
         .collect()
 }
@@ -182,12 +169,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "is not in snapshots")]
-    fn missing_upstream_panics() {
+    fn missing_upstream_skips_pair() {
         let mut snapshots = HashMap::new();
         snapshots.insert(ComponentId::BlockCanonizer, snap(90, None));
-        // BlockExecutor absent from snapshots
+        // BlockExecutor absent from snapshots — pair is silently skipped, no panic
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
-        compute_adjacent_snapshots(&adjacency, &snapshots);
+        let result = compute_adjacent_snapshots(&adjacency, &snapshots);
+        assert!(result.is_empty());
     }
 }

@@ -24,7 +24,7 @@ impl TxAcceptanceGate {
         self.receivers.push(rx);
     }
 
-    pub async fn run(self) {
+    pub async fn run(self, mut stop_receiver: watch::Receiver<bool>) {
         // Evaluate immediately so the initial state is correct before any changes arrive.
         self.evaluate_and_send();
 
@@ -42,8 +42,12 @@ impl TxAcceptanceGate {
         }
 
         let mut combined = select_all(streams);
-        while combined.next().await.is_some() {
-            self.evaluate_and_send();
+        loop {
+            tokio::select! {
+                Some(_) = combined.next() => self.evaluate_and_send(),
+                _ = stop_receiver.changed() => return,
+                else => return,
+            }
         }
     }
 
@@ -92,19 +96,19 @@ mod tests {
 
     #[tokio::test]
     async fn single_channel_not_accepting_propagates() {
-        let (mut gate, gate_rx) = TxAcceptanceGate::new();
+        let (mut gate, mut gate_rx) = TxAcceptanceGate::new();
         let (tx, rx) = watch::channel(TransactionAcceptanceState::Accepting);
         gate.register(rx);
 
-        tokio::spawn(gate.run());
+        let (_stop_tx, stop_rx) = watch::channel(false);
+        tokio::spawn(gate.run(stop_rx));
 
         tx.send(TransactionAcceptanceState::NotAccepting(vec![
             NotAcceptingReason::BlockProductionDisabled,
         ]))
         .unwrap();
 
-        // Give the gate task time to react.
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        gate_rx.changed().await.unwrap();
 
         assert!(matches!(
             *gate_rx.borrow(),
@@ -114,30 +118,21 @@ mod tests {
 
     #[tokio::test]
     async fn both_channels_not_accepting_merges_all_reasons() {
-        let (mut gate, gate_rx) = TxAcceptanceGate::new();
-        let (tx1, rx1) = watch::channel(TransactionAcceptanceState::NotAccepting(vec![
+        let (mut gate, mut gate_rx) = TxAcceptanceGate::new();
+        let (_tx1, rx1) = watch::channel(TransactionAcceptanceState::NotAccepting(vec![
             NotAcceptingReason::BlockProductionDisabled,
         ]));
-        let (tx2, rx2) = watch::channel(TransactionAcceptanceState::NotAccepting(vec![
+        let (_tx2, rx2) = watch::channel(TransactionAcceptanceState::NotAccepting(vec![
             pipeline_backpressure_reason(),
         ]));
         gate.register(rx1);
-        gate_rx.borrow(); // keep alive
         gate.register(rx2);
 
-        tokio::spawn(gate.run());
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        let (_stop_tx, stop_rx) = watch::channel(false);
+        tokio::spawn(gate.run(stop_rx));
 
-        // Trigger a change so the gate re-evaluates with both channels NotAccepting.
-        tx1.send(TransactionAcceptanceState::NotAccepting(vec![
-            NotAcceptingReason::BlockProductionDisabled,
-        ]))
-        .unwrap();
-        tx2.send(TransactionAcceptanceState::NotAccepting(vec![
-            pipeline_backpressure_reason(),
-        ]))
-        .unwrap();
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // The gate's initial evaluate_and_send merges both NotAccepting channels.
+        gate_rx.changed().await.unwrap();
 
         let state = gate_rx.borrow().clone();
         if let TransactionAcceptanceState::NotAccepting(reasons) = state {
@@ -149,7 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_clears_other_remains_not_accepting() {
-        let (mut gate, gate_rx) = TxAcceptanceGate::new();
+        let (mut gate, mut gate_rx) = TxAcceptanceGate::new();
         let (tx1, rx1) = watch::channel(TransactionAcceptanceState::NotAccepting(vec![
             NotAcceptingReason::BlockProductionDisabled,
         ]));
@@ -159,12 +154,17 @@ mod tests {
         gate.register(rx1);
         gate.register(rx2);
 
-        tokio::spawn(gate.run());
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        let (_stop_tx, stop_rx) = watch::channel(false);
+        tokio::spawn(gate.run(stop_rx));
+
+        // Wait for initial evaluation: both channels NotAccepting → gate emits NotAccepting.
+        gate_rx.changed().await.unwrap();
 
         // Channel 1 clears; channel 2 still NotAccepting.
+        // The gate re-evaluates and emits NotAccepting([pipeline_backpressure]) — still NotAccepting
+        // but with one fewer reason, so it is a state change that changed() can observe.
         tx1.send(TransactionAcceptanceState::Accepting).unwrap();
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        gate_rx.changed().await.unwrap();
 
         assert!(matches!(
             *gate_rx.borrow(),
@@ -174,7 +174,7 @@ mod tests {
 
     #[tokio::test]
     async fn both_clear_gate_emits_accepting() {
-        let (mut gate, gate_rx) = TxAcceptanceGate::new();
+        let (mut gate, mut gate_rx) = TxAcceptanceGate::new();
         let (tx1, rx1) = watch::channel(TransactionAcceptanceState::NotAccepting(vec![
             NotAcceptingReason::BlockProductionDisabled,
         ]));
@@ -184,13 +184,37 @@ mod tests {
         gate.register(rx1);
         gate.register(rx2);
 
-        tokio::spawn(gate.run());
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        let (_stop_tx, stop_rx) = watch::channel(false);
+        tokio::spawn(gate.run(stop_rx));
+
+        // Wait for initial evaluation: both channels NotAccepting → gate emits NotAccepting.
+        gate_rx.changed().await.unwrap();
 
         tx1.send(TransactionAcceptanceState::Accepting).unwrap();
         tx2.send(TransactionAcceptanceState::Accepting).unwrap();
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Wait for the gate to process both clears and emit Accepting.
+        gate_rx.changed().await.unwrap();
 
         assert_eq!(*gate_rx.borrow(), TransactionAcceptanceState::Accepting);
+    }
+
+    #[tokio::test]
+    async fn stop_signal_exits_before_upstream_closes() {
+        let (mut gate, _gate_rx) = TxAcceptanceGate::new();
+        let (_tx, rx) = watch::channel(TransactionAcceptanceState::Accepting);
+        gate.register(rx);
+
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let handle = tokio::spawn(gate.run(stop_rx));
+
+        // Signal stop while the upstream sender is still alive.
+        stop_tx.send(true).unwrap();
+
+        // The task should terminate promptly without the upstream dropping.
+        tokio::time::timeout(tokio::time::Duration::from_millis(200), handle)
+            .await
+            .expect("gate did not exit after stop signal")
+            .expect("gate task panicked");
     }
 }

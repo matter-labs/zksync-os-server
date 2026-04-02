@@ -751,16 +751,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "is not in snapshots")]
-    fn unregistered_adjacency_component_panics_in_compute() {
+    fn unregistered_adjacency_component_skips_pair_in_compute() {
         use crate::adjacent::compute_adjacent_snapshots;
         use std::collections::HashMap;
 
         let mut snapshots = HashMap::new();
         snapshots.insert(ComponentId::BlockExecutor, (100u64, None));
-        // BlockCanonizer intentionally absent from snapshots.
+        // BlockCanonizer intentionally absent from snapshots — pair is silently skipped.
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
-        compute_adjacent_snapshots(&adjacency, &snapshots);
+        let result = compute_adjacent_snapshots(&adjacency, &snapshots);
+        assert!(result.is_empty());
     }
 
     #[tokio::test]
