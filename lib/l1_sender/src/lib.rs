@@ -286,16 +286,21 @@ where
                 // blocking here would leave the pipeline stuck with an unconfirmed tx.
                 let fresh = estimate_gas_params(&provider).await?;
 
-                match resubmission_action(&gas_params, &fresh) {
-                    ResubmitAction::SendReplacement => {
+                match resubmission_action(
+                    &gas_params,
+                    &fresh,
+                    config.max_fee_per_gas_wei,
+                    config.max_priority_fee_per_gas_wei,
+                ) {
+                    ResubmitAction::SendReplacement(bumped) => {
                         tracing::info!(
                             command_name,
                             nonce,
-                            "fees rose enough — sending replacement tx",
+                            "sending replacement tx with bumped fees",
                         );
                         let (new_hash, new_gas) = build_and_send(
                             &command,
-                            &fresh,
+                            &bumped,
                             nonce,
                             &provider,
                             &config,
@@ -311,7 +316,7 @@ where
                         tracing::info!(
                             command_name,
                             tx_hash = ?tx_hash,
-                            "fees unchanged — re-watching original tx",
+                            "bumped fees would exceed cap — re-watching original tx",
                         );
                     }
                 }
@@ -326,21 +331,33 @@ where
 
 /// What to do when a transaction times out waiting for inclusion.
 enum ResubmitAction {
-    /// Network fees rose enough to justify a replacement transaction with fresh fees.
-    SendReplacement,
-    /// Fees have not moved significantly — keep watching the original transaction hash.
+    /// Send a replacement transaction using the enclosed fee parameters, which are
+    /// guaranteed to satisfy the EIP-1559 10% bump rule and stay within the operator's cap.
+    SendReplacement(GasParams),
+    /// The minimum required bump would exceed the operator's configured fee cap —
+    /// keep watching the original transaction hash instead.
     RewatchOriginal,
 }
 
-/// Pure decision function: should we send a replacement transaction or rewatch the original?
+/// Decides whether to send a replacement transaction or rewatch the original.
 ///
-/// A replacement is warranted only when the fresh estimate satisfies the EIP-1559 mempool
-/// bump rule (≥ 10% increase on both fee fields) relative to what was already sent.
-fn resubmission_action(current: &GasParams, fresh: &GasParams) -> ResubmitAction {
-    if fresh.is_sufficient_replacement(current) {
-        ResubmitAction::SendReplacement
-    } else {
+/// A bumped fee set is computed as `max(fresh, ceil(current * 1.1))` on each field,
+/// guaranteeing mempool acceptance. If that bumped amount would exceed the operator's
+/// configured cap, rewatching is the only safe option — replacing with a capped fee
+/// would be rejected by the mempool anyway.
+fn resubmission_action(
+    current: &GasParams,
+    fresh: &GasParams,
+    max_fee_per_gas_cap: u128,
+    max_priority_fee_per_gas_cap: u128,
+) -> ResubmitAction {
+    let bumped = fresh.with_minimum_bump(current);
+    if bumped.max_fee_per_gas > max_fee_per_gas_cap
+        || bumped.max_priority_fee_per_gas > max_priority_fee_per_gas_cap
+    {
         ResubmitAction::RewatchOriginal
+    } else {
+        ResubmitAction::SendReplacement(bumped)
     }
 }
 
@@ -715,27 +732,41 @@ mod resubmission_tests {
     }
 
     #[test]
-    fn resubmission_action_sends_replacement_when_fees_rise() {
+    fn resubmission_action_always_sends_replacement_within_cap() {
+        // Even when fresh == current, the bump is applied and replacement is sent.
         assert!(matches!(
-            resubmission_action(&gas(100, 10), &gas(110, 11)),
-            ResubmitAction::SendReplacement
+            resubmission_action(&gas(100, 10), &gas(100, 10), u128::MAX, u128::MAX),
+            ResubmitAction::SendReplacement(_)
         ));
     }
 
     #[test]
-    fn resubmission_action_rewatches_when_fees_unchanged() {
+    fn resubmission_action_rewatches_when_bump_exceeds_fee_cap() {
+        // current=100, bumped fee would be 110, cap=109 → rewatch.
         assert!(matches!(
-            resubmission_action(&gas(100, 10), &gas(100, 10)),
+            resubmission_action(&gas(100, 10), &gas(100, 10), 109, u128::MAX),
             ResubmitAction::RewatchOriginal
         ));
     }
 
     #[test]
-    fn resubmission_action_rewatches_when_only_one_field_bumped() {
-        // Only max_fee bumped but not priority fee → not a sufficient replacement.
+    fn resubmission_action_rewatches_when_bump_exceeds_priority_cap() {
+        // current priority=10, bumped would be 11, cap=10 → rewatch.
         assert!(matches!(
-            resubmission_action(&gas(100, 10), &gas(110, 10)),
+            resubmission_action(&gas(100, 10), &gas(100, 10), u128::MAX, 10),
             ResubmitAction::RewatchOriginal
         ));
+    }
+
+    #[test]
+    fn resubmission_action_uses_higher_of_fresh_and_bump() {
+        // fresh=200 is already above the 10% bump of current=100; result should use fresh.
+        match resubmission_action(&gas(100, 10), &gas(200, 20), u128::MAX, u128::MAX) {
+            ResubmitAction::SendReplacement(p) => {
+                assert_eq!(p.max_fee_per_gas, 200);
+                assert_eq!(p.max_priority_fee_per_gas, 20);
+            }
+            ResubmitAction::RewatchOriginal => panic!("expected SendReplacement"),
+        }
     }
 }
