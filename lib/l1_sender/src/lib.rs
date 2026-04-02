@@ -2,7 +2,6 @@ pub mod batcher_metrics;
 pub mod batcher_model;
 pub mod commands;
 pub mod config;
-pub mod error;
 mod metrics;
 pub mod pipeline_component;
 pub mod types;
