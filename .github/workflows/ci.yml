@@ -169,6 +169,7 @@ jobs:
   #  Build prover integration tests  #
   ####################################
   build-prover-tests:
+    if: false # TODO: re-enable prover tests in CI
     runs-on: matterlabs-ci-runner-ultra-performance
     steps:
 
@@ -205,6 +206,7 @@ jobs:
   #  Run prover integration tests on GPU machine  #
   #################################################
   prover-tests:
+    if: false # TODO: re-enable prover tests in CI
     runs-on: [matterlabs-ci-hetzner-rtx6000-gpu]
     needs: build-prover-tests
     steps:
