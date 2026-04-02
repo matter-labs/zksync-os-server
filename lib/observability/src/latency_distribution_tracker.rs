@@ -22,13 +22,6 @@ pub struct LatencyDistributionTracker<S> {
     past_stages: Vec<(S, Duration)>,
 }
 
-impl<S> Clone for LatencyDistributionTracker<S> {
-    fn clone(&self) -> Self {
-        // The clone starts fresh — we don't carry timing state across clones,
-        // since each copy of a command should track its own lifecycle independently.
-        Self::default()
-    }
-}
 
 impl<S> Default for LatencyDistributionTracker<S> {
     fn default() -> Self {

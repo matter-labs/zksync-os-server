@@ -7,7 +7,7 @@ use std::fmt::Display;
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 use zksync_os_contract_interface::{IExecutor, InteropRoot};
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ExecuteCommand {
     batches: Vec<SignedBatchEnvelope<FriProof>>,
     priority_ops: Vec<PriorityOpsBatchInfo>,

@@ -3,7 +3,7 @@ use std::time::Duration;
 use zksync_os_operator_signer::SignerConfig;
 
 /// Configuration of L1 sender.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct L1SenderConfig<Input> {
     /// Operator signer configuration.
     /// Depending on the mode, this can be a commit/prove/execute operator.
@@ -36,4 +36,20 @@ pub struct L1SenderConfig<Input> {
     pub fusaka_upgrade_timestamp: u64,
 
     pub phantom_data: PhantomData<Input>,
+}
+
+impl<Input> Clone for L1SenderConfig<Input> {
+    fn clone(&self) -> Self {
+        Self {
+            operator_signer: self.operator_signer.clone(),
+            max_fee_per_gas_wei: self.max_fee_per_gas_wei,
+            max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas_wei,
+            max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas_wei,
+            command_limit: self.command_limit,
+            poll_interval: self.poll_interval,
+            transaction_timeout: self.transaction_timeout,
+            fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
+            phantom_data: PhantomData,
+        }
+    }
 }

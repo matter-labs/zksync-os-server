@@ -63,7 +63,7 @@ pub async fn run_l1_sender<Input, F, P>(
     gateway: bool,
 ) -> anyhow::Result<()>
 where
-    Input: SendToL1 + Clone + Send + Sync + 'static,
+    Input: SendToL1 + Send + Sync + 'static,
     F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone + Send + 'static,
     P: Provider<Ethereum> + Clone + Send + Sync + 'static,
 {
