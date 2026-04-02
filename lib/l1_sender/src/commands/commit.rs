@@ -10,7 +10,7 @@ use zksync_os_contract_interface::calldata::encode_commit_batch_data;
 use zksync_os_contract_interface::l1_discovery::BatchVerificationSL;
 use zksync_os_contract_interface::{IExecutor, IMultisigCommitter};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CommitCommand {
     pub(super) input: SignedBatchEnvelope<FriProof>,
     pub(super) signatures: Option<BatchSignatureSet>,

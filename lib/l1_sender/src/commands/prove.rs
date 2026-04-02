@@ -13,7 +13,7 @@ const OHBENDER_PROOF_TYPE: u32 = 2;
 const FAKE_PROOF_TYPE: u32 = 3;
 const FAKE_PROOF_MAGIC_VALUE: u32 = 13;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ProofCommand {
     batches: Vec<SignedBatchEnvelope<FriProof>>,
     proof: SnarkProof,

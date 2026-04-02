@@ -761,6 +761,11 @@ pub struct L1SenderConfig {
     #[config(default_t = 1 * TimeUnit::Seconds)]
     pub poll_interval: Duration,
 
+    /// Maximum time to wait for a submitted L1 transaction to be mined before
+    /// re-estimating fees and sending a replacement transaction.
+    #[config(default_t = 300 * TimeUnit::Seconds)]
+    pub transaction_timeout: Duration,
+
     /// Use Fusaka blob transaction format if the timestamp has passed.
     ///
     /// Defaults to `2^64-1` which is practically never. This is needed for local setup as anvil
@@ -1302,6 +1307,7 @@ impl L1SenderConfig {
             max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
+            transaction_timeout: self.transaction_timeout,
             fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
             phantom_data: Default::default(),
         }
@@ -1587,6 +1593,7 @@ mod tests {
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
                 command_limit: 16,
                 poll_interval: Duration::from_millis(100),
+                transaction_timeout: Duration::from_secs(300),
                 fusaka_upgrade_timestamp: u64::MAX,
                 enabled: true,
                 pubdata_mode: Some(PubdataMode::Blobs),
