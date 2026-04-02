@@ -17,8 +17,9 @@ use alloy::consensus::BlobTransactionValidationError;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, Encodable2718};
 use alloy::network::{Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844};
+use alloy::primitives::Address;
+use alloy::primitives::TxHash;
 use alloy::primitives::utils::{format_ether, format_units};
-use alloy::primitives::{Address, TxHash};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, WalletProvider};
@@ -32,35 +33,31 @@ use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_pipeline::PeekableReceiver;
 
-// ==============================================================================
-// Public entry point
-// ==============================================================================
-
-/// Runs the L1 sender loop for a single transaction type (commit, prove, or execute).
+/// Process responsible for sending transactions to L1.
+/// Handles one type of l1 command (e.g. Commit or Prove).
+/// Loads up to `command_limit` commands from the channel and sends them to L1 in parallel.
+/// Each command is spawned as an independent Tokio task via [`submit_and_confirm`], which
+/// handles submission, receipt polling, and resubmission with gas bumps.
 ///
-/// ## Design
+/// Important: the same provider (sender address) must not be used outside this process.
+///     Otherwise, there will be a nonce conflict and a failed L1 transaction
+///     (recoverable on restart)
 ///
-/// The main loop collects up to `command_limit` commands per iteration, then processes
-/// each one:
+/// Known issues:
+///   * Crashes when there is a gap in incoming L1 blocks (happens periodically with Infura provider)
+///   * Does not attempt to detect in-flight L1 transactions on startup - just crashes if they get mined
 ///
-/// - **Passthrough** commands are forwarded immediately — no L1 transaction is needed.
-/// - **SendToL1** commands each get a nonce assigned and are spawned as an independent
-///   Tokio task via [`submit_and_confirm`].  Fee-cap blocking
-///   ([`estimate_gas_within_caps`]) happens in the main loop so that no nonce is consumed
-///   while network fees exceed the operator's configured cap.
-///
-/// The `oneshot` receivers from all spawned tasks are awaited in submission order, which
-/// preserves ordering on the `outbound` channel (L1 ordering is guaranteed by nonce, not
-/// submission order, but we preserve it here for consistency with downstream consumers).
-///
-/// ## Important
-///
-/// The same provider (sender address) must not be used outside this process. Otherwise
-/// there will be a nonce conflict and a failed L1 transaction (recoverable on restart).
+/// Note: we pass `to_address` - L1 contract address to send transactions to.
+/// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
 pub async fn run_l1_sender<Input, F, P>(
+    // == plumbing ==
     mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
     outbound: Sender<SignedBatchEnvelope<FriProof>>,
+
+    // == command-specific settings ==
     to_address: Address,
+
+    // == config ==
     mut provider: FillProvider<F, P>,
     config: L1SenderConfig<Input>,
     gateway: bool,
@@ -95,11 +92,17 @@ where
     // At this point, only actual SendToL1 commands are expected
     loop {
         latency_tracker.enter_state(L1SenderState::WaitingRecv);
+        // This sleeps until **at least one** command is received from the channel. Additionally,
+        // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
+        // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
+        // emptied in every iteration, its size never exceeds `self.command_limit`.
         let received = inbound
             .recv_many(&mut cmd_buffer, config.command_limit)
             .await;
+        // This method only returns `0` if the channel has been closed and there are no more items
+        // in the queue.
         if received == 0 {
-            tracing::info!(command_name, "inbound channel closed");
+            tracing::info!("inbound channel closed");
             return Ok(());
         }
 
@@ -217,10 +220,6 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
         }
     }
 }
-
-// ==============================================================================
-// Per-transaction task
-// ==============================================================================
 
 /// Submits a single L1 transaction and waits for it to be confirmed.
 ///
@@ -416,10 +415,6 @@ async fn estimate_gas_params(provider: &impl Provider) -> anyhow::Result<GasPara
         max_priority_fee_per_gas: est.max_priority_fee_per_gas,
     })
 }
-
-// ==============================================================================
-// Transaction building and sending
-// ==============================================================================
 
 /// Builds an L1 transaction from `command` and broadcasts it.
 ///
@@ -675,6 +670,7 @@ async fn validate_tx_receipt<Input: SendToL1>(
     receipt: TransactionReceipt,
 ) -> anyhow::Result<()> {
     if receipt.status() {
+        // Transaction succeeded - log output and return OK(())
         L1_SENDER_METRICS.report_tx_receipt(command, receipt)?;
         Ok(())
     } else {
@@ -682,7 +678,7 @@ async fn validate_tx_receipt<Input: SendToL1>(
             %command,
             tx_hash = ?receipt.transaction_hash,
             l1_block_number = receipt.block_number.unwrap(),
-            "transaction failed on L1",
+            "Transaction failed on L1",
         );
         if let Ok(trace) = provider
             .debug_trace_transaction(
@@ -694,17 +690,20 @@ async fn validate_tx_receipt<Input: SendToL1>(
             let call_frame = trace
                 .try_into_call_frame()
                 .expect("requested call tracer but received a different call frame type");
+            // We print top-level call frame's output as it likely contains serialized custom
+            // error pointing to the underlying problem (i.e. starts with the error's 4byte
+            // signature).
             tracing::error!(
                 ?call_frame.output,
                 ?call_frame.error,
                 ?call_frame.revert_reason,
-                "failed transaction's top-level call frame",
+                "Failed transaction's top-level call frame"
             );
         }
         anyhow::bail!(
-            "{} L1 command transaction failed (tx_hash='{:?}')",
+            "{} L1 command transaction failed, see L1 transaction's trace for more details (tx_hash='{:?}')",
             command,
-            receipt.transaction_hash,
+            receipt.transaction_hash
         );
     }
 }
