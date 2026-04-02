@@ -79,6 +79,20 @@ where
 
     let mut cmd_buffer = Vec::with_capacity(config.command_limit);
 
+    // Process all potential passthrough commands first
+    if process_prepending_passthrough_commands(
+        &mut inbound,
+        &outbound,
+        &latency_tracker,
+        command_name,
+    )
+    .await?
+    .is_none()
+    {
+        tracing::info!("inbound channel closed");
+        return Ok(());
+    }
+    // At this point, only actual SendToL1 commands are expected
     loop {
         latency_tracker.enter_state(L1SenderState::WaitingRecv);
         let received = inbound
@@ -98,21 +112,11 @@ where
         latency_tracker.enter_state(L1SenderState::SendingToL1);
         for cmd in cmd_buffer.drain(..) {
             match cmd {
-                // Passthrough commands represent batches that were already committed or
-                // proved in a previous run.  Forward them immediately without submitting
-                // a new L1 transaction.
-                L1SenderCommand::Passthrough(envelope) => {
-                    tracing::info!(
-                        command_name,
-                        batch_number = envelope.batch_number(),
-                        "Not actually sending to L1, just passing through",
-                    );
-                    let forwarded = (*envelope).with_stage(Input::PASSTHROUGH_STAGE);
-                    outbound
-                        .send(forwarded)
-                        .await
-                        .context("outbound channel closed")?;
-                }
+                L1SenderCommand::Passthrough(batch) => anyhow::bail!(
+                    "Unexpected passthrough command for batch {:?}. \
+                    No passthrough commands are expected after the first `SendToL1`.",
+                    batch.batch_number()
+                ),
 
                 L1SenderCommand::SendToL1(mut command) => {
                     // Fee-cap blocking stays in the main loop so that no nonces are
@@ -168,6 +172,48 @@ where
                     .context("outbound channel closed")?;
             }
             latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
+        }
+    }
+}
+
+async fn process_prepending_passthrough_commands<Input: SendToL1>(
+    inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
+    outbound: &Sender<SignedBatchEnvelope<FriProof>>,
+    latency_tracker: &ComponentStateHandle<L1SenderState>,
+    command_name: &str,
+) -> anyhow::Result<Option<()>> {
+    loop {
+        latency_tracker.enter_state(L1SenderState::WaitingRecv);
+        match inbound
+            .peek_recv(|command| matches!(command, L1SenderCommand::Passthrough(_)))
+            .await
+        {
+            None => return Ok(None),
+            // command is SendToL1 (not passthrough)
+            // we don't expect anymore passthroughs and can proceed with normal operations
+            Some(false) => return Ok(Some(())),
+            // command is passthrough
+            Some(true) => {
+                let Some(next_command) = inbound.recv().await else {
+                    return Ok(None);
+                };
+                match next_command {
+                    L1SenderCommand::SendToL1(_) => {
+                        anyhow::bail!("Mismatch between peeked and received command")
+                    }
+                    L1SenderCommand::Passthrough(batch) => {
+                        tracing::info!(
+                            command_name,
+                            batch_number = batch.batch_number(),
+                            "Not actually sending to L1, just passing through"
+                        );
+                        latency_tracker.enter_state(L1SenderState::WaitingSend);
+                        outbound
+                            .send((*batch).with_stage(Input::PASSTHROUGH_STAGE))
+                            .await?;
+                    }
+                }
+            }
         }
     }
 }
