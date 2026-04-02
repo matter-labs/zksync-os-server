@@ -21,11 +21,10 @@ use alloy::primitives::TxHash;
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
-use alloy::providers::{Provider, WalletProvider};
+use alloy::providers::{PendingTransactionBuilder, Provider, WalletProvider, WatchTxError};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use anyhow::Context as _;
-use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
@@ -254,16 +253,13 @@ where
     .await?;
 
     loop {
-        match poll_for_receipt(
-            tx_hash,
-            config.transaction_timeout,
-            &provider,
-            config.poll_interval,
-        )
-        .await?
-        {
-            PollOutcome::Receipt(receipt) => {
-                let receipt = *receipt;
+        let watch_result = PendingTransactionBuilder::new(provider.root().clone(), tx_hash)
+            .with_timeout(Some(config.transaction_timeout))
+            .get_receipt()
+            .await;
+
+        match watch_result {
+            Ok(receipt) => {
                 validate_tx_receipt(&provider, &command, receipt).await?;
                 report_post_confirmation(command_name, operator_address, &provider).await;
                 let mut envelopes: Vec<SignedBatchEnvelope<FriProof>> = command.into();
@@ -273,7 +269,7 @@ where
                 return Ok(envelopes);
             }
 
-            PollOutcome::TimedOut => {
+            Err(e) if matches!(e, alloy::providers::PendingTransactionError::TxWatcher(WatchTxError::Timeout)) => {
                 tracing::warn!(
                     command_name,
                     tx_hash = ?tx_hash,
@@ -320,6 +316,8 @@ where
                     }
                 }
             }
+
+            Err(e) => return Err(anyhow::anyhow!(e).context("wait for L1 transaction confirmation")),
         }
     }
 }
@@ -525,50 +523,6 @@ where
     );
 
     Ok((tx_hash, gas_params.clone()))
-}
-
-// ==============================================================================
-// Receipt polling
-// ==============================================================================
-
-/// Outcome of a [`poll_for_receipt`] call.
-enum PollOutcome {
-    /// A confirmed receipt (block number is set) was found.
-    Receipt(Box<TransactionReceipt>),
-    /// The deadline elapsed without a receipt appearing.
-    TimedOut,
-}
-
-/// Polls for a transaction receipt until it appears or the `timeout` deadline passes.
-///
-/// Uses an exponential backoff starting at `poll_interval`, capped at 4× that value,
-/// so that a short `poll_interval` does not spam the RPC node during high-load periods.
-async fn poll_for_receipt(
-    tx_hash: TxHash,
-    timeout: Duration,
-    provider: &impl Provider<Ethereum>,
-    poll_interval: Duration,
-) -> anyhow::Result<PollOutcome> {
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        match provider
-            .get_transaction_receipt(tx_hash)
-            .await
-            .context("get transaction receipt")?
-        {
-            Some(receipt) if receipt.block_number.is_some() => {
-                return Ok(PollOutcome::Receipt(Box::new(receipt)));
-            }
-            _ => {}
-        }
-
-        if Instant::now() >= deadline {
-            return Ok(PollOutcome::TimedOut);
-        }
-
-        tokio::time::sleep(poll_interval).await;
-    }
 }
 
 // ==============================================================================

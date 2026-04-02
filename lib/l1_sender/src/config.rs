@@ -27,9 +27,6 @@ pub struct L1SenderConfig<Input> {
 
     /// Maximum time to wait for a transaction to be included on L1 before attempting
     /// resubmission with updated gas fees.
-    ///
-    /// Defaults to 300 seconds, which is conservative enough to cover most network-congestion
-    /// scenarios while still allowing timely resubmission when fees move significantly.
     pub transaction_timeout: Duration,
 
     /// Use Fusaka blob transaction format if the timestamp has passed.
