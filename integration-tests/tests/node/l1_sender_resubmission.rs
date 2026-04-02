@@ -3,6 +3,7 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
 use alloy::providers::ext::AnvilApi;
 use alloy::rpc::types::TransactionRequest;
+use smart_config::EtherAmount;
 use std::time::Duration;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert};
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
@@ -26,6 +27,10 @@ async fn l1_sender_resubmits_after_timeout() -> anyhow::Result<()> {
 
     let tester = Tester::setup_with_overrides(|config| {
         config.l1_sender_config.transaction_timeout = TX_TIMEOUT;
+        // Raise fee caps well above what Anvil reports so fee-cap gating does not
+        // prevent transaction submission during the test.
+        config.l1_sender_config.max_priority_fee_per_gas = EtherAmount(10 * 1_000_000_000); // 10 gwei
+        config.l1_sender_config.max_fee_per_gas = EtherAmount(500 * 1_000_000_000); // 500 gwei
         // Fast block production so we get a batch quickly.
         config.sequencer_config.block_time = Duration::from_millis(200);
     })
