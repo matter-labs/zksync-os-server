@@ -15,7 +15,9 @@ pub struct AdjacentSnapshot {
 /// `snapshots` maps each ComponentId to (last_processed_block_seq, last_processed_block_timestamp).
 ///
 /// Returns a HashMap keyed by downstream ComponentId. Components with no upstream adjacency
-/// pair are absent from the result — callers fall back to head-relative lag for those.
+/// pair are absent from the result — callers treat their lag as 0 (BlockExecutor, the head)
+/// or ignore the result (unmonitored components with no thresholds).
+/// The monitor's startup assert guarantees that every other monitored component has a pair.
 /// Adjacency pairs where either component is absent from `snapshots` are silently skipped,
 /// so callers in HTTP handlers or other contexts where a panic is unsafe get a graceful result.
 ///

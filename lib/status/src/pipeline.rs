@@ -81,6 +81,8 @@ pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResp
 
     // adjacent_snapshot[downstream].block_diff = upstream_seq − downstream_seq
     // adjacent_snapshot[downstream].time_diff  = upstream_ts  − downstream_ts (when both available)
+    // Fan-in freedom is asserted by PipelineHealthMonitor::run() at startup; compute_adjacent_snapshots
+    // will not panic here under correct wiring.
     let adjacent = compute_adjacent_snapshots(&state.adjacency, &component_snapshots);
 
     let now = tokio::time::Instant::now();

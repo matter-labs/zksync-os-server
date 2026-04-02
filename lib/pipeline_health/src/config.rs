@@ -20,7 +20,8 @@ pub struct BackpressureCondition {
 #[derive(DescribeConfig, DeserializeConfig, Default, Clone, Debug)]
 pub struct BlockPipelineCondition {
     /// Trigger backpressure when a block-pipeline component is more than N blocks behind
-    /// its upstream neighbour (or behind BlockExecutor if no adjacency is registered).
+    /// its upstream neighbour. Every monitored component must have an adjacency pair registered;
+    /// the monitor asserts this at startup.
     pub max_block_lag: Option<u64>,
     /// Trigger backpressure when the block-timestamp lag for any block-pipeline component
     /// exceeds this duration. Only evaluated when both head and component timestamps are

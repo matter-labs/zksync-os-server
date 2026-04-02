@@ -91,6 +91,24 @@ impl PipelineHealthMonitor {
             }
         }
 
+        // Fan-in guard: each downstream component must appear in at most one adjacency pair.
+        // compute_adjacent_snapshots asserts the same invariant, but that function is also called
+        // from the HTTP handler where a panic is not acceptable. Asserting here — a safe panic
+        // site — ensures any wiring error is caught at startup, so the HTTP handler can rely on
+        // the adjacency being fan-in-free.
+        {
+            let mut seen = std::collections::HashSet::new();
+            for &(_, down) in &self.adjacency {
+                assert!(
+                    seen.insert(down),
+                    "fan-in topology detected: downstream component {:?} appears in multiple \
+                     adjacency pairs; the pipeline must be a linear chain with each component \
+                     having at most one upstream neighbour",
+                    down
+                );
+            }
+        }
+
         // BlockExecutor must be registered: it is the head-of-pipeline source of truth used by
         // head_state() on every evaluation tick. Fail fast here rather than panicking in the loop.
         assert!(
@@ -101,6 +119,32 @@ impl PipelineHealthMonitor {
              BlockExecutor is the required head-of-pipeline source of truth — \
              call register() for BlockExecutor before run()"
         );
+
+        // Every registered component that has at least one backpressure threshold must appear
+        // as the downstream in an adjacency pair — unless it is BlockExecutor itself (the head,
+        // which has no upstream by definition and whose self-lag is always 0).
+        //
+        // Without this guard a monitored component that is accidentally wired outside the
+        // .pipe() chain would silently fall back to head-relative lag, which accumulates the
+        // entire pipeline delay and triggers false backpressure immediately.
+        {
+            let downstream_set: std::collections::HashSet<ComponentId> =
+                self.adjacency.iter().map(|&(_, down)| down).collect();
+            for &(id, _) in &self.components {
+                if id == ComponentId::BlockExecutor {
+                    continue;
+                }
+                let cond = self.config.condition_for(id);
+                let has_threshold = cond.max_block_lag.is_some() || cond.max_time_lag.is_some();
+                assert!(
+                    !has_threshold || downstream_set.contains(&id),
+                    "component {:?} has backpressure thresholds but no adjacency pair registered; \
+                     call register_adjacency() so the monitor can measure lag against its direct \
+                     upstream rather than falling back to head-relative lag",
+                    id
+                );
+            }
+        }
 
         // Guard against a race where stop is already set before run() is entered.
         // changed() only waits for the *next* change, so without this check the monitor
@@ -198,22 +242,22 @@ impl PipelineHealthMonitor {
             .components
             .iter()
             .flat_map(|(id, _rx)| {
-                let &(comp_seq, comp_ts) = snapshots.get(id).expect("id came from self.components");
+                let &(_comp_seq, _comp_ts) =
+                    snapshots.get(id).expect("id came from self.components");
                 let adj = adjacent.get(id);
 
-                let block_lag = adj
-                    .map(|s| s.block_diff)
-                    .unwrap_or_else(|| head_seq.saturating_sub(comp_seq));
+                // block_lag: adjacent diff (upstream_seq − comp_seq).
+                // 0 for BlockExecutor (the head — no upstream by definition, self-lag is always 0)
+                // and for unmonitored components (which have no thresholds and can never trigger).
+                // The startup assert in run() guarantees every other registered component
+                // with a threshold has an adjacency pair, so adj is always Some for them.
+                let block_lag = adj.map(|s| s.block_diff).unwrap_or(0);
 
-                // time_lag: prefer adjacent diff (upstream_ts − comp_ts).
-                // Fall back to head-relative (head_ts − comp_ts) for components with no upstream.
-                // None when timestamps are unavailable for either side.
-                let time_lag = adj
-                    .and_then(|s| s.time_diff)
-                    .or_else(|| match (comp_ts, head_ts) {
-                        (Some(c), Some(h)) => Some(Duration::from_secs(h.saturating_sub(c))),
-                        _ => None,
-                    });
+                // time_lag: adjacent diff (upstream_ts − comp_ts); None when timestamps are
+                // unavailable. Same rationale as block_lag: 0/None is correct for BlockExecutor
+                // and unmonitored components; monitored non-head components are guaranteed by
+                // the startup assert to have adjacency.
+                let time_lag = adj.and_then(|s| s.time_diff);
 
                 let causes = self.evaluate(*id, block_lag, time_lag);
                 if !causes.is_empty() {
@@ -302,12 +346,12 @@ impl PipelineHealthMonitor {
 
     /// Evaluate backpressure for one component.
     ///
-    /// `block_lag`: pre-computed adjacent diff (upstream_seq − component_seq) when an adjacency
-    /// is registered, otherwise head_seq − component_seq.
+    /// `block_lag`: adjacent diff (upstream_seq − component_seq). 0 for BlockExecutor (the head)
+    /// and unmonitored components. The startup assert guarantees every other monitored component
+    /// has an adjacency pair, so this is always the true per-hop diff for those.
     ///
-    /// `time_lag`: pre-computed adjacent time diff (upstream_ts − component_ts) when an adjacency
-    /// is registered and both timestamps are available; head-relative time diff otherwise; None
-    /// when timestamps are unavailable.
+    /// `time_lag`: adjacent time diff (upstream_ts − component_ts); None when timestamps are
+    /// unavailable or the component has no upstream.
     pub(crate) fn evaluate(
         &self,
         id: ComponentId,
@@ -484,8 +528,12 @@ mod tests {
     async fn counter_does_not_increment_on_reason_change() {
         let config = block_config_with_block_lag(10);
         let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
         let (reporter, rx) = ComponentHealthReporter::new("block_applier");
+        exec_reporter.record_processed(100, None);
+        monitor.register(ComponentId::BlockExecutor, exec_rx);
         monitor.register(ComponentId::BlockApplier, rx);
+        monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::BlockApplier);
 
         // Transition 1: Accepting → NotAccepting
         reporter.record_processed(85, None);
@@ -646,9 +694,13 @@ mod tests {
     async fn batch_block_lag_fires_in_evaluate_and_update() {
         let config = batch_config_with_block_lag(10);
         let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
         let (reporter, rx) = ComponentHealthReporter::new("batcher");
+        exec_reporter.record_processed(100, None);
         reporter.record_processed(85, None);
+        monitor.register(ComponentId::BlockExecutor, exec_rx);
         monitor.register(ComponentId::Batcher, rx);
+        monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::Batcher);
 
         monitor.evaluate_and_update_with_head(100, None);
         assert!(
@@ -668,15 +720,19 @@ mod tests {
         // and ignores the late stale report of block 100.
         let config = batch_config_with_block_lag(50);
         let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
         let (reporter, rx) = ComponentHealthReporter::new("fri_job_manager");
+        exec_reporter.record_processed(210, None);
+        monitor.register(ComponentId::BlockExecutor, exec_rx);
         monitor.register(ComponentId::FriJobManager, rx);
+        monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::FriJobManager);
 
         // Batch 2 finishes first (higher block number).
         reporter.record_processed(200, None);
         // Batch 1 finishes late (lower block number) — must be ignored by high-watermark.
         reporter.record_processed(100, None);
 
-        // head=210, watermark=200, lag=10 < threshold=50 → must NOT trigger.
+        // head=210, watermark=200, adjacent lag=10 < threshold=50 → must NOT trigger.
         monitor.evaluate_and_update_with_head(210, None);
         assert_eq!(
             *monitor.acceptance_tx.borrow(),
@@ -689,8 +745,12 @@ mod tests {
     async fn fri_job_manager_block_lag_triggers_and_clears() {
         let config = batch_config_with_block_lag(10);
         let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
         let (reporter, rx) = ComponentHealthReporter::new("fri_job_manager");
+        exec_reporter.record_processed(100, None);
+        monitor.register(ComponentId::BlockExecutor, exec_rx);
         monitor.register(ComponentId::FriJobManager, rx);
+        monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::FriJobManager);
 
         reporter.record_processed(85, None);
         monitor.evaluate_and_update_with_head(100, None);
@@ -720,8 +780,12 @@ mod tests {
         // stored block stays 200, lag=10 < 50 → must NOT trigger.
         let config = batch_config_with_block_lag(50);
         let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
         let (reporter, rx) = ComponentHealthReporter::new("fri_job_manager");
+        exec_reporter.record_processed(210, None);
+        monitor.register(ComponentId::BlockExecutor, exec_rx);
         monitor.register(ComponentId::FriJobManager, rx);
+        monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::FriJobManager);
 
         reporter.record_processed(200, None);
         reporter.record_processed(190, None); // stale — must be ignored
@@ -746,6 +810,34 @@ mod tests {
         let (reporter, rx) = ComponentHealthReporter::new("block_applier");
         reporter.record_processed(10, None);
         monitor.register(ComponentId::BlockApplier, rx);
+
+        monitor.run().await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "has backpressure thresholds but no adjacency pair registered")]
+    async fn run_panics_when_monitored_component_has_no_adjacency() {
+        // BlockApplier has a block-lag threshold but no adjacency pair registered.
+        // run() must catch this at startup rather than silently falling back to
+        // head-relative lag (which accumulates full pipeline delay, causing false backpressure).
+        let config = PipelineHealthConfig {
+            block_pipeline: crate::config::BlockPipelineCondition {
+                max_block_lag: Some(10),
+                max_time_lag: None,
+            },
+            ..PipelineHealthConfig::default()
+        };
+        let (_stop_tx, stop_rx) = watch::channel(false);
+        let (mut monitor, _) = PipelineHealthMonitor::new(config, stop_rx);
+
+        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
+        let (apply_reporter, apply_rx) = ComponentHealthReporter::new("block_applier");
+        exec_reporter.record_processed(100, None);
+        apply_reporter.record_processed(90, None);
+
+        monitor.register(ComponentId::BlockExecutor, exec_rx);
+        monitor.register(ComponentId::BlockApplier, apply_rx);
+        // Intentionally no register_adjacency — must panic in run()
 
         monitor.run().await;
     }
@@ -784,8 +876,12 @@ mod tests {
     async fn fri_job_manager_backpressure_cause_identifies_component() {
         let config = batch_config_with_block_lag(10);
         let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
+        let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
         let (reporter, rx) = ComponentHealthReporter::new("fri_job_manager");
+        exec_reporter.record_processed(100, None);
+        monitor.register(ComponentId::BlockExecutor, exec_rx);
         monitor.register(ComponentId::FriJobManager, rx);
+        monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::FriJobManager);
 
         reporter.record_processed(85, None);
         monitor.evaluate_and_update_with_head(100, None);
