@@ -22,7 +22,6 @@ pub struct LatencyDistributionTracker<S> {
     past_stages: Vec<(S, Duration)>,
 }
 
-
 impl<S> Default for LatencyDistributionTracker<S> {
     fn default() -> Self {
         Self {
