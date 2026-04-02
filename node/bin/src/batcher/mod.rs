@@ -315,10 +315,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                                     self.batcher_config.batch_timeout,
                                 );
                                 tracing::info!(
-                                    batch_number,
-                                    first_block_timestamp,
-                                    unix_deadline,
-                                    "Armed batch deadline from first block timestamp."
+                                    "Armed batch deadline for batch {batch_number} from first block timestamp {first_block_timestamp}, sealing at unix={unix_deadline}"
                                 );
                                 deadline = Some(Box::pin(tokio::time::sleep_until(instant)));
                             }
