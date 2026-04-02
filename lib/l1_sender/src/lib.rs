@@ -13,7 +13,6 @@ use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use crate::types::GasParams;
-use backon::{BackoffBuilder, ExponentialBuilder};
 use alloy::consensus::BlobTransactionValidationError;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, Encodable2718};
@@ -551,11 +550,6 @@ async fn poll_for_receipt(
     provider: &impl Provider<Ethereum>,
     poll_interval: Duration,
 ) -> anyhow::Result<PollOutcome> {
-    let mut backoff = ExponentialBuilder::default()
-        .with_min_delay(poll_interval)
-        .with_max_delay(poll_interval * 4)
-        .without_max_times()
-        .build();
     let deadline = Instant::now() + timeout;
 
     loop {
@@ -574,8 +568,7 @@ async fn poll_for_receipt(
             return Ok(PollOutcome::TimedOut);
         }
 
-        // without_max_times() guarantees next() always returns Some(_).
-        tokio::time::sleep(backoff.next().expect("infinite backoff")).await;
+        tokio::time::sleep(poll_interval).await;
     }
 }
 
