@@ -26,7 +26,7 @@ use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::PubdataMode;
 
 pub mod batch_builder;
-pub mod batch_deadline_policy;
+mod batch_deadline_policy;
 mod seal_criteria;
 pub mod util;
 
@@ -238,8 +238,11 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         latency_tracker: &ComponentStateHandle<GenericComponentState>,
         prev_batch_info: &StoredBatchInfo,
     ) -> anyhow::Result<Option<BatchForSigning<ProverInput>>> {
-        // will be set to `Some` when we process the first block that the batch can be sealed after
+        // Armed once we reach `last_persisted_block`, using the first block's timestamp.
         let mut deadline: Option<Pin<Box<Sleep>>> = None;
+        // Captured from the very first block added to the batch, even during catch-up replay.
+        // This is the stable anchor for the deadline: it does not shift when the server restarts.
+        let mut first_block_timestamp: Option<u64> = None;
 
         let batch_number = prev_batch_info.batch_number + 1;
         let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
@@ -294,26 +297,30 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                                 leaf_count,
                             };
 
-                            // Arm the deadline on the first eligible block using its L2 timestamp.
-                            // Using an absolute wall-clock instant derived from the block timestamp
-                            // makes the deadline restart-resilient: the block timestamp is part of
-                            // chain state and does not reset when the server restarts.
-                            if deadline.is_none() {
-                                if block_number >= self.startup_config.last_persisted_block {
-                                    let block_timestamp = replay_record.block_context.timestamp;
-                                    let (instant, unix_deadline) = deadline_from_block_timestamp(
-                                        block_timestamp,
-                                        self.batcher_config.batch_timeout,
-                                    );
-                                    tracing::info!(
-                                        "Armed batch deadline from first block timestamp. Batch number: {batch_number}, block timestamp: {block_timestamp}, sealing timestamp: {unix_deadline}",
-                                    );
-                                    deadline = Some(Box::pin(tokio::time::sleep_until(instant)));
-                                } else {
-                                    tracing::debug!(
-                                        "received block with number {}, which is lower than last_persisted_block {}. Not enabling the deadline seal criteria yet.", block_number, self.startup_config.last_persisted_block
-                                    )
-                                }
+                            // Always record the first block's timestamp as the stable deadline
+                            // anchor. This must happen before the last_persisted_block check so
+                            // that restarts do not shift the reference block forward to the
+                            // catch-up frontier.
+                            let first_block_timestamp = first_block_timestamp
+                                .get_or_insert(replay_record.block_context.timestamp);
+
+                            // Arm the timer only once catch-up replay is complete. The deadline
+                            // itself is derived from first_block_timestamp — not from the block
+                            // that trips this condition — so it remains stable across restarts.
+                            if deadline.is_none()
+                                && block_number >= self.startup_config.last_persisted_block
+                            {
+                                let (instant, unix_deadline) = deadline_from_block_timestamp(
+                                    *first_block_timestamp,
+                                    self.batcher_config.batch_timeout,
+                                );
+                                tracing::info!(
+                                    batch_number,
+                                    first_block_timestamp,
+                                    unix_deadline,
+                                    "Armed batch deadline from first block timestamp."
+                                );
+                                deadline = Some(Box::pin(tokio::time::sleep_until(instant)));
                             }
 
                             // ---------- accumulate batch data ----------
