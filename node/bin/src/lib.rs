@@ -991,41 +991,6 @@ async fn run_main_node_pipeline(
         return;
     }
 
-    // Fetch the L1 timestamp of the last executeBatches event for settlement-deadline-based batch deadlines.
-    let last_execute_l1_timestamp = if config.batcher_config.settlement_deadline.is_some()
-        && node_state_on_startup.l1_state.last_executed_batch > 0
-    {
-        let execute_l1_block = zksync_os_l1_watcher::util::find_l1_execute_block_by_batch_number(
-            node_state_on_startup.l1_state.diamond_proxy_sl.clone(),
-            node_state_on_startup.l1_state.last_executed_batch,
-        )
-        .await
-        .expect("failed to find L1 block for last executed batch");
-
-        let block = node_state_on_startup
-            .l1_state
-            .diamond_proxy_sl
-            .provider()
-            .get_block_by_number(execute_l1_block.into())
-            .await
-            .expect("failed to fetch L1 block header")
-            .expect("L1 block for last executed batch not found");
-
-        let ts = block.header.timestamp;
-        tracing::info!(
-            last_executed_batch = node_state_on_startup.l1_state.last_executed_batch,
-            execute_l1_block,
-            last_execute_l1_timestamp = ts,
-            "fetched L1 execute timestamp for SLI-based batch deadline"
-        );
-        Some(ts)
-    } else {
-        None
-    };
-
-    let (execute_timestamp_sender, execute_timestamp_receiver) =
-        watch::channel(last_execute_l1_timestamp);
-
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
         .await
@@ -1091,7 +1056,6 @@ async fn run_main_node_pipeline(
                 last_committed_batch: node_state_on_startup.l1_state.last_committed_batch,
                 last_executed_batch: node_state_on_startup.l1_state.last_executed_batch,
                 last_persisted_block: node_state_on_startup.block_replay_storage_last_block,
-                last_execute_l1_timestamp,
             },
             chain_id,
             sl_chain_id: node_state_on_startup.l1_state.sl_chain_id,
@@ -1102,7 +1066,6 @@ async fn run_main_node_pipeline(
             sidecar_sender,
             committed_batch_provider: committed_batch_provider.clone(),
             read_state: state.clone(),
-            execute_timestamp_receiver,
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.clone().into(),
@@ -1150,11 +1113,6 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
         })
-        .pipe(
-            batcher::execute_timestamp_notifier::ExecuteTimestampNotifier {
-                sender: execute_timestamp_sender,
-            },
-        )
         .pipe(BatchSink::new(internal_config_manager));
 
     tracing::info!("Launching pipeline");

@@ -837,9 +837,19 @@ pub struct BatcherConfig {
     #[config(default_t = true)]
     pub enabled: bool,
 
-    /// How long to keep a batch open before sealing it.
-    /// On mainnet environments with low load, consider setting a higher value (e.g. 3 hours),
-    /// as L1 settlement has a non-trivial gas overhead per each batch.
+    /// Maximum time a batch stays open before being sealed.
+    ///
+    /// The deadline is computed as `first_block_timestamp + batch_timeout`, where
+    /// `first_block_timestamp` is the L2 timestamp of the first block in the batch. Using an
+    /// L2 timestamp as the anchor makes the deadline restart-resilient: it does not reset when
+    /// the server restarts mid-batch.
+    ///
+    /// Set this to `settlement_sli - expected_proving_time - expected_l1_submission_time`.
+    /// The operator is responsible for reserving enough headroom for proving and L1 submission,
+    /// since proving time is non-deterministic and cannot be reliably modelled as a fixed buffer.
+    ///
+    /// On mainnet environments with low load, consider a higher value (e.g. 3 hours), as L1
+    /// settlement has a non-trivial gas overhead per batch.
     #[config(default_t = 60 * TimeUnit::Seconds)]
     pub batch_timeout: Duration,
 
@@ -856,19 +866,6 @@ pub struct BatcherConfig {
     /// when recovering from corrupted state.
     #[config(default_t = true)]
     pub assert_rebuilt_batch_hashes: bool,
-
-    /// Target duration within which a block must be settled on L1. When set, the batch seal
-    /// deadline is computed as:
-    ///   `last_execute_timestamp + settlement_deadline - proving_buffer`
-    /// This makes the deadline restart-resilient: it is an absolute wall-clock timestamp
-    /// derived from L1 state, not a relative timer.
-    /// Falls back to `batch_timeout` when no L1 execute timestamp is available yet.
-    pub settlement_deadline: Option<Duration>,
-
-    /// Buffer subtracted from `settlement_deadline` to account for proving and L1 submission time.
-    /// Only meaningful when `settlement_deadline` is set.
-    #[config(default_t = 5 * TimeUnit::Minutes)]
-    pub proving_buffer: Duration,
 }
 
 /// Only used on the Main Node.
