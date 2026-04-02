@@ -12,7 +12,8 @@ use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
-use crate::types::{Backoff, GasParams};
+use crate::types::GasParams;
+use backon::{BackoffBuilder, ExponentialBuilder};
 use alloy::consensus::BlobTransactionValidationError;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, Encodable2718};
@@ -351,7 +352,7 @@ fn resubmission_action(
     max_fee_per_gas_cap: u128,
     max_priority_fee_per_gas_cap: u128,
 ) -> ResubmitAction {
-    let bumped = fresh.with_minimum_bump(current);
+    let bumped = fresh.with_minimum_replacement_bump(current);
     if bumped.max_fee_per_gas > max_fee_per_gas_cap
         || bumped.max_priority_fee_per_gas > max_priority_fee_per_gas_cap
     {
@@ -360,10 +361,6 @@ fn resubmission_action(
         ResubmitAction::SendReplacement(bumped)
     }
 }
-
-// ==============================================================================
-// Gas estimation
-// ==============================================================================
 
 /// Estimates EIP-1559 gas parameters and blocks until they fall within the operator's
 /// configured fee caps.
@@ -554,7 +551,11 @@ async fn poll_for_receipt(
     provider: &impl Provider<Ethereum>,
     poll_interval: Duration,
 ) -> anyhow::Result<PollOutcome> {
-    let mut backoff = Backoff::new(poll_interval, poll_interval * 4, 2);
+    let mut backoff = ExponentialBuilder::default()
+        .with_min_delay(poll_interval)
+        .with_max_delay(poll_interval * 4)
+        .without_max_times()
+        .build();
     let deadline = Instant::now() + timeout;
 
     loop {
@@ -573,7 +574,8 @@ async fn poll_for_receipt(
             return Ok(PollOutcome::TimedOut);
         }
 
-        tokio::time::sleep(backoff.next_duration()).await;
+        // without_max_times() guarantees next() always returns Some(_).
+        tokio::time::sleep(backoff.next().expect("infinite backoff")).await;
     }
 }
 

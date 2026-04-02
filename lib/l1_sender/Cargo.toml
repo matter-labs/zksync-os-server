@@ -42,6 +42,7 @@ time = { workspace = true, features = ["parsing", "formatting"] }
 itertools.workspace = true
 vise.workspace = true
 thiserror.workspace = true
+backon.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
