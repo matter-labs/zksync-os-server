@@ -261,7 +261,9 @@ where
         match watch_result {
             Ok(receipt) => {
                 validate_tx_receipt(&provider, &command, receipt).await?;
-                report_post_confirmation(command_name, operator_address, &provider).await;
+                if let Err(err) = try_report_post_confirmation(command_name, operator_address, &provider).await {
+                    tracing::warn!(%err, command_name, "failed to report post-confirmation metrics");
+                }
                 let mut envelopes: Vec<SignedBatchEnvelope<FriProof>> = command.into();
                 envelopes
                     .iter_mut()
@@ -281,13 +283,12 @@ where
                 // blocking here would leave the pipeline stuck with an unconfirmed tx.
                 let fresh = estimate_gas_params(&provider).await?;
 
-                match resubmission_action(
-                    &gas_params,
-                    &fresh,
-                    config.max_fee_per_gas_wei,
-                    config.max_priority_fee_per_gas_wei,
-                ) {
-                    ResubmitAction::SendReplacement(bumped) => {
+                // Always apply at least a 10% bump to guarantee mempool acceptance.
+                // If the bumped fees exceed the cap, rewatch the original instead.
+                let bumped = fresh.with_minimum_replacement_bump(&gas_params);
+                if bumped.max_fee_per_gas <= config.max_fee_per_gas_wei
+                    && bumped.max_priority_fee_per_gas <= config.max_priority_fee_per_gas_wei
+                {
                         tracing::info!(
                             command_name,
                             nonce,
@@ -306,14 +307,12 @@ where
                         .await?;
                         tx_hash = new_hash;
                         gas_params = new_gas;
-                    }
-                    ResubmitAction::RewatchOriginal => {
-                        tracing::info!(
-                            command_name,
-                            tx_hash = ?tx_hash,
-                            "bumped fees would exceed cap — re-watching original tx",
-                        );
-                    }
+                } else {
+                    tracing::info!(
+                        command_name,
+                        tx_hash = ?tx_hash,
+                        "bumped fees would exceed cap — re-watching original tx",
+                    );
                 }
             }
 
@@ -325,38 +324,6 @@ where
 // ==============================================================================
 // Resubmission decision
 // ==============================================================================
-
-/// What to do when a transaction times out waiting for inclusion.
-enum ResubmitAction {
-    /// Send a replacement transaction using the enclosed fee parameters, which are
-    /// guaranteed to satisfy the EIP-1559 10% bump rule and stay within the operator's cap.
-    SendReplacement(GasParams),
-    /// The minimum required bump would exceed the operator's configured fee cap —
-    /// keep watching the original transaction hash instead.
-    RewatchOriginal,
-}
-
-/// Decides whether to send a replacement transaction or rewatch the original.
-///
-/// A bumped fee set is computed as `max(fresh, ceil(current * 1.1))` on each field,
-/// guaranteeing mempool acceptance. If that bumped amount would exceed the operator's
-/// configured cap, rewatching is the only safe option — replacing with a capped fee
-/// would be rejected by the mempool anyway.
-fn resubmission_action(
-    current: &GasParams,
-    fresh: &GasParams,
-    max_fee_per_gas_cap: u128,
-    max_priority_fee_per_gas_cap: u128,
-) -> ResubmitAction {
-    let bumped = fresh.with_minimum_replacement_bump(current);
-    if bumped.max_fee_per_gas > max_fee_per_gas_cap
-        || bumped.max_priority_fee_per_gas > max_priority_fee_per_gas_cap
-    {
-        ResubmitAction::RewatchOriginal
-    } else {
-        ResubmitAction::SendReplacement(bumped)
-    }
-}
 
 /// Estimates EIP-1559 gas parameters and blocks until they fall within the operator's
 /// configured fee caps.
@@ -525,24 +492,6 @@ where
     Ok((tx_hash, gas_params.clone()))
 }
 
-// ==============================================================================
-// Post-confirmation reporting (non-fatal)
-// ==============================================================================
-
-/// Logs operator balance and nonce after a transaction is confirmed.
-///
-/// Failures are logged as warnings and do not abort the pipeline — metrics are
-/// best-effort and should not block critical processing.
-async fn report_post_confirmation(
-    command_name: &'static str,
-    operator_address: Address,
-    provider: &impl Provider<Ethereum>,
-) {
-    if let Err(err) = try_report_post_confirmation(command_name, operator_address, provider).await {
-        tracing::warn!(%err, command_name, "failed to report post-confirmation metrics");
-    }
-}
-
 async fn try_report_post_confirmation(
     command_name: &'static str,
     operator_address: Address,
@@ -557,12 +506,7 @@ async fn try_report_post_confirmation(
         .await
         .context("get operator nonce")?;
     let balance_eth = format_ether(balance);
-    tracing::info!(
-        command_name,
-        balance_eth,
-        nonce,
-        "post-confirmation operator state",
-    );
+    tracing::info!(command_name, balance_eth, nonce, "post-confirmation operator state");
     L1_SENDER_METRICS.balance[&command_name].set(balance_eth.parse()?);
     L1_SENDER_METRICS.nonce[&command_name].set(nonce);
     Ok(())
@@ -668,53 +612,3 @@ async fn validate_tx_receipt<Input: SendToL1>(
     }
 }
 
-#[cfg(test)]
-mod resubmission_tests {
-    use super::*;
-
-    fn gas(fee: u128, priority: u128) -> GasParams {
-        GasParams {
-            max_fee_per_gas: fee,
-            max_priority_fee_per_gas: priority,
-        }
-    }
-
-    #[test]
-    fn resubmission_action_always_sends_replacement_within_cap() {
-        // Even when fresh == current, the bump is applied and replacement is sent.
-        assert!(matches!(
-            resubmission_action(&gas(100, 10), &gas(100, 10), u128::MAX, u128::MAX),
-            ResubmitAction::SendReplacement(_)
-        ));
-    }
-
-    #[test]
-    fn resubmission_action_rewatches_when_bump_exceeds_fee_cap() {
-        // current=100, bumped fee would be 110, cap=109 → rewatch.
-        assert!(matches!(
-            resubmission_action(&gas(100, 10), &gas(100, 10), 109, u128::MAX),
-            ResubmitAction::RewatchOriginal
-        ));
-    }
-
-    #[test]
-    fn resubmission_action_rewatches_when_bump_exceeds_priority_cap() {
-        // current priority=10, bumped would be 11, cap=10 → rewatch.
-        assert!(matches!(
-            resubmission_action(&gas(100, 10), &gas(100, 10), u128::MAX, 10),
-            ResubmitAction::RewatchOriginal
-        ));
-    }
-
-    #[test]
-    fn resubmission_action_uses_higher_of_fresh_and_bump() {
-        // fresh=200 is already above the 10% bump of current=100; result should use fresh.
-        match resubmission_action(&gas(100, 10), &gas(200, 20), u128::MAX, u128::MAX) {
-            ResubmitAction::SendReplacement(p) => {
-                assert_eq!(p.max_fee_per_gas, 200);
-                assert_eq!(p.max_priority_fee_per_gas, 20);
-            }
-            ResubmitAction::RewatchOriginal => panic!("expected SendReplacement"),
-        }
-    }
-}
