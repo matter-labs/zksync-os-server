@@ -547,7 +547,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 InteropWatcher::create_watcher(
                     node_startup_state.l1_state.bridgehub_sl.clone(),
                     config.l1_watcher_config.clone().into(),
-                    next_cursors.interop_event_index.clone(),
+                    next_cursors.interop_root_id,
                     interop_roots_subpool.clone(),
                     node_startup_state.l1_state.l1_chain_id,
                 )

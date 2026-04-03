@@ -10,7 +10,7 @@ use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
-use zksync_os_types::{BlockStartCursors, InteropRootsLogIndex, ProtocolSemanticVersion};
+use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
 /// A write-ahead log storing [`ReplayRecord`]s.
 ///
@@ -48,7 +48,7 @@ pub enum BlockReplayColumnFamily {
     ProtocolVersion,
     ForcePreimages,
     BlockOutputHash,
-    StartingInteropEventIndex,
+    StartingInteropRootId,
     StartingMigrationNumber,
     StartingInteropFeeNumber,
     /// Mapping from block_number to block hash.
@@ -67,7 +67,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
         BlockReplayColumnFamily::ProtocolVersion,
         BlockReplayColumnFamily::BlockOutputHash,
         BlockReplayColumnFamily::ForcePreimages,
-        BlockReplayColumnFamily::StartingInteropEventIndex,
+        BlockReplayColumnFamily::StartingInteropRootId,
         BlockReplayColumnFamily::StartingMigrationNumber,
         BlockReplayColumnFamily::StartingInteropFeeNumber,
         BlockReplayColumnFamily::CanonicalHash,
@@ -83,7 +83,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
             BlockReplayColumnFamily::ProtocolVersion => "protocol_version",
             BlockReplayColumnFamily::BlockOutputHash => "block_output_hash",
             BlockReplayColumnFamily::ForcePreimages => "force_preimages",
-            BlockReplayColumnFamily::StartingInteropEventIndex => "starting_interop_event_index",
+            BlockReplayColumnFamily::StartingInteropRootId => "starting_interop_root_id",
             BlockReplayColumnFamily::StartingMigrationNumber => "starting_migration_number",
             BlockReplayColumnFamily::StartingInteropFeeNumber => "starting_interop_fee_number",
             BlockReplayColumnFamily::CanonicalHash => "canonical_hash",
@@ -198,15 +198,15 @@ impl BlockReplayStorage {
             &force_preimages_value,
         );
 
-        let starting_interop_event_index_value = bincode::serde::encode_to_vec(
-            &record.starting_cursors.interop_event_index,
+        let starting_interop_root_id_value = bincode::serde::encode_to_vec(
+            record.starting_cursors.interop_root_id,
             bincode::config::standard(),
         )
-        .expect("Failed to serialize record.starting_cursors.interop_event_index");
+        .expect("Failed to serialize record.starting_cursors.interop_root_id");
         batch.put_cf(
-            BlockReplayColumnFamily::StartingInteropEventIndex,
+            BlockReplayColumnFamily::StartingInteropRootId,
             &db_key,
-            &starting_interop_event_index_value,
+            &starting_interop_root_id_value,
         );
 
         let starting_migration_number_value = bincode::serde::encode_to_vec(
@@ -387,20 +387,20 @@ impl ReadReplay for BlockReplayStorage {
             .expect("Failed to read from BlockOutputHash CF")
             .expect("BlockOutputHash must be written atomically with Context");
 
-        let starting_interop_event_index = if let Some(starting_interop_event_index) = self
+        let starting_interop_root_id = if let Some(starting_interop_root_id) = self
             .db
-            .get_cf(BlockReplayColumnFamily::StartingInteropEventIndex, &key)
-            .expect("Failed to read from StartingInteropEventIndex CF")
+            .get_cf(BlockReplayColumnFamily::StartingInteropRootId, &key)
+            .expect("Failed to read from StartingInteropRootId CF")
         {
-            let stored: InteropRootsLogIndex = bincode::serde::decode_from_slice(
-                &starting_interop_event_index,
+            let stored: u64 = bincode::serde::decode_from_slice(
+                &starting_interop_root_id,
                 bincode::config::standard(),
             )
-            .expect("Failed to deserialize starting interop event index")
+            .expect("Failed to deserialize starting interop root id")
             .0;
             stored
         } else {
-            InteropRootsLogIndex::default()
+            0
         };
 
         let starting_migration_number = if let Some(starting_migration_number) = self
@@ -462,7 +462,7 @@ impl ReadReplay for BlockReplayStorage {
                 )
                 .expect("Failed to deserialize starting_l1_priority_id")
                 .0,
-                interop_event_index: starting_interop_event_index,
+                interop_root_id: starting_interop_root_id,
                 migration_number: starting_migration_number,
                 interop_fee_number: starting_interop_fee_number,
             },

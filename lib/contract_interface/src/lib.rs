@@ -7,6 +7,7 @@ use crate::IBridgehub::{
     IBridgehubInstance, L2TransactionRequestDirect, L2TransactionRequestTwoBridgesOuter,
     requestL2TransactionDirectCall, requestL2TransactionTwoBridgesCall,
 };
+use crate::IMessageRoot::IMessageRootInstance;
 use crate::IMultisigCommitter::IMultisigCommitterInstance;
 use crate::IZKChain::IZKChainInstance;
 use alloy::contract::SolCallBuilder;
@@ -91,6 +92,8 @@ alloy::sol! {
         );
 
         function addInteropRootsInBatch(InteropRoot[] calldata interopRootsInput);
+
+        uint256 public totalPublishedInteropRoots;
 
         function getChainTree(uint256 chainId) public view returns (Bytes32PushTree);
 
@@ -428,6 +431,46 @@ alloy::sol! {
     #[sol(rpc)]
     interface IERC20 {
         function decimals() external view returns (uint8);
+    }
+}
+
+pub struct MessageRoot<P: Provider> {
+    instance: IMessageRootInstance<P, Ethereum>,
+    address: Address,
+}
+
+impl<P: Provider> MessageRoot<P> {
+    pub fn new(address: Address, provider: P) -> Self {
+        let instance = IMessageRoot::new(address, provider);
+        Self { instance, address }
+    }
+
+    pub fn address(&self) -> &Address {
+        &self.address
+    }
+
+    pub fn provider(&self) -> &P {
+        self.instance.provider()
+    }
+
+    pub async fn total_published_interop_roots(&self, block_id: BlockId) -> Result<u64> {
+        self.instance
+            .totalPublishedInteropRoots()
+            .block(block_id)
+            .call()
+            .await
+            .map(|n| n.saturating_to())
+            .enrich("totalPublishedInteropRoots", Some(block_id))
+    }
+
+    pub async fn code_exists_at_block(&self, block_id: BlockId) -> alloy::contract::Result<bool> {
+        let code = self
+            .provider()
+            .get_code_at(*self.address())
+            .block_id(block_id)
+            .await?;
+
+        Ok(!code.0.is_empty())
     }
 }
 
