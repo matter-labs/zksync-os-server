@@ -3,7 +3,7 @@ use alloy::primitives::utils::{format_ether, format_units};
 use alloy::providers::utils::Eip1559Estimation;
 use alloy::rpc::types::TransactionReceipt;
 use anyhow::Context;
-use vise::{Buckets, EncodeLabelValue, Gauge, Histogram, LabeledFamily, Metrics};
+use vise::{Buckets, Counter, EncodeLabelValue, Gauge, Histogram, LabeledFamily, Metrics};
 use zksync_os_observability::{GenericComponentState, StateLabel};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
@@ -98,6 +98,26 @@ pub struct L1SenderMetrics {
     /// Last nonce used
     #[metrics(labels = ["command"])]
     pub nonce: LabeledFamily<&'static str, Gauge<u64>>,
+
+    /// Operator-configured EIP-1559 max fee per gas cap in gwei, labeled by command.
+    ///
+    /// Paired with `estimated_max_fee_per_gas_gwei`, this lets dashboards immediately
+    /// show when the network estimate has crossed the operator's ceiling.
+    #[metrics(labels = ["command"])]
+    pub configured_max_fee_per_gas_gwei: LabeledFamily<&'static str, Gauge<f64>>,
+
+    /// Operator-configured EIP-1559 max priority fee per gas cap in gwei, labeled by command.
+    #[metrics(labels = ["command"])]
+    pub configured_max_priority_fee_per_gas_gwei: LabeledFamily<&'static str, Gauge<f64>>,
+
+    /// Number of replacement transactions broadcast due to confirmation timeouts,
+    /// labeled by command.
+    ///
+    /// A rising counter indicates the pipeline is actively resubmitting; if it climbs
+    /// without corresponding confirmations, the sender may be stuck (e.g. because the
+    /// bumped fees are still below the current base fee or the configured cap is too low).
+    #[metrics(labels = ["command"])]
+    pub tx_resubmissions: LabeledFamily<&'static str, Counter>,
 }
 
 impl L1SenderMetrics {
@@ -157,6 +177,19 @@ impl L1SenderMetrics {
             .set(Self::wei_to_gwei(eip1559_est.max_priority_fee_per_gas)?);
         Ok(())
     }
+    pub fn report_fee_caps(
+        &self,
+        command_name: &'static str,
+        max_fee_per_gas_wei: u128,
+        max_priority_fee_per_gas_wei: u128,
+    ) -> anyhow::Result<()> {
+        self.configured_max_fee_per_gas_gwei[&command_name]
+            .set(Self::wei_to_gwei(max_fee_per_gas_wei)?);
+        self.configured_max_priority_fee_per_gas_gwei[&command_name]
+            .set(Self::wei_to_gwei(max_priority_fee_per_gas_wei)?);
+        Ok(())
+    }
+
     pub fn report_blob_base_fee(&self, base_fee_wei: u128) -> anyhow::Result<()> {
         self.blob_base_fee_gwei
             .set(Self::wei_to_gwei(base_fee_wei)?);

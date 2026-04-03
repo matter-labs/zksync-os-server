@@ -130,6 +130,13 @@ where
                             .max_priority_fee_per_gas
                             .min(config.max_priority_fee_per_gas_wei),
                     };
+                    if let Err(err) = L1_SENDER_METRICS.report_fee_caps(
+                        command_name,
+                        config.max_fee_per_gas_wei,
+                        config.max_priority_fee_per_gas_wei,
+                    ) {
+                        tracing::warn!(%err, command_name, "failed to report fee cap metrics");
+                    }
                     if raw.max_fee_per_gas > config.max_fee_per_gas_wei
                         || raw.max_priority_fee_per_gas > config.max_priority_fee_per_gas_wei
                     {
@@ -322,6 +329,7 @@ where
                         nonce,
                         "sending replacement tx with bumped fees",
                     );
+                    L1_SENDER_METRICS.tx_resubmissions[&command_name].inc();
                     let (new_hash, new_gas) = build_and_send(
                         &command,
                         &bumped,
