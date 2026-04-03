@@ -273,8 +273,7 @@ where
                 return Ok(envelopes);
             }
 
-            Err(alloy::providers::PendingTransactionError::TxWatcher(WatchTxError::Timeout)) =>
-            {
+            Err(alloy::providers::PendingTransactionError::TxWatcher(WatchTxError::Timeout)) => {
                 tracing::warn!(
                     command_name,
                     tx_hash = ?tx_hash,
