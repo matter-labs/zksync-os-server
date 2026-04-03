@@ -119,10 +119,24 @@ where
                 ),
 
                 L1SenderCommand::SendToL1(mut command) => {
-                    // Fee-cap blocking stays in the main loop so that no nonces are
-                    // consumed while network fees are above the operator's configured cap.
-                    let gas_params =
-                        estimate_gas_within_caps(&provider, &config, &latency_tracker).await?;
+                    // Always submit the first transaction, even if the estimate exceeds the
+                    // configured cap — stalling the pipeline indefinitely is worse than a
+                    // single over-priced tx.  Resubmission is still capped (see
+                    // `submit_and_confirm`).
+                    let gas_params = estimate_gas_params(&provider).await?;
+                    if gas_params.max_fee_per_gas > config.max_fee_per_gas_wei
+                        || gas_params.max_priority_fee_per_gas
+                            > config.max_priority_fee_per_gas_wei
+                    {
+                        tracing::warn!(
+                            command_name,
+                            configured_max_fee = config.max_fee_per_gas_wei,
+                            estimated_max_fee = gas_params.max_fee_per_gas,
+                            configured_max_priority_fee = config.max_priority_fee_per_gas_wei,
+                            estimated_max_priority_fee = gas_params.max_priority_fee_per_gas,
+                            "network fees exceed configured cap — submitting anyway, resubmission will be capped",
+                        );
+                    }
 
                     let nonce = next_nonce;
                     next_nonce += 1;
@@ -322,48 +336,6 @@ where
                 return Err(anyhow::anyhow!(e).context("wait for L1 transaction confirmation"));
             }
         }
-    }
-}
-
-/// Estimates EIP-1559 gas parameters and blocks until they fall within the operator's
-/// configured fee caps.
-///
-/// Called in the main loop (before spawning each task) so fee-cap blocking is global:
-/// no nonce is consumed while fees exceed the cap.
-async fn estimate_gas_within_caps<Input: SendToL1>(
-    provider: &impl Provider,
-    config: &L1SenderConfig<Input>,
-    latency_tracker: &ComponentStateHandle<L1SenderState>,
-) -> anyhow::Result<GasParams> {
-    loop {
-        let params = estimate_gas_params(provider).await?;
-
-        let fee_ok = params.max_fee_per_gas <= config.max_fee_per_gas_wei;
-        let priority_ok = params.max_priority_fee_per_gas <= config.max_priority_fee_per_gas_wei;
-
-        if fee_ok && priority_ok {
-            return Ok(params);
-        }
-
-        if !fee_ok {
-            tracing::warn!(
-                command_name = Input::NAME,
-                configured_cap = config.max_fee_per_gas_wei,
-                estimated = params.max_fee_per_gas,
-                "network max_fee_per_gas exceeds configured cap — waiting",
-            );
-        }
-        if !priority_ok {
-            tracing::warn!(
-                command_name = Input::NAME,
-                configured_cap = config.max_priority_fee_per_gas_wei,
-                estimated = params.max_priority_fee_per_gas,
-                "network max_priority_fee_per_gas exceeds configured cap — waiting",
-            );
-        }
-
-        latency_tracker.enter_state(L1SenderState::WaitingRecv);
-        tokio::time::sleep(config.poll_interval).await;
     }
 }
 
