@@ -122,7 +122,7 @@ where
                     // Always submit the first transaction, even if the estimate exceeds the
                     // configured cap — stalling the pipeline indefinitely is worse than a
                     // single over-priced tx.  Resubmission is still capped (see
-                    // `submit_and_confirm`).
+                    // `watch_and_resubmit`).
                     let gas_params = estimate_gas_params(&provider).await?;
                     if gas_params.max_fee_per_gas > config.max_fee_per_gas_wei
                         || gas_params.max_priority_fee_per_gas > config.max_priority_fee_per_gas_wei
@@ -140,19 +140,37 @@ where
                     let nonce = next_nonce;
                     next_nonce += 1;
 
-                    // Mark envelopes as sent before spawning so stage changes are
-                    // visible in metrics immediately.
+                    // Broadcast the first transaction sequentially before moving on to
+                    // the next nonce.  If this fails, no higher-nonce transactions will
+                    // have been broadcast yet, so there are no orphaned mempool entries.
+                    let (tx_hash, gas_params) = build_and_send(
+                        &command,
+                        &gas_params,
+                        nonce,
+                        &provider,
+                        &config,
+                        to_address,
+                        operator_address,
+                        gateway,
+                    )
+                    .await?;
+
+                    // Mark envelopes as sent now that the tx is in the mempool.
                     command
                         .as_mut()
                         .iter_mut()
                         .for_each(|e| e.set_stage(Input::SENT_STAGE));
 
+                    // Spawn the receipt-watching / resubmission loop in parallel so
+                    // multiple batches can be confirmed concurrently once all first
+                    // transactions have been broadcast.
                     let provider = provider.clone();
                     let config = config.clone();
                     let handle = tokio::spawn(async move {
-                        submit_and_confirm(
+                        watch_and_resubmit(
                             command,
                             nonce,
+                            tx_hash,
                             gas_params,
                             provider,
                             config,
@@ -172,7 +190,7 @@ where
         L1_SENDER_METRICS.parallel_transactions[&command_name].set(handles.len() as u64);
 
         for handle in handles {
-            let envelopes = handle.await.context("submit_and_confirm task panicked")??;
+            let envelopes = handle.await.context("watch_and_resubmit task panicked")??;
             latency_tracker.enter_state(L1SenderState::WaitingSend);
             for envelope in envelopes {
                 outbound
@@ -227,19 +245,20 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
     }
 }
 
-/// Submits a single L1 transaction and waits for it to be confirmed.
+/// Watches a submitted L1 transaction for confirmation, resubmitting with bumped fees
+/// on each timeout until a receipt is received.
 ///
-/// If the transaction is not mined within `config.transaction_timeout`, the function
-/// re-estimates gas and optionally sends a replacement transaction (EIP-1559 replacement
-/// requires a ≥ 10% fee bump on both fee fields).  This loop continues until a receipt
-/// is found.
+/// The caller is responsible for having already broadcast the first transaction
+/// (sequentially, before spawning this task) so that a submission failure for nonce N
+/// does not leave higher-nonce transactions stranded in the mempool.
 ///
 /// Returns the confirmed envelopes with the `MINED_STAGE` set.
 #[allow(clippy::too_many_arguments)]
-async fn submit_and_confirm<Input, F, P>(
+async fn watch_and_resubmit<Input, F, P>(
     command: Input,
     nonce: u64,
-    initial_gas_params: GasParams,
+    mut tx_hash: TxHash,
+    mut gas_params: GasParams,
     provider: FillProvider<F, P>,
     config: L1SenderConfig<Input>,
     to_address: Address,
@@ -252,18 +271,6 @@ where
     P: Provider<Ethereum> + Clone,
 {
     let command_name = Input::NAME;
-
-    let (mut tx_hash, mut gas_params) = build_and_send(
-        &command,
-        &initial_gas_params,
-        nonce,
-        &provider,
-        &config,
-        to_address,
-        operator_address,
-        gateway,
-    )
-    .await?;
 
     loop {
         let watch_result = PendingTransactionBuilder::new(provider.root().clone(), tx_hash)
