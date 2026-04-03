@@ -25,7 +25,7 @@ zksync_os_verify_storage_proof = { path = "../tools/verify-storage-proof" }
 
 reth-tasks.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
+alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "provider-txpool-api", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 flate2.workspace = true
 fs2.workspace = true
