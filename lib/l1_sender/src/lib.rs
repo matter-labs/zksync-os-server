@@ -145,26 +145,28 @@ pub async fn run_l1_sender<Input: SendToL1>(
 
                     if let Some(blob_sidecar) = cmd.blob_sidecar() {
                         let fee_per_blob_gas = provider.get_blob_base_fee().await?;
-                        L1_SENDER_METRICS
-                            .report_blob_base_fee(fee_per_blob_gas)?;
-                        let max_fee_per_blob_gas = config.max_fee_per_blob_gas_wei;
-
-                        if fee_per_blob_gas > max_fee_per_blob_gas {
-                            tracing::warn!(
-                                max_fee_per_blob_gas,
-                                fee_per_blob_gas,
-                                "L1 sender's configured maxFeePerBlobGas is lower than the one estimated from network"
-                            );
-                        }
+                        L1_SENDER_METRICS.report_blob_base_fee(fee_per_blob_gas)?;
+                        let max_fee_per_blob_gas = cap_fee_estimate(
+                            "maxFeePerBlobGas",
+                            fee_per_blob_gas,
+                            config.max_fee_per_blob_gas_wei,
+                        );
                         tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
                         tx_request.set_blob_sidecar(blob_sidecar);
                     };
 
                     // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an
                     // envelope.
-                    let envelope = provider.fill(tx_request).await?.try_into_envelope()?.try_into_pooled()?;
+                    let envelope = provider
+                        .fill(tx_request)
+                        .await?
+                        .try_into_envelope()?
+                        .try_into_pooled()?;
 
-                    let pending_block = provider.get_block(BlockId::pending()).await?.expect("no pending block");
+                    let pending_block = provider
+                        .get_block(BlockId::pending())
+                        .await?
+                        .expect("no pending block");
                     // todo: make conversion unconditional (and remove respective config) once anvil
                     //       supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
                     let tx = if config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
@@ -172,7 +174,9 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         envelope.try_map_eip4844(|tx| {
                             tx.try_map_sidecar(|sidecar| {
                                 Ok::<_, BlobTransactionValidationError>(
-                                    BlobTransactionSidecarVariant::Eip7594(sidecar.try_into_eip7594()?)
+                                    BlobTransactionSidecarVariant::Eip7594(
+                                        sidecar.try_into_eip7594()?,
+                                    ),
                                 )
                             })
                         })?
@@ -292,31 +296,13 @@ async fn tx_request_with_gas_fields(
         max_fee_per_gas_gwei = ?format_units(eip1559_est.max_fee_per_gas, "gwei"),
         "estimated priority and max fees"
     );
-    // Use the minimum of estimated and configured values for gas fields
-    let capped_max_fee_per_gas = if eip1559_est.max_fee_per_gas > max_fee_per_gas {
-        tracing::warn!(
-            "L1 sender's configured maxFeePerGas ({max_fee_per_gas}) \
-             is lower than the one estimated from network  ({}), \
-             using the configured base fee value ({max_fee_per_gas}) - this may result in inclusion delay.",
-            eip1559_est.max_fee_per_gas
-        );
-        max_fee_per_gas
-    } else {
-        eip1559_est.max_fee_per_gas
-    };
-    let capped_max_priority_fee_per_gas = if eip1559_est.max_priority_fee_per_gas
-        > max_priority_fee_per_gas
-    {
-        tracing::warn!(
-            "L1 sender's configured max_priority_fee_per_gas ({max_priority_fee_per_gas}) \
-             is lower than the one estimated from network  ({}), \
-             using the configured priority fee value ({max_priority_fee_per_gas}) - this may result in inclusion delay.",
-            eip1559_est.max_priority_fee_per_gas
-        );
-        max_priority_fee_per_gas
-    } else {
-        eip1559_est.max_priority_fee_per_gas
-    };
+    let capped_max_fee_per_gas =
+        cap_fee_estimate("maxFeePerGas", eip1559_est.max_fee_per_gas, max_fee_per_gas);
+    let capped_max_priority_fee_per_gas = cap_fee_estimate(
+        "maxPriorityFeePerGas",
+        eip1559_est.max_priority_fee_per_gas,
+        max_priority_fee_per_gas,
+    );
 
     let tx = TransactionRequest::default()
         .with_from(operator_address)
@@ -325,6 +311,21 @@ async fn tx_request_with_gas_fields(
         // Default value for `max_aggregated_tx_gas` from zksync-era, should always be enough
         .with_gas_limit(15000000);
     Ok(tx)
+}
+
+fn cap_fee_estimate(field: &'static str, estimated_fee: u128, configured_cap: u128) -> u128 {
+    if estimated_fee > configured_cap {
+        tracing::warn!(
+            field,
+            configured_cap,
+            estimated_fee,
+            "L1 sender's configured fee cap is lower than the network estimate; \
+             using the configured value and this may delay inclusion"
+        );
+        configured_cap
+    } else {
+        estimated_fee
+    }
 }
 
 async fn register_operator<
@@ -397,5 +398,20 @@ async fn validate_tx_receipt<Input: SendToL1>(
             command,
             receipt.transaction_hash
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cap_fee_estimate;
+
+    #[test]
+    fn fee_estimate_uses_network_value_when_within_cap() {
+        assert_eq!(cap_fee_estimate("maxFeePerBlobGas", 7, 10), 7);
+    }
+
+    #[test]
+    fn fee_estimate_uses_configured_cap_when_network_is_higher() {
+        assert_eq!(cap_fee_estimate("maxFeePerBlobGas", 11, 10), 10);
     }
 }
