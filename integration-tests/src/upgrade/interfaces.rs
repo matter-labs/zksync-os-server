@@ -88,10 +88,20 @@ alloy::sol! {
         function getTransactionFilterer() external view returns (address);
 
         // Admin facet
-        function upgradeChainFromVersion(uint256 _protocolVersion, DiamondCutData calldata _cutData) external;
+        function upgradeChainFromVersion(
+            address, // _chainAddress (unused in this specific implementation)
+            uint256 _oldProtocolVersion,
+            DiamondCutData calldata _diamondCut
+        ) external;
         function getTotalBatchesCommitted() external view returns (uint256);
         function getTotalBatchesVerified() external view returns (uint256);
         function getTotalBatchesExecuted() external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    contract ZkChainV30 {
+        // Admin facet
+        function upgradeChainFromVersion(uint256 _protocolVersion, DiamondCutData calldata _cutData) external;
     }
 
     #[sol(rpc)]

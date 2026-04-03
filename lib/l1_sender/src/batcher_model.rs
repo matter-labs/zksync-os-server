@@ -180,7 +180,25 @@ impl<E, S> BatchEnvelope<E, S> {
     }
 }
 
-pub type ProverInput = Vec<u32>;
+/// Input data required to generate a ZK proof for a batch.
+///
+/// Used for tests and testnets where the expensive RiscV witness computation is unnecessary.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ProverInput {
+    Real(Vec<u32>),
+    Fake,
+}
+
+impl ProverInput {
+    /// Returns the underlying witness words.
+    /// Panics if called on `Fake`.
+    pub fn unwrap_real(&self) -> &[u32] {
+        match self {
+            ProverInput::Real(v) => v.as_slice(),
+            ProverInput::Fake => panic!("ProverInput::Fake has no witness data"),
+        }
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum FriProof {

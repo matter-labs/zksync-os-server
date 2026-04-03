@@ -50,15 +50,16 @@ impl ProofStorage {
             PROOF_STORAGE_METRICS.latency[&ProofStorageMethod::SaveBatchWithProof].start();
 
         let key = format!("batch_{}.json", batch.batch_number());
-        let usage = self
+        let result = self
             .batches_with_proof
             .lock()
             .await
             .store(&key, batch)
-            .await?;
+            .await;
+        latency.observe();
+        let usage = result?;
 
         PROOF_STORAGE_METRICS.disk_usage[&ProofStorageMethod::SaveBatchWithProof].set(usage);
-        latency.observe();
         Ok(())
     }
 
@@ -87,10 +88,11 @@ impl ProofStorage {
         let latency = PROOF_STORAGE_METRICS.latency[&ProofStorageMethod::SaveFailed].start();
 
         let key = format!("failed_{}.json", proof.batch_number);
-        let usage = self.failed.lock().await.store(&key, proof).await?;
+        let result = self.failed.lock().await.store(&key, proof).await;
+        latency.observe();
+        let usage = result?;
 
         PROOF_STORAGE_METRICS.disk_usage[&ProofStorageMethod::SaveFailed].set(usage);
-        latency.observe();
         Ok(())
     }
 

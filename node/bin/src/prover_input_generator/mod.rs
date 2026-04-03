@@ -20,13 +20,19 @@ use zksync_os_pipeline::PipelineComponent;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
 
-/// This component generates prover input from batch replay data
+/// This component generates prover input from batch replay data.
+///
+/// When `disabled` is `true` the component acts as a passthrough: it forwards each block
+/// unchanged but sets `ProverInput::Fake` instead of computing real witness data.
+/// This is only valid when both FRI and SNARK provers are faked.
 pub struct ProverInputGenerator<ReadState> {
     pub enable_logging: bool,
     pub maximum_in_flight_blocks: usize,
     pub read_state: ReadState,
     pub pubdata_mode: PubdataMode,
     pub runtime: Runtime,
+    /// When true, skip all computation and emit `ProverInput::Fake` for every block.
+    pub disabled: bool,
 }
 
 #[async_trait]
@@ -48,6 +54,18 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
     ) -> Result<()> {
+        if self.disabled {
+            tracing::info!(
+                "ProverInputGenerator is disabled — passing through blocks with ProverInput::Fake"
+            );
+            while let Some((block_output, replay_record, tree)) = input.recv().await {
+                output
+                    .send((block_output, replay_record, ProverInput::Fake, tree))
+                    .await?;
+            }
+            return Ok(());
+        }
+
         let latency_tracker = ComponentStateReporter::global().handle_for(
             "prover_input_generator",
             GenericComponentState::ProcessingOrWaitingRecv,
@@ -130,13 +148,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             replay_record.transactions.len(),
         );
         let mut handle = tokio::task::spawn_blocking(move || {
-            let prover_input = compute_prover_input(
+            let prover_input = ProverInput::Real(compute_prover_input(
                 &replay_record,
                 read_state,
                 tree.block_start.clone(),
                 da_commitment_scheme,
                 enable_logging,
-            );
+            ));
             (block_output, replay_record, prover_input, tree)
         });
         self.runtime.spawn_critical_with_graceful_shutdown_signal(

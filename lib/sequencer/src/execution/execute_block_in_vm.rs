@@ -9,6 +9,7 @@ use futures::StreamExt;
 use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
+use zk_ee::memory::stack_trait::Stack;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::types::{BlockContext, BlockOutput};
@@ -105,12 +106,14 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
                 tracing::info!(
                     block_number=command.block_context.block_number,
-                    tx_hash=?tx.hash(),
-                    tx_index_in_block=executed_txs.len(),
-                    cumulative_gas_used_before=cumulative_gas_used,
-                    gas_limit=tx.inner.gas_limit(),
-                    signer=?tx.inner.signer(),
-                    "Executing transaction..."
+                    "Executing transaction {:?} ({:?}) in block {} at index {} signer {:?} nonce {} with gas limit {} and cumulative gas used {cumulative_gas_used}...",
+                    tx.hash(),
+                    tx.tx_type(),
+                    command.block_context.block_number,
+                    executed_txs.len(),
+                    tx.inner.signer(),
+                    tx.nonce(),
+                    tx.inner.gas_limit()
                 );
 
                 all_processed_txs.push(tx.clone());
@@ -147,7 +150,9 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         tracing::info!(
                             block_number=command.block_context.block_number,
                             output=?res,
-                            "Transaction executed"
+                            "Transaction {:?} executed with status {status_str} in block {}",
+                            tx.hash(),
+                            command.block_context.block_number
                         );
 
                         if let Some(SystemTxType::ImportInteropRoots(roots_count)) = tx.as_system_tx_type() {
@@ -216,6 +221,14 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         }
                     }
                     Err(e) => {
+                        tracing::info!(
+                            block_number = command.block_context.block_number,
+                            "Transaction {:?} ({}) in block {} failed: {e:?}",
+                            tx.tx_type(),
+                            tx.hash(),
+                            command.block_context.block_number
+                        );
+
                         match (tx.tx_type(), command.invalid_tx_policy) {
                             (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
                                 return Err(
@@ -235,33 +248,57 @@ pub async fn execute_block_in_vm<V: ViewState>(
                                     }
                                 )
                             }
-                            (ZkTxType::L2(_), InvalidTxPolicy::RejectAndContinue) => {
+                            (
+                                ZkTxType::L2(_),
+                                InvalidTxPolicy::RejectAndContinue { mark_in_source },
+                            ) => {
                                 let rejection_method = rejection_method(&e);
+                                if mark_in_source {
+                                    command.tx_source.mark_last_l2_tx_as_invalid();
+                                }
 
-                                // mark the tx as invalid regardless of the `rejection_method`.
-                                command.tx_source.mark_last_l2_tx_as_invalid();
-                                // add tx to `purged_txs` only if we are purging it.
                                 match (rejection_method, command.seal_policy, executed_txs.is_empty()) {
                                     (TxRejectionMethod::Purge, _, _) => {
                                         purged_txs.push((*tx.hash(), e.clone()));
-                                        tracing::info!(tx_hash = %tx.hash(), block_number = ctx.block_number, ?e, "invalid tx → purged");
+                                        tracing::info!(
+                                            block_number = ctx.block_number,
+                                            "Invalid L2 tx {} was purged in block {}: error={e:?}, source_marked_invalid={}, nonce={:?}",
+                                            tx.hash(),
+                                            ctx.block_number,
+                                            mark_in_source,
+                                            tx.nonce(),
+                                        );
                                     }
                                     (TxRejectionMethod::Skip, _, _) => {
-                                        tracing::info!(tx_hash = %tx.hash(), block_number = ctx.block_number, ?e, "invalid tx → skipped");
+                                        tracing::info!(
+                                            block_number = ctx.block_number,
+                                            "Invalid L2 tx {} was skipped in block {}: error={e:?}, source_marked_invalid={}, nonce={:?}",
+                                            tx.hash(),
+                                            ctx.block_number,
+                                            mark_in_source,
+                                            tx.nonce(),
+                                        );
                                     },
                                     // For Produce, don't seal if no transactions have been executed yet
                                     (TxRejectionMethod::SealBlock(reason), SealPolicy::Decide(..), true) => {
                                         purged_txs.push((*tx.hash(), e.clone()));
                                         tracing::info!(
-                                            tx_hash = %tx.hash(),
                                             block_number = ctx.block_number,
-                                            ?e,
-                                            ?reason,
-                                            "block limit reached on first tx for Produce → rejecting tx instead of sealing",
+                                            "Block {} hit a sealing criterion while processing first L2 tx {}: reason={reason:?}, error={e:?}, source_marked_invalid={}, nonce={:?}; rejecting tx instead of sealing",
+                                            ctx.block_number,
+                                            tx.hash(),
+                                            mark_in_source,
+                                            tx.nonce(),
                                         );
                                     }
                                     (TxRejectionMethod::SealBlock(reason), _, _) => {
-                                        tracing::info!(tx_hash = %tx.hash(), block_number = ctx.block_number, ?e, ?reason, "sealing block by criterion");
+                                        tracing::info!(
+                                            block_number = ctx.block_number,
+                                            "Sealing block {} before L2 tx {} because it hit a sealing criterion: reason={reason:?}, error={e:?}, nonce={:?}",
+                                            ctx.block_number,
+                                            tx.hash(),
+                                            tx.nonce(),
+                                        );
                                         break reason;
                                     }
                                 }

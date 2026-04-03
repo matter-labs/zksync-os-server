@@ -8,7 +8,7 @@ pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
 mod node_state_on_startup;
-mod priority_tree_steps;
+mod priority_tree_pipeline_step;
 pub mod prover_api;
 mod prover_input_generator;
 mod provider;
@@ -24,8 +24,6 @@ use crate::config::{
 };
 use crate::en_remote_config::load_remote_config;
 use crate::node_state_on_startup::NodeStateOnStartup;
-use crate::priority_tree_steps::priority_tree_en_step::PriorityTreeENStep;
-use crate::priority_tree_steps::priority_tree_pipeline_step::PriorityTreePipelineStep;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::fri_proving_pipeline_step::FriProvingPipelineStep;
@@ -46,6 +44,7 @@ use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
+use priority_tree_pipeline_step::PriorityTreePipelineStep;
 use reth_tasks::Runtime;
 use ruint::aliases::U256;
 use std::net::SocketAddr;
@@ -84,6 +83,7 @@ use zksync_os_network::RecordOverride;
 use zksync_os_network::service::{NetworkService, ZksProtocolConfig};
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
+use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, loopback_consensus,
 };
@@ -183,22 +183,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
     let l1_provider = build_node_provider(&config.general_config.l1_rpc_url).await;
-    let sl_provider = match &config.general_config.gateway_rpc_url {
-        Some(url) => build_node_provider(url).await,
-        None => l1_provider.clone(),
+    let gateway_provider = match &config.general_config.gateway_rpc_url {
+        Some(url) => Some(build_node_provider(url).await),
+        None => None,
     };
-    let gateway_provider = config
-        .general_config
-        .gateway_rpc_url
-        .as_ref()
-        .map(|_| sl_provider.clone());
 
     tracing::info!("Reading L1 state");
     let l1_state = if node_role.is_main() {
         // On the main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
         L1State::fetch_finalized(
             l1_provider.clone().erased(),
-            sl_provider.clone().erased(),
+            gateway_provider.as_ref().map(|p| p.clone().erased()),
             bridgehub_address,
             chain_id,
         )
@@ -207,12 +202,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     } else {
         L1State::fetch(
             l1_provider.clone().erased(),
-            sl_provider.clone().erased(),
+            gateway_provider.as_ref().map(|p| p.clone().erased()),
             bridgehub_address,
             chain_id,
         )
         .await
         .expect("failed to fetch L1 state")
+    };
+    let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
+        l1_provider.clone()
+    } else {
+        gateway_provider.clone().unwrap()
     };
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
@@ -447,6 +447,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
+            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 commit watcher")
@@ -460,6 +461,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
+            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 execute watcher")
@@ -547,6 +549,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                     config.l1_watcher_config.clone().into(),
                     next_cursors.interop_root_id,
                     interop_roots_subpool.clone(),
+                    node_startup_state.l1_state.l1_chain_id,
                 )
                 .await
                 .expect("failed to start L1 interop roots watcher")
@@ -726,6 +729,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             persistent_batch_storage.clone(),
+            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 batch persist watcher")
@@ -842,6 +846,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state,
             block_replay_storage.clone(),
             runtime,
+            starting_block,
             block_context_provider,
             state.clone(),
             tree_db,
@@ -864,6 +869,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             run_status_server(addr, shutdown)
         });
     }
+
+    // Wait for repositories to be ready to be used in RPC.
+    repositories.wait_for_db_ready_to_process_blocks().await;
 
     // =========== Start JSON RPC ========
     zksync_os_rpc::spawn(
@@ -926,6 +934,8 @@ async fn run_main_node_pipeline(
     );
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::channel(8);
+    let (applied_block_number_sender, applied_block_number_receiver) =
+        watch::channel(starting_block - 1);
 
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ConsensusNodeCommandSource {
@@ -944,6 +954,7 @@ async fn run_main_node_pipeline(
             state: state.clone(),
             config: config.into(),
             tx_acceptance_state_sender,
+            applied_block_number_receiver,
         })
         .pipe(BlockCanonizer {
             consensus: canonization_engine,
@@ -954,6 +965,7 @@ async fn run_main_node_pipeline(
             replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             config: config.into(),
+            applied_block_number_sender,
         })
         .pipe_opt(
             config
@@ -970,6 +982,15 @@ async fn run_main_node_pipeline(
                 }),
         )
         .pipe(TreeManager { tree: tree.clone() });
+
+    if !config.batcher_config.enabled {
+        tracing::warn!(
+            "Batcher subsystem disabled — skipping prover input generation, L1 settlement, and downstream components"
+        );
+        pipeline.pipe(NoOpSink::new()).spawn();
+        return;
+    }
+
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
         .await
@@ -1009,6 +1030,16 @@ async fn run_main_node_pipeline(
         run_fake_snark_provers(&config.prover_api_config, runtime, snark_job_manager);
     }
 
+    if !config.prover_input_generator_config.enable_input_generation {
+        assert!(
+            config.prover_api_config.fake_fri_provers.enabled
+                && config.prover_api_config.fake_snark_provers.enabled,
+            "prover_input_generator_config.enable_input_generation=false requires both \
+             prover_api_config.fake_fri_provers.enabled and \
+             prover_api_config.fake_snark_provers.enabled to be true"
+        );
+    }
+
     let pipeline = pipeline
         .pipe(ProverInputGenerator {
             enable_logging: config.prover_input_generator_config.logging_enabled,
@@ -1018,6 +1049,7 @@ async fn run_main_node_pipeline(
             read_state: state.clone(),
             pubdata_mode,
             runtime: runtime.clone(),
+            disabled: !config.prover_input_generator_config.enable_input_generation,
         })
         .pipe(Batcher {
             startup_config: BatcherStartupConfig {
@@ -1073,7 +1105,6 @@ async fn run_main_node_pipeline(
                 finality,
                 committed_batch_provider,
             )
-            .await
             .unwrap(),
         )
         .pipe(L1Sender {
@@ -1098,6 +1129,7 @@ async fn run_en_pipeline(
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     runtime: &Runtime,
+    starting_block: u64,
     block_context_provider: BlockContextProvider<impl L2Subpool>,
     state: impl ReadStateHistory + WriteState + Clone,
     tree: MerkleTree<RocksDBWrapper>,
@@ -1112,6 +1144,8 @@ async fn run_en_pipeline(
             .rocks_db_path
             .join(INTERNAL_CONFIG_FILE_NAME),
     );
+    let (applied_block_number_sender, applied_block_number_receiver) =
+        watch::channel(starting_block - 1);
 
     Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
@@ -1123,12 +1157,14 @@ async fn run_en_pipeline(
             state: state.clone(),
             config: config.into(),
             tx_acceptance_state_sender,
+            applied_block_number_receiver,
         })
         .pipe(BlockApplier {
             state: state.clone(),
             replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             config: config.into(),
+            applied_block_number_sender,
         })
         .pipe_opt(
             config
@@ -1162,7 +1198,7 @@ async fn run_en_pipeline(
 
     // Run Priority Tree tasks for EN - not part of the pipeline.
     if config.general_config.run_priority_tree {
-        let priority_tree_en_step = PriorityTreeENStep::new(
+        let priority_tree_manager = PriorityTreeManager::new(
             block_replay_storage,
             Path::new(
                 &config
@@ -1173,10 +1209,21 @@ async fn run_en_pipeline(
             finality.clone(),
             committed_batch_provider,
         )
-        .await
         .unwrap();
-
-        priority_tree_en_step.spawn(runtime);
+        runtime.spawn_critical_with_graceful_shutdown_signal(
+            "priority tree caching",
+            |shutdown| async move {
+                tokio::select! {
+                    result = priority_tree_manager.run(None) => {
+                        result.expect("PriorityTreeManager run failed");
+                    }
+                    _guard = shutdown => {
+                        // Ensures both futures are dropped before we shutdown gracefully. Otherwise
+                        // priority tree manager might keep holding DB.
+                    }
+                }
+            },
+        );
     }
     runtime.spawn_critical_task(
         "clear failing block config",

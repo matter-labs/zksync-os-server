@@ -74,53 +74,10 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         }
     }
 
-    use zk_os_forward_system::run::generate_batch_proof_input;
-    use zk_os_forward_system_dev::run::generate_batch_proof_input as generate_batch_proof_input_dev;
-
     let proving_version =
         ProvingVersion::try_from(blocks.first().unwrap().1.protocol_version.clone())?;
     // execution version should be the same for all the blocks, it is ensured by the seal criteria
-    let batch_prover_input: ProverInput = match proving_version {
-        ProvingVersion::V1
-        | ProvingVersion::V2
-        | ProvingVersion::V3
-        | ProvingVersion::V4
-        | ProvingVersion::V5 => {
-            panic!("sealing batch with prover version v1-v5 is not supported");
-        }
-        ProvingVersion::V6 => {
-            // TODO: in the long-term we should generate proof input per batch
-            generate_batch_proof_input(
-                blocks
-                    .iter()
-                    .map(|(_, _, _, prover_input)| prover_input.as_slice())
-                    .collect(),
-                (pubdata_mode.da_commitment_scheme() as u8)
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
-                blocks
-                    .iter()
-                    .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
-                    .collect(),
-            )
-        }
-        ProvingVersion::V7 => {
-            // TODO: in the long-term we should generate proof input per batch
-            generate_batch_proof_input_dev(
-                blocks
-                    .iter()
-                    .map(|(_, _, _, prover_input)| prover_input.as_slice())
-                    .collect(),
-                (pubdata_mode.da_commitment_scheme() as u8)
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
-                blocks
-                    .iter()
-                    .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
-                    .collect(),
-            )
-        }
-    };
+    let batch_prover_input = compute_batch_prover_input(blocks, proving_version, pubdata_mode)?;
 
     // Sanity check: all blocks in the batch should have the same protocol version
     for (_, replay_record, _, _) in blocks.iter().skip(1) {
@@ -161,4 +118,67 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     .with_stage(BatchExecutionStage::BatchSealed);
 
     Ok(batch_envelope)
+}
+
+fn compute_batch_prover_input(
+    blocks: &[(
+        zksync_os_interface::types::BlockOutput,
+        zksync_os_storage_api::ReplayRecord,
+        zksync_os_merkle_tree::TreeBatchOutput,
+        ProverInput,
+    )],
+    proving_version: ProvingVersion,
+    pubdata_mode: PubdataMode,
+) -> anyhow::Result<ProverInput> {
+    use zk_os_forward_system::run::generate_batch_proof_input;
+    use zk_os_forward_system_dev::run::generate_batch_proof_input as generate_batch_proof_input_dev;
+
+    if blocks
+        .iter()
+        .any(|(_, _, _, pi)| matches!(pi, ProverInput::Fake))
+    {
+        return Ok(ProverInput::Fake);
+    }
+
+    Ok(match proving_version {
+        ProvingVersion::V1
+        | ProvingVersion::V2
+        | ProvingVersion::V3
+        | ProvingVersion::V4
+        | ProvingVersion::V5 => {
+            panic!("sealing batch with prover version v1-v5 is not supported");
+        }
+        ProvingVersion::V6 => {
+            // TODO: in the long-term we should generate proof input per batch
+            ProverInput::Real(generate_batch_proof_input(
+                blocks
+                    .iter()
+                    .map(|(_, _, _, prover_input)| prover_input.unwrap_real())
+                    .collect(),
+                (pubdata_mode.da_commitment_scheme() as u8)
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
+                blocks
+                    .iter()
+                    .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
+                    .collect(),
+            ))
+        }
+        ProvingVersion::V7 => {
+            // TODO: in the long-term we should generate proof input per batch
+            ProverInput::Real(generate_batch_proof_input_dev(
+                blocks
+                    .iter()
+                    .map(|(_, _, _, prover_input)| prover_input.unwrap_real())
+                    .collect(),
+                (pubdata_mode.da_commitment_scheme() as u8)
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
+                blocks
+                    .iter()
+                    .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
+                    .collect(),
+            ))
+        }
+    })
 }

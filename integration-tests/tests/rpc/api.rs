@@ -335,7 +335,7 @@ async fn get_storage_proof(tester: Tester) -> anyhow::Result<()> {
     // Get L1 state which contains diamond proxy address
     let l1_state = L1State::fetch(
         tester.l1_provider().clone().erased(),
-        tester.sl_provider().clone().erased(),
+        tester.gateway_eth_provider(),
         bridgehub_address,
         chain_id,
     )

@@ -36,6 +36,10 @@ threads-required = 2
 [profile.fast]
 default-filter = 'not test(~interop) & not test(does_not_get_stuck) & not test(batch_verification_without_enough_ens) & not test(batch_verification_with_2_ens)'
 
+# Profile that disables Prover Input Generation — useful for agents and lightweight CI runs.
+# Usage: cargo nextest run -p zksync_os_integration_tests --profile no-pig
+[profile.no-pig]
+
 # Skip slow external node tests in coverage profile
 # TODO: investigate why this test gets stuck in coverage runs
 # by producing 550s proving computations in coverage mode

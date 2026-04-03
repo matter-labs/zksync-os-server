@@ -11,6 +11,7 @@ use crate::provider::{ZksyncApi as _, ZksyncTestingProvider as _};
 use crate::upgrade::interfaces::ChainAssetHandlerBase::ChainAssetHandlerBaseInstance;
 use crate::upgrade::interfaces::ChainTypeManagerV30::ChainTypeManagerV30Instance;
 use crate::upgrade::interfaces::FacetCut;
+use crate::upgrade::interfaces::ZkChainV30::ZkChainV30Instance;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
 use alloy::providers::ext::AnvilApi;
@@ -183,7 +184,7 @@ impl UpgradeTester {
         let bridgehub_address_l1 = tester.l2_zk_provider.get_bridgehub_contract().await?;
         let l1_state = L1State::fetch(
             tester.l1_provider().clone().erased(),
-            tester.sl_provider().clone().erased(),
+            tester.gateway_eth_provider(),
             bridgehub_address_l1,
             chain_id,
         )
@@ -401,7 +402,7 @@ impl UpgradeTester {
     pub async fn generic_l2_upgrade_target(&self) -> anyhow::Result<(Address, Bytes)> {
         // HACK: right now we need to call an account with bytecode to make the upgrade work.
         // So we deploy a event emitter contract and use it as a delegate.
-        let event_emitter =
+        let event_emitter: crate::contracts::EventEmitter::EventEmitterInstance<EthDynProvider> =
             crate::contracts::EventEmitter::deploy(self.tester.l2_provider.clone()).await?;
         let event_emitter_calldata = event_emitter
             .emitEvent(U256::from(42u64))
@@ -527,6 +528,7 @@ impl UpgradeTester {
             let calldata = self
                 .diamond_proxy_sl
                 .upgradeChainFromVersion(
+                    Address::ZERO, // not used
                     self.protocol_version
                         .packed()
                         .expect("Incorrect protocol version"),
@@ -541,16 +543,32 @@ impl UpgradeTester {
             )
             .await?;
         } else {
-            let tx = self
-                .diamond_proxy_sl
-                .upgradeChainFromVersion(
-                    self.protocol_version
-                        .packed()
-                        .expect("Incorrect protocol version"),
-                    upgrade_data,
-                )
-                .into_transaction_request()
-                .with_from(self.diamond_proxy_admin_sl);
+            let tx = if self.tester.chain_layout.protocol_version().contains("v30") {
+                let zk_chain = ZkChainV30Instance::new(
+                    *self.diamond_proxy_sl.address(),
+                    self.diamond_proxy_sl.provider().clone(),
+                );
+                zk_chain
+                    .upgradeChainFromVersion(
+                        self.protocol_version
+                            .packed()
+                            .expect("Incorrect protocol version"),
+                        upgrade_data,
+                    )
+                    .into_transaction_request()
+                    .with_from(self.diamond_proxy_admin_sl)
+            } else {
+                self.diamond_proxy_sl
+                    .upgradeChainFromVersion(
+                        Address::ZERO, // not used
+                        self.protocol_version
+                            .packed()
+                            .expect("Incorrect protocol version"),
+                        upgrade_data,
+                    )
+                    .into_transaction_request()
+                    .with_from(self.diamond_proxy_admin_sl)
+            };
             self.send_impersonated_transaction(tx).await?;
         }
         Ok(())

@@ -30,6 +30,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         config: L1WatcherConfig,
         zk_chain: ZkChain<DynProvider>,
         batch_storage: BatchStorage,
+        l1_chain_id: u64,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_persisted_batch = batch_storage.latest_batch();
@@ -62,9 +63,12 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             // one.
             last_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
+            l1_chain_id,
             config.poll_interval,
             Box::new(this),
-        );
+        )
+        .await?;
 
         Ok(l1_watcher)
     }
@@ -98,17 +102,18 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     ) -> Result<(), L1WatcherError> {
         let batch_number = report.batchNumber;
         let latest_processed_batch = self.last_processed_commit_batch;
-        if batch_number <= latest_processed_batch {
+        let stored_batch = self
+            .batch_storage
+            .get_batch_by_number(batch_number)
+            .map_err(L1WatcherError::Other)?;
+        if batch_number <= latest_processed_batch
+            && let Some(stored_batch) = stored_batch
+        {
             tracing::debug!(
                 batch_number,
                 "discovered already processed batch, validating"
             );
             let committed_batch = self.parse_committed_batch(report, log).await?;
-            let stored_batch = self
-                .batch_storage
-                .get_batch_by_number(batch_number)
-                .map_err(L1WatcherError::Other)?
-                .expect("persisted batch not found in DB");
             if stored_batch.committed_batch != committed_batch {
                 tracing::error!(
                     ?stored_batch,
@@ -142,6 +147,11 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                     );
                     return Ok(());
                 }
+            } else if batch_number <= latest_processed_batch {
+                tracing::warn!(
+                    "Found already committed batch #{batch_number}, but it is not present in batch storage; \
+                    assuming previous operation was reverted and overwriting data"
+                );
             }
             tracing::debug!(batch_number, "discovered committed batch");
             let committed_batch = self.parse_committed_batch(report, log).await?;

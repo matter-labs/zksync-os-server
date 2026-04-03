@@ -10,8 +10,8 @@ use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
-    Config, ConfigArgs, ProofStorageConfig, RebuildBlocksConfig, StateBackendConfig,
-    build_external_config, load_config_file_sources,
+    Config, ConfigArgs, ConfigValidate, ProofStorageConfig, RebuildBlocksConfig,
+    StateBackendConfig, build_external_config, load_config_file_sources,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -43,6 +43,11 @@ struct Cli {
 
     #[command(subcommand)]
     cmd: Option<CliCommand>,
+
+    /// Makes the node to stop before calling `run` method.
+    /// It is used to catch issues with configuration.
+    #[arg(long)]
+    no_run: bool,
 }
 
 fn load_config_defaults(config_sources: &mut ConfigSources, config_paths: Option<Vec<String>>) {
@@ -150,11 +155,15 @@ pub async fn main() {
     let mut config = build_external_config(config_repo).await;
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
+    config.validate().await.expect("invalid config");
+
+    if opt.no_run {
+        tracing::info!("Node config was loaded successfully, exiting due to --no-run flag");
+        return;
+    }
+
     // ======= Run tasks ===========
     let ephemeral_enabled = config.general_config.ephemeral;
-    if !ephemeral_enabled && config.general_config.ephemeral_state.is_some() {
-        panic!("`ephemeral_state` requires `ephemeral` mode to be enabled");
-    }
     let _ephemeral_guard = ephemeral_enabled.then(|| enable_ephemeral_mode(&mut config));
     let prometheus_port = config.observability_config.prometheus.port;
 
@@ -215,7 +224,6 @@ async fn handle_delayed_termination(runtime: Runtime) {
         },
         _ = sigint.recv() => {
             tracing::info!("received SIGINT: shutting down gracefully (within 10s)");
-
             runtime.graceful_shutdown_with_timeout(GRACEFUL_SHUTDOWN_TIMEOUT);
         },
     }
