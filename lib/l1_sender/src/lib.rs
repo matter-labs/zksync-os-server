@@ -261,7 +261,9 @@ where
         match watch_result {
             Ok(receipt) => {
                 validate_tx_receipt(&provider, &command, receipt).await?;
-                if let Err(err) = try_report_post_confirmation(command_name, operator_address, &provider).await {
+                if let Err(err) =
+                    try_report_post_confirmation(command_name, operator_address, &provider).await
+                {
                     tracing::warn!(%err, command_name, "failed to report post-confirmation metrics");
                 }
                 let mut envelopes: Vec<SignedBatchEnvelope<FriProof>> = command.into();
@@ -271,7 +273,8 @@ where
                 return Ok(envelopes);
             }
 
-            Err(e) if matches!(e, alloy::providers::PendingTransactionError::TxWatcher(WatchTxError::Timeout)) => {
+            Err(alloy::providers::PendingTransactionError::TxWatcher(WatchTxError::Timeout)) =>
+            {
                 tracing::warn!(
                     command_name,
                     tx_hash = ?tx_hash,
@@ -289,24 +292,24 @@ where
                 if bumped.max_fee_per_gas <= config.max_fee_per_gas_wei
                     && bumped.max_priority_fee_per_gas <= config.max_priority_fee_per_gas_wei
                 {
-                        tracing::info!(
-                            command_name,
-                            nonce,
-                            "sending replacement tx with bumped fees",
-                        );
-                        let (new_hash, new_gas) = build_and_send(
-                            &command,
-                            &bumped,
-                            nonce,
-                            &provider,
-                            &config,
-                            to_address,
-                            operator_address,
-                            gateway,
-                        )
-                        .await?;
-                        tx_hash = new_hash;
-                        gas_params = new_gas;
+                    tracing::info!(
+                        command_name,
+                        nonce,
+                        "sending replacement tx with bumped fees",
+                    );
+                    let (new_hash, new_gas) = build_and_send(
+                        &command,
+                        &bumped,
+                        nonce,
+                        &provider,
+                        &config,
+                        to_address,
+                        operator_address,
+                        gateway,
+                    )
+                    .await?;
+                    tx_hash = new_hash;
+                    gas_params = new_gas;
                 } else {
                     tracing::info!(
                         command_name,
@@ -316,14 +319,12 @@ where
                 }
             }
 
-            Err(e) => return Err(anyhow::anyhow!(e).context("wait for L1 transaction confirmation")),
+            Err(e) => {
+                return Err(anyhow::anyhow!(e).context("wait for L1 transaction confirmation"));
+            }
         }
     }
 }
-
-// ==============================================================================
-// Resubmission decision
-// ==============================================================================
 
 /// Estimates EIP-1559 gas parameters and blocks until they fall within the operator's
 /// configured fee caps.
@@ -506,7 +507,12 @@ async fn try_report_post_confirmation(
         .await
         .context("get operator nonce")?;
     let balance_eth = format_ether(balance);
-    tracing::info!(command_name, balance_eth, nonce, "post-confirmation operator state");
+    tracing::info!(
+        command_name,
+        balance_eth,
+        nonce,
+        "post-confirmation operator state"
+    );
     L1_SENDER_METRICS.balance[&command_name].set(balance_eth.parse()?);
     L1_SENDER_METRICS.nonce[&command_name].set(nonce);
     Ok(())
@@ -611,4 +617,3 @@ async fn validate_tx_receipt<Input: SendToL1>(
         );
     }
 }
-

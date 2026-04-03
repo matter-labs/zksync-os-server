@@ -1,4 +1,3 @@
-
 /// EIP-1559 gas parameters for a submitted transaction.
 #[derive(Clone, Debug)]
 pub struct GasParams {
@@ -15,18 +14,15 @@ impl GasParams {
     /// Returns a new `GasParams` that is guaranteed to satisfy the EIP-1559 10% replacement bump
     /// rule,
     pub fn with_minimum_replacement_bump(&self, previous: &GasParams) -> GasParams {
-        // Ceiling division: (previous * 110 + 99) / 100 ensures the result
-        // always satisfies `result * 100 >= previous * 110`.
-        let min_fee = (previous.max_fee_per_gas * Self::REPLACEMENT_BUMP_PCT + 99) / 100;
+        let min_fee = (previous.max_fee_per_gas * Self::REPLACEMENT_BUMP_PCT).div_ceil(100);
         let min_priority =
-            (previous.max_priority_fee_per_gas * Self::REPLACEMENT_BUMP_PCT + 99) / 100;
+            (previous.max_priority_fee_per_gas * Self::REPLACEMENT_BUMP_PCT).div_ceil(100);
         GasParams {
             max_fee_per_gas: self.max_fee_per_gas.max(min_fee),
             max_priority_fee_per_gas: self.max_priority_fee_per_gas.max(min_priority),
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -37,9 +33,25 @@ mod tests {
         // Each case: (prev_fee, prev_pri, fresh_fee, fresh_pri, expected_fee, expected_pri, label)
         let cases: &[(u128, u128, u128, u128, u128, u128, &str)] = &[
             // Fresh estimate already above the 10% threshold — use it as-is.
-            (100, 10, 120, 15, 120, 15, "fresh already above bump threshold"),
+            (
+                100,
+                10,
+                120,
+                15,
+                120,
+                15,
+                "fresh already above bump threshold",
+            ),
             // Fresh estimate below threshold — floor is applied.
-            (100, 10, 105, 10, 110, 11, "fresh below threshold, floor applied"),
+            (
+                100,
+                10,
+                105,
+                10,
+                110,
+                11,
+                "fresh below threshold, floor applied",
+            ),
             // Fresh estimate exactly at the threshold.
             (100, 10, 110, 11, 110, 11, "fresh exactly at threshold"),
             // Ceiling division: 9 * 110 = 990, ceil(990/100) = 10.
@@ -58,8 +70,10 @@ mod tests {
             };
             let bumped = fresh.with_minimum_replacement_bump(&previous);
             assert_eq!(bumped.max_fee_per_gas, exp_fee, "fee: {label}");
-            assert_eq!(bumped.max_priority_fee_per_gas, exp_pri, "priority: {label}");
+            assert_eq!(
+                bumped.max_priority_fee_per_gas, exp_pri,
+                "priority: {label}"
+            );
         }
     }
-
 }
