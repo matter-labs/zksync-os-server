@@ -119,21 +119,29 @@ where
                 ),
 
                 L1SenderCommand::SendToL1(mut command) => {
-                    // Always submit the first transaction, even if the estimate exceeds the
-                    // configured cap — stalling the pipeline indefinitely is worse than a
-                    // single over-priced tx.  Resubmission is still capped (see
-                    // `watch_and_resubmit`).
-                    let gas_params = estimate_gas_params(&provider).await?;
-                    if gas_params.max_fee_per_gas > config.max_fee_per_gas_wei
-                        || gas_params.max_priority_fee_per_gas > config.max_priority_fee_per_gas_wei
+                    // Estimate current network fees and clamp to the configured caps.
+                    // Even when the network estimate exceeds the cap we still submit — the
+                    // nonce slot must be filled to keep the pipeline moving — but we never
+                    // broadcast above the operator's stated maximum.
+                    let raw = estimate_gas_params(&provider).await?;
+                    let gas_params = GasParams {
+                        max_fee_per_gas: raw
+                            .max_fee_per_gas
+                            .min(config.max_fee_per_gas_wei),
+                        max_priority_fee_per_gas: raw
+                            .max_priority_fee_per_gas
+                            .min(config.max_priority_fee_per_gas_wei),
+                    };
+                    if raw.max_fee_per_gas > config.max_fee_per_gas_wei
+                        || raw.max_priority_fee_per_gas > config.max_priority_fee_per_gas_wei
                     {
                         tracing::warn!(
                             command_name,
                             configured_max_fee = config.max_fee_per_gas_wei,
-                            estimated_max_fee = gas_params.max_fee_per_gas,
+                            estimated_max_fee = raw.max_fee_per_gas,
                             configured_max_priority_fee = config.max_priority_fee_per_gas_wei,
-                            estimated_max_priority_fee = gas_params.max_priority_fee_per_gas,
-                            "network fees exceed configured cap — submitting anyway, resubmission will be capped",
+                            estimated_max_priority_fee = raw.max_priority_fee_per_gas,
+                            "network fees exceed configured cap — submitting at cap",
                         );
                     }
 
