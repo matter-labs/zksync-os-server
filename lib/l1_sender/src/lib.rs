@@ -125,8 +125,7 @@ where
                     // `submit_and_confirm`).
                     let gas_params = estimate_gas_params(&provider).await?;
                     if gas_params.max_fee_per_gas > config.max_fee_per_gas_wei
-                        || gas_params.max_priority_fee_per_gas
-                            > config.max_priority_fee_per_gas_wei
+                        || gas_params.max_priority_fee_per_gas > config.max_priority_fee_per_gas_wei
                     {
                         tracing::warn!(
                             command_name,
