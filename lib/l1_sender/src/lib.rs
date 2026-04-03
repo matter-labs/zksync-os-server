@@ -125,9 +125,7 @@ where
                     // broadcast above the operator's stated maximum.
                     let raw = estimate_gas_params(&provider).await?;
                     let gas_params = GasParams {
-                        max_fee_per_gas: raw
-                            .max_fee_per_gas
-                            .min(config.max_fee_per_gas_wei),
+                        max_fee_per_gas: raw.max_fee_per_gas.min(config.max_fee_per_gas_wei),
                         max_priority_fee_per_gas: raw
                             .max_priority_fee_per_gas
                             .min(config.max_priority_fee_per_gas_wei),
