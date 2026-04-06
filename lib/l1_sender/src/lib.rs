@@ -197,8 +197,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         .with_timeout(Some(TRANSACTION_TIMEOUT));
                     let tx_hash = *pending_tx.tx_hash();
                     tracing::info!(
-                        tx_hash = ?tx_hash,
-                        "L1 transaction submitted, waiting for inclusion: {cmd}",
+                        "{command_name}: L1 transaction submitted for {range}. Hash: {tx_hash:?} Waiting for inclusion...",
                     );
                     let receipt_fut = pending_tx.get_receipt().boxed();
                     cmd.as_mut()
