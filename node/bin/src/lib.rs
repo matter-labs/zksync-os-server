@@ -439,6 +439,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
+    // Channel from L1Sender<CommitCommand> to L1CommitWatcher.
+    // Initialized to startup's last_committed_batch so any commit above that value
+    // which the pipeline didn't submit in this session triggers a restart.
+    let (commit_submitted_tx, commit_submitted_rx) =
+        watch::channel(node_startup_state.l1_state.last_committed_batch);
+
     tracing::info!("Initializing L1 Watchers");
     runtime.spawn_critical_task(
         "l1 commit watcher",
@@ -448,6 +454,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_batch_provider.clone(),
             finality_storage.clone(),
             node_startup_state.l1_state.l1_chain_id,
+            node_role.is_main().then_some(commit_submitted_rx),
         )
         .await
         .expect("failed to start L1 commit watcher")
@@ -835,6 +842,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_batch_provider.clone(),
             canonization_engine,
             leadership,
+            commit_submitted_tx,
         )
         .await;
     } else {
@@ -917,6 +925,7 @@ async fn run_main_node_pipeline(
     committed_batch_provider: CommittedBatchProvider,
     canonization_engine: BlockCanonizationEngine,
     leadership: LeadershipSignal,
+    commit_submitted_tx: watch::Sender<u64>,
 ) {
     let pubdata_mode = config
         .l1_sender_config
@@ -1087,6 +1096,7 @@ async fn run_main_node_pipeline(
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
+            commit_submitted_tx: Some(commit_submitted_tx),
         })
         .pipe(snark_proving_step)
         .pipe(GaplessL1ProofSender::new(
@@ -1097,6 +1107,7 @@ async fn run_main_node_pipeline(
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
+            commit_submitted_tx: None,
         })
         .pipe(
             PriorityTreePipelineStep::new(
@@ -1112,6 +1123,7 @@ async fn run_main_node_pipeline(
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
+            commit_submitted_tx: None,
         })
         .pipe(BatchSink::new(internal_config_manager));
 

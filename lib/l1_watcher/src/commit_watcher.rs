@@ -4,6 +4,7 @@ use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::primitives::Address;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
+use tokio::sync::watch;
 use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
@@ -18,6 +19,7 @@ pub struct L1CommitWatcher<Finality> {
     startup_last_committed_batch: u64,
     committed_batch_provider: CommittedBatchProvider,
     finality: Finality,
+    commit_submitted_rx: Option<watch::Receiver<u64>>,
 }
 
 impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
@@ -27,6 +29,7 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         l1_chain_id: u64,
+        commit_submitted_rx: Option<watch::Receiver<u64>>,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_committed_batch = finality.get_finality_status().last_committed_batch;
@@ -53,6 +56,7 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
             startup_last_committed_batch: last_committed_batch,
             committed_batch_provider,
             finality,
+            commit_submitted_rx,
         };
         let l1_watcher = L1Watcher::new(
             zk_chain.provider().clone(),
@@ -106,6 +110,12 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
         } else if batch_number < self.next_batch_number {
             tracing::debug!(batch_number, "skipping already processed committed batch");
         } else {
+            // Fast-fail if this batch was committed by a prior crashed session's pending tx.
+            if should_restart_for_unexpected_commit(batch_number, self.commit_submitted_rx.as_ref())
+            {
+                return Err(L1WatcherError::UnexpectedCommit(batch_number));
+            }
+
             tracing::debug!(batch_number, "discovered committed batch");
             let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
             let committed_batch = util::fetch_commit_calldata(&self.zk_chain, tx_hash).await?;
@@ -143,6 +153,15 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
     }
 }
 
+/// Returns true if the commit event is for a batch that this session's pipeline has not yet
+/// submitted to L1 — indicating a pending tx from a prior crashed session just landed.
+fn should_restart_for_unexpected_commit(
+    batch_number: u64,
+    commit_submitted_rx: Option<&watch::Receiver<u64>>,
+) -> bool {
+    commit_submitted_rx.is_some_and(|rx| batch_number > *rx.borrow())
+}
+
 /// Returns true if the commit event belongs to startup catch-up range and is above the startup
 /// committed frontier.
 fn should_skip_historical_commit(
@@ -158,7 +177,9 @@ fn should_skip_historical_commit(
 
 #[cfg(test)]
 mod tests {
+    use super::should_restart_for_unexpected_commit;
     use super::should_skip_historical_commit;
+    use tokio::sync::watch;
 
     #[test]
     fn skips_historical_batch_above_startup_frontier() {
@@ -180,5 +201,35 @@ mod tests {
     #[test]
     fn does_not_skip_when_log_has_no_block_number() {
         assert!(!should_skip_historical_commit(100, 10, 11, None));
+    }
+
+    #[test]
+    fn restarts_when_batch_exceeds_submitted() {
+        let (_tx, rx) = watch::channel(5u64);
+        assert!(should_restart_for_unexpected_commit(6, Some(&rx)));
+    }
+
+    #[test]
+    fn no_restart_when_batch_equals_submitted() {
+        let (_tx, rx) = watch::channel(5u64);
+        assert!(!should_restart_for_unexpected_commit(5, Some(&rx)));
+    }
+
+    #[test]
+    fn no_restart_when_batch_below_submitted() {
+        let (_tx, rx) = watch::channel(5u64);
+        assert!(!should_restart_for_unexpected_commit(4, Some(&rx)));
+    }
+
+    #[test]
+    fn no_restart_when_rx_is_none() {
+        assert!(!should_restart_for_unexpected_commit(100, None));
+    }
+
+    #[test]
+    fn no_restart_after_pipeline_updates_submitted() {
+        let (tx, rx) = watch::channel(5u64);
+        tx.send(6).unwrap();
+        assert!(!should_restart_for_unexpected_commit(6, Some(&rx)));
     }
 }
