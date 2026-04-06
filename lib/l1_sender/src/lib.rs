@@ -184,7 +184,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     // We don't wait for receipt here, instead we register an alloy watcher that
                     // polls for the receipt in the background. This future resolves when the watcher
                     // finds it.
-                    let receipt_fut = provider
+                    let pending_tx = provider
                         .send_raw_transaction(&tx.encoded_2718())
                         .await?
                         // We are being optimistic with our transaction inclusion here. But, even if
@@ -194,9 +194,13 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         .with_required_confirmations(1)
                         // Ensure we don't wait indefinitely and crash if the transaction is not
                         // included on L1 in a reasonable time.
-                        .with_timeout(Some(TRANSACTION_TIMEOUT))
-                        .get_receipt()
-                        .boxed();
+                        .with_timeout(Some(TRANSACTION_TIMEOUT));
+                    let tx_hash = *pending_tx.tx_hash();
+                    tracing::info!(
+                        tx_hash = ?tx_hash,
+                        "L1 transaction submitted, waiting for inclusion: {cmd}",
+                    );
+                    let receipt_fut = pending_tx.get_receipt().boxed();
                     cmd.as_mut()
                         .iter_mut()
                         .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
