@@ -1188,7 +1188,6 @@ async fn run_en_pipeline(
                 node_state_on_startup.l1_state.diamond_proxy_address_sl(),
                 config.batch_verification_config.connect_address.clone(),
                 config.batch_verification_config.signing_key.clone(),
-                finality.clone(),
                 node_state_on_startup.l1_state.clone(),
                 state.clone(),
             ),

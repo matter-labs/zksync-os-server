@@ -1,40 +1,9 @@
 use alloy::primitives::{Address, B256};
 /// This module is for sharing various testing utilities and helpers.
-use tokio::sync::watch;
 use zksync_os_batch_types::BatchInfo;
 use zksync_os_contract_interface::models::{CommitBatchInfo, DACommitmentScheme, StoredBatchInfo};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, MissingSignature};
-use zksync_os_storage_api::{FinalityStatus, ReadFinality};
 use zksync_os_types::ProtocolSemanticVersion;
-
-pub struct DummyFinality {
-    status: FinalityStatus,
-    rx: watch::Receiver<FinalityStatus>,
-}
-
-impl DummyFinality {
-    pub fn zero() -> Self {
-        let status = FinalityStatus {
-            last_committed_block: 0,
-            last_committed_batch: 0,
-            last_executed_block: 0,
-            last_executed_batch: 0,
-        };
-        let (tx, rx) = watch::channel(status.clone());
-        let _ = tx;
-        Self { status, rx }
-    }
-}
-
-impl ReadFinality for DummyFinality {
-    fn get_finality_status(&self) -> FinalityStatus {
-        self.status.clone()
-    }
-
-    fn subscribe(&self) -> watch::Receiver<FinalityStatus> {
-        self.rx.clone()
-    }
-}
 
 pub fn dummy_commit_batch_info(batch_number: u64, from: u64, to: u64) -> CommitBatchInfo {
     CommitBatchInfo {

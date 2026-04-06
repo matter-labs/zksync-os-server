@@ -38,20 +38,20 @@ use zksync_os_observability::ComponentStateReporter;
 use zksync_os_observability::GenericComponentState;
 use zksync_os_observability::StateLabel;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
+use zksync_os_storage_api::ReadStateHistory;
 use zksync_os_storage_api::{ReplayRecord, StateError, read_multichain_root};
 
 mod block_cache;
 mod metrics;
 
 /// Client that connects to the main sequencer for batch verification
-pub struct BatchVerificationClient<Finality, ReadState> {
+pub struct BatchVerificationClient<ReadState> {
     chain_id: u64,
     diamond_proxy_sl: Address,
     server_address: String,
     l1_state: L1State,
     signer: PrivateKeySigner,
-    block_cache: BlockCache<Finality, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
+    block_cache: BlockCache<(BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
     read_state: ReadState,
 }
 
@@ -69,15 +69,12 @@ enum BatchVerificationError {
 
 type VerificationInput = (BlockOutput, ReplayRecord, BlockMerkleTreeData);
 
-impl<Finality: ReadFinality, ReadState: ReadStateHistory>
-    BatchVerificationClient<Finality, ReadState>
-{
+impl<ReadState: ReadStateHistory> BatchVerificationClient<ReadState> {
     pub fn new(
         chain_id: u64,
         diamond_proxy_sl: Address,
         server_address: String,
         private_key: SecretString,
-        finality: Finality,
         l1_state: L1State,
         read_state: ReadState,
     ) -> Self {
@@ -98,7 +95,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             server_address,
             l1_state,
             signer,
-            block_cache: BlockCache::new(finality),
+            block_cache: BlockCache::new(),
             read_state,
         }
     }
@@ -186,7 +183,14 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
 
                             let batch_number = message.batch_number;
                             let request_id = message.request_id;
+                            let first_block = message.first_block_number;
                             let verification_result = self.handle_verification_request(message).await;
+
+                            // Evict blocks from previous batches. We use the request's first_block rather than the finality
+                            // watch channel because after a restart the L1CommitWatcher can advance last_committed_block
+                            // past a batch whose L1 tx was still pending at startup, while the server's static
+                            // last_committed_batch_number hasn't caught up yet.
+                            self.block_cache.remove_lower_then(first_block);
 
                             latency_tracker.enter_state(BatchVerificationClientState::WaitingSend);
                             match verification_result {
@@ -330,9 +334,7 @@ impl StateLabel for BatchVerificationClientState {
 }
 
 #[async_trait]
-impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
-    for BatchVerificationClient<Finality, ReadState>
-{
+impl<ReadState: ReadStateHistory> PipelineComponent for BatchVerificationClient<ReadState> {
     type Input = VerificationInput;
     type Output = ();
 

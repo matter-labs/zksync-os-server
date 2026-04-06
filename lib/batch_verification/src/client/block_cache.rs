@@ -1,26 +1,23 @@
 use std::collections::HashMap;
-use zksync_os_storage_api::ReadFinality;
 
 use super::metrics::BATCH_VERIFICATION_CLIENT_METRICS;
 
-/// Cache of blocks that are to be used for batch verification
-/// Accepts blocks only in ascending order. Old blocks are evicted when not
-/// needed through a call to remove_lower_then.
+/// Cache of blocks that are to be used for batch verification.
+/// Accepts blocks only in ascending order. Old blocks are evicted via
+/// [`remove_lower_then`] after each verification request is handled.
 ///
 /// This may be optimized by using a ring buffer for data storage instead.
-pub(super) struct BlockCache<Finality, Data> {
+pub(super) struct BlockCache<Data> {
     data: HashMap<u64, Data>,
     /// Range of cached data. Range is inclusive of both bounds.
     range: Option<(u64, u64)>,
-    finality: Finality,
 }
 
-impl<Finality: ReadFinality, Data> BlockCache<Finality, Data> {
-    pub fn new(finality: Finality) -> Self {
+impl<Data> BlockCache<Data> {
+    pub fn new() -> Self {
         Self {
             data: HashMap::new(),
             range: None,
-            finality,
         }
     }
 
@@ -35,9 +32,6 @@ impl<Finality: ReadFinality, Data> BlockCache<Finality, Data> {
             self.range = Some((block_number, block_number));
         }
         self.data.insert(block_number, block);
-
-        // evict block for committed batches
-        self.remove_lower_then(self.finality.get_finality_status().last_committed_block + 1);
 
         if let Some((start, end)) = self.range {
             BATCH_VERIFICATION_CLIENT_METRICS.update_cache_range(start, end);
@@ -72,16 +66,11 @@ impl<Finality: ReadFinality, Data> BlockCache<Finality, Data> {
 
 #[cfg(test)]
 mod tests {
-    use crate::tests::DummyFinality;
-
     use super::*;
-
-    // We use everywhere zero finality to trigger no automatic evictions in tests.
 
     #[test]
     fn insert_updates_range_and_data_for_sequential_blocks() {
-        let finality = DummyFinality::zero();
-        let mut cache = BlockCache::<_, u64>::new(finality);
+        let mut cache = BlockCache::<u64>::new();
 
         cache.insert(1, 1).unwrap();
         assert_eq!(cache.range, Some((1, 1)));
@@ -97,8 +86,7 @@ mod tests {
 
     #[test]
     fn insert_rejects_out_of_order_blocks() {
-        let finality = DummyFinality::zero();
-        let mut cache = BlockCache::new(finality);
+        let mut cache = BlockCache::new();
 
         cache.insert(1, 1).unwrap();
         cache.insert(2, 2).unwrap();
@@ -124,8 +112,7 @@ mod tests {
 
     #[test]
     fn remove_lower_then_evicts_and_updates_range() {
-        let finality = DummyFinality::zero();
-        let mut cache = BlockCache::new(finality);
+        let mut cache = BlockCache::new();
 
         for n in 1u64..=5 {
             cache.insert(n, n).unwrap();
