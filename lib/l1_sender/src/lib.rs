@@ -35,7 +35,7 @@ use zksync_os_pipeline::PeekableReceiver;
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
 /// Loads up to `command_limit` commands from the channel and sends them to L1 in parallel.
-/// Each command is spawned as an independent Tokio task via [`submit_and_confirm`], which
+/// Each command is spawned as an independent Tokio task via [`watch_and_resubmit`], which
 /// handles submission, receipt polling, and resubmission with gas bumps.
 ///
 /// Important: the same provider (sender address) must not be used outside this process.
@@ -314,7 +314,7 @@ where
             Ok(receipt) => {
                 validate_tx_receipt(&provider, &command, receipt).await?;
                 if let Err(err) =
-                    try_report_post_confirmation(command_name, operator_address, &provider).await
+                    report_post_confirmation(command_name, operator_address, &provider).await
                 {
                     tracing::warn!(
                         ?err,
@@ -530,7 +530,7 @@ where
     Ok(tx_hash)
 }
 
-async fn try_report_post_confirmation(
+async fn report_post_confirmation(
     command_name: &'static str,
     operator_address: Address,
     provider: &impl Provider<Ethereum>,
@@ -544,26 +544,11 @@ async fn try_report_post_confirmation(
         .await
         .context("get operator nonce")?;
     let balance_eth = format_ether(balance);
-    tracing::info!(
-        command_name,
-        balance_eth,
-        nonce,
-        "post-confirmation operator state"
-    );
     L1_SENDER_METRICS.balance[&command_name].set(balance_eth.parse()?);
     L1_SENDER_METRICS.nonce[&command_name].set(nonce);
     Ok(())
 }
 
-// ==============================================================================
-// Operator registration
-// ==============================================================================
-
-/// Registers the operator signer with the provider wallet and returns `(address, nonce)`.
-///
-/// The nonce is fetched once at startup so the main loop can track it manually.  We
-/// set `.with_nonce` on every outgoing transaction to bypass alloy's automatic nonce
-/// filler, which would otherwise interfere with our manual counter.
 async fn register_operator<
     P: Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
     Input: SendToL1,
@@ -603,14 +588,6 @@ async fn register_operator<
     Ok((address, nonce))
 }
 
-// ==============================================================================
-// Receipt validation
-// ==============================================================================
-
-/// Validates a confirmed transaction receipt.
-///
-/// Successful receipts: records gas/cost metrics and returns `Ok(())`.
-/// Reverted transactions: logs the error with an optional debug trace and returns `Err`.
 async fn validate_tx_receipt<Input: SendToL1>(
     provider: &impl Provider,
     command: &Input,
