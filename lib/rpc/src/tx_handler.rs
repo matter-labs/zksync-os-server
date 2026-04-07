@@ -62,21 +62,22 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         if self.config.l2_signer_blacklist.contains(&l2_tx.signer()) {
             return Err(EthSendRawTransactionError::BlacklistedSigner);
         }
-        let mut stats = TxSubmissionStats::new();
-        self.mempool.add_l2_transaction(l2_tx).await?;
-        stats.mempool_done();
+        {
+            let _guard = MempoolLatencyGuard::new();
+            self.mempool.add_l2_transaction(l2_tx).await?;
+        }
 
         if let Some(tx_forwarder) = self.tx_forwarder.as_ref() {
-            stats.start_forwarding();
-            match tx_forwarder.send_raw_transaction(&tx_bytes).await {
-                // We do not need to wait for pending transaction here, so it's safe to forget about it
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::debug!(%err, "forwarding error from main node back to user");
-                    // Remove previously added transaction from local mempool
-                    self.mempool.remove_transactions(vec![hash]);
-                    return Err(err.into());
-                }
+            let forwarding_result = {
+                let _guard = ForwardingLatencyGuard::new();
+                tx_forwarder.send_raw_transaction(&tx_bytes).await
+            };
+            // We do not need to wait for pending transaction here, so it's safe to forget about it
+            if let Err(err) = forwarding_result {
+                tracing::debug!(%err, "forwarding error from main node back to user");
+                // Remove previously added transaction from local mempool
+                self.mempool.remove_transactions(vec![hash]);
+                return Err(err.into());
             }
         }
 
@@ -171,44 +172,36 @@ pub enum EthSendRawTransactionSyncError {
     Timeout(Duration),
 }
 
-/// Tracks latency of the transaction submission pipeline.
-/// Observes Prometheus metrics when dropped, ensuring they are recorded on all exit paths.
-struct TxSubmissionStats {
-    mempool_started: Instant,
-    mempool_elapsed: Option<Duration>,
-    forwarding_started: Option<Instant>,
-}
+/// Records mempool insertion latency on drop, capturing errors and async cancellations.
+struct MempoolLatencyGuard(Instant);
 
-impl TxSubmissionStats {
+impl MempoolLatencyGuard {
     fn new() -> Self {
-        Self {
-            mempool_started: Instant::now(),
-            mempool_elapsed: None,
-            forwarding_started: None,
-        }
-    }
-
-    fn mempool_done(&mut self) {
-        self.mempool_elapsed = Some(self.mempool_started.elapsed());
-    }
-
-    fn start_forwarding(&mut self) {
-        self.forwarding_started = Some(Instant::now());
+        Self(Instant::now())
     }
 }
 
-impl Drop for TxSubmissionStats {
+impl Drop for MempoolLatencyGuard {
     fn drop(&mut self) {
-        let mempool_elapsed = self
-            .mempool_elapsed
-            .unwrap_or_else(|| self.mempool_started.elapsed());
         TX_SUBMISSION_METRICS
             .mempool_latency
-            .observe(mempool_elapsed);
-        if let Some(started) = self.forwarding_started {
-            TX_SUBMISSION_METRICS
-                .forwarding_latency
-                .observe(started.elapsed());
-        }
+            .observe(self.0.elapsed());
+    }
+}
+
+/// Records forwarding latency on drop, capturing errors and async cancellations.
+struct ForwardingLatencyGuard(Instant);
+
+impl ForwardingLatencyGuard {
+    fn new() -> Self {
+        Self(Instant::now())
+    }
+}
+
+impl Drop for ForwardingLatencyGuard {
+    fn drop(&mut self) {
+        TX_SUBMISSION_METRICS
+            .forwarding_latency
+            .observe(self.0.elapsed());
     }
 }
