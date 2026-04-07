@@ -132,9 +132,7 @@ where
                     };
                     let raw = estimate_gas_params(&provider, &caps).await;
                     let gas_params = raw.clamped_to(&caps);
-                    if let Err(err) =
-                        L1_SENDER_METRICS.report_fee_caps(command_name, &caps)
-                    {
+                    if let Err(err) = L1_SENDER_METRICS.report_fee_caps(command_name, &caps) {
                         tracing::warn!(%err, command_name, "failed to report fee cap metrics");
                     }
                     if raw.exceeds(&caps) {
@@ -333,11 +331,14 @@ where
 
                 // Raw fee estimate — no cap blocking.  The nonce slot is already reserved;
                 // blocking here would leave the pipeline stuck with an unconfirmed tx.
-                let fresh = estimate_gas_params(&provider, &GasParams {
-                    max_fee_per_gas: config.max_fee_per_gas_wei,
-                    max_priority_fee_per_gas: config.max_priority_fee_per_gas_wei,
-                    fee_per_blob_gas: config.max_fee_per_blob_gas_wei,
-                })
+                let fresh = estimate_gas_params(
+                    &provider,
+                    &GasParams {
+                        max_fee_per_gas: config.max_fee_per_gas_wei,
+                        max_priority_fee_per_gas: config.max_priority_fee_per_gas_wei,
+                        fee_per_blob_gas: config.max_fee_per_blob_gas_wei,
+                    },
+                )
                 .await;
 
                 // Always apply at least a 10% bump to guarantee mempool acceptance.
@@ -386,10 +387,7 @@ where
 /// caps as fallback means we still submit — potentially above the network price — rather
 /// than stalling the pipeline on a transient RPC error.
 async fn estimate_gas_params(provider: &impl Provider, fallback: &GasParams) -> GasParams {
-    let (max_fee_per_gas, max_priority_fee_per_gas) = match provider
-        .estimate_eip1559_fees()
-        .await
-    {
+    let (max_fee_per_gas, max_priority_fee_per_gas) = match provider.estimate_eip1559_fees().await {
         Ok(est) => {
             if let Err(err) = L1_SENDER_METRICS.report_l1_eip_1559_estimation(est) {
                 tracing::warn!(%err, "failed to report EIP-1559 estimation metrics");
