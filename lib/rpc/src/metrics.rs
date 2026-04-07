@@ -19,6 +19,8 @@ pub struct ApiMetrics {
     pub requests_in_batch_count: LabeledFamily<String, Histogram<u64>>,
     #[metrics(labels = ["method", "code"])]
     pub errors: LabeledFamily<(String, i32), Counter, 2>,
+    #[metrics(labels = ["method"])]
+    pub cancelled: LabeledFamily<String, Counter>,
 }
 
 #[vise::register]

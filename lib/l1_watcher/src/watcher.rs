@@ -5,32 +5,41 @@ use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use std::time::Duration;
 
-/// An abstract watcher for L1 events.
-/// Handles polling L1 for new blocks and extracting logs,
+/// An abstract watcher for events.
+/// Handles polling for new blocks and extracting logs,
 /// while delegating the actual event processing to a user-provided processor.
 pub struct L1Watcher {
     provider: DynProvider,
-    next_l1_block: BlockNumber,
+    next_block: BlockNumber,
     max_blocks_to_process: u64,
+    confirmations: BlockNumber,
     poll_interval: Duration,
     processor: Box<dyn ProcessRawEvents>,
 }
 
 impl L1Watcher {
-    pub(crate) fn new(
+    pub(crate) async fn new(
         provider: DynProvider,
-        next_l1_block: BlockNumber,
+        next_block: BlockNumber,
         max_blocks_to_process: u64,
+        mut confirmations: BlockNumber,
+        l1_chain_id: u64,
         poll_interval: Duration,
         processor: Box<dyn ProcessRawEvents>,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        if provider.get_chain_id().await? != l1_chain_id {
+            // Gateway case, zero out confirmations.
+            confirmations = 0;
+        }
+
+        Ok(Self {
             provider,
-            next_l1_block,
+            next_block,
             max_blocks_to_process,
+            confirmations,
             poll_interval,
             processor,
-        }
+        })
     }
 }
 
@@ -39,17 +48,21 @@ impl L1Watcher {
         let mut timer = tokio::time::interval(self.poll_interval);
         loop {
             timer.tick().await;
-            self.poll().await.expect("watcher failed");
+            if let Err(e) = self.poll().await {
+                tracing::error!("l1 watcher fatal error: {e}");
+                panic!("watcher failed: {e}");
+            }
         }
     }
 
     async fn poll(&mut self) -> Result<(), L1WatcherError> {
         let latest_block = self.provider.get_block_number().await?;
+        let latest_confirmed_block = latest_block.saturating_sub(self.confirmations);
 
-        while self.next_l1_block <= latest_block {
-            let from_block = self.next_l1_block;
+        while self.next_block <= latest_confirmed_block {
+            let from_block = self.next_block;
             // Inspect up to `self.max_blocks_to_process` blocks at a time
-            let to_block = latest_block.min(from_block + self.max_blocks_to_process - 1);
+            let to_block = latest_confirmed_block.min(from_block + self.max_blocks_to_process - 1);
 
             let events = self
                 .extract_logs_from_l1_blocks(from_block, to_block)
@@ -64,7 +77,7 @@ impl L1Watcher {
                 self.processor.process_raw_event(event).await?;
             }
 
-            self.next_l1_block = to_block + 1;
+            self.next_block = to_block + 1;
         }
 
         Ok(())
@@ -127,6 +140,10 @@ pub enum L1WatcherError {
     Contract(#[from] zksync_os_contract_interface::Error),
     #[error(transparent)]
     Other(anyhow::Error),
+    #[error(
+        "batch {0} was committed on L1 but not submitted by this session; likely a pending tx from a prior crash"
+    )]
+    UnexpectedCommit(u64),
     #[error("output has been closed")]
     OutputClosed,
 }

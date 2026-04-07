@@ -10,8 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use zksync_os_types::ConfigFormat;
 
-/// Builds the runtime [`Config`] by parsing all supported sections from the repository,
-/// applying node-role-specific adjustments, and validating distinct L1 operator addresses.
+/// Builds the runtime [`Config`] by parsing all supported sections from the repository
+/// and applying node-role-specific adjustments.
 pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     let general_config = repo
         .single::<GeneralConfig>()
@@ -125,51 +125,17 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse interop fee updater config");
 
-    // Parse this config only for Main Nodes. External Nodes never start the base token price updater.
-    let external_price_api_client_config = if general_config.node_role.is_main() {
-        Some(
-            repo.single::<ExternalPriceApiClientConfig>()
-                .expect("Failed to load external price API client config")
-                .parse()
-                .expect("Failed to parse external price API client config"),
-        )
-    } else {
-        None
-    };
+    let external_price_api_client_config = repo
+        .single::<ExternalPriceApiClientConfig>()
+        .expect("Failed to load external price API client config")
+        .parse_opt()
+        .expect("Failed to parse external price API client config");
 
     let fee_config = repo
         .single::<FeeConfig>()
         .expect("Failed to load fee config")
         .parse()
         .expect("Failed to parse fee config");
-
-    // Validate that operator signers resolve to different Ethereum addresses (Main Node only).
-    // Resolving the address for GCP KMS keys requires a network call, but is necessary to catch
-    // duplicates across different backends (e.g. a local key and a KMS key for the same address).
-    if let (Some(commit), Some(prove), Some(execute)) = (
-        &l1_sender_config.operator_commit_sk,
-        &l1_sender_config.operator_prove_sk,
-        &l1_sender_config.operator_execute_sk,
-    ) {
-        let commit_addr = commit
-            .address()
-            .await
-            .expect("failed to resolve commit operator address");
-        let prove_addr = prove
-            .address()
-            .await
-            .expect("failed to resolve prove operator address");
-        let execute_addr = execute
-            .address()
-            .await
-            .expect("failed to resolve execute operator address");
-        if commit_addr == prove_addr || prove_addr == execute_addr || execute_addr == commit_addr {
-            panic!(
-                "Operator addresses for commit, prove and execute must be different, \
-                 got commit={commit_addr}, prove={prove_addr}, execute={execute_addr}"
-            );
-        }
-    }
 
     Config {
         general_config,

@@ -26,6 +26,7 @@ alloy = { workspace = true, default-features = false, features = [
     "rand",
 ] }
 alloy-rlp.workspace = true
+backon.workspace = true
 futures.workspace = true
 semver.workspace = true
 tokio.workspace = true

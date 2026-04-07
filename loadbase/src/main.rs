@@ -33,7 +33,7 @@ struct Args {
     mnemonic: String,
     #[arg(long, default_value_t = 10)] wallets: u32,
     #[arg(long)] duration: humantime::Duration,
-    #[arg(long, default_value_t = 10)] max_in_flight: u32,
+    #[arg(long, default_value_t = 1000)] max_in_flight: u32,
     #[arg(long, default_value = "100000000000000")] amount_fund: String,
     #[arg(long)] estimate_gas: bool,
     #[arg(long, value_enum, default_value_t = DestMode::Wallet)] dest: DestMode,

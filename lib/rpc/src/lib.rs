@@ -8,7 +8,7 @@ use tokio::sync::watch;
 
 mod eth_call_handler;
 pub use eth_call_handler::EthCallHandler;
-mod eth_filter_impl;
+mod eth_filter;
 mod eth_impl;
 mod eth_pubsub_impl;
 mod metrics;
@@ -29,7 +29,7 @@ mod web3_impl;
 mod zks_impl;
 
 use crate::debug_impl::DebugNamespace;
-use crate::eth_filter_impl::EthFilterNamespace;
+use crate::eth_filter::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
 use crate::monitoring_middleware::Monitoring;

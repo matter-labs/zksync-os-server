@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.18.2](https://github.com/matter-labs/zksync-os-server/compare/v0.18.1...v0.18.2) (2026-04-01)
+
+
+### Features
+
+* **batcher:** add config option to disable batcher subsystem ([#1119](https://github.com/matter-labs/zksync-os-server/issues/1119)) ([0ea9c7f](https://github.com/matter-labs/zksync-os-server/commit/0ea9c7f47bd7a52159d7e513d0e3352b9f2b6600))
+* use `getSettlementLayer` to determine SL ([#1116](https://github.com/matter-labs/zksync-os-server/issues/1116)) ([dd1bc0c](https://github.com/matter-labs/zksync-os-server/commit/dd1bc0c0dc1bd3b84c0c6615102777fa314a2520))
+
+
+### Bug Fixes
+
+* fix batcher shutdown and enable revert test ([#1122](https://github.com/matter-labs/zksync-os-server/issues/1122)) ([a846796](https://github.com/matter-labs/zksync-os-server/commit/a846796043ccc6a44ef9800a7245105a7e49ad10))
+* **prover_api:** use drop guards to ensure metrics are always recorded ([#1126](https://github.com/matter-labs/zksync-os-server/issues/1126)) ([e5df063](https://github.com/matter-labs/zksync-os-server/commit/e5df0636b80960a02e6d9476a7a220aa6de7610e))
+* **rpc:** record latency for cancelled requests (client disconnect) ([#1125](https://github.com/matter-labs/zksync-os-server/issues/1125)) ([7027315](https://github.com/matter-labs/zksync-os-server/commit/7027315cee8c9943ac5b3ac85989678438da3deb))
+* **tracer:** Fix tracer only_top_call handling ([#1127](https://github.com/matter-labs/zksync-os-server/issues/1127)) ([9a88dc1](https://github.com/matter-labs/zksync-os-server/commit/9a88dc13ddb0b761c99dbabf754dbbbf3f8dfc13))
+
+## [0.18.1](https://github.com/matter-labs/zksync-os-server/compare/v0.18.0...v0.18.1) (2026-03-30)
+
+
+### Features
+
+* **config:** generate declarative config validation ([#1090](https://github.com/matter-labs/zksync-os-server/issues/1090)) ([491b930](https://github.com/matter-labs/zksync-os-server/commit/491b93036e144aa0afc178e07cc07cec87eaaf2e))
+* **config:** set production-oriented defaults, extract local dev overrides ([#1062](https://github.com/matter-labs/zksync-os-server/issues/1062)) ([5e850f5](https://github.com/matter-labs/zksync-os-server/commit/5e850f54b0be944b3d1b1ae33f20a2edf9f9fd05))
+* **minor:** improve logging of executed transactions ([#1094](https://github.com/matter-labs/zksync-os-server/issues/1094)) ([da4a52a](https://github.com/matter-labs/zksync-os-server/commit/da4a52a31895d308eedc08f672e5b7781825ee94))
+* **network:** report metrics from `reth-network` crate ([#1063](https://github.com/matter-labs/zksync-os-server/issues/1063)) ([2e1ec9d](https://github.com/matter-labs/zksync-os-server/commit/2e1ec9d114ca6e325fb05f7a3240c7997d2326cd))
+* **network:** support `network_interface` and DNS boot nodes ([#1075](https://github.com/matter-labs/zksync-os-server/issues/1075)) ([f2afb8d](https://github.com/matter-labs/zksync-os-server/commit/f2afb8d544dfad2159ff496ab1c6bec3883e0e7e))
+* **tracer:** Meaningful errors for out-of-pubdata reverts ([#1058](https://github.com/matter-labs/zksync-os-server/issues/1058)) ([e62b216](https://github.com/matter-labs/zksync-os-server/commit/e62b216758b795f40061691db497c9f51d1899ba))
+
+
+### Bug Fixes
+
+* avoid marking rebuild tx source entries invalid ([#1109](https://github.com/matter-labs/zksync-os-server/issues/1109)) ([c5c339f](https://github.com/matter-labs/zksync-os-server/commit/c5c339f345fcdae447fcc02a5a29b13045184758))
+* EN preimage persisting before block saved ([#1114](https://github.com/matter-labs/zksync-os-server/issues/1114)) ([fafd039](https://github.com/matter-labs/zksync-os-server/commit/fafd03988cc1ddf4b5a794a3fc24573c7ef9d754))
+* fix batch storage in revert case ([#1081](https://github.com/matter-labs/zksync-os-server/issues/1081)) ([4cce328](https://github.com/matter-labs/zksync-os-server/commit/4cce328f3fbe5df9d44ce181e2ccdef2b8e711a4))
+* handle already reverted batches in commit watcher ([#1096](https://github.com/matter-labs/zksync-os-server/issues/1096)) ([887ff33](https://github.com/matter-labs/zksync-os-server/commit/887ff3315fa4e2f7b3dbe4457352533c5063af61))
+* ignore permission denied for stale port lockfiles ([#1088](https://github.com/matter-labs/zksync-os-server/issues/1088)) ([edafd60](https://github.com/matter-labs/zksync-os-server/commit/edafd604db1d95b8693a73d27d60dd0922800047))
+* **l1-watcher:** wait two L1 blocks before processing events ([#1091](https://github.com/matter-labs/zksync-os-server/issues/1091)) ([2afb0b4](https://github.com/matter-labs/zksync-os-server/commit/2afb0b49c07311c719a312d0957e754475babc8e))
+* make block executor wait for block applier ([#1108](https://github.com/matter-labs/zksync-os-server/issues/1108)) ([0e23999](https://github.com/matter-labs/zksync-os-server/commit/0e23999e2bb05625152423b50211a095e61c3ca7))
+* **network:** retry boot node DNS resolution before startup ([#1100](https://github.com/matter-labs/zksync-os-server/issues/1100)) ([4a635d5](https://github.com/matter-labs/zksync-os-server/commit/4a635d555eb173b110d7395ed884d6abe9e01b8f))
+* **priority-tree:** run initialization in background to avoid shutdown bug ([#1067](https://github.com/matter-labs/zksync-os-server/issues/1067)) ([debea8f](https://github.com/matter-labs/zksync-os-server/commit/debea8fab1bac9e83337b684900cd57f71736173))
+* **tracer:** map CREATE and CREATE2 correctly ([#1060](https://github.com/matter-labs/zksync-os-server/issues/1060)) ([553e627](https://github.com/matter-labs/zksync-os-server/commit/553e627241a8390eba5fbd7a3affb034df6a9316))
+
 ## [0.18.0](https://github.com/matter-labs/zksync-os-server/compare/v0.17.1...v0.18.0) (2026-03-24)
 
 

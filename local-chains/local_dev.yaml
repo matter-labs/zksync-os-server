@@ -4,6 +4,7 @@
 
 l1_watcher:
   poll_interval: 100ms
+  confirmations: 0
 
 l1_sender:
   poll_interval: 100ms

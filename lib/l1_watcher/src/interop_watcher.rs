@@ -25,6 +25,7 @@ impl InteropWatcher {
         config: L1WatcherConfig,
         starting_interop_root_id: u64,
         interop_roots_subpool: InteropRootsSubpool,
+        l1_chain_id: u64,
     ) -> anyhow::Result<L1Watcher> {
         let contract_address = bridgehub.message_root_address().await?;
 
@@ -43,13 +44,18 @@ impl InteropWatcher {
             interop_roots_subpool,
         };
 
-        Ok(L1Watcher::new(
+        let l1_watcher = L1Watcher::new(
             bridgehub.provider().clone(),
             next_l1_block,
             config.max_blocks_to_process,
+            config.confirmations,
+            l1_chain_id,
             config.poll_interval,
             Box::new(this),
-        ))
+        )
+        .await?;
+
+        Ok(l1_watcher)
     }
 }
 

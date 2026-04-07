@@ -25,6 +25,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::watch;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_pipeline::PeekableReceiver;
@@ -71,6 +72,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
     >,
     config: L1SenderConfig<Input>,
     gateway: bool,
+    commit_submitted_tx: Option<watch::Sender<u64>>,
 ) -> anyhow::Result<()> {
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
@@ -184,7 +186,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     // We don't wait for receipt here, instead we register an alloy watcher that
                     // polls for the receipt in the background. This future resolves when the watcher
                     // finds it.
-                    let receipt_fut = provider
+                    let pending_tx = provider
                         .send_raw_transaction(&tx.encoded_2718())
                         .await?
                         // We are being optimistic with our transaction inclusion here. But, even if
@@ -194,9 +196,30 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         .with_required_confirmations(1)
                         // Ensure we don't wait indefinitely and crash if the transaction is not
                         // included on L1 in a reasonable time.
-                        .with_timeout(Some(TRANSACTION_TIMEOUT))
-                        .get_receipt()
-                        .boxed();
+                        .with_timeout(Some(TRANSACTION_TIMEOUT));
+                    let tx_hash = *pending_tx.tx_hash();
+                    tracing::info!(
+                        "{command_name}: L1 transaction submitted for {range}. Hash: {tx_hash:?} Waiting for inclusion...",
+                    );
+                    let receipt_fut = pending_tx.get_receipt().boxed();
+
+                    // Notify CommitWatcher: this batch number has been submitted to L1.
+                    if let Some(sender) = &commit_submitted_tx {
+                        let batch_number = cmd
+                            .as_ref()
+                            .last()
+                            .expect("commands is non-empty after recv_many")
+                            .batch_number();
+                        sender.send_if_modified(|current| {
+                            if batch_number > *current {
+                                *current = batch_number;
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                    }
+
                     cmd.as_mut()
                         .iter_mut()
                         .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));

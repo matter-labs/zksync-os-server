@@ -304,7 +304,7 @@ async fn deposit_erc20_to_chain(
         .await?;
     let max_fee_per_gas = base_fees.max_fee_per_gas + max_priority_fee_per_gas;
 
-    let l2_gas_limit = 1_500_000_u64;
+    let l2_gas_limit = 2_500_000_u64;
     let tx_base_cost = bridgehub
         .l2_transaction_base_cost(
             max_fee_per_gas + max_priority_fee_per_gas,

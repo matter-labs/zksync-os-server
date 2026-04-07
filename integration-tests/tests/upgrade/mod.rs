@@ -16,7 +16,7 @@ use zksync_os_server::default_protocol_version::NEXT_PROTOCOL_VERSION;
 /// the system can handle patch upgrades correctly.
 #[test_log::test(tokio::test)]
 async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
-    let upgrade_timestamp = U256::from(0); // Protocol upgrade can be executed immediately.
+    let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
     // Test that we can deposit L2 funds from a rich L1 account
@@ -47,7 +47,7 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
 
 #[test_log::test(tokio::test)]
 async fn upgrade_patch_no_deployments_gateway() -> anyhow::Result<()> {
-    let upgrade_timestamp = U256::from(0); // Protocol upgrade can be executed immediately.
+    let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
     // Test that we can deposit L2 funds from a rich L1 account
@@ -83,7 +83,7 @@ async fn upgrade_patch_no_deployments_gateway() -> anyhow::Result<()> {
 
 #[test_log::test(tokio::test)]
 async fn upgrade_patch_no_deployments_settles_to_gateway() -> anyhow::Result<()> {
-    let upgrade_timestamp = U256::from(0);
+    let upgrade_timestamp = U256::from(1);
     let deadline = U256::MAX;
 
     let gateway_tester = GatewayTester::builder()
@@ -118,7 +118,7 @@ async fn upgrade_patch_no_deployments_settles_to_gateway() -> anyhow::Result<()>
 /// Performs V30->V31 protocol upgrade which also does a force deployment.
 #[test_log::test(tokio::test)]
 async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
-    let upgrade_timestamp = U256::from(0); // Protocol upgrade can be executed immediately.
+    let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
     let sample_force_deployment_address: Address = "0x000000000000000000000000000000000000dead"
@@ -205,7 +205,7 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
 /// Upgraded chain settles to gateway.
 #[test_log::test(tokio::test)]
 async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<()> {
-    let upgrade_timestamp = U256::from(0); // Protocol upgrade can be executed immediately.
+    let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
     let sample_force_deployment_address: Address = "0x000000000000000000000000000000000000dead"

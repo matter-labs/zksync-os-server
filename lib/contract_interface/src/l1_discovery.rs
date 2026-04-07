@@ -41,26 +41,48 @@ pub struct L1State {
 
 impl L1State {
     /// Fetches L1 ecosystem contracts along with batch finality status as of latest block.
+    ///
+    /// `gateway_provider` must be `Some` when the chain is settling on the Gateway and `None`
+    /// when settling on L1. An error is returned if the chain is found to be on the Gateway but
+    /// no provider was supplied.
     pub async fn fetch(
         l1_provider: DynProvider,
-        sl_provider: DynProvider,
+        gateway_provider: Option<DynProvider>,
         bridgehub_address_l1: Address,
         l2_chain_id: u64,
     ) -> anyhow::Result<Self> {
         let l1_chain_id = l1_provider.get_chain_id().await?;
-        let sl_chain_id = sl_provider.get_chain_id().await?;
 
         let bridgehub_l1 = Bridgehub::new(bridgehub_address_l1, l1_provider, l2_chain_id);
-        let bridgehub_address_sl = if l1_chain_id == sl_chain_id {
-            bridgehub_address_l1
+        let diamond_proxy_l1 = bridgehub_l1.zk_chain().await?;
+
+        // Call ZKChainStorage::getSettlementLayer() on the L1 diamond proxy to determine whether
+        // this chain is currently settling on L1 or on the Gateway.
+        // Returns address(0) when settling on L1, or the Gateway diamond proxy address after migration.
+        let settlement_layer_address = diamond_proxy_l1.get_settlement_layer().await?;
+
+        let (sl_chain_id, bridgehub_sl) = if settlement_layer_address.is_zero() {
+            // Settling on L1: the settlement layer is L1 itself.
+            (l1_chain_id, bridgehub_l1.clone())
         } else {
-            L2_BRIDGEHUB_ADDRESS
+            // Settling on Gateway: require a dedicated Gateway RPC provider.
+            let gateway_provider = gateway_provider.with_context(|| {
+                format!(
+                    "chain is settling on Gateway (settlement layer: {settlement_layer_address}) \
+                     but no gateway RPC URL is configured"
+                )
+            })?;
+            let sl_chain_id = gateway_provider.get_chain_id().await?;
+            anyhow::ensure!(
+                sl_chain_id != l1_chain_id,
+                "settling on Gateway but SL chain ID is identical to L1 chain ID"
+            );
+            let bridgehub_sl = Bridgehub::new(L2_BRIDGEHUB_ADDRESS, gateway_provider, l2_chain_id);
+            (sl_chain_id, bridgehub_sl)
         };
-        let bridgehub_sl = Bridgehub::new(bridgehub_address_sl, sl_provider, l2_chain_id);
 
         Self::validate_chain_ids(&bridgehub_l1, &bridgehub_sl, l2_chain_id).await?;
 
-        let diamond_proxy_l1 = bridgehub_l1.zk_chain().await?;
         let diamond_proxy_sl = bridgehub_sl.zk_chain().await?;
         let validator_timelock_sl = bridgehub_sl.validator_timelock_address().await?;
 
@@ -150,11 +172,11 @@ impl L1State {
     /// are being submitted by the main node.
     pub async fn fetch_finalized(
         l1_provider: DynProvider,
-        sl_provider: DynProvider,
+        gateway_provider: Option<DynProvider>,
         bridgehub_address: Address,
         chain_id: u64,
     ) -> anyhow::Result<Self> {
-        let this = Self::fetch(l1_provider, sl_provider, bridgehub_address, chain_id).await?;
+        let this = Self::fetch(l1_provider, gateway_provider, bridgehub_address, chain_id).await?;
         let zk_chain_sl = &this.diamond_proxy_sl;
         let last_committed_batch =
             wait_to_finalize(|block_id| zk_chain_sl.get_total_batches_committed(block_id))
