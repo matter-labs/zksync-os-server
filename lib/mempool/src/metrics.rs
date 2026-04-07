@@ -15,11 +15,17 @@ pub struct TxPoolMetrics {
     pub(crate) inserted_transactions: Counter,
     /// Number of invalid transactions
     pub(crate) invalid_transactions: Counter,
-    /// Number of removed transactions from the pool
+    /// Number of transactions removed from the pool after being mined or dropped due to account
+    /// state changes (nonce increase, balance drop). Tracked by reth internally.
     pub(crate) removed_transactions: Counter,
-    /// Number of L2 transactions removed from the pool after failing ZK VM execution
+    /// Number of L2 transactions removed from the pool after being rejected by the ZK VM during
+    /// block execution. Unlike `removed_transactions`, these were never mined — the VM ran them
+    /// and determined they cannot be included (e.g. nonce already used at execution time,
+    /// insufficient balance after earlier transactions in the same block).
     pub(crate) purged_transactions: Counter,
-    /// Number of L2 transactions rolled back from the local pool after forwarding to main node failed
+    /// Number of L2 transactions rolled back from the local mempool after forwarding to the main
+    /// node failed. Only fires on external nodes. The transaction was accepted locally but the
+    /// main node rejected it (e.g. stale nonce/balance view due to EN lag, or connectivity issue).
     pub(crate) forwarding_rollback_transactions: Counter,
 
     /// Number of transactions in the pending sub-pool
