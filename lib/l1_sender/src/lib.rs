@@ -137,6 +137,7 @@ where
                         command_name,
                         config.max_fee_per_gas_wei,
                         config.max_priority_fee_per_gas_wei,
+                        config.max_fee_per_blob_gas_wei,
                     ) {
                         tracing::warn!(%err, command_name, "failed to report fee cap metrics");
                     }

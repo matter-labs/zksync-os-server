@@ -110,6 +110,13 @@ pub struct L1SenderMetrics {
     #[metrics(labels = ["command"])]
     pub configured_max_priority_fee_per_gas_gwei: LabeledFamily<&'static str, Gauge<f64>>,
 
+    /// Operator-configured EIP-4844 max fee per blob gas cap in gwei, labeled by command.
+    ///
+    /// Paired with `blob_base_fee_gwei`, this lets dashboards show when the network blob
+    /// base fee has crossed the operator's ceiling.
+    #[metrics(labels = ["command"])]
+    pub configured_max_fee_per_blob_gas_gwei: LabeledFamily<&'static str, Gauge<f64>>,
+
     /// Number of replacement transactions broadcast due to confirmation timeouts,
     /// labeled by command.
     ///
@@ -182,11 +189,14 @@ impl L1SenderMetrics {
         command_name: &'static str,
         max_fee_per_gas_wei: u128,
         max_priority_fee_per_gas_wei: u128,
+        max_fee_per_blob_gas_wei: u128,
     ) -> anyhow::Result<()> {
         self.configured_max_fee_per_gas_gwei[&command_name]
             .set(Self::wei_to_gwei(max_fee_per_gas_wei)?);
         self.configured_max_priority_fee_per_gas_gwei[&command_name]
             .set(Self::wei_to_gwei(max_priority_fee_per_gas_wei)?);
+        self.configured_max_fee_per_blob_gas_gwei[&command_name]
+            .set(Self::wei_to_gwei(max_fee_per_blob_gas_wei)?);
         Ok(())
     }
 
