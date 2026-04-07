@@ -135,7 +135,11 @@ where
                     if let Err(err) = L1_SENDER_METRICS.report_fee_caps(command_name, &caps) {
                         tracing::warn!(?err, command_name, "failed to report fee cap metrics");
                     }
-                    if raw.exceeds(&caps) {
+                    if raw.max_fee_per_gas > caps.max_fee_per_gas
+                        || raw.max_priority_fee_per_gas > caps.max_priority_fee_per_gas
+                        || (command.blob_sidecar().is_some()
+                            && raw.fee_per_blob_gas > caps.fee_per_blob_gas)
+                    {
                         tracing::warn!(
                             command_name,
                             configured_max_fee = caps.max_fee_per_gas,
@@ -346,7 +350,11 @@ where
                 // Always apply at least a 10% bump to guarantee mempool acceptance.
                 // If the bumped fees exceed the cap, rewatch the original instead.
                 let bumped = fresh.with_minimum_replacement_bump(&gas_params);
-                if !bumped.exceeds(&caps) {
+                if bumped.max_fee_per_gas <= caps.max_fee_per_gas
+                    && bumped.max_priority_fee_per_gas <= caps.max_priority_fee_per_gas
+                    && (!command.blob_sidecar().is_some()
+                        || bumped.fee_per_blob_gas <= caps.fee_per_blob_gas)
+                {
                     tracing::info!(
                         command_name,
                         nonce,
