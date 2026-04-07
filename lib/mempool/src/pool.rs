@@ -1,3 +1,4 @@
+use crate::metrics::TRANSACTION_POOL_METRICS;
 use crate::subpools::interop_fee::InteropFeeSubpool;
 use crate::subpools::interop_roots::InteropRootsSubpool;
 use crate::subpools::l1::L1Subpool;
@@ -158,7 +159,21 @@ impl<T: L2Subpool> Pool<T> {
         }
     }
 
+    /// Removes transactions from the local pool when forwarding to the main node fails after
+    /// local insertion. Records them in the `forwarding_rollback_transactions` metric.
     pub fn remove_transactions(&self, tx_hashes: Vec<TxHash>) {
+        TRANSACTION_POOL_METRICS
+            .forwarding_rollback_transactions
+            .inc_by(tx_hashes.len() as u64);
+        self.l2_subpool.remove_transactions(tx_hashes);
+    }
+
+    /// Removes transactions that were rejected by the ZK VM during block execution and
+    /// records them in the `purged_transactions` metric.
+    pub fn purge_transactions(&self, tx_hashes: Vec<TxHash>) {
+        TRANSACTION_POOL_METRICS
+            .purged_transactions
+            .inc_by(tx_hashes.len() as u64);
         self.l2_subpool.remove_transactions(tx_hashes);
     }
 

@@ -17,6 +17,10 @@ pub struct TxPoolMetrics {
     pub(crate) invalid_transactions: Counter,
     /// Number of removed transactions from the pool
     pub(crate) removed_transactions: Counter,
+    /// Number of L2 transactions removed from the pool after failing ZK VM execution
+    pub(crate) purged_transactions: Counter,
+    /// Number of L2 transactions rolled back from the local pool after forwarding to main node failed
+    pub(crate) forwarding_rollback_transactions: Counter,
 
     /// Number of transactions in the pending sub-pool
     pub(crate) pending_pool_transactions: Gauge,

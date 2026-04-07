@@ -376,8 +376,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         Ok(prepared_command)
     }
 
-    pub fn remove_transactions(&self, tx_hashes: Vec<TxHash>) {
-        self.pool.remove_transactions(tx_hashes);
+    pub fn purge_transactions(&self, tx_hashes: Vec<TxHash>) {
+        self.pool.purge_transactions(tx_hashes);
     }
 
     pub async fn on_canonical_state_change(
