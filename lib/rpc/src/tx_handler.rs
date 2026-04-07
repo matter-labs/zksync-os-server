@@ -1,11 +1,12 @@
 use crate::eth_impl::build_api_receipt;
+use crate::metrics::TX_SUBMISSION_METRICS;
 use crate::{ReadRpcStorage, RpcConfig};
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
 use alloy::primitives::{B256, Bytes, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::transports::{RpcError, TransportErrorKind};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_mempool::PoolError;
 use zksync_os_mempool::subpools::l2::L2Subpool;
@@ -61,18 +62,22 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         if self.config.l2_signer_blacklist.contains(&l2_tx.signer()) {
             return Err(EthSendRawTransactionError::BlacklistedSigner);
         }
-        self.mempool.add_l2_transaction(l2_tx).await?;
+        {
+            let _guard = MempoolLatencyGuard::new();
+            self.mempool.add_l2_transaction(l2_tx).await?;
+        }
 
         if let Some(tx_forwarder) = self.tx_forwarder.as_ref() {
-            match tx_forwarder.send_raw_transaction(&tx_bytes).await {
-                // We do not need to wait for pending transaction here, so it's safe to forget about it
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::debug!(%err, "forwarding error from main node back to user");
-                    // Remove previously added transaction from local mempool
-                    self.mempool.remove_transactions(vec![hash]);
-                    return Err(err.into());
-                }
+            let forwarding_result = {
+                let _guard = ForwardingLatencyGuard::new();
+                tx_forwarder.send_raw_transaction(&tx_bytes).await
+            };
+            // We do not need to wait for pending transaction here, so it's safe to forget about it
+            if let Err(err) = forwarding_result {
+                tracing::debug!(%err, "forwarding error from main node back to user");
+                // Remove previously added transaction from local mempool
+                self.mempool.remove_transactions(vec![hash]);
+                return Err(err.into());
             }
         }
 
@@ -165,4 +170,38 @@ pub enum EthSendRawTransactionSyncError {
     /// Timeout while waiting for transaction receipt.
     #[error("The transaction was added to the mempool but wasn't processed within {0:?}.")]
     Timeout(Duration),
+}
+
+/// Records mempool insertion latency on drop, capturing errors and async cancellations.
+struct MempoolLatencyGuard(Instant);
+
+impl MempoolLatencyGuard {
+    fn new() -> Self {
+        Self(Instant::now())
+    }
+}
+
+impl Drop for MempoolLatencyGuard {
+    fn drop(&mut self) {
+        TX_SUBMISSION_METRICS
+            .mempool_latency
+            .observe(self.0.elapsed());
+    }
+}
+
+/// Records forwarding latency on drop, capturing errors and async cancellations.
+struct ForwardingLatencyGuard(Instant);
+
+impl ForwardingLatencyGuard {
+    fn new() -> Self {
+        Self(Instant::now())
+    }
+}
+
+impl Drop for ForwardingLatencyGuard {
+    fn drop(&mut self) {
+        TX_SUBMISSION_METRICS
+            .forwarding_latency
+            .observe(self.0.elapsed());
+    }
 }
