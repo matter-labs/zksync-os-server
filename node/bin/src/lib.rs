@@ -870,10 +870,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         });
     }
 
-    // Wait for repositories to be ready to be used in RPC.
-    repositories.wait_for_db_ready_to_process_blocks().await;
-
     // =========== Start JSON RPC ========
+    let repositories_for_wait = repositories.clone();
+    let wait_for_db = async move {
+        // Wait for repositories to be ready to be used in RPC.
+        repositories_for_wait
+            .wait_for_db_ready_to_process_blocks()
+            .await;
+    };
     zksync_os_rpc::spawn(
         config.rpc_config.into(),
         chain_id,
@@ -887,6 +891,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         main_node_provider,
         gateway_provider.map(|p| p.erased()),
         runtime,
+        wait_for_db,
     )
     .await
     .expect("failed to spawn rpc server");
