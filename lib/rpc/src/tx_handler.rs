@@ -1,11 +1,12 @@
 use crate::eth_impl::build_api_receipt;
+use crate::metrics::TX_SUBMISSION_METRICS;
 use crate::{ReadRpcStorage, RpcConfig};
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
 use alloy::primitives::{B256, Bytes, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::transports::{RpcError, TransportErrorKind};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_mempool::PoolError;
 use zksync_os_mempool::subpools::l2::L2Subpool;
@@ -61,9 +62,12 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         if self.config.l2_signer_blacklist.contains(&l2_tx.signer()) {
             return Err(EthSendRawTransactionError::BlacklistedSigner);
         }
+        let mut stats = TxSubmissionStats::new();
         self.mempool.add_l2_transaction(l2_tx).await?;
+        stats.mempool_done();
 
         if let Some(tx_forwarder) = self.tx_forwarder.as_ref() {
+            stats.start_forwarding();
             match tx_forwarder.send_raw_transaction(&tx_bytes).await {
                 // We do not need to wait for pending transaction here, so it's safe to forget about it
                 Ok(_) => {}
@@ -165,4 +169,46 @@ pub enum EthSendRawTransactionSyncError {
     /// Timeout while waiting for transaction receipt.
     #[error("The transaction was added to the mempool but wasn't processed within {0:?}.")]
     Timeout(Duration),
+}
+
+/// Tracks latency of the transaction submission pipeline.
+/// Observes Prometheus metrics when dropped, ensuring they are recorded on all exit paths.
+struct TxSubmissionStats {
+    mempool_started: Instant,
+    mempool_elapsed: Option<Duration>,
+    forwarding_started: Option<Instant>,
+}
+
+impl TxSubmissionStats {
+    fn new() -> Self {
+        Self {
+            mempool_started: Instant::now(),
+            mempool_elapsed: None,
+            forwarding_started: None,
+        }
+    }
+
+    fn mempool_done(&mut self) {
+        self.mempool_elapsed = Some(self.mempool_started.elapsed());
+    }
+
+    fn start_forwarding(&mut self) {
+        self.forwarding_started = Some(Instant::now());
+    }
+}
+
+impl Drop for TxSubmissionStats {
+    fn drop(&mut self) {
+        let mempool_elapsed = self
+            .mempool_elapsed
+            .unwrap_or_else(|| self.mempool_started.elapsed());
+        TX_SUBMISSION_METRICS
+            .mempool_latency
+            .observe(mempool_elapsed);
+        if let Some(started) = self.forwarding_started {
+            TX_SUBMISSION_METRICS
+                .forwarding_latency
+                .observe(started.elapsed());
+        }
+    }
 }
