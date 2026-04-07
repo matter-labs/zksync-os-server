@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.18.2](https://github.com/matter-labs/zksync-os-server/compare/v0.18.1...v0.18.2) (2026-04-01)
+
+
+### Features
+
+* **batcher:** add config option to disable batcher subsystem ([#1119](https://github.com/matter-labs/zksync-os-server/issues/1119)) ([0ea9c7f](https://github.com/matter-labs/zksync-os-server/commit/0ea9c7f47bd7a52159d7e513d0e3352b9f2b6600))
+* use `getSettlementLayer` to determine SL ([#1116](https://github.com/matter-labs/zksync-os-server/issues/1116)) ([dd1bc0c](https://github.com/matter-labs/zksync-os-server/commit/dd1bc0c0dc1bd3b84c0c6615102777fa314a2520))
+
+
+### Bug Fixes
+
+* fix batcher shutdown and enable revert test ([#1122](https://github.com/matter-labs/zksync-os-server/issues/1122)) ([a846796](https://github.com/matter-labs/zksync-os-server/commit/a846796043ccc6a44ef9800a7245105a7e49ad10))
+* **prover_api:** use drop guards to ensure metrics are always recorded ([#1126](https://github.com/matter-labs/zksync-os-server/issues/1126)) ([e5df063](https://github.com/matter-labs/zksync-os-server/commit/e5df0636b80960a02e6d9476a7a220aa6de7610e))
+* **rpc:** record latency for cancelled requests (client disconnect) ([#1125](https://github.com/matter-labs/zksync-os-server/issues/1125)) ([7027315](https://github.com/matter-labs/zksync-os-server/commit/7027315cee8c9943ac5b3ac85989678438da3deb))
+* **tracer:** Fix tracer only_top_call handling ([#1127](https://github.com/matter-labs/zksync-os-server/issues/1127)) ([9a88dc1](https://github.com/matter-labs/zksync-os-server/commit/9a88dc13ddb0b761c99dbabf754dbbbf3f8dfc13))
+
 ## [0.18.1](https://github.com/matter-labs/zksync-os-server/compare/v0.18.0...v0.18.1) (2026-03-30)
 
 

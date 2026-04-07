@@ -1,7 +1,7 @@
 //! Support for representing the version of the `zks` protocol
 
 use crate::wire::message::ZksMessageId;
-use crate::wire::replays::{WireReplayRecord, v0, v1, v2};
+use crate::wire::replays::{WireReplayRecord, v0, v1, v2, v3};
 use alloy::primitives::bytes::BufMut;
 use alloy::rlp::{Decodable, Encodable, Error as RlpError};
 use std::fmt::Debug;
@@ -36,8 +36,7 @@ impl AnyZksProtocolVersion for ZksProtocolV1 {
     const VERSION: ZksVersion = ZksVersion::Zks1;
 }
 
-/// Protocol version 1 is the initial implementation that supports `GetBlockReplays` and `BlockReplays`
-/// message types.
+/// Protocol version 2 updates replay records to use indexes for new watchers.
 #[derive(Debug, Clone)]
 pub struct ZksProtocolV2;
 
@@ -45,6 +44,17 @@ impl AnyZksProtocolVersion for ZksProtocolV2 {
     type Record = v2::ReplayRecord;
 
     const VERSION: ZksVersion = ZksVersion::Zks2;
+}
+
+/// Protocol version 3 replaces `starting_interop_event_index: InteropRootsLogIndex` with
+/// `starting_interop_root_id: u64`.
+#[derive(Debug, Clone)]
+pub struct ZksProtocolV3;
+
+impl AnyZksProtocolVersion for ZksProtocolV3 {
+    type Record = v3::ReplayRecord;
+
+    const VERSION: ZksVersion = ZksVersion::Zks3;
 }
 
 /// Error thrown when failed to parse a valid [`ZksVersion`].
@@ -62,14 +72,16 @@ pub enum ZksVersion {
     Zks1 = 1,
     /// The `zks` protocol version 2.
     Zks2 = 2,
+    /// The `zks` protocol version 3.
+    Zks3 = 3,
 }
 
 impl ZksVersion {
     /// The latest known zks version
-    pub const LATEST: Self = Self::Zks1;
+    pub const LATEST: Self = Self::Zks3;
 
     /// All known zks versions
-    pub const ALL_VERSIONS: &'static [Self] = &[Self::Zks0, Self::Zks1];
+    pub const ALL_VERSIONS: &'static [Self] = &[Self::Zks0, Self::Zks1, Self::Zks2, Self::Zks3];
 
     /// Returns the max message id for the given version.
     const fn max_message_id(&self) -> u8 {
@@ -77,6 +89,7 @@ impl ZksVersion {
             ZksVersion::Zks0 => ZksMessageId::BlockReplays as u8,
             ZksVersion::Zks1 => ZksMessageId::BlockReplays as u8,
             ZksVersion::Zks2 => ZksMessageId::BlockReplays as u8,
+            ZksVersion::Zks3 => ZksMessageId::BlockReplays as u8,
         }
     }
 
@@ -124,6 +137,7 @@ impl TryFrom<u8> for ZksVersion {
             0 => Ok(Self::Zks0),
             1 => Ok(Self::Zks1),
             2 => Ok(Self::Zks2),
+            3 => Ok(Self::Zks3),
             _ => Err(ParseVersionError(u.to_string())),
         }
     }
@@ -143,6 +157,7 @@ impl From<ZksVersion> for &'static str {
             ZksVersion::Zks0 => "0",
             ZksVersion::Zks1 => "1",
             ZksVersion::Zks2 => "2",
+            ZksVersion::Zks3 => "3",
         }
     }
 }
@@ -156,7 +171,7 @@ mod tests {
     #[test]
     fn test_zks_version_rlp_encode() {
         // Version 0 is purposefully left out as it encodes to 0x80 (prefix for 0-length string)
-        let versions = [ZksVersion::Zks1, ZksVersion::Zks2];
+        let versions = [ZksVersion::Zks1, ZksVersion::Zks2, ZksVersion::Zks3];
 
         for version in versions {
             let mut encoded = BytesMut::new();
@@ -173,7 +188,8 @@ mod tests {
             (0_u8, Ok(ZksVersion::Zks0)),
             (1_u8, Ok(ZksVersion::Zks1)),
             (2_u8, Ok(ZksVersion::Zks2)),
-            (3_u8, Err(RlpError::Custom("invalid zks version"))),
+            (3_u8, Ok(ZksVersion::Zks3)),
+            (4_u8, Err(RlpError::Custom("invalid zks version"))),
         ];
 
         for (input, expected) in test_cases {

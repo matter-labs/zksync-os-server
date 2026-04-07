@@ -26,6 +26,7 @@ use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use anyhow::Context as _;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_operator_signer::SignerConfig;
@@ -59,6 +60,7 @@ pub async fn run_l1_sender<Input, F, P>(
     mut provider: FillProvider<F, P>,
     config: L1SenderConfig<Input>,
     gateway: bool,
+    commit_submitted_tx: Option<watch::Sender<u64>>,
 ) -> anyhow::Result<()>
 where
     Input: SendToL1 + Send + Sync + 'static,
@@ -167,6 +169,23 @@ where
                         gateway,
                     )
                     .await?;
+
+                    // Notify CommitWatcher: this batch number has been submitted to L1.
+                    if let Some(sender) = &commit_submitted_tx {
+                        let batch_number = command
+                            .as_ref()
+                            .last()
+                            .expect("commands is non-empty after recv_many")
+                            .batch_number();
+                        sender.send_if_modified(|current| {
+                            if batch_number > *current {
+                                *current = batch_number;
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                    }
 
                     // Mark envelopes as sent now that the tx is in the mempool.
                     command

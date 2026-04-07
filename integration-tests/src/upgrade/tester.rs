@@ -11,6 +11,7 @@ use crate::provider::{ZksyncApi as _, ZksyncTestingProvider as _};
 use crate::upgrade::interfaces::ChainAssetHandlerBase::ChainAssetHandlerBaseInstance;
 use crate::upgrade::interfaces::ChainTypeManagerV30::ChainTypeManagerV30Instance;
 use crate::upgrade::interfaces::FacetCut;
+use crate::upgrade::interfaces::ZkChainV30::ZkChainV30Instance;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
 use alloy::providers::ext::AnvilApi;
@@ -527,6 +528,7 @@ impl UpgradeTester {
             let calldata = self
                 .diamond_proxy_sl
                 .upgradeChainFromVersion(
+                    Address::ZERO, // not used
                     self.protocol_version
                         .packed()
                         .expect("Incorrect protocol version"),
@@ -541,16 +543,32 @@ impl UpgradeTester {
             )
             .await?;
         } else {
-            let tx = self
-                .diamond_proxy_sl
-                .upgradeChainFromVersion(
-                    self.protocol_version
-                        .packed()
-                        .expect("Incorrect protocol version"),
-                    upgrade_data,
-                )
-                .into_transaction_request()
-                .with_from(self.diamond_proxy_admin_sl);
+            let tx = if self.tester.chain_layout.protocol_version().contains("v30") {
+                let zk_chain = ZkChainV30Instance::new(
+                    *self.diamond_proxy_sl.address(),
+                    self.diamond_proxy_sl.provider().clone(),
+                );
+                zk_chain
+                    .upgradeChainFromVersion(
+                        self.protocol_version
+                            .packed()
+                            .expect("Incorrect protocol version"),
+                        upgrade_data,
+                    )
+                    .into_transaction_request()
+                    .with_from(self.diamond_proxy_admin_sl)
+            } else {
+                self.diamond_proxy_sl
+                    .upgradeChainFromVersion(
+                        Address::ZERO, // not used
+                        self.protocol_version
+                            .packed()
+                            .expect("Incorrect protocol version"),
+                        upgrade_data,
+                    )
+                    .into_transaction_request()
+                    .with_from(self.diamond_proxy_admin_sl)
+            };
             self.send_impersonated_transaction(tx).await?;
         }
         Ok(())

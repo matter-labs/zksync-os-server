@@ -15,9 +15,7 @@ use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
 use tokio::time::Instant;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{
-    InteropRootsLogIndex, L1TxSerialId, SystemTxType, UpgradeMetadata, ZkEnvelope, ZkTransaction,
-};
+use zksync_os_types::{L1TxSerialId, SystemTxType, UpgradeMetadata, ZkEnvelope, ZkTransaction};
 
 /// General pool that provides unified access to all transaction sources in the system.
 ///
@@ -213,7 +211,7 @@ impl<T: L2Subpool> Pool<T> {
         self.upgrade_subpool
             .on_canonical_state_change(&replay_record.protocol_version, upgrade_txs)
             .await;
-        let last_interop_log_index = self
+        let last_interop_log_id = self
             .interop_roots_subpool
             .on_canonical_state_change(interop_txs)
             .await;
@@ -254,7 +252,7 @@ impl<T: L2Subpool> Pool<T> {
             });
 
         StateChangeOutcome {
-            last_interop_log_index,
+            last_interop_log_id,
             last_l1_priority_id,
             last_migration_number,
             last_interop_fee_number,
@@ -273,8 +271,8 @@ pub struct StreamOutcome<'a> {
 
 #[derive(Debug, Default)]
 pub struct StateChangeOutcome {
-    /// Last interop log index that was imported after canonical state change.
-    pub last_interop_log_index: Option<InteropRootsLogIndex>,
+    /// Last interop log_id that was imported after canonical state change.
+    pub last_interop_log_id: Option<u64>,
     /// Last L1 priority ID that was executed after canonical state change.
     pub last_l1_priority_id: Option<L1TxSerialId>,
     /// Last migration number that was executed after canonical state change.

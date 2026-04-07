@@ -439,6 +439,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
+    // Channel from L1Sender<CommitCommand> to L1CommitWatcher.
+    // Initialized to startup's last_committed_batch so any commit above that value
+    // which the pipeline didn't submit in this session triggers a restart.
+    let (commit_submitted_tx, commit_submitted_rx) =
+        watch::channel(node_startup_state.l1_state.last_committed_batch);
+
     tracing::info!("Initializing L1 Watchers");
     runtime.spawn_critical_task(
         "l1 commit watcher",
@@ -448,6 +454,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_batch_provider.clone(),
             finality_storage.clone(),
             node_startup_state.l1_state.l1_chain_id,
+            node_role.is_main().then_some(commit_submitted_rx),
         )
         .await
         .expect("failed to start L1 commit watcher")
@@ -547,7 +554,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 InteropWatcher::create_watcher(
                     node_startup_state.l1_state.bridgehub_sl.clone(),
                     config.l1_watcher_config.clone().into(),
-                    next_cursors.interop_event_index.clone(),
+                    next_cursors.interop_root_id,
                     interop_roots_subpool.clone(),
                     node_startup_state.l1_state.l1_chain_id,
                 )
@@ -835,6 +842,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_batch_provider.clone(),
             canonization_engine,
             leadership,
+            commit_submitted_tx,
         )
         .await;
     } else {
@@ -870,10 +878,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         });
     }
 
-    // Wait for repositories to be ready to be used in RPC.
-    repositories.wait_for_db_ready_to_process_blocks().await;
-
     // =========== Start JSON RPC ========
+    let repositories_for_wait = repositories.clone();
+    let wait_for_db = async move {
+        // Wait for repositories to be ready to be used in RPC.
+        repositories_for_wait
+            .wait_for_db_ready_to_process_blocks()
+            .await;
+    };
     zksync_os_rpc::spawn(
         config.rpc_config.into(),
         chain_id,
@@ -887,12 +899,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         main_node_provider,
         gateway_provider.map(|p| p.erased()),
         runtime,
+        wait_for_db,
     )
     .await
     .expect("failed to spawn rpc server");
     let startup_time = process_started_at.elapsed();
     GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
-    tracing::info!("All components initialized in {startup_time:?}");
+    tracing::info!("All components scheduled for initialization in {startup_time:?}");
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -917,6 +930,7 @@ async fn run_main_node_pipeline(
     committed_batch_provider: CommittedBatchProvider,
     canonization_engine: BlockCanonizationEngine,
     leadership: LeadershipSignal,
+    commit_submitted_tx: watch::Sender<u64>,
 ) {
     let pubdata_mode = config
         .l1_sender_config
@@ -1087,6 +1101,7 @@ async fn run_main_node_pipeline(
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
+            commit_submitted_tx: Some(commit_submitted_tx),
         })
         .pipe(snark_proving_step)
         .pipe(GaplessL1ProofSender::new(
@@ -1097,6 +1112,7 @@ async fn run_main_node_pipeline(
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
+            commit_submitted_tx: None,
         })
         .pipe(
             PriorityTreePipelineStep::new(
@@ -1112,6 +1128,7 @@ async fn run_main_node_pipeline(
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
+            commit_submitted_tx: None,
         })
         .pipe(BatchSink::new(internal_config_manager));
 

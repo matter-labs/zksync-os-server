@@ -12,10 +12,10 @@ use zksync_os_interface::types::BlockContext;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_network::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
 use zksync_os_network::version::{
-    AnyZksProtocolVersion, ZksProtocolV0, ZksProtocolV1, ZksProtocolV2, ZksVersion,
+    AnyZksProtocolVersion, ZksProtocolV0, ZksProtocolV1, ZksProtocolV2, ZksProtocolV3, ZksVersion,
 };
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
-use zksync_os_types::{BlockStartCursors, InteropRootsLogIndex, NodeRole, ProtocolSemanticVersion};
+use zksync_os_types::{BlockStartCursors, NodeRole, ProtocolSemanticVersion};
 
 #[derive(Debug, Clone, Default)]
 struct InMemReplay(HashMap<BlockNumber, ReplayRecord>);
@@ -57,7 +57,7 @@ fn dummy_record<P: AnyZksProtocolVersion>(block_number: BlockNumber) -> ReplayRe
         vec![],
         BlockStartCursors {
             l1_priority_id: 42,
-            interop_event_index: InteropRootsLogIndex::default(),
+            interop_root_id: 0,
             migration_number: 123,
             interop_fee_number: 456,
         },
@@ -110,7 +110,7 @@ where
     }
 }
 
-#[test_casing(2, [ZksVersion::Zks1, ZksVersion::Zks2])]
+#[test_casing(3, [ZksVersion::Zks1, ZksVersion::Zks2, ZksVersion::Zks3])]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn send_replay_record_matching_version(version: ZksVersion) {
     // Run two peers that both communicate on exactly one matching zks protocol and successfully
@@ -151,10 +151,11 @@ async fn send_replay_record_matching_version(version: ZksVersion) {
         ZksVersion::Zks0 => unreachable!(),
         ZksVersion::Zks1 => test_inner::<ZksProtocolV1>().await,
         ZksVersion::Zks2 => test_inner::<ZksProtocolV2>().await,
+        ZksVersion::Zks3 => test_inner::<ZksProtocolV3>().await,
     }
 }
 
-#[test_casing(2, [ZksVersion::Zks1, ZksVersion::Zks2])]
+#[test_casing(3, [ZksVersion::Zks1, ZksVersion::Zks2, ZksVersion::Zks3])]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn send_replay_record_different_versions(version: ZksVersion) {
     // Run two peers where peer0 can communicate on zks protocol v0 AND v1, while peer1 can only
@@ -211,6 +212,7 @@ async fn send_replay_record_different_versions(version: ZksVersion) {
         ZksVersion::Zks0 => unreachable!(),
         ZksVersion::Zks1 => test_inner::<ZksProtocolV1>().await,
         ZksVersion::Zks2 => test_inner::<ZksProtocolV2>().await,
+        ZksVersion::Zks3 => test_inner::<ZksProtocolV3>().await,
     }
 }
 
