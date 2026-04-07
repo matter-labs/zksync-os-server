@@ -187,16 +187,14 @@ impl L1SenderMetrics {
     pub fn report_fee_caps(
         &self,
         command_name: &'static str,
-        max_fee_per_gas_wei: u128,
-        max_priority_fee_per_gas_wei: u128,
-        max_fee_per_blob_gas_wei: u128,
+        caps: &crate::types::GasParams,
     ) -> anyhow::Result<()> {
         self.configured_max_fee_per_gas_gwei[&command_name]
-            .set(Self::wei_to_gwei(max_fee_per_gas_wei)?);
+            .set(Self::wei_to_gwei(caps.max_fee_per_gas)?);
         self.configured_max_priority_fee_per_gas_gwei[&command_name]
-            .set(Self::wei_to_gwei(max_priority_fee_per_gas_wei)?);
+            .set(Self::wei_to_gwei(caps.max_priority_fee_per_gas)?);
         self.configured_max_fee_per_blob_gas_gwei[&command_name]
-            .set(Self::wei_to_gwei(max_fee_per_blob_gas_wei)?);
+            .set(Self::wei_to_gwei(caps.fee_per_blob_gas)?);
         Ok(())
     }
 

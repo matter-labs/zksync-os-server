@@ -14,6 +14,24 @@ impl GasParams {
     /// EIP-1559 / geth require a 10% bump on both fee fields.
     const REPLACEMENT_BUMP_PCT: u128 = 110;
 
+    /// Returns a new `GasParams` with each field clamped to the corresponding cap.
+    pub fn clamped_to(&self, caps: &GasParams) -> GasParams {
+        GasParams {
+            max_fee_per_gas: self.max_fee_per_gas.min(caps.max_fee_per_gas),
+            max_priority_fee_per_gas: self
+                .max_priority_fee_per_gas
+                .min(caps.max_priority_fee_per_gas),
+            fee_per_blob_gas: self.fee_per_blob_gas.min(caps.fee_per_blob_gas),
+        }
+    }
+
+    /// Returns `true` if any field exceeds the corresponding cap.
+    pub fn exceeds(&self, caps: &GasParams) -> bool {
+        self.max_fee_per_gas > caps.max_fee_per_gas
+            || self.max_priority_fee_per_gas > caps.max_priority_fee_per_gas
+            || self.fee_per_blob_gas > caps.fee_per_blob_gas
+    }
+
     /// Returns a new `GasParams` that is guaranteed to satisfy the EIP-1559 10% replacement bump
     /// rule,
     pub fn with_minimum_replacement_bump(&self, previous: &GasParams) -> GasParams {

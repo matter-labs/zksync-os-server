@@ -125,33 +125,26 @@ where
                     // Even when the network estimate exceeds the cap we still submit — the
                     // nonce slot must be filled to keep the pipeline moving — but we never
                     // broadcast above the operator's stated maximum.
-                    let raw = estimate_gas_params(&provider).await?;
-                    let gas_params = GasParams {
-                        max_fee_per_gas: raw.max_fee_per_gas.min(config.max_fee_per_gas_wei),
-                        max_priority_fee_per_gas: raw
-                            .max_priority_fee_per_gas
-                            .min(config.max_priority_fee_per_gas_wei),
-                        fee_per_blob_gas: raw.fee_per_blob_gas.min(config.max_fee_per_blob_gas_wei),
+                    let caps = GasParams {
+                        max_fee_per_gas: config.max_fee_per_gas_wei,
+                        max_priority_fee_per_gas: config.max_priority_fee_per_gas_wei,
+                        fee_per_blob_gas: config.max_fee_per_blob_gas_wei,
                     };
-                    if let Err(err) = L1_SENDER_METRICS.report_fee_caps(
-                        command_name,
-                        config.max_fee_per_gas_wei,
-                        config.max_priority_fee_per_gas_wei,
-                        config.max_fee_per_blob_gas_wei,
-                    ) {
+                    let raw = estimate_gas_params(&provider, &caps).await;
+                    let gas_params = raw.clamped_to(&caps);
+                    if let Err(err) =
+                        L1_SENDER_METRICS.report_fee_caps(command_name, &caps)
+                    {
                         tracing::warn!(%err, command_name, "failed to report fee cap metrics");
                     }
-                    if raw.max_fee_per_gas > config.max_fee_per_gas_wei
-                        || raw.max_priority_fee_per_gas > config.max_priority_fee_per_gas_wei
-                        || raw.fee_per_blob_gas > config.max_fee_per_blob_gas_wei
-                    {
+                    if raw.exceeds(&caps) {
                         tracing::warn!(
                             command_name,
-                            configured_max_fee = config.max_fee_per_gas_wei,
+                            configured_max_fee = caps.max_fee_per_gas,
                             estimated_max_fee = raw.max_fee_per_gas,
-                            configured_max_priority_fee = config.max_priority_fee_per_gas_wei,
+                            configured_max_priority_fee = caps.max_priority_fee_per_gas,
                             estimated_max_priority_fee = raw.max_priority_fee_per_gas,
-                            configured_max_blob_fee = config.max_fee_per_blob_gas_wei,
+                            configured_max_blob_fee = caps.fee_per_blob_gas,
                             estimated_blob_fee = raw.fee_per_blob_gas,
                             "network fees exceed configured cap — submitting at cap, inclusion might be delayed if the cap is too low",
                         );
@@ -340,7 +333,12 @@ where
 
                 // Raw fee estimate — no cap blocking.  The nonce slot is already reserved;
                 // blocking here would leave the pipeline stuck with an unconfirmed tx.
-                let fresh = estimate_gas_params(&provider).await?;
+                let fresh = estimate_gas_params(&provider, &GasParams {
+                    max_fee_per_gas: config.max_fee_per_gas_wei,
+                    max_priority_fee_per_gas: config.max_priority_fee_per_gas_wei,
+                    fee_per_blob_gas: config.max_fee_per_blob_gas_wei,
+                })
+                .await;
 
                 // Always apply at least a 10% bump to guarantee mempool acceptance.
                 // If the bumped fees exceed the cap, rewatch the original instead.
@@ -383,30 +381,61 @@ where
     }
 }
 
-async fn estimate_gas_params(provider: &impl Provider) -> anyhow::Result<GasParams> {
-    let est = provider
+/// Estimates current network fees from the provider, falling back to `fallback` per-field
+/// if an RPC call fails (e.g. provider is temporarily unavailable).  Using the configured
+/// caps as fallback means we still submit — potentially above the network price — rather
+/// than stalling the pipeline on a transient RPC error.
+async fn estimate_gas_params(provider: &impl Provider, fallback: &GasParams) -> GasParams {
+    let (max_fee_per_gas, max_priority_fee_per_gas) = match provider
         .estimate_eip1559_fees()
         .await
-        .context("estimate EIP-1559 fees")?;
-    L1_SENDER_METRICS.report_l1_eip_1559_estimation(est)?;
+    {
+        Ok(est) => {
+            if let Err(err) = L1_SENDER_METRICS.report_l1_eip_1559_estimation(est) {
+                tracing::warn!(%err, "failed to report EIP-1559 estimation metrics");
+            }
+            (est.max_fee_per_gas, est.max_priority_fee_per_gas)
+        }
+        Err(err) => {
+            tracing::warn!(
+                %err,
+                fallback_max_fee_per_gas = fallback.max_fee_per_gas,
+                fallback_max_priority_fee_per_gas = fallback.max_priority_fee_per_gas,
+                "failed to estimate EIP-1559 fees — using configured caps as fallback",
+            );
+            (fallback.max_fee_per_gas, fallback.max_priority_fee_per_gas)
+        }
+    };
 
-    let fee_per_blob_gas = provider
-        .get_blob_base_fee()
-        .await
-        .context("get blob base fee")?;
-    L1_SENDER_METRICS.report_blob_base_fee(fee_per_blob_gas)?;
+    let fee_per_blob_gas = match provider.get_blob_base_fee().await {
+        Ok(fee) => {
+            if let Err(err) = L1_SENDER_METRICS.report_blob_base_fee(fee) {
+                tracing::warn!(%err, "failed to report blob base fee metric");
+            }
+            fee
+        }
+        Err(err) => {
+            tracing::warn!(
+                %err,
+                fallback_fee_per_blob_gas = fallback.fee_per_blob_gas,
+                "failed to get blob base fee — using configured cap as fallback",
+            );
+            fallback.fee_per_blob_gas
+        }
+    };
 
     tracing::debug!(
-        max_priority_fee_per_gas_gwei = ?format_units(est.max_priority_fee_per_gas, "gwei"),
-        max_fee_per_gas_gwei = ?format_units(est.max_fee_per_gas, "gwei"),
+        max_fee_per_gas_gwei = ?format_units(max_fee_per_gas, "gwei"),
+        max_priority_fee_per_gas_gwei = ?format_units(max_priority_fee_per_gas, "gwei"),
         fee_per_blob_gas_gwei = ?format_units(fee_per_blob_gas, "gwei"),
         "estimated fees",
     );
-    Ok(GasParams {
-        max_fee_per_gas: est.max_fee_per_gas,
-        max_priority_fee_per_gas: est.max_priority_fee_per_gas,
+
+    GasParams {
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
         fee_per_blob_gas,
-    })
+    }
 }
 
 /// Builds an L1 transaction from `command` and broadcasts it.
