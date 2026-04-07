@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use std::collections::HashSet;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_raft::{ConsensusRole, LeadershipSignal};
@@ -195,7 +196,30 @@ impl PipelineComponent for ExternalNodeCommandSource {
         _input: PeekableReceiver<()>,
         output: mpsc::Sender<BlockCommand>,
     ) -> anyhow::Result<()> {
-        while let Some(record) = self.replays_for_sequencer.recv().await {
+        // If no block arrives within this window the P2P stream is considered stalled.
+        // Returning Err triggers `pipeline segment failed` → container restart via
+        // the `unless-stopped` Docker policy, automatically recovering connectivity.
+        // 5 minutes is conservative: the network produces a block every ~1-2 seconds
+        // even at the chain head.
+        const STALL_TIMEOUT: Duration = Duration::from_secs(300);
+
+        loop {
+            let record = match tokio::time::timeout(
+                STALL_TIMEOUT,
+                self.replays_for_sequencer.recv(),
+            )
+            .await
+            {
+                Ok(Some(record)) => record,
+                Ok(None) => break, // channel closed — normal shutdown
+                Err(_elapsed) => {
+                    anyhow::bail!(
+                        "no block received from main node for {STALL_TIMEOUT:?}; \
+                         the P2P connection is likely stalled — triggering restart to recover"
+                    );
+                }
+            };
+
             let block_number = record.block_context.block_number;
             let command = BlockCommand::Replay(Box::new(record));
             tracing::info!(?command, "Received block command from main node");
