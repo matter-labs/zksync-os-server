@@ -307,6 +307,7 @@ where
     loop {
         let watch_result = PendingTransactionBuilder::new(provider.root().clone(), tx_hash)
             .with_timeout(Some(config.transaction_timeout))
+            .with_required_confirmations(config.required_confirmations)
             .get_receipt()
             .await;
 

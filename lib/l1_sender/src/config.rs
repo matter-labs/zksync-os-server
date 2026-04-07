@@ -29,6 +29,10 @@ pub struct L1SenderConfig<Input> {
     /// resubmission with updated gas fees.
     pub transaction_timeout: Duration,
 
+    /// Number of L1 block confirmations to wait for before considering a transaction final.
+    /// Higher values reduce reorg risk at the cost of increased latency.
+    pub required_confirmations: u64,
+
     /// Use Fusaka blob transaction format if the timestamp has passed.
     pub fusaka_upgrade_timestamp: u64,
 
@@ -45,6 +49,7 @@ impl<Input> Clone for L1SenderConfig<Input> {
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
+            required_confirmations: self.required_confirmations,
             fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
             phantom_data: PhantomData,
         }
