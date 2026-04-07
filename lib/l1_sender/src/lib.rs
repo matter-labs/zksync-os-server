@@ -353,7 +353,7 @@ where
                 let bumped = fresh.with_minimum_replacement_bump(&gas_params);
                 if bumped.max_fee_per_gas <= caps.max_fee_per_gas
                     && bumped.max_priority_fee_per_gas <= caps.max_priority_fee_per_gas
-                    && (!command.blob_sidecar().is_some()
+                    && (command.blob_sidecar().is_none()
                         || bumped.fee_per_blob_gas <= caps.fee_per_blob_gas)
                 {
                     tracing::info!(
