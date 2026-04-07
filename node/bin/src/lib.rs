@@ -897,7 +897,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     .expect("failed to spawn rpc server");
     let startup_time = process_started_at.elapsed();
     GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
-    tracing::info!("All components initialized in {startup_time:?}");
+    tracing::info!("All components scheduled for initialization in {startup_time:?}");
 }
 
 #[allow(clippy::too_many_arguments)]
