@@ -360,7 +360,6 @@ where
                         nonce,
                         "sending replacement tx with bumped fees",
                     );
-                    L1_SENDER_METRICS.tx_resubmissions[&command_name].inc();
                     tx_hash = build_and_send(
                         &command,
                         &bumped,

@@ -123,15 +123,6 @@ pub struct L1SenderMetrics {
     /// `transaction_timeout` to be included.
     #[metrics(labels = ["command"])]
     pub tx_confirmation_timeouts: LabeledFamily<&'static str, Counter>,
-
-    /// Number of replacement transactions broadcast due to confirmation timeouts,
-    /// labeled by command.
-    ///
-    /// A rising counter indicates the pipeline is actively resubmitting; if it climbs
-    /// without corresponding confirmations, the sender may be stuck (e.g. because the
-    /// bumped fees are still below the current base fee or the configured cap is too low).
-    #[metrics(labels = ["command"])]
-    pub tx_resubmissions: LabeledFamily<&'static str, Counter>,
 }
 
 impl L1SenderMetrics {
