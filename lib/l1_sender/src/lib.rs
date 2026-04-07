@@ -133,7 +133,7 @@ where
                     let raw = estimate_gas_params(&provider, &caps).await;
                     let gas_params = raw.clamped_to(&caps);
                     if let Err(err) = L1_SENDER_METRICS.report_fee_caps(command_name, &caps) {
-                        tracing::warn!(%err, command_name, "failed to report fee cap metrics");
+                        tracing::warn!(?err, command_name, "failed to report fee cap metrics");
                     }
                     if raw.exceeds(&caps) {
                         tracing::warn!(
@@ -154,7 +154,7 @@ where
                     // Broadcast the first transaction sequentially before moving on to
                     // the next nonce.  If this fails, no higher-nonce transactions will
                     // have been broadcast yet, so there are no orphaned mempool entries.
-                    let (tx_hash, gas_params) = build_and_send(
+                    let tx_hash = build_and_send(
                         &command,
                         &gas_params,
                         nonce,
@@ -312,7 +312,11 @@ where
                 if let Err(err) =
                     try_report_post_confirmation(command_name, operator_address, &provider).await
                 {
-                    tracing::warn!(%err, command_name, "failed to report post-confirmation metrics");
+                    tracing::warn!(
+                        ?err,
+                        command_name,
+                        "failed to report post-confirmation metrics"
+                    );
                 }
                 let mut envelopes: Vec<SignedBatchEnvelope<FriProof>> = command.into();
                 envelopes
@@ -322,6 +326,7 @@ where
             }
 
             Err(alloy::providers::PendingTransactionError::TxWatcher(WatchTxError::Timeout)) => {
+                L1_SENDER_METRICS.tx_confirmation_timeouts[&command_name].inc();
                 tracing::warn!(
                     command_name,
                     tx_hash = ?tx_hash,
@@ -331,29 +336,24 @@ where
 
                 // Raw fee estimate — no cap blocking.  The nonce slot is already reserved;
                 // blocking here would leave the pipeline stuck with an unconfirmed tx.
-                let fresh = estimate_gas_params(
-                    &provider,
-                    &GasParams {
-                        max_fee_per_gas: config.max_fee_per_gas_wei,
-                        max_priority_fee_per_gas: config.max_priority_fee_per_gas_wei,
-                        fee_per_blob_gas: config.max_fee_per_blob_gas_wei,
-                    },
-                )
-                .await;
+                let caps = GasParams {
+                    max_fee_per_gas: config.max_fee_per_gas_wei,
+                    max_priority_fee_per_gas: config.max_priority_fee_per_gas_wei,
+                    fee_per_blob_gas: config.max_fee_per_blob_gas_wei,
+                };
+                let fresh = estimate_gas_params(&provider, &caps).await;
 
                 // Always apply at least a 10% bump to guarantee mempool acceptance.
                 // If the bumped fees exceed the cap, rewatch the original instead.
                 let bumped = fresh.with_minimum_replacement_bump(&gas_params);
-                if bumped.max_fee_per_gas <= config.max_fee_per_gas_wei
-                    && bumped.max_priority_fee_per_gas <= config.max_priority_fee_per_gas_wei
-                {
+                if !bumped.exceeds(&caps) {
                     tracing::info!(
                         command_name,
                         nonce,
                         "sending replacement tx with bumped fees",
                     );
                     L1_SENDER_METRICS.tx_resubmissions[&command_name].inc();
-                    let (new_hash, new_gas) = build_and_send(
+                    tx_hash = build_and_send(
                         &command,
                         &bumped,
                         nonce,
@@ -364,10 +364,9 @@ where
                         gateway,
                     )
                     .await?;
-                    tx_hash = new_hash;
-                    gas_params = new_gas;
+                    gas_params = bumped;
                 } else {
-                    tracing::info!(
+                    tracing::warn!(
                         command_name,
                         tx_hash = ?tx_hash,
                         "bumped fees would exceed cap — re-watching original tx",
@@ -390,13 +389,13 @@ async fn estimate_gas_params(provider: &impl Provider, fallback: &GasParams) -> 
     let (max_fee_per_gas, max_priority_fee_per_gas) = match provider.estimate_eip1559_fees().await {
         Ok(est) => {
             if let Err(err) = L1_SENDER_METRICS.report_l1_eip_1559_estimation(est) {
-                tracing::warn!(%err, "failed to report EIP-1559 estimation metrics");
+                tracing::warn!(?err, "failed to report EIP-1559 estimation metrics");
             }
             (est.max_fee_per_gas, est.max_priority_fee_per_gas)
         }
         Err(err) => {
             tracing::warn!(
-                %err,
+                ?err,
                 fallback_max_fee_per_gas = fallback.max_fee_per_gas,
                 fallback_max_priority_fee_per_gas = fallback.max_priority_fee_per_gas,
                 "failed to estimate EIP-1559 fees — using configured caps as fallback",
@@ -408,13 +407,13 @@ async fn estimate_gas_params(provider: &impl Provider, fallback: &GasParams) -> 
     let fee_per_blob_gas = match provider.get_blob_base_fee().await {
         Ok(fee) => {
             if let Err(err) = L1_SENDER_METRICS.report_blob_base_fee(fee) {
-                tracing::warn!(%err, "failed to report blob base fee metric");
+                tracing::warn!(?err, "failed to report blob base fee metric");
             }
             fee
         }
         Err(err) => {
             tracing::warn!(
-                %err,
+                ?err,
                 fallback_fee_per_blob_gas = fallback.fee_per_blob_gas,
                 "failed to get blob base fee — using configured cap as fallback",
             );
@@ -437,10 +436,7 @@ async fn estimate_gas_params(provider: &impl Provider, fallback: &GasParams) -> 
 }
 
 /// Builds an L1 transaction from `command` and broadcasts it.
-///
-/// Returns `(tx_hash, gas_params_used)` on success.  The returned `GasParams` are the
-/// values actually embedded in the signed transaction — callers use them for the
-/// resubmission bump check.
+/// Returns the transaction hash on success.
 #[allow(clippy::too_many_arguments)]
 async fn build_and_send<Input, F, P>(
     command: &Input,
@@ -451,7 +447,7 @@ async fn build_and_send<Input, F, P>(
     to_address: Address,
     operator_address: Address,
     gateway: bool,
-) -> anyhow::Result<(TxHash, GasParams)>
+) -> anyhow::Result<TxHash>
 where
     Input: SendToL1,
     F: TxFiller<Ethereum>,
@@ -523,7 +519,7 @@ where
         "L1 transaction submitted",
     );
 
-    Ok((tx_hash, gas_params.clone()))
+    Ok(tx_hash)
 }
 
 async fn try_report_post_confirmation(

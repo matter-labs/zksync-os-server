@@ -117,6 +117,13 @@ pub struct L1SenderMetrics {
     #[metrics(labels = ["command"])]
     pub configured_max_fee_per_blob_gas_gwei: LabeledFamily<&'static str, Gauge<f64>>,
 
+    /// Number of confirmation timeouts observed per command, regardless of whether a
+    /// replacement was broadcast or the original was re-watched due to cap constraints.
+    /// A rising counter means transactions are consistently taking longer than
+    /// `transaction_timeout` to be included.
+    #[metrics(labels = ["command"])]
+    pub tx_confirmation_timeouts: LabeledFamily<&'static str, Counter>,
+
     /// Number of replacement transactions broadcast due to confirmation timeouts,
     /// labeled by command.
     ///
