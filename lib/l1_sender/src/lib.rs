@@ -131,6 +131,7 @@ where
                         max_priority_fee_per_gas: raw
                             .max_priority_fee_per_gas
                             .min(config.max_priority_fee_per_gas_wei),
+                        fee_per_blob_gas: raw.fee_per_blob_gas.min(config.max_fee_per_blob_gas_wei),
                     };
                     if let Err(err) = L1_SENDER_METRICS.report_fee_caps(
                         command_name,
@@ -141,6 +142,7 @@ where
                     }
                     if raw.max_fee_per_gas > config.max_fee_per_gas_wei
                         || raw.max_priority_fee_per_gas > config.max_priority_fee_per_gas_wei
+                        || raw.fee_per_blob_gas > config.max_fee_per_blob_gas_wei
                     {
                         tracing::warn!(
                             command_name,
@@ -148,7 +150,9 @@ where
                             estimated_max_fee = raw.max_fee_per_gas,
                             configured_max_priority_fee = config.max_priority_fee_per_gas_wei,
                             estimated_max_priority_fee = raw.max_priority_fee_per_gas,
-                            "network fees exceed configured cap — submitting at cap",
+                            configured_max_blob_fee = config.max_fee_per_blob_gas_wei,
+                            estimated_blob_fee = raw.fee_per_blob_gas,
+                            "network fees exceed configured cap — submitting at cap, inclusion might be delayed if the cap is too low",
                         );
                     }
 
@@ -378,24 +382,29 @@ where
     }
 }
 
-/// Raw EIP-1559 fee estimate with no cap check.
-///
-/// Used inside [`submit_and_confirm`] for resubmission decisions where the nonce is
-/// already reserved and blocking on the cap would leave the pipeline stuck.
 async fn estimate_gas_params(provider: &impl Provider) -> anyhow::Result<GasParams> {
     let est = provider
         .estimate_eip1559_fees()
         .await
         .context("estimate EIP-1559 fees")?;
     L1_SENDER_METRICS.report_l1_eip_1559_estimation(est)?;
+
+    let fee_per_blob_gas = provider
+        .get_blob_base_fee()
+        .await
+        .context("get blob base fee")?;
+    L1_SENDER_METRICS.report_blob_base_fee(fee_per_blob_gas)?;
+
     tracing::debug!(
         max_priority_fee_per_gas_gwei = ?format_units(est.max_priority_fee_per_gas, "gwei"),
         max_fee_per_gas_gwei = ?format_units(est.max_fee_per_gas, "gwei"),
-        "estimated EIP-1559 fees",
+        fee_per_blob_gas_gwei = ?format_units(fee_per_blob_gas, "gwei"),
+        "estimated fees",
     );
     Ok(GasParams {
         max_fee_per_gas: est.max_fee_per_gas,
         max_priority_fee_per_gas: est.max_priority_fee_per_gas,
+        fee_per_blob_gas,
     })
 }
 
@@ -433,21 +442,7 @@ where
         .with_input(command.solidity_call(gateway, &operator_address));
 
     if let Some(blob_sidecar) = command.blob_sidecar() {
-        let fee_per_blob_gas = provider
-            .get_blob_base_fee()
-            .await
-            .context("get blob base fee")?;
-        L1_SENDER_METRICS.report_blob_base_fee(fee_per_blob_gas)?;
-
-        if fee_per_blob_gas > config.max_fee_per_blob_gas_wei {
-            tracing::warn!(
-                max_fee_per_blob_gas = config.max_fee_per_blob_gas_wei,
-                fee_per_blob_gas,
-                "configured maxFeePerBlobGas is lower than the network estimate — \
-                 inclusion may be delayed",
-            );
-        }
-        tx_request.set_max_fee_per_blob_gas(config.max_fee_per_blob_gas_wei);
+        tx_request.set_max_fee_per_blob_gas(gas_params.fee_per_blob_gas);
         tx_request.set_blob_sidecar(blob_sidecar);
     }
 

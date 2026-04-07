@@ -3,6 +3,9 @@
 pub struct GasParams {
     pub max_fee_per_gas: u128,
     pub max_priority_fee_per_gas: u128,
+    /// EIP-4844 blob base fee, included even for non-blob transactions so that
+    /// `estimate_gas_params` can be a single call site for all fee estimation.
+    pub fee_per_blob_gas: u128,
 }
 
 impl GasParams {
@@ -17,9 +20,11 @@ impl GasParams {
         let min_fee = (previous.max_fee_per_gas * Self::REPLACEMENT_BUMP_PCT).div_ceil(100);
         let min_priority =
             (previous.max_priority_fee_per_gas * Self::REPLACEMENT_BUMP_PCT).div_ceil(100);
+        let min_blob = (previous.fee_per_blob_gas * Self::REPLACEMENT_BUMP_PCT).div_ceil(100);
         GasParams {
             max_fee_per_gas: self.max_fee_per_gas.max(min_fee),
             max_priority_fee_per_gas: self.max_priority_fee_per_gas.max(min_priority),
+            fee_per_blob_gas: self.fee_per_blob_gas.max(min_blob),
         }
     }
 }
@@ -63,10 +68,12 @@ mod tests {
             let previous = GasParams {
                 max_fee_per_gas: prev_fee,
                 max_priority_fee_per_gas: prev_pri,
+                fee_per_blob_gas: 0,
             };
             let fresh = GasParams {
                 max_fee_per_gas: fresh_fee,
                 max_priority_fee_per_gas: fresh_pri,
+                fee_per_blob_gas: 0,
             };
             let bumped = fresh.with_minimum_replacement_bump(&previous);
             assert_eq!(bumped.max_fee_per_gas, exp_fee, "fee: {label}");
