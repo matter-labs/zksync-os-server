@@ -21,10 +21,10 @@ use zksync_os_types::{
 };
 
 alloy::sol! {
-    /// Matches the `BytecodePublished` event emitted by the `BytecodesSupplier` contract
+    /// Matches the `EVMBytecodePublished` event emitted by the `BytecodesSupplier` contract
     /// in era-contracts (`l1-contracts/contracts/upgrades/BytecodesSupplier.sol`).
     #[derive(Debug)]
-    event BytecodePublished(bytes32 indexed bytecodeHash, bytes bytecode);
+    event EVMBytecodePublished(bytes32 indexed bytecodeHash, bytes bytecode);
 
     #[sol(rpc)]
     interface IChainTypeManagerBytecodeSupplier {
@@ -48,13 +48,13 @@ const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 /// - **Gateway (SL)**: `NewUpgradeCutData` / `NewUpgradeCutHash` events from `ChainTypeManager`,
 ///   plus the full upgrade execution including the L2 upgrade transaction.
 /// - **L1**: The `BytecodesSupplier` publishes the factory dep bytecodes via
-///   `BytecodePublished` events — these live on L1 regardless of settlement layer.
+///   `EVMBytecodePublished` events — these live on L1 regardless of settlement layer.
 pub struct L1UpgradeTxWatcher {
     admin_contract_l1: Address,
 
     provider_l1: DynProvider,
     provider_sl: DynProvider,
-    /// Address of the bytecode supplier contract on L1 (used to scan BytecodePublished events)
+    /// Address of the bytecode supplier contract on L1 (used to scan EVMBytecodePublished events)
     bytecode_supplier_address: Address,
     /// Address of the CTM contract on L1 (used to resolve the canonical bytecode supplier)
     ctm_l1: Address,
@@ -279,11 +279,11 @@ impl L1UpgradeTxWatcher {
                 .from_block(from_block)
                 .to_block(current_block)
                 .address(active_supplier)
-                .event_signature(BytecodePublished::SIGNATURE_HASH);
+                .event_signature(EVMBytecodePublished::SIGNATURE_HASH);
             let logs = self.provider_l1.get_logs(&filter).await?;
 
             for log in logs {
-                let published = BytecodePublished::decode_log(&log.inner)?.data;
+                let published = EVMBytecodePublished::decode_log(&log.inner)?.data;
                 let raw_bytecode = published.bytecode.to_vec();
 
                 // Compute the ZKOS bytecode hash and full preimage (code + padding + artifacts)

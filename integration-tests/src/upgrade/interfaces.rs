@@ -191,11 +191,8 @@ alloy::sol! {
 
     #[sol(rpc)]
     contract BytecodesSupplier {
-        /// @notice Publishes multiple bytecodes (v31+ name).
-        function publishEraBytecodes(bytes[] calldata _bytecodes) external;
-
-        /// @notice Publishes multiple bytecodes (pre-v31 name).
-        function publishBytecodes(bytes[] calldata _bytecodes) external;
+        /// @notice Publishes multiple EVM bytecodes.
+        function publishEVMBytecodes(bytes[] calldata _bytecodes) external;
     }
 
     // Bytecode for committer facet is hardcoded, since putting it to dependencies would significantly

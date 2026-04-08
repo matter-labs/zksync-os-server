@@ -402,9 +402,9 @@ alloy::sol! {
         function tokenMultiplierSetter() external view returns (address);
     }
 
-    // `BytecodeSupplier.sol`
+    // `BytecodesSupplier.sol`
     interface IBytecodeSupplier {
-        event BytecodePublished(bytes32 indexed bytecodeHash, bytes bytecode);
+        event EVMBytecodePublished(bytes32 indexed bytecodeHash, bytes bytecode);
     }
 
     #[sol(rpc)]

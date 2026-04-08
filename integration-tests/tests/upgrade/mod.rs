@@ -7,17 +7,6 @@ use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV31, FacetCut, 
 use zksync_os_integration_tests::{GatewayTester, Tester};
 use zksync_os_server::default_protocol_version::NEXT_PROTOCOL_VERSION;
 
-/// Pads a bytecode to meet `BytecodesSupplier` requirements:
-/// 32-byte aligned with an odd number of 32-byte words.
-fn pad_bytecode_for_supplier(raw: &[u8]) -> Bytes {
-    let mut bytecode = raw.to_vec();
-    let padding = (32 - bytecode.len() % 32) % 32;
-    bytecode.extend(vec![0u8; padding]);
-    if (bytecode.len() / 32).is_multiple_of(2) {
-        bytecode.extend([0u8; 32]);
-    }
-    Bytes::from(bytecode)
-}
 
 /// Executes the simplest patch protocol upgrade:
 /// - no contracts are deployed
@@ -247,10 +236,9 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
         .await?;
 
     // Also publish to the L1 BytecodesSupplier so `fetch_force_preimages` discovers
-    // the bytecode via `BytecodePublished` events.
-    let supplier_bytecode = pad_bytecode_for_supplier(&SampleForceDeployment::DEPLOYED_BYTECODE);
+    // the bytecode via `EVMBytecodePublished` events.
     upgrade_tester
-        .publish_bytecodes_to_l1_supplier([supplier_bytecode])
+        .publish_bytecodes_to_l1_supplier([SampleForceDeployment::DEPLOYED_BYTECODE.clone()])
         .await?;
 
     // Prepare protocol upgrade

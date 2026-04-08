@@ -446,34 +446,19 @@ impl UpgradeTester {
         Ok(())
     }
 
-    /// Publishes bytecodes to the `BytecodesSupplier` contract on L1.
-    /// The server scans `BytecodePublished` events from this contract
+    /// Publishes EVM bytecodes to the `BytecodesSupplier` contract on L1.
+    /// The server scans `EVMBytecodePublished` events from this contract
     /// to discover force preimages needed during protocol upgrades.
-    ///
-    /// Tries `publishEraBytecodes` (v31+) first, falls back to `publishBytecodes` (pre-v31).
     pub async fn publish_bytecodes_to_l1_supplier<I: IntoIterator<Item = Bytes>>(
         &self,
         bytecodes: I,
     ) -> anyhow::Result<()> {
-        let bytecodes: Vec<Bytes> = bytecodes.into_iter().collect();
-        match self
-            .bytecode_supplier
-            .publishEraBytecodes(bytecodes.clone())
+        self.bytecode_supplier
+            .publishEVMBytecodes(bytecodes.into_iter().collect())
             .send()
-            .await
-        {
-            Ok(pending) => {
-                pending.expect_successful_receipt().await?;
-            }
-            Err(_) => {
-                self.bytecode_supplier
-                    .publishBytecodes(bytecodes)
-                    .send()
-                    .await?
-                    .expect_successful_receipt()
-                    .await?;
-            }
-        }
+            .await?
+            .expect_successful_receipt()
+            .await?;
         Ok(())
     }
 
