@@ -1720,11 +1720,11 @@ mod tests {
 
         let err = config.validate().await.unwrap_err().to_string();
 
-        assert!(err.contains(
-            "`batch_verification.server_enabled` requires `network.enabled=true`"
-        ));
-        assert!(err.contains(
-            "`batch_verification.client_enabled` requires `network.enabled=true`"
-        ));
+        assert!(
+            err.contains("`batch_verification.server_enabled` requires `network.enabled=true`")
+        );
+        assert!(
+            err.contains("`batch_verification.client_enabled` requires `network.enabled=true`")
+        );
     }
 }
