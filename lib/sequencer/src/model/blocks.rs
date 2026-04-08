@@ -46,6 +46,7 @@ pub struct ProduceCommand {
 pub struct RebuildCommand {
     pub replay_record: ReplayRecord,
     pub make_empty: bool,
+    pub reset_timestamp: bool,
 }
 
 impl BlockCommand {

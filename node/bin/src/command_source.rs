@@ -22,8 +22,9 @@ pub struct MainNodeCommandSource<Replay> {
 
 #[derive(Debug)]
 pub struct RebuildOptions {
-    pub rebuild_from_block: u64,
+    pub from_block: u64,
     pub blocks_to_empty: HashSet<u64>,
+    pub reset_timestamps: bool,
 }
 
 /// External node command source
@@ -137,21 +138,21 @@ fn command_source(
     let (replay_end, rebuild_stream): (u64, BoxStream<BlockCommand>) =
         if let Some(rebuild_options) = rebuild_options {
             assert!(
-                rebuild_options.rebuild_from_block >= block_to_start,
+                rebuild_options.from_block >= block_to_start,
                 "rebuild_from_block must be >= block_to_start, got {} < {}",
-                rebuild_options.rebuild_from_block,
+                rebuild_options.from_block,
                 block_to_start
             );
 
             assert!(
-                rebuild_options.rebuild_from_block <= last_block_in_wal,
+                rebuild_options.from_block <= last_block_in_wal,
                 "rebuild_from_block must be <= last_block_in_wal, got {} > {}",
-                rebuild_options.rebuild_from_block,
+                rebuild_options.from_block,
                 last_block_in_wal
             );
 
             let command_iterator =
-                (rebuild_options.rebuild_from_block..=last_block_in_wal).map(move |block_number| {
+                (rebuild_options.from_block..=last_block_in_wal).map(move |block_number| {
                     let replay_record = block_replay_wal
                         .get_replay_record(block_number)
                         .expect("Replay record must exist for rebuild");
@@ -159,10 +160,11 @@ fn command_source(
                     BlockCommand::Rebuild(Box::new(RebuildCommand {
                         replay_record,
                         make_empty,
+                        reset_timestamp: rebuild_options.reset_timestamps,
                     }))
                 });
             (
-                rebuild_options.rebuild_from_block - 1,
+                rebuild_options.from_block - 1,
                 futures::stream::iter(command_iterator).boxed(),
             )
         } else {
