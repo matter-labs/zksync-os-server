@@ -7,7 +7,6 @@ use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV31, FacetCut, 
 use zksync_os_integration_tests::{GatewayTester, Tester};
 use zksync_os_server::default_protocol_version::NEXT_PROTOCOL_VERSION;
 
-
 /// Executes the simplest patch protocol upgrade:
 /// - no contracts are deployed
 /// - patch version is bumped by 1
