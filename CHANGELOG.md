@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.19.0](https://github.com/matter-labs/zksync-os-server/compare/v0.18.2...v0.19.0) (2026-04-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **network:** move batch verification to devp2p ([#1149](https://github.com/matter-labs/zksync-os-server/issues/1149))
+
+### Features
+
+* add config option to `reset_timestamps` for rebuilt blocks ([#1157](https://github.com/matter-labs/zksync-os-server/issues/1157)) ([a59aaf9](https://github.com/matter-labs/zksync-os-server/commit/a59aaf974f867ff2dba3405f53aaade433814f71))
+* **batcher:** SLI-based sealing ([#1130](https://github.com/matter-labs/zksync-os-server/issues/1130)) ([9e268e3](https://github.com/matter-labs/zksync-os-server/commit/9e268e3ea3db45bb07de7b6906125e40caf8bf79))
+* **integration-tests:** expose fatal node errors from harness ([#1148](https://github.com/matter-labs/zksync-os-server/issues/1148)) ([a196f5b](https://github.com/matter-labs/zksync-os-server/commit/a196f5ba5027be32a880b05e2f12c7d3603d9e21))
+* **network:** move batch verification to devp2p ([#1149](https://github.com/matter-labs/zksync-os-server/issues/1149)) ([7a140a7](https://github.com/matter-labs/zksync-os-server/commit/7a140a772034b2d01773ca37d3d5a81e03470ceb))
+* **rpc:** track mempool insertion and forwarding latency for eth_sendRawTransaction ([#1153](https://github.com/matter-labs/zksync-os-server/issues/1153)) ([0caa6e2](https://github.com/matter-labs/zksync-os-server/commit/0caa6e2dbd136b0dabe4996355afe5face5df851))
+* **storage_api:** add LogIndex supertrait to ReadRepository ([#1156](https://github.com/matter-labs/zksync-os-server/issues/1156)) ([27c1fcf](https://github.com/matter-labs/zksync-os-server/commit/27c1fcfc162d2588f6750592da3f52afd1f63231))
+* update v31 state and zksync-os dev ([#1132](https://github.com/matter-labs/zksync-os-server/issues/1132)) ([59d50fc](https://github.com/matter-labs/zksync-os-server/commit/59d50fcb0ca8feb39c4c6edbec41d798596beb3e))
+* Use log id for interop root indexing ([#1092](https://github.com/matter-labs/zksync-os-server/issues/1092)) ([8c074ba](https://github.com/matter-labs/zksync-os-server/commit/8c074baa182ce324337830117d728a9bc538e960))
+
+
+### Bug Fixes
+
+* **loadbase:** Increase max-in-flight from 10 to 1000 in loadbase ([#1136](https://github.com/matter-labs/zksync-os-server/issues/1136)) ([40585b7](https://github.com/matter-labs/zksync-os-server/commit/40585b7dfecaa934c19c1549ee08f009a68e548a))
+* **mempool:** track all L2 transaction outflow paths in metrics ([#1151](https://github.com/matter-labs/zksync-os-server/issues/1151)) ([895dd18](https://github.com/matter-labs/zksync-os-server/commit/895dd183ee9feed720aedbb822f12738ed073d35))
+* restart node on unexpected l1 commit ([#1147](https://github.com/matter-labs/zksync-os-server/issues/1147)) ([dd558fc](https://github.com/matter-labs/zksync-os-server/commit/dd558fc9c22edceba946e3adddd7b5fdfff70e60))
+* **rpc:** map client errors to -32602, keep server errors at -32603 ([#1137](https://github.com/matter-labs/zksync-os-server/issues/1137)) ([fe3275f](https://github.com/matter-labs/zksync-os-server/commit/fe3275f556e0f3b01a8fe1984f5986f7237972cf))
+* **rpc:** move wait_for_db_ready_to_process_blocks tobackground ([#1150](https://github.com/matter-labs/zksync-os-server/issues/1150)) ([5f1222f](https://github.com/matter-labs/zksync-os-server/commit/5f1222f08dc13073b18628be2b1deca60c7971eb))
+
 ## [0.18.2](https://github.com/matter-labs/zksync-os-server/compare/v0.18.1...v0.18.2) (2026-04-01)
 
 
