@@ -56,6 +56,7 @@ fn load_operator_private_key(layout: ChainLayout<'_>, chain_id: u64) -> anyhow::
 }
 
 fn make_commit_only_config(config: &mut Config) {
+    config.prover_input_generator_config.enable_input_generation = true;
     config.prover_api_config.fake_fri_provers.enabled = true;
     config.prover_api_config.fake_fri_provers.compute_time = Duration::from_millis(200);
     config.prover_api_config.fake_fri_provers.min_age = Duration::ZERO;
@@ -63,6 +64,7 @@ fn make_commit_only_config(config: &mut Config) {
 }
 
 fn disable_commits_config(config: &mut Config) {
+    config.prover_input_generator_config.enable_input_generation = true;
     config.prover_api_config.fake_fri_provers.enabled = false;
     config.prover_api_config.fake_snark_provers.enabled = false;
 }

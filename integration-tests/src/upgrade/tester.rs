@@ -402,7 +402,7 @@ impl UpgradeTester {
     pub async fn generic_l2_upgrade_target(&self) -> anyhow::Result<(Address, Bytes)> {
         // HACK: right now we need to call an account with bytecode to make the upgrade work.
         // So we deploy a event emitter contract and use it as a delegate.
-        let event_emitter =
+        let event_emitter: crate::contracts::EventEmitter::EventEmitterInstance<EthDynProvider> =
             crate::contracts::EventEmitter::deploy(self.tester.l2_provider.clone()).await?;
         let event_emitter_calldata = event_emitter
             .emitEvent(U256::from(42u64))
