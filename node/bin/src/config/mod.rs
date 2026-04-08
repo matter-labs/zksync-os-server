@@ -550,6 +550,10 @@ pub struct RebuildBlocksConfig {
     /// List of blocks to empty (i.e., remove all transactions from).
     #[config(default, with = Delimited::new(","))]
     pub blocks_to_empty: Vec<u64>,
+    /// Whether to reset timestamps of rebuilt blocks to the current time.
+    /// If false, original timestamps are kept. If true then current time is used.
+    #[config(default_t = false)]
+    pub reset_timestamps: bool,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
@@ -1379,8 +1383,9 @@ impl From<MempoolTxValidatorConfig> for zksync_os_mempool::TxValidatorConfig {
 impl From<RebuildBlocksConfig> for RebuildOptions {
     fn from(c: RebuildBlocksConfig) -> Self {
         Self {
-            rebuild_from_block: c.from_block,
+            from_block: c.from_block,
             blocks_to_empty: c.blocks_to_empty.into_iter().collect(),
+            reset_timestamps: c.reset_timestamps,
         }
     }
 }

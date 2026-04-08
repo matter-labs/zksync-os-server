@@ -26,8 +26,9 @@ pub struct ConsensusNodeCommandSource<Replay> {
 
 #[derive(Debug)]
 pub struct RebuildOptions {
-    pub rebuild_from_block: u64,
+    pub from_block: u64,
     pub blocks_to_empty: HashSet<u64>,
+    pub reset_timestamps: bool,
 }
 
 /// External node command source.
@@ -54,18 +55,18 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 
         let replay_until = if let Some(rebuild_options) = &self.rebuild_options {
             assert!(
-                rebuild_options.rebuild_from_block >= self.starting_block,
+                rebuild_options.from_block >= self.starting_block,
                 "rebuild_from_block must be >= starting_block, got {} < {}",
-                rebuild_options.rebuild_from_block,
+                rebuild_options.from_block,
                 self.starting_block
             );
             assert!(
-                rebuild_options.rebuild_from_block <= last_block_in_wal,
+                rebuild_options.from_block <= last_block_in_wal,
                 "rebuild_from_block must be <= last_block_in_wal, got {} > {}",
-                rebuild_options.rebuild_from_block,
+                rebuild_options.from_block,
                 last_block_in_wal
             );
-            rebuild_options.rebuild_from_block - 1
+            rebuild_options.from_block - 1
         } else {
             last_block_in_wal
         };
@@ -156,7 +157,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
         tracing::warn!(
             "Starting block rebuilds! {rebuild_options:?}, last_block_in_wal: {last_block_in_wal}"
         );
-        for block_number in rebuild_options.rebuild_from_block..=last_block_in_wal {
+        for block_number in rebuild_options.from_block..=last_block_in_wal {
             let replay_record = self
                 .block_replay_storage
                 .get_replay_record(block_number)
@@ -172,6 +173,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
             let command = BlockCommand::Rebuild(Box::new(RebuildCommand {
                 replay_record,
                 make_empty,
+                reset_timestamp: rebuild_options.reset_timestamps,
             }));
             if output.send(command).await.is_err() {
                 tracing::warn!("Command output channel closed, stopping source");

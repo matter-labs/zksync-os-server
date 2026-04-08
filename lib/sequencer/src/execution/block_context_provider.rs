@@ -296,12 +296,17 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     );
                 }
 
+                let timestamp = if rebuild.reset_timestamp {
+                    (millis_since_epoch() / 1000) as u64
+                } else {
+                    rebuild.replay_record.block_context.timestamp
+                };
                 let block_context = BlockContext {
                     eip1559_basefee: rebuild.replay_record.block_context.eip1559_basefee,
                     native_price: rebuild.replay_record.block_context.native_price,
                     pubdata_price: rebuild.replay_record.block_context.pubdata_price,
                     block_number,
-                    timestamp: rebuild.replay_record.block_context.timestamp,
+                    timestamp,
                     blob_fee: rebuild.replay_record.block_context.blob_fee,
                     chain_id: self.chain_id,
                     coinbase: self.fee_collector_address,
