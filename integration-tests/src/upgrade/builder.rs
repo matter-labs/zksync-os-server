@@ -28,8 +28,11 @@ pub struct ProtocolUpgradeBuilder {
     /// Timestamp after which upgrade can be executed
     /// If not provided, default value will be used (e.g. upgrade whenever)
     timestamp: U256,
-    // I don't need more parameters here for now, but in the future if you want
-    // to extend this builder, feel free to do it.
+    /// Whether to include bytecode hashes in `factory_deps` of the upgrade tx.
+    /// When true, the server's `fetch_force_preimages` will look up bytecodes
+    /// from the L1 `BytecodesSupplier`. When false, the server relies on
+    /// preimages already known from L2 deploys.
+    include_factory_deps: bool,
 }
 
 impl ProtocolUpgradeBuilder {
@@ -44,6 +47,7 @@ impl ProtocolUpgradeBuilder {
             force_deployments: None,
             delegate_to,
             timestamp: U256::ZERO,
+            include_factory_deps: false,
         }
     }
 
@@ -91,6 +95,13 @@ impl ProtocolUpgradeBuilder {
         self
     }
 
+    /// Includes bytecode hashes in the upgrade tx's `factory_deps`, which causes the
+    /// server to fetch preimages from the L1 `BytecodesSupplier` via `EVMBytecodePublished` events.
+    pub fn with_factory_deps(mut self) -> Self {
+        self.include_factory_deps = true;
+        self
+    }
+
     /// Sets the timestamp after which the upgrade can be executed.
     pub fn with_timestamp(mut self, timestamp: U256) -> Self {
         self.timestamp = timestamp;
@@ -114,6 +125,11 @@ impl ProtocolUpgradeBuilder {
             let mut account_properties = AccountProperties::default();
             set_properties_code(&mut account_properties, &bytecode);
 
+            // NOTE: `setBytecodeDetailsEVM` in era-contracts uses `bytecodeSize` for both
+            // `bytecode_length` and `observable_bytecode_length`. In production this should be the
+            // observable (raw EVM) bytecode length. Here we use `full_bytecode_len()` because the
+            // test registers preimages via L2 deploy, which records the full padded size. Using
+            // `observable_bytecode_len` would cause a preimage cache panic at runtime.
             let deployed_bytecode_info = super::interfaces::ForceDeploymentBytecodeInfo {
                 bytecodeHash: B256::from_slice(account_properties.bytecode_hash.as_u8_ref()),
                 bytecodeSize: account_properties.full_bytecode_len(),
@@ -127,9 +143,11 @@ impl ProtocolUpgradeBuilder {
                 newAddress: address,
             });
 
-            factory_deps.push(U256::from_be_slice(
-                deployed_bytecode_info.bytecodeHash.as_ref(),
-            ));
+            if self.include_factory_deps {
+                factory_deps.push(U256::from_be_slice(
+                    deployed_bytecode_info.bytecodeHash.as_ref(),
+                ));
+            }
         }
 
         let tx_type = if patch_only {

@@ -224,24 +224,20 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
     let tester = gateway_tester.into_primary_chain();
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
-    // Publish the bytecodes for upgrade beforehand via L2 deploy
-    // so that the preimages are known to the node.
-    upgrade_tester
-        .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
-        .await?;
-
-    // Also publish to the L1 BytecodesSupplier so `fetch_force_preimages` discovers
-    // the bytecode via `EVMBytecodePublished` events.
+    // Publish to the L1 BytecodesSupplier only (no L2 deploy). This exercises
+    // the end-to-end path: the server discovers preimages from `EVMBytecodePublished`
+    // events via `fetch_force_preimages`.
     upgrade_tester
         .publish_bytecodes_to_l1_supplier([SampleForceDeployment::DEPLOYED_BYTECODE.clone()])
         .await?;
 
-    // Prepare protocol upgrade
+    // Prepare protocol upgrade with factory_deps so the server fetches from the supplier.
     let protocol_upgrade = upgrade_tester
         .protocol_upgrade_builder()
         .await?
         .bump_minor(1)
         .with_force_deployments(force_deployments)
+        .with_factory_deps()
         .with_timestamp(upgrade_timestamp)
         .build();
 

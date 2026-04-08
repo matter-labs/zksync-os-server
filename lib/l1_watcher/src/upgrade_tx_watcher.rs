@@ -256,6 +256,7 @@ impl L1UpgradeTxWatcher {
             .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS)
             .max(1u64);
 
+        let requested: std::collections::HashSet<B256> = hashes.iter().copied().collect();
         let mut by_hash: HashMap<B256, Vec<u8>> = HashMap::new();
 
         while current_block >= start_block {
@@ -279,6 +280,11 @@ impl L1UpgradeTxWatcher {
                 let full_preimage = set_properties_code(&mut props, &raw_bytecode);
                 let zkos_hash = B256::from(props.bytecode_hash.as_u8_array());
 
+                // Only keep bytecodes that were actually requested.
+                if !requested.contains(&zkos_hash) {
+                    continue;
+                }
+
                 if let Some(existing) = by_hash.get(&zkos_hash) {
                     if existing != &full_preimage {
                         tracing::warn!(
@@ -291,6 +297,10 @@ impl L1UpgradeTxWatcher {
                 }
             }
 
+            // Stop early once all requested hashes are found.
+            if by_hash.len() == requested.len() {
+                break;
+            }
             if from_block == start_block {
                 break;
             }
@@ -302,13 +312,12 @@ impl L1UpgradeTxWatcher {
             .iter()
             .filter(|h| !by_hash.contains_key(*h))
             .collect();
-        if !missing.is_empty() {
-            tracing::warn!(
-                missing_count = missing.len(),
-                ?missing,
-                "some requested factory dep hashes were not found in the bytecode supplier"
-            );
-        }
+        anyhow::ensure!(
+            missing.is_empty(),
+            "missing {} factory dep preimage(s) from bytecode supplier: {:?}",
+            missing.len(),
+            missing
+        );
 
         tracing::info!(
             supplier = ?active_supplier,
