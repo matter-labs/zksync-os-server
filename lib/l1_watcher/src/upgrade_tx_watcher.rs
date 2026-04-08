@@ -249,7 +249,7 @@ impl L1UpgradeTxWatcher {
             return Ok(Vec::new());
         }
 
-        let active_supplier = self.resolve_active_bytecode_supplier().await;
+        let active_supplier = self.resolve_active_bytecode_supplier().await?;
 
         let mut current_block = self.provider_l1.get_block_number().await?;
         let start_block = current_block
@@ -329,39 +329,28 @@ impl L1UpgradeTxWatcher {
     }
 
     /// Queries the CTM on L1 for the canonical `BytecodesSupplier` address.
-    ///
-    /// Falls back to the configured `bytecode_supplier_address` if the CTM does
-    /// not expose `L1_BYTECODES_SUPPLIER()` (pre-v31 deployments).
-    async fn resolve_active_bytecode_supplier(&self) -> Address {
+    async fn resolve_active_bytecode_supplier(&self) -> anyhow::Result<Address> {
         let ctm = IChainTypeManagerInstance::new(self.ctm_l1, self.provider_l1.clone());
         match ctm.L1_BYTECODES_SUPPLIER().call().await {
-            Ok(l1_address) if l1_address != Address::ZERO => {
-                if l1_address != self.bytecode_supplier_address {
-                    tracing::warn!(
-                        configured_supplier = ?self.bytecode_supplier_address,
-                        l1_supplier = ?l1_address,
-                        ctm = ?self.ctm_l1,
-                        "bytecode supplier changed on L1; using L1 supplier for this fetch"
-                    );
-                }
-                l1_address
-            }
+            Ok(l1_address) if l1_address != Address::ZERO => Ok(l1_address),
             Ok(_) => {
-                tracing::info!(
-                    configured_supplier = ?self.bytecode_supplier_address,
-                    ctm = ?self.ctm_l1,
-                    "CTM returned zero bytecode supplier; using configured supplier"
+                anyhow::bail!(
+                    "L1 ChainTypeManager at {:?} returned zero BytecodesSupplier address",
+                    self.ctm_l1
                 );
-                self.bytecode_supplier_address
             }
-            Err(_) => {
-                // Expected for pre-v31 CTM deployments.
+            Err(e) => {
+                // Transport errors (503, timeout, etc.) should propagate.
+                // Contract-level reverts (function not found) are expected on pre-v31 CTMs.
+                if matches!(e, alloy::contract::Error::TransportError(_)) {
+                    return Err(e.into());
+                }
                 tracing::info!(
                     configured_supplier = ?self.bytecode_supplier_address,
                     ctm = ?self.ctm_l1,
                     "CTM does not expose L1_BYTECODES_SUPPLIER(); using configured supplier"
                 );
-                self.bytecode_supplier_address
+                Ok(self.bytecode_supplier_address)
             }
         }
     }

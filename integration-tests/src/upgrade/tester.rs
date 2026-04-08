@@ -250,10 +250,16 @@ impl UpgradeTester {
             interfaces::ChainTypeManager::new(ctm_l1_address, tester.l1_provider().clone());
         let bytecode_supplier_address = match ctm_l1.L1_BYTECODES_SUPPLIER().call().await {
             Ok(addr) if addr != Address::ZERO => addr,
-            _ => chain_config
-                .genesis_config
-                .bytecode_supplier_address
-                .expect("Bytecode supplier address is missing in the config"),
+            Ok(_) => anyhow::bail!(
+                "L1 ChainTypeManager at {ctm_l1_address:?} returned zero BytecodesSupplier"
+            ),
+            Err(_) => {
+                // Pre-v31 CTMs don't have this getter; fall back to config.
+                chain_config
+                    .genesis_config
+                    .bytecode_supplier_address
+                    .expect("Bytecode supplier address is missing in the config")
+            }
         };
         let bytecode_supplier = interfaces::BytecodesSupplier::new(
             bytecode_supplier_address,
