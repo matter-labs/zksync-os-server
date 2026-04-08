@@ -135,10 +135,8 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
     let tester = Tester::setup().await?;
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
-    // Publish the bytecodes for upgrade beforehand via L2 deploy.
-    // TODO: we need to use bytecode instead of deployed bytecode for now, since under the hood `publish_bytecodes`
-    // actually deploys contracts since BytecodesSupplier is not ready for zksync os
-    // Once this is fixed, also check the logic for `ForceDeploymentBytecodeInfo` in the builder.
+    // Publish the bytecodes for upgrade beforehand via L2 deploy
+    // so that the preimages are known to the node.
     upgrade_tester
         .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
         .await?;
@@ -226,10 +224,8 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
     let tester = gateway_tester.into_primary_chain();
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
-    // Publish the bytecodes for upgrade beforehand via L2 deploy.
-    // TODO: we need to use bytecode instead of deployed bytecode for now, since under the hood `publish_bytecodes`
-    // actually deploys contracts since BytecodesSupplier is not ready for zksync os
-    // Once this is fixed, also check the logic for `ForceDeploymentBytecodeInfo` in the builder.
+    // Publish the bytecodes for upgrade beforehand via L2 deploy
+    // so that the preimages are known to the node.
     upgrade_tester
         .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
         .await?;

@@ -11,6 +11,7 @@ use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use zk_os_api::helpers::set_properties_code;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
+use zksync_os_contract_interface::IBytecodeSupplier::EVMBytecodePublished;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
 use zksync_os_contract_interface::ZkChain;
@@ -20,21 +21,7 @@ use zksync_os_types::{
     UpgradeMetadata,
 };
 
-alloy::sol! {
-    /// Matches the `EVMBytecodePublished` event emitted by the `BytecodesSupplier` contract
-    /// in era-contracts (`l1-contracts/contracts/upgrades/BytecodesSupplier.sol`).
-    #[derive(Debug)]
-    event EVMBytecodePublished(bytes32 indexed bytecodeHash, bytes bytecode);
-
-    #[sol(rpc)]
-    interface IChainTypeManagerBytecodeSupplier {
-        /// Public immutable on `ChainTypeManagerBase` (era-contracts draft-v31+).
-        /// Returns the canonical `BytecodesSupplier` address on L1.
-        /// Falls back to the configured `bytecode_supplier_address` if the CTM
-        /// does not expose this getter (pre-v31 deployments).
-        function L1_BYTECODES_SUPPLIER() external view returns (address);
-    }
-}
+use zksync_os_contract_interface::IChainTypeManager::IChainTypeManagerInstance;
 
 /// Limit the number of L1 blocks to scan when looking for the set timestamp transaction.
 const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
@@ -337,7 +324,7 @@ impl L1UpgradeTxWatcher {
     /// Falls back to the configured `bytecode_supplier_address` if the CTM does
     /// not expose `L1_BYTECODES_SUPPLIER()` (pre-v31 deployments).
     async fn resolve_active_bytecode_supplier(&self) -> Address {
-        let ctm = IChainTypeManagerBytecodeSupplier::new(self.ctm_l1, self.provider_l1.clone());
+        let ctm = IChainTypeManagerInstance::new(self.ctm_l1, self.provider_l1.clone());
         match ctm.L1_BYTECODES_SUPPLIER().call().await {
             Ok(l1_address) if l1_address != Address::ZERO => {
                 if l1_address != self.bytecode_supplier_address {

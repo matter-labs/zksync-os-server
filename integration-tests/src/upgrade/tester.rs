@@ -418,12 +418,11 @@ impl UpgradeTester {
         ))
     }
 
+    /// Deploys each bytecode on L2 so that the preimages are known to the node.
     pub async fn publish_bytecodes<I: IntoIterator<Item = Bytes>>(
         &self,
         bytecodes: I,
     ) -> anyhow::Result<()> {
-        // TODO: right now, using bytecode publisher doesn't work.
-        // so instead, we just deploy each contract once on L2 to make sure that preimages are known.
         for bytecode in bytecodes {
             self.tester
                 .l2_provider
@@ -436,13 +435,6 @@ impl UpgradeTester {
                 .expect_successful_receipt()
                 .await?;
         }
-
-        // self.bytecode_supplier
-        //     .publishBytecodes(bytecodes.into_iter().collect())
-        //     .send()
-        //     .await?
-        //     .expect_successful_receipt()
-        //     .await?;
         Ok(())
     }
 
