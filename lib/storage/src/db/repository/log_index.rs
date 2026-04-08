@@ -45,25 +45,40 @@ fn deserialize_bitmap(bytes: &[u8]) -> Result<RoaringBitmap, RepositoryError> {
         .map_err(|e| RepositoryError::BitmapDeserialize(e.to_string()))
 }
 
-/// Reads the bitmap for `key` from `cf`, sets `block_number`, writes back into `batch`.
-pub(super) fn update_chunk(
+/// Reads the bitmap for `key` from `cf`, applies `f` to it, then writes it back into `batch`
+/// (or deletes the key if the bitmap becomes empty after the mutation).
+fn with_chunk(
+    db: &RocksDB<RepositoryCF>,
+    batch: &mut WriteBatch<RepositoryCF>,
+    cf: RepositoryCF,
+    key: &[u8],
+    f: impl FnOnce(&mut RoaringBitmap),
+) -> RepositoryResult<()> {
+    let mut bitmap = match db.get_cf(cf, key)? {
+        Some(bytes) => deserialize_bitmap(&bytes)?,
+        None => RoaringBitmap::new(),
+    };
+    f(&mut bitmap);
+    if bitmap.is_empty() {
+        batch.delete_cf(cf, key);
+    } else {
+        batch.put_cf(cf, key, &serialize_bitmap(&bitmap));
+    }
+    Ok(())
+}
+
+pub(super) fn insert_into_chunk(
     db: &RocksDB<RepositoryCF>,
     batch: &mut WriteBatch<RepositoryCF>,
     cf: RepositoryCF,
     key: &[u8],
     block_number: u32,
 ) -> RepositoryResult<()> {
-    let mut bitmap = match db.get_cf(cf, key)? {
-        Some(bytes) => deserialize_bitmap(&bytes)?,
-        None => RoaringBitmap::new(),
-    };
-    bitmap.insert(block_number);
-    batch.put_cf(cf, key, &serialize_bitmap(&bitmap));
-    Ok(())
+    with_chunk(db, batch, cf, key, |bitmap| {
+        bitmap.insert(block_number);
+    })
 }
 
-/// Reads the bitmap for `key` from `cf`, removes `block_number`. Deletes the key if the
-/// bitmap becomes empty.
 pub(super) fn remove_from_chunk(
     db: &RocksDB<RepositoryCF>,
     batch: &mut WriteBatch<RepositoryCF>,
@@ -71,17 +86,9 @@ pub(super) fn remove_from_chunk(
     key: &[u8],
     block_number: u32,
 ) -> RepositoryResult<()> {
-    let Some(bytes) = db.get_cf(cf, key)? else {
-        return Ok(());
-    };
-    let mut bitmap = deserialize_bitmap(&bytes)?;
-    bitmap.remove(block_number);
-    if bitmap.is_empty() {
-        batch.delete_cf(cf, key);
-    } else {
-        batch.put_cf(cf, key, &serialize_bitmap(&bitmap));
-    }
-    Ok(())
+    with_chunk(db, batch, cf, key, |bitmap| {
+        bitmap.remove(block_number);
+    })
 }
 
 /// Updates the log index coverage metadata in `batch`.
@@ -124,7 +131,7 @@ pub(super) fn index_logs<'a>(
     logs: impl IntoIterator<Item = &'a alloy::primitives::Log>,
 ) -> RepositoryResult<()> {
     for log in logs {
-        update_chunk(
+        insert_into_chunk(
             db,
             batch,
             RepositoryCF::LogBlocksByAddress,
@@ -132,7 +139,7 @@ pub(super) fn index_logs<'a>(
             block_number,
         )?;
         for topic in log.topics() {
-            update_chunk(
+            insert_into_chunk(
                 db,
                 batch,
                 RepositoryCF::LogBlocksByTopic,
