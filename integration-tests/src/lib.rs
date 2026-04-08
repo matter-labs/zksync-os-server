@@ -17,7 +17,7 @@ use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
 use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -117,6 +117,8 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 /// shutdown. We put 60s here until zksync-os v0.4.0 which will get rid of RISC-V simulator and
 /// allow async/abortable prover input generation.
 const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
+const NETWORK_PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
+const NETWORK_PORT_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
     BATCH_VERIFICATION_KEYS
@@ -143,29 +145,38 @@ pub struct Tester {
     pub prover_tester: ProverTester,
 
     runtime: Runtime,
+    config: Config,
 
     #[allow(dead_code)]
     tempdir: Arc<tempfile::TempDir>,
 
     // Needed to be able to connect external nodes
     node_record: NodeRecord,
+    network_port: u16,
     l2_rpc_address: String,
     batch_verification_url: String,
     gateway_rpc_url: Option<String>,
     sl_provider: EthDynProvider,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
-    enable_prover_input_generation: bool,
     supporting_nodes: Vec<Tester>,
 }
 
 #[derive(Debug)]
 pub struct StoppedTester {
     l1: AnvilL1,
+    config: Config,
     tempdir: Arc<tempfile::TempDir>,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
-    enable_prover_input_generation: bool,
+}
+
+struct Ports {
+    l2_rpc: LockedPort,
+    prover_api: LockedPort,
+    network: LockedPort,
+    status: LockedPort,
+    batch_verification: LockedPort,
 }
 
 impl Tester {
@@ -271,7 +282,9 @@ impl Tester {
         Self::launch_node(
             self.l1.clone(),
             false,
-            self.enable_prover_input_generation,
+            self.config
+                .prover_input_generator_config
+                .enable_input_generation,
             Some(overrides_fun),
             self.chain_layout,
         )
@@ -282,27 +295,30 @@ impl Tester {
     ///
     /// Returns a new `Tester` connected to the restarted node. The original `Tester` is consumed.
     ///
-    /// Note that allocated ports might change between old node and new one.
+    /// Restart keeps the same config by default, including the original ports.
     pub async fn stop(self) -> anyhow::Result<StoppedTester> {
         // Drop all fields that might rely on node being alive (e.g. alloy provider that uses RPC).
         let Self {
             runtime,
             l1,
+            config,
             tempdir,
             log_state,
             chain_layout,
-            enable_prover_input_generation,
+            network_port,
             ..
         } = self;
         if !runtime.graceful_shutdown_with_timeout(NODE_SHUTDOWN_TIMEOUT) {
             panic!("node failed to shutdown in time");
         }
+        drop(runtime);
+        wait_for_network_port_release(network_port).await;
         Ok(StoppedTester {
             l1,
+            config,
             tempdir,
             log_state,
             chain_layout,
-            enable_prover_input_generation,
         })
     }
 
@@ -328,48 +344,40 @@ impl Tester {
         chain_layout: ChainLayout<'static>,
     ) -> anyhow::Result<Self> {
         let tempdir = Arc::new(tempfile::tempdir()?);
-        Self::launch_node_inner(
-            l1,
+        let ports = Ports::acquire_unused().await?;
+        let mut config = Self::build_config(
+            &l1,
+            tempdir.as_ref(),
+            chain_layout,
             enable_prover,
             enable_prover_input_generation,
-            config_overrides,
-            tempdir,
-            None,
-            chain_layout,
+            ports,
         )
-        .await
+        .await?;
+        if let Some(config_overrides) = config_overrides {
+            config_overrides(&mut config);
+        }
+        Self::launch_node_inner(l1, config, tempdir, chain_layout, None).await
     }
 
-    async fn launch_node_inner(
-        l1: AnvilL1,
+    async fn build_config(
+        l1: &AnvilL1,
+        tempdir: &TempDir,
+        chain_layout: ChainLayout<'static>,
         enable_prover: bool,
         enable_prover_input_generation: bool,
-        config_overrides: Option<impl FnOnce(&mut Config)>,
-        tempdir: Arc<TempDir>,
-        log_state: Option<NodeLogState>,
-        chain_layout: ChainLayout<'static>,
-    ) -> anyhow::Result<Self> {
-        // Initialize and **hold** locked ports for the duration of node initialization.
-        let l2_locked_port = LockedPort::acquire_unused().await?;
-        let prover_api_locked_port = LockedPort::acquire_unused().await?;
-        let network_locked_port = LockedPort::acquire_unused().await?;
-        let status_locked_port = LockedPort::acquire_unused().await?;
-        let batch_verification_locked_port = LockedPort::acquire_unused().await?;
-        let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
-        let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
-        let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
-        let status_address = format!("0.0.0.0:{}", status_locked_port.port);
-        let batch_verification_address = format!("0.0.0.0:{}", batch_verification_locked_port.port);
-        let batch_verification_url =
-            format!("http://localhost:{}", batch_verification_locked_port.port);
+        ports: Ports,
+    ) -> anyhow::Result<Config> {
+        let l2_rpc_address = format!("0.0.0.0:{}", ports.l2_rpc.port);
+        let prover_api_address = format!("0.0.0.0:{}", ports.prover_api.port);
+        let status_address = format!("0.0.0.0:{}", ports.status.port);
+        let batch_verification_address = format!("0.0.0.0:{}", ports.batch_verification.port);
+        let batch_verification_url = format!("http://localhost:{}", ports.batch_verification.port);
 
         let rocks_db_path = tempdir.path().join("rocksdb");
-        // ENs will not use this dir
         let proof_storage_path = tempdir.path().join("proof_storage_path");
-
         let default_config = load_chain_config(chain_layout).await;
 
-        // Create a handle to run the sequencer in the background
         let general_config = GeneralConfig {
             rocks_db_path: rocks_db_path.clone(),
             l1_rpc_url: l1.address.clone(),
@@ -380,7 +388,7 @@ impl Tester {
             ..default_config.sequencer_config
         };
         let rpc_config = RpcConfig {
-            address: l2_rpc_address.clone(),
+            address: l2_rpc_address,
             // Override default with a higher value as the test can be slow in CI
             send_raw_transaction_sync_timeout: Duration::from_secs(10),
             ..default_config.rpc_config
@@ -396,44 +404,38 @@ impl Tester {
             },
             address: prover_api_address,
             proof_storage: ProofStorageConfig {
-                path: proof_storage_path.clone(),
+                path: proof_storage_path,
                 ..default_config.prover_api_config.proof_storage
             },
             ..default_config.prover_api_config
         };
         let batch_verification_config = BatchVerificationConfig {
             server_enabled: false,
-            listen_address: batch_verification_address.clone(),
+            listen_address: batch_verification_address,
             client_enabled: false,
-            connect_address: batch_verification_url.clone(),
-            threshold: 1, // default to 1 of 2
+            connect_address: batch_verification_url,
+            threshold: 1,
             accepted_signers: BATCH_VERIFICATION_ADDRESSES.clone(),
             request_timeout: Duration::from_millis(500),
             retry_delay: Duration::from_secs(1),
             total_timeout: Duration::from_secs(300),
             signing_key: BATCH_VERIFICATION_KEYS[0].into(),
         };
-
         let status_server_config = StatusServerConfig {
             enabled: true,
             address: status_address,
         };
-
         let network_secret_key = zksync_os_network::rng_secret_key();
-        let node_record = NodeRecord::from_secret_key(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), network_locked_port.port),
-            &network_secret_key,
-        );
         let network_config = NetworkConfig {
             enabled: true,
             secret_key: Some(network_secret_key),
             address: Ipv4Addr::LOCALHOST,
             interface: None,
-            port: network_locked_port.port,
+            port: ports.network.port,
             boot_nodes: vec![],
         };
 
-        let mut config = Config {
+        Ok(Config {
             general_config,
             network_config,
             genesis_config: default_config.genesis_config,
@@ -458,7 +460,32 @@ impl Tester {
             interop_fee_updater_config: default_config.interop_fee_updater_config,
             external_price_api_client_config: default_config.external_price_api_client_config,
             fee_config: default_config.fee_config,
-        };
+        })
+    }
+
+    async fn launch_node_inner(
+        l1: AnvilL1,
+        config: Config,
+        tempdir: Arc<TempDir>,
+        chain_layout: ChainLayout<'static>,
+        log_state: Option<NodeLogState>,
+    ) -> anyhow::Result<Self> {
+        let _ports = Ports::from_config(&config).await?;
+        #[cfg(feature = "prover-tests")]
+        let enable_prover = !config.prover_api_config.fake_fri_provers.enabled;
+        let l2_rpc_address = config.rpc_config.address.clone();
+        let l2_rpc_ws_url = format!("ws://localhost:{}", parse_local_port(&l2_rpc_address)?);
+        let batch_verification_url = config.batch_verification_config.connect_address.clone();
+
+        let network_secret_key = config
+            .network_config
+            .secret_key
+            .as_ref()
+            .context("network secret key should be present in test config")?;
+        let node_record = NodeRecord::from_secret_key(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), config.network_config.port),
+            network_secret_key,
+        );
 
         if let Some(ephemeral_state) = &config.general_config.ephemeral_state {
             tracing::info!("Loading ephemeral state from {}", ephemeral_state.display());
@@ -467,13 +494,13 @@ impl Tester {
                 &config.general_config.rocks_db_path,
             );
         }
-        if let Some(f) = config_overrides {
-            f(&mut config)
-        }
         let node_role = config.general_config.node_role;
         let log_state = log_state.unwrap_or_else(|| NodeLogState::fresh(node_role));
         let log_tag = log_state.tag();
         let gateway_rpc_url = config.general_config.gateway_rpc_url.clone();
+        let network_port = config.network_config.port;
+        #[cfg(feature = "prover-tests")]
+        let prover_api_address = config.prover_api_config.address.clone();
 
         let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
             .build()
@@ -484,13 +511,13 @@ impl Tester {
             role = %node_role,
         );
         tracing::info!(parent: &node_span, "Launching test node");
-        zksync_os_server::run::<FullDiffsState>(&runtime, config)
+        zksync_os_server::run::<FullDiffsState>(&runtime, config.clone())
             .instrument(node_span)
             .await;
 
         #[cfg(feature = "prover-tests")]
         if enable_prover {
-            let base_url = format!("http://localhost:{}", prover_api_locked_port.port);
+            let base_url = prover_api_address.replace("0.0.0.0:", "http://localhost:");
             let app_bin_path = utils::materialize_multiblock_batch_bin(
                 &tempdir.path().join("app_bins"),
                 "v6",
@@ -614,15 +641,16 @@ impl Tester {
             l2_wallet,
             prover_tester,
             runtime,
+            config,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             batch_verification_url,
             gateway_rpc_url,
             sl_provider,
             node_record,
             log_state,
+            network_port,
             tempdir: tempdir.clone(),
             chain_layout,
-            enable_prover_input_generation,
             supporting_nodes: Vec::new(),
         })
     }
@@ -642,14 +670,13 @@ impl StoppedTester {
     }
 
     pub async fn start(self) -> anyhow::Result<Tester> {
+        let config = self.config.clone();
         Tester::launch_node_inner(
             self.l1,
-            false,
-            self.enable_prover_input_generation,
-            None::<fn(&mut Config)>,
+            config,
             self.tempdir,
-            Some(self.log_state.restarted()),
             self.chain_layout,
+            Some(self.log_state.restarted()),
         )
         .await
     }
@@ -658,17 +685,113 @@ impl StoppedTester {
         self,
         config_overrides: impl FnOnce(&mut Config),
     ) -> anyhow::Result<Tester> {
+        let mut config = self.config.clone();
+        config_overrides(&mut config);
         Tester::launch_node_inner(
             self.l1,
-            false,
-            self.enable_prover_input_generation,
-            Some(config_overrides),
+            config,
             self.tempdir,
-            Some(self.log_state.restarted()),
             self.chain_layout,
+            Some(self.log_state.restarted()),
         )
         .await
     }
+}
+
+impl Ports {
+    async fn acquire_unused() -> anyhow::Result<Self> {
+        Ok(Self {
+            l2_rpc: LockedPort::acquire_unused().await?,
+            prover_api: LockedPort::acquire_unused().await?,
+            network: LockedPort::acquire_unused().await?,
+            status: LockedPort::acquire_unused().await?,
+            batch_verification: LockedPort::acquire_unused().await?,
+        })
+    }
+
+    async fn from_config(config: &Config) -> anyhow::Result<Self> {
+        Ok(Self {
+            l2_rpc: LockedPort::acquire(parse_local_port(&config.rpc_config.address)?)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to acquire L2 RPC port {}",
+                        config.rpc_config.address
+                    )
+                })?,
+            prover_api: LockedPort::acquire(parse_local_port(&config.prover_api_config.address)?)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to acquire prover API port {}",
+                        config.prover_api_config.address
+                    )
+                })?,
+            network: LockedPort::acquire(config.network_config.port)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to acquire network port {}",
+                        config.network_config.port
+                    )
+                })?,
+            status: LockedPort::acquire(parse_local_port(&config.status_server_config.address)?)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to acquire status server port {}",
+                        config.status_server_config.address
+                    )
+                })?,
+            batch_verification: LockedPort::acquire(parse_local_port(
+                &config.batch_verification_config.listen_address,
+            )?)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to acquire batch verification port {}",
+                    config.batch_verification_config.listen_address
+                )
+            })?,
+        })
+    }
+}
+
+fn parse_local_port(address: &str) -> anyhow::Result<u16> {
+    let port = address
+        .rsplit_once(':')
+        .context("address should contain a port")?
+        .1;
+    port.parse().context("address port should be numeric")
+}
+
+async fn wait_for_network_port_release(port: u16) {
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    let deadline = tokio::time::Instant::now() + NETWORK_PORT_RELEASE_TIMEOUT;
+    loop {
+        if network_port_is_reusable(addr) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "network port {port} did not become reusable within {NETWORK_PORT_RELEASE_TIMEOUT:?}"
+        );
+        tokio::time::sleep(NETWORK_PORT_RELEASE_POLL_INTERVAL).await;
+    }
+}
+
+fn network_port_is_reusable(addr: SocketAddr) -> bool {
+    let tcp = match TcpListener::bind(addr) {
+        Ok(listener) => listener,
+        Err(_) => return false,
+    };
+    let udp = match UdpSocket::bind(addr) {
+        Ok(socket) => socket,
+        Err(_) => return false,
+    };
+    drop(udp);
+    drop(tcp);
+    true
 }
 
 async fn ensure_test_wallet_funded(

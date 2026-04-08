@@ -46,7 +46,7 @@ pub use build_external_config::{build_external_config, load_config_file_sources}
 ///    files are used. In Docker, the `local-chains/` directory is not copied into the image,
 ///    so no files are auto-loaded and config must be provided entirely via environment variables.
 /// 3. **Environment variables** — always override everything.
-#[derive(Debug, ConfigValidate)]
+#[derive(Clone, Debug, ConfigValidate)]
 #[config_validate(root)]
 pub struct Config {
     pub general_config: GeneralConfig,

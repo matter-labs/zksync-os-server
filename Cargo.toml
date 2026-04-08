@@ -226,24 +226,24 @@ opentelemetry-semantic-conventions = "0.31.0"
 opentelemetry-appender-tracing = "0.31.1"
 
 # Reth dependencies
-reth-db-models = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-trie-common = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-storage-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-network = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-network-peers = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-net-nat = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-rpc-eth-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
-reth-tasks = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.1" }
+reth-db-models = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-evm-ethereum = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-chainspec = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-trie-common = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-primitives = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-primitives-traits = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-revm = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-storage-api = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-transaction-pool = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-execution-types = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-network = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-network-peers = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-net-nat = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-eth-wire = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-discv5 = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-provider = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-rpc-eth-types = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
+reth-tasks = { git = "https://github.com/romanbrodetski-ai/reth.git", branch = "fix/discv5-shutdown-v1.11.1" }
 
 zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.0.4" }
 

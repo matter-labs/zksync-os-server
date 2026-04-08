@@ -177,6 +177,7 @@ async fn revert_batches_on_l1(stopped: &StoppedTester, new_last_batch: u64) -> a
 #[test_runtime(flavor = "multi_thread")]
 async fn node_stop_and_restart_preserves_state() -> anyhow::Result<()> {
     let tester = Tester::builder().build().await?;
+    let original_rpc_url = tester.l2_rpc_url().to_owned();
 
     // Send a transaction and wait for it to be included.
     let receipt = tester
@@ -193,6 +194,7 @@ async fn node_stop_and_restart_preserves_state() -> anyhow::Result<()> {
 
     // Restart the same node (same DB, same L1).
     let restarted = tester.restart().await?;
+    assert_eq!(restarted.l2_rpc_url(), original_rpc_url);
     // Wait for receipt's block to be available. It might not be immediately available because
     // repository DB did not persist the receipt during previous run.
     restarted

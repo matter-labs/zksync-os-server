@@ -29,7 +29,7 @@ async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
 ///   1. Start with `batcher.enabled = false` — blocks execute and are stored locally but
 ///      nothing is batched or submitted to L1.
 ///   2. Mine several blocks and confirm that L1 commitment count did not move.
-///   3. Restart in normal mode (batcher + fake provers enabled by default).
+///   3. Restart with overrides that re-enable the batcher.
 ///   4. Wait for the last pre-restart block to be finalized (= executed on L1), proving the
 ///      node settled all pending blocks after re-enabling the batcher.
 #[test_multisetup([CURRENT_TO_L1])]
@@ -65,9 +65,12 @@ async fn uncommitted_blocks_are_settled_after_batcher_reenabled() -> anyhow::Res
         "no new batches should be committed while the batcher is disabled"
     );
 
-    // Restart in normal mode. Batcher is enabled by default; fake provers are enabled by
-    // default in the test harness (enable_prover = false → fake_*_provers.enabled = true).
-    let restarted = tester.restart().await?;
+    // Plain restart preserves config, so explicitly re-enable the batcher on restart.
+    let restarted = tester
+        .restart_with_overrides(|config| {
+            config.batcher_config.enabled = true;
+        })
+        .await?;
 
     // The restarted node must pick up all pending uncommitted blocks and settle them on L1.
     // Wait until the last pre-restart block is finalized (= executed on L1).
