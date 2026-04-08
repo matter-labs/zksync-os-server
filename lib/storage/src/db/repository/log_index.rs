@@ -180,17 +180,16 @@ pub(super) fn deindex_logs<'a>(
     Ok(())
 }
 
+fn read_u64_meta(db: &RocksDB<RepositoryCF>, key: &[u8]) -> RepositoryResult<Option<u64>> {
+    Ok(db
+        .get_cf(RepositoryCF::Meta, key)?
+        .map(|v: Vec<u8>| u64::from_be_bytes(v.as_slice().try_into().unwrap())))
+}
+
 /// Returns the index coverage as a half-open range, or `None` if the index is empty.
 fn coverage(db: &RocksDB<RepositoryCF>) -> RepositoryResult<Option<Range<u64>>> {
-    let first = db
-        .get_cf(
-            RepositoryCF::Meta,
-            RepositoryCF::log_index_first_block_key(),
-        )?
-        .map(|v: Vec<u8>| u64::from_be_bytes(v.as_slice().try_into().unwrap()));
-    let last = db
-        .get_cf(RepositoryCF::Meta, RepositoryCF::log_index_last_block_key())?
-        .map(|v: Vec<u8>| u64::from_be_bytes(v.as_slice().try_into().unwrap()));
+    let first = read_u64_meta(db, RepositoryCF::log_index_first_block_key())?;
+    let last = read_u64_meta(db, RepositoryCF::log_index_last_block_key())?;
     Ok(first.zip(last).map(|(f, l)| f..l + 1))
 }
 
