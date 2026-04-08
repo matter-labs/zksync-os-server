@@ -135,13 +135,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     if node_role.is_main() && !config.general_config.run_priority_tree {
         panic!("`general_run_priority_tree` must be true for Main Node");
     }
-    if (config.batch_verification_config.server_enabled
-        || config.batch_verification_config.client_enabled)
-        && !config.network_config.enabled
-    {
-        panic!("batch verification requires `network.enabled=true`");
-    }
-
     let process_started_at = Instant::now();
     GENERAL_METRICS.process_started_at[&(NODE_VERSION, role)].set(
         SystemTime::now()

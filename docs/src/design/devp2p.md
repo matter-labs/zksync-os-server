@@ -1,6 +1,6 @@
 # devp2p / `zks` Protocol
 
-The `lib/network` crate integrates zkSync OS-specific peer-to-peer traffic into the node's
+The `lib/network` crate integrates ZKsync OS-specific peer-to-peer traffic into the node's
 devp2p / RLPx network stack.
 
 Its purpose is not to replace the node's general networking. Instead, it adds a `zks/<version>`

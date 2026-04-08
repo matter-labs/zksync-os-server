@@ -1088,14 +1088,22 @@ pub struct OtlpConfig {
 }
 
 /// Configuration for batch verification over the p2p network.
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct BatchVerificationConfig {
     /// [main node] If we are collecting batch verification signatures.
     #[config(default_t = false)]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| !*value || root.network_config.enabled,
+        "requires `network.enabled=true`"
+    ))]
     pub server_enabled: bool,
     /// [external node] If we are signing batches.
     #[config(default_t = false)]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| !*value || root.network_config.enabled,
+        "requires `network.enabled=true`"
+    ))]
     pub client_enabled: bool,
     /// [main node] Threshold (number of needed signatures).
     #[config(default_t = 1)]
@@ -1701,5 +1709,22 @@ mod tests {
         );
         assert!(err.contains("`l1_sender.operator_commit_sk`"));
         assert!(err.contains("must be different"));
+    }
+
+    #[tokio::test]
+    async fn batch_verification_requires_networking() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.batch_verification_config.server_enabled = true;
+        config.batch_verification_config.client_enabled = true;
+        config.network_config.enabled = false;
+
+        let err = config.validate().await.unwrap_err().to_string();
+
+        assert!(err.contains(
+            "`batch_verification.server_enabled` requires `network.enabled=true`"
+        ));
+        assert!(err.contains(
+            "`batch_verification.client_enabled` requires `network.enabled=true`"
+        ));
     }
 }

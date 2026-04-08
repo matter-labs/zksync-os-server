@@ -391,7 +391,7 @@ impl NetworkService {
                 tracing::info!("p2p network graceful shutdown complete");
             },
         );
-        runtime.spawn_critical_task("p2p protocol logger", async move {
+        runtime.spawn_critical_task("p2p session tracker", async move {
             while let Some(event) = self.protocol_rx.recv().await {
                 let now = Instant::now();
                 let mut peer_sessions = self.peer_sessions.write().unwrap();
@@ -524,7 +524,7 @@ async fn dispatch_verify_batch(
             );
             continue;
         };
-        if connection.version != crate::version::ZksVersion::Zks3 {
+        if connection.version < crate::version::ZksVersion::Zks3 {
             tracing::warn!(
                 peer_id = %peer_id,
                 request_id = request.request_id,
