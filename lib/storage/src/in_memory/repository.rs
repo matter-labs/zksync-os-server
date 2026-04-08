@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use zksync_os_interface::types::{BlockOutput, ExecutionResult};
 use zksync_os_storage_api::{
-    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+    LogIndex, ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
 use zksync_os_types::{L2ToL1Log, ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
 
@@ -169,6 +169,8 @@ impl RepositoryInMemory {
             .remove_by_hashes(tx_hashes);
     }
 }
+
+impl LogIndex for RepositoryInMemory {}
 
 impl ReadRepository for RepositoryInMemory {
     fn get_block_by_number(
