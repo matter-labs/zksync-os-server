@@ -164,19 +164,6 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
         Ok(signature)
     }
 
-    fn cache_verification_input(
-        &mut self,
-        block_output: BlockOutput,
-        replay_record: ReplayRecord,
-        tree_data: BlockMerkleTreeData,
-    ) -> anyhow::Result<()> {
-        self.block_cache.insert(
-            replay_record.block_context.block_number,
-            (block_output, replay_record, tree_data),
-        )?;
-        Ok(())
-    }
-
     async fn handle_verification_message(
         &self,
         request: VerifyBatch,
@@ -225,7 +212,10 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
                 block = input.recv() => {
                     match block {
                         Some((block_output, replay_record, tree_data)) => {
-                            self.cache_verification_input(block_output, replay_record, tree_data)?;
+                            self.block_cache.insert(
+                                replay_record.block_context.block_number,
+                                (block_output, replay_record, tree_data),
+                            )?;
                         }
                         None => return Ok(()),
                     }
