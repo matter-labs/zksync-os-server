@@ -242,20 +242,19 @@ impl UpgradeTester {
             None
         };
 
-        // Bytecode supplier is a bit special: right now it's not discoverable
-        // yet, so fetch the expected address from the active chain config.
-        let bytecode_supplier_address = chain_config
-            .genesis_config
-            .bytecode_supplier_address
-            .expect("Bytecode supplier address is missing in the config");
-        anyhow::ensure!(
-            !tester
-                .l1_provider()
-                .get_code_at(bytecode_supplier_address)
-                .await?
-                .is_empty(),
-            "Bytecode supplier contract is not deployed at expected address {bytecode_supplier_address:?}; if zkos-l1-state.json.gz was updated, update the address in the test code"
-        );
+        // Fetch the BytecodesSupplier address from the L1 ChainTypeManager,
+        // where it is stored as an immutable `L1_BYTECODES_SUPPLIER`.
+        // Falls back to the config address for pre-v31 deployments that don't expose this getter.
+        let ctm_l1_address = l1_state.bridgehub_l1.chain_type_manager_address().await?;
+        let ctm_l1 =
+            interfaces::ChainTypeManager::new(ctm_l1_address, tester.l1_provider().clone());
+        let bytecode_supplier_address = match ctm_l1.L1_BYTECODES_SUPPLIER().call().await {
+            Ok(addr) if addr != Address::ZERO => addr,
+            _ => chain_config
+                .genesis_config
+                .bytecode_supplier_address
+                .expect("Bytecode supplier address is missing in the config"),
+        };
         let bytecode_supplier = interfaces::BytecodesSupplier::new(
             bytecode_supplier_address,
             tester.l1_provider().clone(),
@@ -450,16 +449,31 @@ impl UpgradeTester {
     /// Publishes bytecodes to the `BytecodesSupplier` contract on L1.
     /// The server scans `BytecodePublished` events from this contract
     /// to discover force preimages needed during protocol upgrades.
+    ///
+    /// Tries `publishEraBytecodes` (v31+) first, falls back to `publishBytecodes` (pre-v31).
     pub async fn publish_bytecodes_to_l1_supplier<I: IntoIterator<Item = Bytes>>(
         &self,
         bytecodes: I,
     ) -> anyhow::Result<()> {
-        self.bytecode_supplier
-            .publishBytecodes(bytecodes.into_iter().collect())
+        let bytecodes: Vec<Bytes> = bytecodes.into_iter().collect();
+        match self
+            .bytecode_supplier
+            .publishEraBytecodes(bytecodes.clone())
             .send()
-            .await?
-            .expect_successful_receipt()
-            .await?;
+            .await
+        {
+            Ok(pending) => {
+                pending.expect_successful_receipt().await?;
+            }
+            Err(_) => {
+                self.bytecode_supplier
+                    .publishBytecodes(bytecodes)
+                    .send()
+                    .await?
+                    .expect_successful_receipt()
+                    .await?;
+            }
+        }
         Ok(())
     }
 

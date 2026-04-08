@@ -34,14 +34,6 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
     let tester = Tester::setup().await?;
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
-    // Publish a bytecode to the L1 BytecodesSupplier. Patch upgrades do not include
-    // an upgrade transaction so these preimages are not consumed, but the server must
-    // still scan the supplier without errors.
-    let supplier_bytecode = pad_bytecode_for_supplier(&SampleForceDeployment::DEPLOYED_BYTECODE);
-    upgrade_tester
-        .publish_bytecodes_to_l1_supplier([supplier_bytecode])
-        .await?;
-
     // Prepare protocol upgrade
     let protocol_upgrade = upgrade_tester
         .protocol_upgrade_builder()
@@ -161,13 +153,6 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
     // Once this is fixed, also check the logic for `ForceDeploymentBytecodeInfo` in the builder.
     upgrade_tester
         .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
-        .await?;
-
-    // Also publish to the L1 BytecodesSupplier so `fetch_force_preimages` discovers
-    // the bytecode via `BytecodePublished` events.
-    let supplier_bytecode = pad_bytecode_for_supplier(&SampleForceDeployment::DEPLOYED_BYTECODE);
-    upgrade_tester
-        .publish_bytecodes_to_l1_supplier([supplier_bytecode])
         .await?;
 
     // Prepare protocol upgrade
