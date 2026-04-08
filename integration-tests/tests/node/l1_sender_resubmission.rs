@@ -33,6 +33,8 @@ async fn l1_sender_resubmits_after_timeout() -> anyhow::Result<()> {
         // prevent transaction submission during the test.
         config.l1_sender_config.max_priority_fee_per_gas = EtherAmount(10 * 1_000_000_000); // 10 gwei
         config.l1_sender_config.max_fee_per_gas = EtherAmount(500 * 1_000_000_000); // 500 gwei
+        // Single confirmation is enough on Anvil — no reorg risk in tests.
+        config.l1_sender_config.required_confirmations = 1;
         // Fast block production so we get a batch quickly.
         config.sequencer_config.block_time = Duration::from_millis(200);
     })
