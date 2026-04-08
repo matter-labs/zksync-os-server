@@ -1,8 +1,8 @@
 use vise::{Counter, Gauge, Metrics};
 
 #[derive(Debug, Metrics)]
-#[metrics(prefix = "batch_verification_client")]
-pub struct BatchVerificationClientMetrics {
+#[metrics(prefix = "batch_verification_responder")]
+pub struct BatchVerificationResponderMetrics {
     /// Number of blocks currently cached
     block_cache_size: Gauge<usize>,
     /// Lowest block number in the cache
@@ -22,10 +22,11 @@ pub struct BatchVerificationClientMetrics {
 }
 
 #[vise::register]
-pub(crate) static BATCH_VERIFICATION_CLIENT_METRICS: vise::Global<BatchVerificationClientMetrics> =
-    vise::Global::new();
+pub(crate) static BATCH_VERIFICATION_RESPONDER_METRICS: vise::Global<
+    BatchVerificationResponderMetrics,
+> = vise::Global::new();
 
-impl BatchVerificationClientMetrics {
+impl BatchVerificationResponderMetrics {
     pub fn update_cache_range(&self, from: u64, to: u64) {
         self.block_cache_from_number.set(from);
         self.block_cache_to_number.set(to);

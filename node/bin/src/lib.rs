@@ -49,11 +49,14 @@ use reth_tasks::Runtime;
 use ruint::aliases::U256;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
-use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
+use zksync_os_batch_verification::{
+    BatchVerificationConfig as BatchVerificationPolicyConfig, BatchVerificationPipelineStep,
+    BatchVerificationResponder, effective_verification_policy,
+};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_gas_adjuster::GasAdjuster;
@@ -80,7 +83,12 @@ use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_network::RecordOverride;
-use zksync_os_network::service::{NetworkService, ZksProtocolConfig};
+use zksync_os_network::VerifyBatch;
+use zksync_os_network::protocol::{
+    ExternalNodeProtocolConfig, ExternalNodeVerifierConfig, MainNodeProtocolConfig,
+    ZksProtocolConfig,
+};
+use zksync_os_network::service::{NetworkService, PeerVerifyBatch, PeerVerifyBatchResult};
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
@@ -126,6 +134,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // Priority tree is required for main node
     if node_role.is_main() && !config.general_config.run_priority_tree {
         panic!("`general_run_priority_tree` must be true for Main Node");
+    }
+    if (config.batch_verification_config.server_enabled
+        || config.batch_verification_config.client_enabled)
+        && !config.network_config.enabled
+    {
+        panic!("batch verification requires `network.enabled=true`");
     }
 
     let process_started_at = Instant::now();
@@ -391,8 +405,16 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     node_startup_state.assert_consistency();
 
-    // Channel between NetworkService and Sequencer
+    // MN sends `VerifyBatch` requests to the network and receives `PeerVerifyBatchResult`s back.
+    let (verify_request_tx, verify_request_rx) = tokio::sync::mpsc::channel::<VerifyBatch>(16);
+    let (verify_result_tx, verify_result_rx) =
+        tokio::sync::mpsc::channel::<PeerVerifyBatchResult>(128);
+    // `replay_*` carries replay records from the network service into the EN pipeline.
     let (replay_sender, replays_for_sequencer) = tokio::sync::mpsc::channel(128);
+    // EN receives peer verification requests and broadcasts signed responses back to the network.
+    let (verify_batch_tx, verify_batch_rx) = tokio::sync::mpsc::channel::<PeerVerifyBatch>(128);
+    let (outgoing_verify_results, _) =
+        tokio::sync::broadcast::channel::<PeerVerifyBatchResult>(128);
 
     let ConsensusRuntimeParts {
         canonization_engine,
@@ -401,30 +423,52 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     } = loopback_consensus();
     if config.network_config.enabled {
         tracing::info!("initializing p2p networking");
-
-        let network_service = NetworkService::new(
-            config.network_config.clone().into(),
-            ZksProtocolConfig {
-                node_role,
-                starting_block,
-                // This will be gone once we migrate away from record overrides
-                record_overrides: config
-                    .sequencer_config
-                    .en_replay_record_overrides
-                    .iter()
-                    .map(|(block_number, db_key)| RecordOverride {
-                        block_number: *block_number,
-                        db_key: db_key.clone(),
-                    })
-                    .collect(),
-                replay_sender,
-            },
-            block_replay_storage.clone(),
-            zk_provider_factory,
-        )
-        .await
+        let batch_verification_policy_config: BatchVerificationPolicyConfig =
+            config.batch_verification_config.clone().into();
+        let network_service = if node_role.is_main() {
+            let (_, accepted_verifier_signers) =
+                effective_verification_policy(&batch_verification_policy_config, &l1_state);
+            NetworkService::new(
+                config.network_config.clone().into(),
+                ZksProtocolConfig::MainNode(MainNodeProtocolConfig {
+                    accepted_verifier_signers,
+                    verify_result_tx: verify_result_tx.clone(),
+                }),
+                block_replay_storage.clone(),
+                zk_provider_factory,
+            )
+            .await
+        } else {
+            let record_overrides = config
+                .sequencer_config
+                .en_replay_record_overrides
+                .iter()
+                .map(|(block_number, db_key)| RecordOverride {
+                    block_number: *block_number,
+                    db_key: db_key.clone(),
+                })
+                .collect();
+            NetworkService::new(
+                config.network_config.clone().into(),
+                ZksProtocolConfig::ExternalNode(ExternalNodeProtocolConfig {
+                    starting_block: Arc::new(RwLock::new(starting_block)),
+                    record_overrides,
+                    replay_sender,
+                    verification: config.batch_verification_config.client_enabled.then(|| {
+                        ExternalNodeVerifierConfig {
+                            signing_key: config.batch_verification_config.signing_key.clone(),
+                            verify_batch_tx: verify_batch_tx.clone(),
+                            outgoing_verify_results: outgoing_verify_results.clone(),
+                        }
+                    }),
+                }),
+                block_replay_storage.clone(),
+                zk_provider_factory,
+            )
+            .await
+        }
         .expect("failed to create network service");
-        network_service.spawn(runtime);
+        network_service.spawn(runtime, node_role.is_main().then_some(verify_request_rx));
     } else if node_role.is_main() {
         tracing::info!(
             "p2p networking is disabled; to enable set `network.enabled=true` and populate `network.secret_key`"
@@ -823,7 +867,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     if node_role.is_main() {
-        // Main Node
         run_main_node_pipeline(
             &config,
             sl_provider.clone(),
@@ -843,10 +886,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             canonization_engine,
             leadership,
             commit_submitted_tx,
+            verify_request_tx,
+            verify_result_rx,
         )
         .await;
     } else {
-        // External Node
         run_en_pipeline(
             &config,
             replays_for_sequencer,
@@ -862,6 +906,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             finality_storage.clone(),
             tx_acceptance_state_sender,
             chain_id,
+            verify_batch_rx,
+            outgoing_verify_results.clone(),
         )
         .await;
     };
@@ -931,6 +977,8 @@ async fn run_main_node_pipeline(
     canonization_engine: BlockCanonizationEngine,
     leadership: LeadershipSignal,
     commit_submitted_tx: watch::Sender<u64>,
+    verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
+    verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
 ) {
     let pubdata_mode = config
         .l1_sender_config
@@ -1085,6 +1133,8 @@ async fn run_main_node_pipeline(
             config.batch_verification_config.clone().into(),
             node_state_on_startup.l1_state.clone(),
             node_state_on_startup.l1_state.last_committed_batch,
+            verify_request_tx,
+            verify_result_rx,
         ))
         .pipe(fri_proving_step)
         .pipe(GaplessCommitter {
@@ -1154,6 +1204,8 @@ async fn run_en_pipeline(
     finality: impl ReadFinality + Clone,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
+    verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
+    outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
 ) {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
@@ -1200,14 +1252,15 @@ async fn run_en_pipeline(
         .pipe(TreeManager { tree: tree.clone() })
         .pipe_if(
             config.batch_verification_config.client_enabled,
-            BatchVerificationClient::new(
+            BatchVerificationResponder::new(
                 chain_id,
                 node_state_on_startup.l1_state.diamond_proxy_address_sl(),
-                config.batch_verification_config.connect_address.clone(),
                 config.batch_verification_config.signing_key.clone(),
                 finality.clone(),
                 node_state_on_startup.l1_state.clone(),
                 state.clone(),
+                verify_batch_rx,
+                outgoing_verify_results,
             ),
             NoOpSink::new(),
         )

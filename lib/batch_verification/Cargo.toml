@@ -18,27 +18,15 @@ zksync_os_merkle_tree.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_pipeline.workspace = true
 zksync_os_batch_types.workspace = true
+zksync_os_network.workspace = true
 
 zksync_os_interface.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["rlp"] }
-futures.workspace = true
-serde.workspace = true
-bincode.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tokio-stream.workspace = true
-tokio-util.workspace = true
 tracing.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
-structdiff.workspace = true
 secrecy.workspace = true
 vise.workspace = true
-axum.workspace = true
-hyper.workspace = true
-hyper-util.workspace = true
-tower.workspace = true
-http-body-util = {  workspace = true, features = ["channel"] }
-hyper-rustls = { workspace = true, features = ["http2"] }
-rustls.workspace = true

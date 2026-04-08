@@ -150,7 +150,6 @@ pub struct Tester {
     // Needed to be able to connect external nodes
     node_record: NodeRecord,
     l2_rpc_address: String,
-    batch_verification_url: String,
     gateway_rpc_url: Option<String>,
     sl_provider: EthDynProvider,
     log_state: NodeLogState,
@@ -262,7 +261,6 @@ impl Tester {
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
             config.l1_sender_config.pubdata_mode = None;
             config.general_config.gateway_rpc_url = self.gateway_rpc_url.clone();
-            config.batch_verification_config.connect_address = self.batch_verification_url.clone();
             if let Some(f) = config_overrides {
                 f(config)
             }
@@ -354,14 +352,10 @@ impl Tester {
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
         let network_locked_port = LockedPort::acquire_unused().await?;
         let status_locked_port = LockedPort::acquire_unused().await?;
-        let batch_verification_locked_port = LockedPort::acquire_unused().await?;
         let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
-        let batch_verification_address = format!("0.0.0.0:{}", batch_verification_locked_port.port);
-        let batch_verification_url =
-            format!("http://localhost:{}", batch_verification_locked_port.port);
 
         let rocks_db_path = tempdir.path().join("rocksdb");
         // ENs will not use this dir
@@ -403,9 +397,7 @@ impl Tester {
         };
         let batch_verification_config = BatchVerificationConfig {
             server_enabled: false,
-            listen_address: batch_verification_address.clone(),
             client_enabled: false,
-            connect_address: batch_verification_url.clone(),
             threshold: 1, // default to 1 of 2
             accepted_signers: BATCH_VERIFICATION_ADDRESSES.clone(),
             request_timeout: Duration::from_millis(500),
@@ -615,7 +607,6 @@ impl Tester {
             prover_tester,
             runtime,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
-            batch_verification_url,
             gateway_rpc_url,
             sl_provider,
             node_record,
