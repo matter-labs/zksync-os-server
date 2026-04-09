@@ -28,6 +28,10 @@ struct Inner {
 }
 
 impl CommittedBatchProvider {
+    /// Creates an empty provider and inserts the genesis batch if startup state still points at it.
+    ///
+    /// Historical committed batches are intentionally not loaded here. Call [`Self::init`] in a
+    /// background task to populate the rest of the startup range.
     pub async fn new(
         l1_state: &L1State,
         load_genesis_batch_info: impl AsyncFnOnce() -> StoredBatchInfo,
@@ -54,6 +58,12 @@ impl CommittedBatchProvider {
         Ok(provider)
     }
 
+    /// Loads historical committed batches discovered on startup.
+    ///
+    /// The three frontier batches used by startup bookkeeping are fetched first so callers waiting
+    /// on `last_committed_batch`, `last_proved_batch`, or `last_executed_batch` can proceed as
+    /// soon as possible. The remaining committed batches are fetched afterwards, with bounded
+    /// parallelism.
     pub async fn init(&self, l1_state: &L1State, max_l1_blocks_to_scan: u64) -> anyhow::Result<()> {
         self.load_batches_in_background(
             l1_state.diamond_proxy_sl.clone(),
@@ -77,6 +87,10 @@ impl CommittedBatchProvider {
         inner.insert(batch);
     }
 
+    /// Waits until the requested batch is available in memory.
+    ///
+    /// Startup initialization and live L1 watchers both populate this provider, so callers can use
+    /// a single API regardless of whether the batch is historical or just arrived from L1.
     pub async fn wait_for_batch(&self, batch_number: u64) -> DiscoveredCommittedBatch {
         let mut logged_wait = false;
         loop {
@@ -95,6 +109,8 @@ impl CommittedBatchProvider {
         }
     }
 
+    /// Fills the provider in two phases so startup-critical frontier batches become available
+    /// before the rest of the historical committed range.
     async fn load_batches_in_background(
         &self,
         diamond_proxy_sl: ZkChain<DynProvider>,
@@ -117,6 +133,8 @@ impl CommittedBatchProvider {
         Ok(())
     }
 
+    /// Fetches a batch set with bounded concurrency to reduce startup latency without issuing an
+    /// unbounded number of L1 requests.
     async fn load_batch_numbers(
         &self,
         diamond_proxy_sl: ZkChain<DynProvider>,
@@ -155,6 +173,8 @@ impl Inner {
     }
 }
 
+/// Returns unique startup frontier batches in the order they are most likely to unblock startup
+/// bookkeeping: committed, proved, then executed.
 fn startup_priority_batch_numbers(
     last_committed_batch: u64,
     last_proved_batch: u64,
@@ -168,6 +188,8 @@ fn startup_priority_batch_numbers(
         .collect()
 }
 
+/// Returns the rest of the startup committed range after removing the frontier batches that are
+/// loaded first.
 fn startup_remaining_batch_numbers(
     last_committed_batch: u64,
     last_proved_batch: u64,
@@ -185,6 +207,8 @@ fn startup_remaining_batch_numbers(
         .collect()
 }
 
+/// Resolves a committed batch from L1 by first finding the block that committed it and then
+/// decoding the corresponding stored batch data.
 async fn fetch_batch(
     diamond_proxy_sl: ZkChain<DynProvider>,
     batch_number: u64,
