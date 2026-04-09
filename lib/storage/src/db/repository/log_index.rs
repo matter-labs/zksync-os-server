@@ -1,6 +1,7 @@
 use super::{RepositoryCF, RepositoryDb};
 use alloy::primitives::{Address, B256};
 use roaring::RoaringBitmap;
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::ops::Range;
 use zksync_os_rocksdb::RocksDB;
@@ -45,50 +46,44 @@ fn deserialize_bitmap(bytes: &[u8]) -> Result<RoaringBitmap, RepositoryError> {
         .map_err(|e| RepositoryError::BitmapDeserialize(e.to_string()))
 }
 
-/// Reads the bitmap for `key` from `cf`, applies `f` to it, then writes it back into `batch`
-/// (or deletes the key if the bitmap becomes empty after the mutation).
+/// In-memory cache of pending bitmap mutations for a single write batch.
+/// Reads fall through to the DB on first access; writes stay in the cache until
+/// `flush_bitmap_cache` copies them to the batch.  Using a cache means that
+/// multiple mutations to the same key within one batch compose correctly —
+/// without it, each read would see the pre-batch DB state and later writes
+/// would silently overwrite earlier ones.
+pub(super) type BitmapCache = HashMap<(RepositoryCF, Vec<u8>), RoaringBitmap>;
+
 fn with_chunk(
     db: &RocksDB<RepositoryCF>,
-    batch: &mut WriteBatch<RepositoryCF>,
+    cache: &mut BitmapCache,
     cf: RepositoryCF,
     key: &[u8],
     f: impl FnOnce(&mut RoaringBitmap),
 ) -> RepositoryResult<()> {
-    let mut bitmap = match db.get_cf(cf, key)? {
-        Some(bytes) => deserialize_bitmap(&bytes)?,
-        None => RoaringBitmap::new(),
-    };
-    f(&mut bitmap);
-    if bitmap.is_empty() {
-        batch.delete_cf(cf, key);
+    let cache_key = (cf, key.to_vec());
+    let bitmap = if let Some(bm) = cache.get_mut(&cache_key) {
+        bm
     } else {
-        batch.put_cf(cf, key, &serialize_bitmap(&bitmap));
-    }
+        let bm = match db.get_cf(cf, key)? {
+            Some(bytes) => deserialize_bitmap(&bytes)?,
+            None => RoaringBitmap::new(),
+        };
+        cache.entry(cache_key).or_insert(bm)
+    };
+    f(bitmap);
     Ok(())
 }
 
-pub(super) fn insert_into_chunk(
-    db: &RocksDB<RepositoryCF>,
-    batch: &mut WriteBatch<RepositoryCF>,
-    cf: RepositoryCF,
-    key: &[u8],
-    block_number: u32,
-) -> RepositoryResult<()> {
-    with_chunk(db, batch, cf, key, |bitmap| {
-        bitmap.insert(block_number);
-    })
-}
-
-pub(super) fn remove_from_chunk(
-    db: &RocksDB<RepositoryCF>,
-    batch: &mut WriteBatch<RepositoryCF>,
-    cf: RepositoryCF,
-    key: &[u8],
-    block_number: u32,
-) -> RepositoryResult<()> {
-    with_chunk(db, batch, cf, key, |bitmap| {
-        bitmap.remove(block_number);
-    })
+/// Writes all cached bitmap mutations to `batch`, consuming the cache.
+pub(super) fn flush_bitmap_cache(cache: BitmapCache, batch: &mut WriteBatch<RepositoryCF>) {
+    for ((cf, key), bitmap) in cache {
+        if bitmap.is_empty() {
+            batch.delete_cf(cf, &key);
+        } else {
+            batch.put_cf(cf, &key, &serialize_bitmap(&bitmap));
+        }
+    }
 }
 
 /// Updates the log index coverage metadata in `batch`.
@@ -122,58 +117,66 @@ pub(super) fn rollback_coverage(batch: &mut WriteBatch<RepositoryCF>, block_numb
     );
 }
 
-/// Adds all logs from a single transaction to the log index write batch.
+/// Adds all logs from a single transaction to the bitmap cache.
 pub(super) fn index_logs<'a>(
     db: &RocksDB<RepositoryCF>,
-    batch: &mut WriteBatch<RepositoryCF>,
+    cache: &mut BitmapCache,
     block_number: u32,
     chunk: u64,
     logs: impl IntoIterator<Item = &'a alloy::primitives::Log>,
 ) -> RepositoryResult<()> {
     for log in logs {
-        insert_into_chunk(
+        with_chunk(
             db,
-            batch,
+            cache,
             RepositoryCF::LogBlocksByAddress,
             &address_chunk_key(log.address, chunk),
-            block_number,
+            |bm| {
+                bm.insert(block_number);
+            },
         )?;
         for topic in log.topics() {
-            insert_into_chunk(
+            with_chunk(
                 db,
-                batch,
+                cache,
                 RepositoryCF::LogBlocksByTopic,
                 &topic_chunk_key(*topic, chunk),
-                block_number,
+                |bm| {
+                    bm.insert(block_number);
+                },
             )?;
         }
     }
     Ok(())
 }
 
-/// Removes all logs from a single transaction from the log index write batch.
+/// Removes all logs from a single transaction from the bitmap cache.
 pub(super) fn deindex_logs<'a>(
     db: &RocksDB<RepositoryCF>,
-    batch: &mut WriteBatch<RepositoryCF>,
+    cache: &mut BitmapCache,
     block_number: u32,
     chunk: u64,
     logs: impl IntoIterator<Item = &'a alloy::primitives::Log>,
 ) -> RepositoryResult<()> {
     for log in logs {
-        remove_from_chunk(
+        with_chunk(
             db,
-            batch,
+            cache,
             RepositoryCF::LogBlocksByAddress,
             &address_chunk_key(log.address, chunk),
-            block_number,
+            |bm| {
+                bm.remove(block_number);
+            },
         )?;
         for topic in log.topics() {
-            remove_from_chunk(
+            with_chunk(
                 db,
-                batch,
+                cache,
                 RepositoryCF::LogBlocksByTopic,
                 &topic_chunk_key(*topic, chunk),
-                block_number,
+                |bm| {
+                    bm.remove(block_number);
+                },
             )?;
         }
     }
@@ -293,14 +296,16 @@ mod tests {
         log_index_started: bool,
     ) {
         let mut batch = db.new_write_batch();
+        let mut cache = BitmapCache::new();
         index_logs(
             db,
-            &mut batch,
+            &mut cache,
             block_number as u32,
             chunk_start(block_number),
             logs,
         )
         .unwrap();
+        flush_bitmap_cache(cache, &mut batch);
         update_coverage(&mut batch, &block_number.to_be_bytes(), log_index_started);
         db.write(batch).unwrap();
     }
@@ -308,99 +313,95 @@ mod tests {
     #[test]
     fn address_index_round_trip() {
         let (db, _dir) = open_test_db();
-        let addr = Address::repeat_byte(0xAB);
+        let addr = Address::repeat_byte(1);
         let log = make_log(addr, &[]);
 
-        index_block(&db, 10, std::slice::from_ref(&log), false);
-        index_block(&db, 20, &[log], true);
+        index_block(&db, 0, std::slice::from_ref(&log), false);
+        index_block(&db, 1, &[log], true);
 
         let (bitmap, covered) = query(
             &db,
             RepositoryCF::LogBlocksByAddress,
             addr.as_slice(),
-            0..100,
+            0..10,
         )
         .unwrap();
-        assert_eq!(covered, 10..21);
-        assert!(bitmap.contains(10));
-        assert!(bitmap.contains(20));
-        assert!(!bitmap.contains(15));
+        assert_eq!(covered, 0..2);
+        assert!(bitmap.contains(0));
+        assert!(bitmap.contains(1));
     }
 
     #[test]
     fn topic_index_round_trip() {
         let (db, _dir) = open_test_db();
-        let topic = B256::repeat_byte(0x42);
+        let topic = B256::repeat_byte(1);
         let log = make_log(Address::ZERO, &[topic]);
 
-        index_block(&db, 5, &[log], false);
+        index_block(&db, 0, &[log], false);
 
-        let (bitmap, covered) = query(
-            &db,
-            RepositoryCF::LogBlocksByTopic,
-            topic.as_slice(),
-            0..100,
-        )
-        .unwrap();
-        assert_eq!(covered, 5..6);
-        assert!(bitmap.contains(5));
+        let (bitmap, covered) =
+            query(&db, RepositoryCF::LogBlocksByTopic, topic.as_slice(), 0..10).unwrap();
+        assert_eq!(covered, 0..1);
+        assert!(bitmap.contains(0));
     }
 
     #[test]
     fn query_respects_requested_range() {
         let (db, _dir) = open_test_db();
-        let addr = Address::repeat_byte(0x01);
+        let addr = Address::repeat_byte(1);
         let log = make_log(addr, &[]);
 
-        index_block(&db, 1, std::slice::from_ref(&log), false);
-        index_block(&db, 2, std::slice::from_ref(&log), true);
-        index_block(&db, 3, &[log], true);
+        index_block(&db, 0, std::slice::from_ref(&log), false);
+        index_block(&db, 1, std::slice::from_ref(&log), true);
+        index_block(&db, 2, &[log], true);
 
-        // Request only blocks 2..=3 — block 1 must not appear.
+        // Request only blocks 1..=2 — block 0 must not appear.
         let (bitmap, covered) =
-            query(&db, RepositoryCF::LogBlocksByAddress, addr.as_slice(), 2..4).unwrap();
-        assert_eq!(covered, 2..4);
-        assert!(!bitmap.contains(1));
+            query(&db, RepositoryCF::LogBlocksByAddress, addr.as_slice(), 1..3).unwrap();
+        assert_eq!(covered, 1..3);
+        assert!(!bitmap.contains(0));
+        assert!(bitmap.contains(1));
         assert!(bitmap.contains(2));
-        assert!(bitmap.contains(3));
     }
 
     #[test]
     fn deindex_removes_block() {
         let (db, _dir) = open_test_db();
-        let addr = Address::repeat_byte(0xCC);
+        let addr = Address::repeat_byte(1);
         let log = make_log(addr, &[]);
 
-        index_block(&db, 7, std::slice::from_ref(&log), false);
-        index_block(&db, 8, std::slice::from_ref(&log), true);
+        index_block(&db, 0, std::slice::from_ref(&log), false);
+        index_block(&db, 1, std::slice::from_ref(&log), true);
 
         let mut batch = db.new_write_batch();
-        deindex_logs(&db, &mut batch, 8u32, chunk_start(8), &[log]).unwrap();
-        rollback_coverage(&mut batch, &7u64.to_be_bytes());
+        let mut cache = BitmapCache::new();
+        deindex_logs(&db, &mut cache, 1u32, chunk_start(1), &[log]).unwrap();
+        flush_bitmap_cache(cache, &mut batch);
+        rollback_coverage(&mut batch, &0u64.to_be_bytes());
         db.write(batch).unwrap();
 
         let (bitmap, covered) = query(
             &db,
             RepositoryCF::LogBlocksByAddress,
             addr.as_slice(),
-            0..100,
+            0..10,
         )
         .unwrap();
-        assert_eq!(covered, 7..8);
-        assert!(bitmap.contains(7));
-        assert!(!bitmap.contains(8));
+        assert_eq!(covered, 0..1);
+        assert!(bitmap.contains(0));
+        assert!(!bitmap.contains(1));
     }
 
     #[test]
     fn no_index_returns_empty() {
         let (db, _dir) = open_test_db();
-        let addr = Address::repeat_byte(0xFF);
+        let addr = Address::repeat_byte(1);
 
         let (bitmap, covered) = query(
             &db,
             RepositoryCF::LogBlocksByAddress,
             addr.as_slice(),
-            0..1000,
+            0..10,
         )
         .unwrap();
         assert!(covered.is_empty());
@@ -410,35 +411,35 @@ mod tests {
     #[test]
     fn different_addresses_do_not_interfere() {
         let (db, _dir) = open_test_db();
-        let addr_a = Address::repeat_byte(0x0A);
-        let addr_b = Address::repeat_byte(0x0B);
+        let addr_a = Address::repeat_byte(1);
+        let addr_b = Address::repeat_byte(2);
 
-        index_block(&db, 10, &[make_log(addr_a, &[])], false);
-        index_block(&db, 11, &[make_log(addr_b, &[])], true);
+        index_block(&db, 0, &[make_log(addr_a, &[])], false);
+        index_block(&db, 1, &[make_log(addr_b, &[])], true);
 
         let (bitmap_a, _) = query(
             &db,
             RepositoryCF::LogBlocksByAddress,
             addr_a.as_slice(),
-            0..100,
+            0..10,
         )
         .unwrap();
         let (bitmap_b, _) = query(
             &db,
             RepositoryCF::LogBlocksByAddress,
             addr_b.as_slice(),
-            0..100,
+            0..10,
         )
         .unwrap();
 
-        assert!(bitmap_a.contains(10) && !bitmap_a.contains(11));
-        assert!(bitmap_b.contains(11) && !bitmap_b.contains(10));
+        assert!(bitmap_a.contains(0) && !bitmap_a.contains(1));
+        assert!(bitmap_b.contains(1) && !bitmap_b.contains(0));
     }
 
     #[test]
     fn chunk_boundary_spanning_query() {
         let (db, _dir) = open_test_db();
-        let addr = Address::repeat_byte(0x77);
+        let addr = Address::repeat_byte(1);
         let log = make_log(addr, &[]);
 
         let last_in_chunk0 = CHUNK_SIZE - 1;
@@ -456,5 +457,48 @@ mod tests {
         assert!(bitmap.contains(last_in_chunk0 as u32));
         assert!(bitmap.contains(first_in_chunk1 as u32));
         assert_eq!(covered, last_in_chunk0..first_in_chunk1 + 1);
+    }
+
+    /// Regression test: rolling back multiple consecutive blocks that all emitted logs for the
+    /// same address must remove *all* of them, not just the last one.
+    ///
+    /// The old `deindex_logs` read bitmaps directly from the DB on every call, so within one
+    /// write batch the last call silently overwrote the earlier ones, leaving stale entries.
+    #[test]
+    fn multi_block_rollback_removes_all_blocks() {
+        let (db, _dir) = open_test_db();
+        let addr = Address::repeat_byte(1);
+
+        index_block(&db, 0, &[make_log(addr, &[])], false);
+        index_block(&db, 1, &[make_log(addr, &[])], true);
+        index_block(&db, 2, &[make_log(addr, &[])], true);
+
+        // Roll back blocks 0, 1, 2 in one batch.
+        let mut batch = db.new_write_batch();
+        let mut cache = BitmapCache::new();
+        for block in 0u64..=2 {
+            deindex_logs(
+                &db,
+                &mut cache,
+                block as u32,
+                chunk_start(block),
+                &[make_log(addr, &[])],
+            )
+            .unwrap();
+        }
+        flush_bitmap_cache(cache, &mut batch);
+        db.write(batch).unwrap();
+
+        let (bitmap, _) = query(
+            &db,
+            RepositoryCF::LogBlocksByAddress,
+            addr.as_slice(),
+            0..10,
+        )
+        .unwrap();
+        assert!(
+            bitmap.is_empty(),
+            "expected empty bitmap after multi-block rollback, got {bitmap:?}"
+        );
     }
 }

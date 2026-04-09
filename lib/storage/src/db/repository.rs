@@ -6,7 +6,10 @@ use alloy::{
     primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce},
     rlp::{Decodable, Encodable},
 };
-use log_index::{chunk_start, deindex_logs, index_logs, rollback_coverage, update_coverage};
+use log_index::{
+    BitmapCache, chunk_start, deindex_logs, flush_bitmap_cache, index_logs, rollback_coverage,
+    update_coverage,
+};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,7 +24,7 @@ use zksync_os_types::{ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 
 mod log_index;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RepositoryCF {
     // block hash => (block header, array of tx hashes)
     BlockData,
@@ -171,10 +174,19 @@ impl RepositoryDb {
         block.encode(&mut block_bytes);
         batch.put_cf(RepositoryCF::BlockData, block_hash.as_slice(), &block_bytes);
 
+        let mut bitmap_cache = BitmapCache::new();
         for tx in txs {
-            Self::add_tx_to_write_batch(db, &mut batch, tx, block_number_u32, chunk)
-                .expect("write batch failed");
+            Self::add_tx_to_write_batch(
+                db,
+                &mut batch,
+                &mut bitmap_cache,
+                tx,
+                block_number_u32,
+                chunk,
+            )
+            .expect("write batch failed");
         }
+        flush_bitmap_cache(bitmap_cache, &mut batch);
 
         let block_number_key = RepositoryCF::block_number_key();
         batch.put_cf(RepositoryCF::Meta, block_number_key, &block_number_bytes);
@@ -199,6 +211,7 @@ impl RepositoryDb {
     fn add_tx_to_write_batch(
         db: &RocksDB<RepositoryCF>,
         batch: &mut WriteBatch<RepositoryCF>,
+        bitmap_cache: &mut BitmapCache,
         tx: &StoredTxData,
         block_number: u32,
         chunk: u64,
@@ -227,7 +240,7 @@ impl RepositoryDb {
             tx_hash.as_slice(),
         );
 
-        index_logs(db, batch, block_number, chunk, tx.receipt.logs())?;
+        index_logs(db, bitmap_cache, block_number, chunk, tx.receipt.logs())?;
 
         Ok(())
     }
@@ -252,6 +265,12 @@ impl RepositoryDb {
                 block_number_key,
                 &last_block_to_keep_bytes,
             );
+
+            // Bitmap mutations for the log index are accumulated in a local cache so that
+            // successive removals within the same batch for the same bitmap key compose
+            // correctly (plain `with_chunk` always reads from the DB, so the last write
+            // would silently win and earlier removals would be lost).
+            let mut bitmap_cache = BitmapCache::new();
 
             for block_number in (last_block_to_keep + 1)..=latest_block_number {
                 let old_repo_block = self
@@ -283,7 +302,7 @@ impl RepositoryDb {
 
                     deindex_logs(
                         &self.db,
-                        &mut batch,
+                        &mut bitmap_cache,
                         block_number_u32,
                         chunk,
                         stored_tx.receipt.logs(),
@@ -292,6 +311,7 @@ impl RepositoryDb {
                 }
             }
 
+            flush_bitmap_cache(bitmap_cache, &mut batch);
             rollback_coverage(&mut batch, &last_block_to_keep_bytes);
 
             self.db.write(batch)?;
