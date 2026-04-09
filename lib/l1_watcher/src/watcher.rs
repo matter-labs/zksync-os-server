@@ -49,6 +49,12 @@ impl L1Watcher {
         loop {
             timer.tick().await;
             if let Err(e) = self.poll().await {
+                if matches!(e, L1WatcherError::BatchNotCommitted(_)) {
+                    tracing::warn!(
+                        "batch not yet discovered as committed, will retry next poll: {e}"
+                    );
+                    continue;
+                }
                 tracing::error!("l1 watcher fatal error: {e}");
                 panic!("watcher failed: {e}");
             }
