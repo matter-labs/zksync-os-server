@@ -23,19 +23,12 @@ use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_pipeline::PeekableReceiver;
-
-/// Maximum time to wait for a transaction to be included on L1.
-///
-/// Normally 15-30 seconds is enough for normal priority transactions, and 60-120 is enough for
-/// lower gas price transactions. We picked 300 seconds conservatively as it should cover most
-/// scenarios with network congestion.
-const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Future that resolves into a (fallible) transaction receipt.
 type TransactionReceiptFuture =
@@ -132,7 +125,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
         // so that we send them downstream also in order.
         // This holds true because l1 transactions are included in the order of sender nonce.
         // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
-        let pending_txs: Vec<(TransactionReceiptFuture, Input)> =
+        let pending_txs: Vec<(TransactionReceiptFuture, Input, Instant)> =
             futures::stream::iter(commands.drain(..))
                 .then(|mut cmd| async {
                     let mut tx_request = tx_request_with_gas_fields(
@@ -188,7 +181,9 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     // finds it.
                     let pending_tx = provider
                         .send_raw_transaction(&tx.encoded_2718())
-                        .await?
+                        .await?;
+                    let submitted_at = Instant::now();
+                    let pending_tx = pending_tx
                         // We are being optimistic with our transaction inclusion here. But, even if
                         // reorg happens and transaction will not be included in the new fork (very-very
                         // unlikely), L1 sender will crash at some point (because a consequent L1
@@ -196,7 +191,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         .with_required_confirmations(1)
                         // Ensure we don't wait indefinitely and crash if the transaction is not
                         // included on L1 in a reasonable time.
-                        .with_timeout(Some(TRANSACTION_TIMEOUT));
+                        .with_timeout(Some(config.transaction_timeout));
                     let tx_hash = *pending_tx.tx_hash();
                     tracing::info!(
                         "{command_name}: L1 transaction submitted for {range}. Hash: {tx_hash:?} Waiting for inclusion...",
@@ -223,7 +218,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     cmd.as_mut()
                         .iter_mut()
                         .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
-                    anyhow::Ok((receipt_fut, cmd))
+                    anyhow::Ok((receipt_fut, cmd, submitted_at))
                 })
                 // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
                 // but this is not necessary for now - we wait for them to be included in parallel
@@ -233,8 +228,12 @@ pub async fn run_l1_sender<Input: SendToL1>(
         latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
 
         let mut completed_commands = Vec::with_capacity(pending_txs.len());
-        for (receipt_fut, command) in pending_txs {
-            let receipt = receipt_fut.await?;
+        for (receipt_fut, command, submitted_at) in pending_txs {
+            let receipt = receipt_fut.await;
+            // Observe latency before propagating errors so timeout cases are recorded
+            L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
+                .observe(submitted_at.elapsed().as_secs_f64());
+            let receipt = receipt?;
             validate_tx_receipt(&provider, &command, receipt).await?;
             completed_commands.push(command);
         }
