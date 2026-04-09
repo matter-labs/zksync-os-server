@@ -16,6 +16,14 @@ use zksync_os_contract_interface::models::StoredBatchInfo;
 const INIT_MAX_PARALLEL_BATCH_FETCHES: usize = 10;
 const WAIT_FOR_BATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// In-memory store of committed batches discovered either during startup catch-up or by live L1
+/// watcher.
+///
+/// Construct it with [`Self::new`], then run [`Self::init`] in a background task to populate
+/// historical batches while consumers use [`Self::wait_for_batch`] to block until a specific batch
+/// becomes available. During startup, `init()` loads committed batches in the inclusive range
+/// `max(last_executed_batch, 1)..=last_committed_batch`, with the startup frontier batches loaded
+/// first.
 #[derive(Debug, Clone)]
 pub struct CommittedBatchProvider {
     inner: Arc<RwLock<Inner>>,
@@ -99,6 +107,7 @@ impl CommittedBatchProvider {
                 inner.batches.get(&batch_number).cloned()
             };
             if let Some(batch) = batch {
+                tracing::info!("returning batch {batch_number} from CommittedBatchProvider");
                 return batch;
             }
             if !logged_wait {
