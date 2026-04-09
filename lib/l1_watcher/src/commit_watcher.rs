@@ -1,7 +1,7 @@
 use crate::committed_batch_provider::CommittedBatchProvider;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
-use alloy::primitives::Address;
+use alloy::primitives::{Address, B256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
 use tokio::sync::watch;
@@ -92,22 +92,35 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let batch_number = report.batchNumber;
-        // Startup-only guard: skip historical commits that are above the startup committed frontier.
-        // This handles batches that were committed and reverted before the node started.
+        // Startup-only guard: skip historical commits that are above the startup committed frontier,
+        // but only after verifying the batch was actually reverted on L1. A non-zero stored batch
+        // hash means the commit is still valid and must be processed (e.g., the batch was committed
+        // between the EN crash and restart).
         if should_skip_historical_commit(
             self.startup_latest_l1_block,
             self.startup_last_committed_batch,
             batch_number,
             log.block_number,
         ) {
-            tracing::warn!(
+            let batch_hash = self.zk_chain.stored_batch_hash(batch_number).await?;
+            if batch_hash == B256::ZERO {
+                tracing::warn!(
+                    batch_number,
+                    log_block_number = ?log.block_number,
+                    startup_latest_l1_block = self.startup_latest_l1_block,
+                    startup_last_committed_batch = self.startup_last_committed_batch,
+                    "skipping reverted historical committed batch",
+                );
+                return Ok(());
+            }
+            tracing::info!(
                 batch_number,
                 log_block_number = ?log.block_number,
-                startup_latest_l1_block = self.startup_latest_l1_block,
-                startup_last_committed_batch = self.startup_last_committed_batch,
-                "skipping historical committed batch above startup frontier; likely reverted before startup",
+                "historical committed batch is still valid on L1, processing",
             );
-        } else if batch_number < self.next_batch_number {
+        }
+
+        if batch_number < self.next_batch_number {
             tracing::debug!(batch_number, "skipping already processed committed batch");
         } else {
             // Fast-fail if this batch was committed by a prior crashed session's pending tx.
