@@ -490,6 +490,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
+            l1_state.sl_block_number,
             node_startup_state.l1_state.l1_chain_id,
             node_role.is_main().then_some(commit_submitted_rx),
         )
