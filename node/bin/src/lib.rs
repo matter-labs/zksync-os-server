@@ -314,11 +314,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let committed_batch_provider_for_init = committed_batch_provider.clone();
     let l1_state_for_init = l1_state.clone();
     let max_blocks_to_process = config.l1_watcher_config.max_blocks_to_process;
-    runtime.spawn_critical_task("committed batch provider init", async move {
-        committed_batch_provider_for_init
-            .init(&l1_state_for_init, max_blocks_to_process)
-            .await
-            .expect("failed to initialize CommittedBatchProvider");
+    let runtime_for_init = runtime.clone();
+    runtime.spawn_critical_with_shutdown_signal("committed batch provider init", |shutdown| async move {
+        tokio::pin!(shutdown);
+
+        tokio::select! {
+            result = committed_batch_provider_for_init.init(&l1_state_for_init, max_blocks_to_process) => {
+                if let Err(err) = result {
+                    tracing::error!(%err, "failed to initialize CommittedBatchProvider");
+                    let _ = runtime_for_init.initiate_graceful_shutdown();
+                }
+            }
+            _ = &mut shutdown => {}
+        }
     });
 
     let state = State::new(&config.general_config, &genesis).await;
@@ -332,7 +340,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
-        commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider).await;
+        commit_proof_execute_block_numbers(runtime, &l1_state, &committed_batch_provider)
+            .await
+            .expect("failed to resolve startup committed batches");
 
     let node_startup_state = NodeStateOnStartup {
         node_role,
@@ -1357,37 +1367,63 @@ fn check_batch_verification_mismatch(
 }
 
 async fn commit_proof_execute_block_numbers(
+    runtime: &Runtime,
     l1_state: &L1State,
     committed_batch_provider: &CommittedBatchProvider,
-) -> (u64, u64, u64) {
+) -> anyhow::Result<(u64, u64, u64)> {
     let last_committed_block = if l1_state.last_committed_batch == 0 {
         0
     } else {
-        committed_batch_provider
-            .wait_for_batch(l1_state.last_committed_batch)
-            .await
-            .last_block_number()
+        wait_for_batch_or_shutdown(
+            runtime,
+            committed_batch_provider,
+            l1_state.last_committed_batch,
+        )
+        .await?
+        .last_block_number()
     };
 
     // only used to log on node startup
     let last_proved_block = if l1_state.last_proved_batch == 0 {
         0
     } else {
-        committed_batch_provider
-            .wait_for_batch(l1_state.last_proved_batch)
-            .await
-            .last_block_number()
+        wait_for_batch_or_shutdown(
+            runtime,
+            committed_batch_provider,
+            l1_state.last_proved_batch,
+        )
+        .await?
+        .last_block_number()
     };
 
     let last_executed_block = if l1_state.last_executed_batch == 0 {
         0
     } else {
-        committed_batch_provider
-            .wait_for_batch(l1_state.last_executed_batch)
-            .await
-            .last_block_number()
+        wait_for_batch_or_shutdown(
+            runtime,
+            committed_batch_provider,
+            l1_state.last_executed_batch,
+        )
+        .await?
+        .last_block_number()
     };
-    (last_committed_block, last_proved_block, last_executed_block)
+    Ok((last_committed_block, last_proved_block, last_executed_block))
+}
+
+async fn wait_for_batch_or_shutdown(
+    runtime: &Runtime,
+    committed_batch_provider: &CommittedBatchProvider,
+    batch_number: u64,
+) -> anyhow::Result<zksync_os_batch_types::DiscoveredCommittedBatch> {
+    let shutdown = runtime.on_shutdown_signal().clone();
+    tokio::pin!(shutdown);
+
+    tokio::select! {
+        batch = committed_batch_provider.wait_for_batch(batch_number) => Ok(batch),
+        _ = &mut shutdown => anyhow::bail!(
+            "shutdown started while waiting for committed batch {batch_number} during startup"
+        ),
+    }
 }
 
 fn run_fake_snark_provers(
