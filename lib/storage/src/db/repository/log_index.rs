@@ -48,42 +48,57 @@ fn deserialize_bitmap(bytes: &[u8]) -> Result<RoaringBitmap, RepositoryError> {
 
 /// In-memory cache of pending bitmap mutations for a single write batch.
 /// Reads fall through to the DB on first access; writes stay in the cache until
-/// `flush_bitmap_cache` copies them to the batch.  Using a cache means that
-/// multiple mutations to the same key within one batch compose correctly —
-/// without it, each read would see the pre-batch DB state and later writes
-/// would silently overwrite earlier ones.
-pub(super) type BitmapCache = HashMap<(RepositoryCF, Vec<u8>), RoaringBitmap>;
-
-fn with_chunk(
-    db: &RocksDB<RepositoryCF>,
-    cache: &mut BitmapCache,
-    cf: RepositoryCF,
-    key: &[u8],
-    f: impl FnOnce(&mut RoaringBitmap),
-) -> RepositoryResult<()> {
-    let cache_key = (cf, key.to_vec());
-    let bitmap = if let Some(bm) = cache.get_mut(&cache_key) {
-        bm
-    } else {
-        let bm = match db.get_cf(cf, key)? {
-            Some(bytes) => deserialize_bitmap(&bytes)?,
-            None => RoaringBitmap::new(),
-        };
-        cache.entry(cache_key).or_insert(bm)
-    };
-    f(bitmap);
-    Ok(())
+/// `flush` copies them to the batch.  Using a cache means that multiple mutations
+/// to the same key within one batch compose correctly — without it, each read
+/// would see the pre-batch DB state and later writes would silently overwrite
+/// earlier ones.
+#[derive(Default)]
+pub(super) struct BitmapCache {
+    by_address: HashMap<Vec<u8>, RoaringBitmap>,
+    by_topic: HashMap<Vec<u8>, RoaringBitmap>,
 }
 
-/// Writes all cached bitmap mutations to `batch`, consuming the cache.
-pub(super) fn flush_bitmap_cache(cache: BitmapCache, batch: &mut WriteBatch<RepositoryCF>) {
-    for ((cf, key), bitmap) in cache {
+impl BitmapCache {
+    /// Writes all cached bitmap mutations to `batch`, consuming the cache.
+    pub(super) fn flush(self, batch: &mut WriteBatch<RepositoryCF>) {
+        write_bitmaps_to_batch(self.by_address, RepositoryCF::LogBlocksByAddress, batch);
+        write_bitmaps_to_batch(self.by_topic, RepositoryCF::LogBlocksByTopic, batch);
+    }
+}
+
+fn write_bitmaps_to_batch(
+    bitmaps: HashMap<Vec<u8>, RoaringBitmap>,
+    cf: RepositoryCF,
+    batch: &mut WriteBatch<RepositoryCF>,
+) {
+    for (key, bitmap) in bitmaps {
         if bitmap.is_empty() {
             batch.delete_cf(cf, &key);
         } else {
             batch.put_cf(cf, &key, &serialize_bitmap(&bitmap));
         }
     }
+}
+
+/// Mutates the bitmap for `key` in `bitmaps`, loading it from `db` on first access.
+fn with_chunk(
+    db: &RocksDB<RepositoryCF>,
+    bitmaps: &mut HashMap<Vec<u8>, RoaringBitmap>,
+    cf: RepositoryCF,
+    key: &[u8],
+    f: impl FnOnce(&mut RoaringBitmap),
+) -> RepositoryResult<()> {
+    let bitmap = if let Some(bm) = bitmaps.get_mut(key) {
+        bm
+    } else {
+        let bm = match db.get_cf(cf, key)? {
+            Some(bytes) => deserialize_bitmap(&bytes)?,
+            None => RoaringBitmap::new(),
+        };
+        bitmaps.entry(key.to_vec()).or_insert(bm)
+    };
+    f(bitmap);
+    Ok(())
 }
 
 /// Updates the log index coverage metadata in `batch`.
@@ -128,7 +143,7 @@ pub(super) fn index_logs<'a>(
     for log in logs {
         with_chunk(
             db,
-            cache,
+            &mut cache.by_address,
             RepositoryCF::LogBlocksByAddress,
             &address_chunk_key(log.address, chunk),
             |bm| {
@@ -138,7 +153,7 @@ pub(super) fn index_logs<'a>(
         for topic in log.topics() {
             with_chunk(
                 db,
-                cache,
+                &mut cache.by_topic,
                 RepositoryCF::LogBlocksByTopic,
                 &topic_chunk_key(*topic, chunk),
                 |bm| {
@@ -161,7 +176,7 @@ pub(super) fn deindex_logs<'a>(
     for log in logs {
         with_chunk(
             db,
-            cache,
+            &mut cache.by_address,
             RepositoryCF::LogBlocksByAddress,
             &address_chunk_key(log.address, chunk),
             |bm| {
@@ -171,7 +186,7 @@ pub(super) fn deindex_logs<'a>(
         for topic in log.topics() {
             with_chunk(
                 db,
-                cache,
+                &mut cache.by_topic,
                 RepositoryCF::LogBlocksByTopic,
                 &topic_chunk_key(*topic, chunk),
                 |bm| {
@@ -296,7 +311,7 @@ mod tests {
         log_index_started: bool,
     ) {
         let mut batch = db.new_write_batch();
-        let mut cache = BitmapCache::new();
+        let mut cache = BitmapCache::default();
         index_logs(
             db,
             &mut cache,
@@ -305,7 +320,7 @@ mod tests {
             logs,
         )
         .unwrap();
-        flush_bitmap_cache(cache, &mut batch);
+        cache.flush(&mut batch);
         update_coverage(&mut batch, &block_number.to_be_bytes(), log_index_started);
         db.write(batch).unwrap();
     }
@@ -374,9 +389,9 @@ mod tests {
         index_block(&db, 1, std::slice::from_ref(&log), true);
 
         let mut batch = db.new_write_batch();
-        let mut cache = BitmapCache::new();
+        let mut cache = BitmapCache::default();
         deindex_logs(&db, &mut cache, 1u32, chunk_start(1), &[log]).unwrap();
-        flush_bitmap_cache(cache, &mut batch);
+        cache.flush(&mut batch);
         rollback_coverage(&mut batch, &0u64.to_be_bytes());
         db.write(batch).unwrap();
 
@@ -475,7 +490,7 @@ mod tests {
 
         // Roll back blocks 0, 1, 2 in one batch.
         let mut batch = db.new_write_batch();
-        let mut cache = BitmapCache::new();
+        let mut cache = BitmapCache::default();
         for block in 0u64..=2 {
             deindex_logs(
                 &db,
@@ -486,7 +501,7 @@ mod tests {
             )
             .unwrap();
         }
-        flush_bitmap_cache(cache, &mut batch);
+        cache.flush(&mut batch);
         db.write(batch).unwrap();
 
         let (bitmap, _) = query(

@@ -7,8 +7,7 @@ use alloy::{
     rlp::{Decodable, Encodable},
 };
 use log_index::{
-    BitmapCache, chunk_start, deindex_logs, flush_bitmap_cache, index_logs, rollback_coverage,
-    update_coverage,
+    BitmapCache, chunk_start, deindex_logs, index_logs, rollback_coverage, update_coverage,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -24,7 +23,7 @@ use zksync_os_types::{ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 
 mod log_index;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug)]
 pub enum RepositoryCF {
     // block hash => (block header, array of tx hashes)
     BlockData,
@@ -174,7 +173,7 @@ impl RepositoryDb {
         block.encode(&mut block_bytes);
         batch.put_cf(RepositoryCF::BlockData, block_hash.as_slice(), &block_bytes);
 
-        let mut bitmap_cache = BitmapCache::new();
+        let mut bitmap_cache = BitmapCache::default();
         for tx in txs {
             Self::add_tx_to_write_batch(
                 db,
@@ -186,7 +185,7 @@ impl RepositoryDb {
             )
             .expect("write batch failed");
         }
-        flush_bitmap_cache(bitmap_cache, &mut batch);
+        bitmap_cache.flush(&mut batch);
 
         let block_number_key = RepositoryCF::block_number_key();
         batch.put_cf(RepositoryCF::Meta, block_number_key, &block_number_bytes);
@@ -270,7 +269,7 @@ impl RepositoryDb {
             // successive removals within the same batch for the same bitmap key compose
             // correctly (plain `with_chunk` always reads from the DB, so the last write
             // would silently win and earlier removals would be lost).
-            let mut bitmap_cache = BitmapCache::new();
+            let mut bitmap_cache = BitmapCache::default();
 
             for block_number in (last_block_to_keep + 1)..=latest_block_number {
                 let old_repo_block = self
@@ -311,7 +310,7 @@ impl RepositoryDb {
                 }
             }
 
-            flush_bitmap_cache(bitmap_cache, &mut batch);
+            bitmap_cache.flush(&mut batch);
             rollback_coverage(&mut batch, &last_block_to_keep_bytes);
 
             self.db.write(batch)?;
