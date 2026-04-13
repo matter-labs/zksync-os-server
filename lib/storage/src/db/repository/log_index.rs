@@ -110,7 +110,11 @@ pub(super) fn update_coverage(
     block_number_bytes: &[u8],
 ) {
     let first_block_key = RepositoryCF::log_index_first_block_key();
-    if db.get_cf(RepositoryCF::Meta, first_block_key).unwrap().is_none() {
+    if db
+        .get_cf(RepositoryCF::Meta, first_block_key)
+        .unwrap()
+        .is_none()
+    {
         batch.put_cf(RepositoryCF::Meta, first_block_key, block_number_bytes);
     }
     batch.put_cf(
@@ -314,14 +318,7 @@ mod tests {
         let chunk = chunk_start(block_number);
         let mut batch = db.new_write_batch();
         let mut cache = BitmapCache::default();
-        index_logs(
-            db,
-            &mut cache,
-            (block_number - chunk) as u32,
-            chunk,
-            logs,
-        )
-        .unwrap();
+        index_logs(db, &mut cache, (block_number - chunk) as u32, chunk, logs).unwrap();
         cache.flush(&mut batch);
         update_coverage(db, &mut batch, &block_number.to_be_bytes());
         db.write(batch).unwrap();
@@ -392,7 +389,14 @@ mod tests {
 
         let mut batch = db.new_write_batch();
         let mut cache = BitmapCache::default();
-        deindex_logs(&db, &mut cache, 1u32 - chunk_start(1) as u32, chunk_start(1), &[log]).unwrap();
+        deindex_logs(
+            &db,
+            &mut cache,
+            1u32 - chunk_start(1) as u32,
+            chunk_start(1),
+            &[log],
+        )
+        .unwrap();
         cache.flush(&mut batch);
         rollback_coverage(&mut batch, &0u64.to_be_bytes());
         db.write(batch).unwrap();

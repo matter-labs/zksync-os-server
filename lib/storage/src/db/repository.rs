@@ -6,7 +6,9 @@ use alloy::{
     primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce},
     rlp::{Decodable, Encodable},
 };
-use log_index::{BitmapCache, chunk_start, deindex_logs, index_logs, rollback_coverage, update_coverage};
+use log_index::{
+    BitmapCache, chunk_start, deindex_logs, index_logs, rollback_coverage, update_coverage,
+};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -161,15 +163,8 @@ impl RepositoryDb {
 
         let mut bitmap_cache = BitmapCache::default();
         for tx in txs {
-            Self::add_tx_to_write_batch(
-                db,
-                &mut batch,
-                &mut bitmap_cache,
-                tx,
-                block_offset,
-                chunk,
-            )
-            .expect("write batch failed");
+            Self::add_tx_to_write_batch(db, &mut batch, &mut bitmap_cache, tx, block_offset, chunk)
+                .expect("write batch failed");
         }
         bitmap_cache.flush(&mut batch);
 
