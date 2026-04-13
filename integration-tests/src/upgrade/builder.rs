@@ -32,6 +32,9 @@ pub struct ProtocolUpgradeBuilder {
     /// When true, the server's `fetch_force_preimages` will look up bytecodes
     /// from the L1 `BytecodesSupplier`. When false, the server relies on
     /// preimages already known from L2 deploys.
+    ///
+    /// TODO: Remove once v30 support is dropped — `BytecodesSupplier` will be
+    /// the only path and this flag should always be true.
     include_factory_deps: bool,
 }
 
@@ -125,14 +128,25 @@ impl ProtocolUpgradeBuilder {
             let mut account_properties = AccountProperties::default();
             set_properties_code(&mut account_properties, &bytecode);
 
-            // NOTE: `setBytecodeDetailsEVM` in era-contracts uses `bytecodeSize` for both
-            // `bytecode_length` and `observable_bytecode_length`. In production this should be the
-            // observable (raw EVM) bytecode length. Here we use `full_bytecode_len()` because the
-            // test registers preimages via L2 deploy, which records the full padded size. Using
-            // `observable_bytecode_len` would cause a preimage cache panic at runtime.
+            // In production, `setBytecodeDetailsEVM` in era-contracts uses `bytecodeSize`
+            // for both `bytecode_length` and `observable_bytecode_length`, and the value
+            // is the observable (raw EVM) bytecode length.
+            //
+            // When the test uses the BytecodesSupplier path (`with_factory_deps`), we
+            // match production and pass observable length. Without factory deps, preimages
+            // are registered via L2 deploy which records the full padded size, so we must
+            // pass `full_bytecode_len` to avoid a preimage cache panic.
+            //
+            // TODO: Remove the `full_bytecode_len` branch once v30 support is dropped
+            // and `include_factory_deps` is always true.
+            let bytecode_size = if self.include_factory_deps {
+                account_properties.observable_bytecode_len
+            } else {
+                account_properties.full_bytecode_len()
+            };
             let deployed_bytecode_info = super::interfaces::ForceDeploymentBytecodeInfo {
                 bytecodeHash: B256::from_slice(account_properties.bytecode_hash.as_u8_ref()),
-                bytecodeSize: account_properties.full_bytecode_len(),
+                bytecodeSize: bytecode_size,
                 observableBytecodeHash: B256::from_slice(
                     account_properties.observable_bytecode_hash.as_u8_ref(),
                 ),

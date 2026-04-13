@@ -165,9 +165,6 @@ impl L1UpgradeTxWatcher {
                 .event_signature(NewUpgradeCutData::SIGNATURE_HASH)
                 .topic1(*raw_protocol_version);
             upgrade_cut_data_logs = self.provider_sl.get_logs(&filter).await?;
-            if from_block == start_block {
-                break;
-            }
             current_block = from_block.saturating_sub(1);
         }
 
@@ -299,9 +296,6 @@ impl L1UpgradeTxWatcher {
 
             // Stop early once all requested hashes are found.
             if by_hash.len() == requested.len() {
-                break;
-            }
-            if from_block == start_block {
                 break;
             }
             current_block = from_block.saturating_sub(1);
