@@ -4,7 +4,7 @@ use alloy::providers::DynProvider;
 use anyhow::Context;
 use futures::stream::{self, StreamExt};
 use rangemap::RangeInclusiveMap;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -73,21 +73,25 @@ impl CommittedBatchProvider {
     /// soon as possible. The remaining committed batches are fetched afterwards, with bounded
     /// parallelism.
     pub async fn init(&self, l1_state: &L1State, max_l1_blocks_to_scan: u64) -> anyhow::Result<()> {
-        self.load_batches_in_background(
+        let (prioritized_batch_numbers, remaining_batch_numbers) = startup_batch_numbers(
+            l1_state.last_committed_batch,
+            l1_state.last_proved_batch,
+            l1_state.last_executed_batch,
+        );
+
+        self.load_batch_numbers(
             l1_state.diamond_proxy_sl.clone(),
             max_l1_blocks_to_scan,
-            startup_priority_batch_numbers(
-                l1_state.last_committed_batch,
-                l1_state.last_proved_batch,
-                l1_state.last_executed_batch,
-            ),
-            startup_remaining_batch_numbers(
-                l1_state.last_committed_batch,
-                l1_state.last_proved_batch,
-                l1_state.last_executed_batch,
-            ),
+            prioritized_batch_numbers,
         )
-        .await
+        .await?;
+        self.load_batch_numbers(
+            l1_state.diamond_proxy_sl.clone(),
+            max_l1_blocks_to_scan,
+            remaining_batch_numbers,
+        )
+        .await?;
+        Ok(())
     }
 
     pub(crate) fn insert(&self, batch: DiscoveredCommittedBatch) {
@@ -116,30 +120,6 @@ impl CommittedBatchProvider {
             }
             sleep(WAIT_FOR_BATCH_POLL_INTERVAL).await;
         }
-    }
-
-    /// Fills the provider in two phases so startup-critical frontier batches become available
-    /// before the rest of the historical committed range.
-    async fn load_batches_in_background(
-        &self,
-        diamond_proxy_sl: ZkChain<DynProvider>,
-        max_l1_blocks_to_scan: u64,
-        prioritized_batch_numbers: Vec<u64>,
-        remaining_batch_numbers: Vec<u64>,
-    ) -> anyhow::Result<()> {
-        self.load_batch_numbers(
-            diamond_proxy_sl.clone(),
-            max_l1_blocks_to_scan,
-            prioritized_batch_numbers,
-        )
-        .await?;
-        self.load_batch_numbers(
-            diamond_proxy_sl,
-            max_l1_blocks_to_scan,
-            remaining_batch_numbers,
-        )
-        .await?;
-        Ok(())
     }
 
     /// Fetches a batch set with bounded concurrency to reduce startup latency without issuing an
@@ -182,38 +162,21 @@ impl Inner {
     }
 }
 
-/// Returns unique startup frontier batches in the order they are most likely to unblock startup
-/// bookkeeping: committed, proved, then executed.
-fn startup_priority_batch_numbers(
+/// Returns startup frontier batches first, then the remaining committed startup range.
+///
+/// The prioritized vector preserves the bookkeeping order most likely to unblock startup:
+/// committed, proved, then executed.
+fn startup_batch_numbers(
     last_committed_batch: u64,
     last_proved_batch: u64,
     last_executed_batch: u64,
-) -> Vec<u64> {
-    let mut seen = HashSet::new();
-    [last_committed_batch, last_proved_batch, last_executed_batch]
-        .into_iter()
-        .filter(|batch_number| *batch_number > 0)
-        .filter(|batch_number| seen.insert(*batch_number))
-        .collect()
-}
+) -> (Vec<u64>, Vec<u64>) {
+    let prioritized = [last_committed_batch, last_proved_batch, last_executed_batch];
+    let (prioritized_in_range, remaining_batch_numbers): (Vec<_>, Vec<_>) =
+        (last_executed_batch.max(1)..=last_committed_batch)
+            .partition(|batch_number| prioritized.contains(batch_number));
 
-/// Returns the rest of the startup committed range after removing the frontier batches that are
-/// loaded first.
-fn startup_remaining_batch_numbers(
-    last_committed_batch: u64,
-    last_proved_batch: u64,
-    last_executed_batch: u64,
-) -> Vec<u64> {
-    let prioritized: HashSet<_> = startup_priority_batch_numbers(
-        last_committed_batch,
-        last_proved_batch,
-        last_executed_batch,
-    )
-    .into_iter()
-    .collect();
-    (last_executed_batch.max(1)..=last_committed_batch)
-        .filter(|batch_number| !prioritized.contains(batch_number))
-        .collect()
+    (prioritized_in_range, remaining_batch_numbers)
 }
 
 /// Resolves a committed batch from L1 by first finding the block that committed it and then
@@ -236,15 +199,18 @@ async fn fetch_batch(
 
 #[cfg(test)]
 mod tests {
-    use super::{startup_priority_batch_numbers, startup_remaining_batch_numbers};
+    use super::startup_batch_numbers;
 
     #[test]
     fn prioritizes_frontier_batches_once() {
-        assert_eq!(startup_priority_batch_numbers(10, 8, 8), vec![10, 8]);
+        assert_eq!(startup_batch_numbers(10, 8, 8), (vec![8, 10], vec![9]));
     }
 
     #[test]
     fn excludes_prioritized_batches_from_remaining_range() {
-        assert_eq!(startup_remaining_batch_numbers(10, 8, 6), vec![7, 9]);
+        assert_eq!(
+            startup_batch_numbers(10, 8, 6),
+            (vec![6, 8, 10], vec![7, 9])
+        );
     }
 }
