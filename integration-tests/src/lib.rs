@@ -4,6 +4,7 @@ use crate::network::Zksync;
 use crate::node_log::NodeLogState;
 use crate::prover_tester::ProverTester;
 use crate::provider::{ZksyncApi, ZksyncTestingProvider};
+#[cfg(not(feature = "live-update"))]
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
@@ -44,6 +45,10 @@ use zksync_os_types::{
 };
 
 pub mod assert_traits;
+#[cfg(feature = "live-update")]
+pub mod live_update;
+#[cfg(feature = "live-update")]
+pub use crate::utils::LockedPort;
 pub mod config;
 pub mod contracts;
 pub mod dyn_wallet_provider;
@@ -52,7 +57,7 @@ mod node_log;
 mod prover_tester;
 pub mod provider;
 pub mod upgrade;
-mod utils;
+pub(crate) mod utils;
 
 /// L1 chain id as expected by contracts deployed in `l1-state.json.gz`
 const L1_CHAIN_ID: u64 = 31337;
@@ -117,7 +122,7 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 /// generator runs its CPU-bound task on a blocking thread it can significantly slow down graceful
 /// shutdown. We put 60s here until zksync-os v0.4.0 which will get rid of RISC-V simulator and
 /// allow async/abortable prover input generation.
-const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
+pub const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
     BATCH_VERIFICATION_KEYS
@@ -1321,7 +1326,7 @@ fn find_first_prover_binary(dir: &std::path::Path) -> Option<std::path::PathBuf>
     None
 }
 
-#[cfg(feature = "prover-tests")]
+#[cfg(any(feature = "prover-tests", feature = "live-update"))]
 async fn download_prover_binary(url: &str) -> anyhow::Result<reqwest::Response> {
     use reqwest::{
         Client, StatusCode,

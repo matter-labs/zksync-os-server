@@ -30,7 +30,11 @@ anyhow.workspace = true
 flate2.workspace = true
 fs2.workspace = true
 reqwest = { workspace = true, optional = true }
+kube = { workspace = true, optional = true }
+k8s-openapi = { workspace = true, optional = true }
+fs_extra = { workspace = true, optional = true }
 tar.workspace = true
+zksync_os_internal_config = { workspace = true, optional = true }
 tokio.workspace = true
 tempfile.workspace = true
 tracing.workspace = true
@@ -58,3 +62,4 @@ regex.workspace = true
 [features]
 prover-tests = ["dep:reqwest"]
 gpu-prover-tests = ["prover-tests"]
+live-update = ["dep:reqwest", "dep:kube", "dep:k8s-openapi", "dep:fs_extra", "dep:zksync_os_internal_config"]
