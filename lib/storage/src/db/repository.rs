@@ -6,12 +6,9 @@ use alloy::{
     primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce},
     rlp::{Decodable, Encodable},
 };
-use log_index::{
-    BitmapCache, chunk_start, deindex_logs, index_logs, rollback_coverage, update_coverage,
-};
+use log_index::{BitmapCache, chunk_start, deindex_logs, index_logs, rollback_coverage, update_coverage};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::watch;
 use zksync_os_genesis::Genesis;
 use zksync_os_rocksdb::RocksDB;
@@ -94,8 +91,6 @@ pub struct RepositoryDb {
     /// Points to the latest block whose data has been persisted in `db`. There might be partial
     /// data written for the next block, in other words `db` is caught up to *AT LEAST* this number.
     latest_block_number: watch::Sender<u64>,
-    /// True once the log index coverage start marker has been written to the DB.
-    log_index_started: Arc<AtomicBool>,
 }
 
 impl RepositoryDb {
@@ -105,15 +100,8 @@ impl RepositoryDb {
             .get_cf(RepositoryCF::Meta, RepositoryCF::block_number_key())
             .unwrap()
             .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()));
-        let log_index_started_in_db = db
-            .get_cf(
-                RepositoryCF::Meta,
-                RepositoryCF::log_index_first_block_key(),
-            )
-            .unwrap()
-            .is_some();
-        let (latest_block_number, log_index_started) = if let Some(n) = db_block_number {
-            (n, log_index_started_in_db)
+        let latest_block_number = if let Some(n) = db_block_number {
+            n
         } else {
             let (header, hash) = genesis.state().await.header.clone().into_parts();
             let block = Sealed::new_unchecked(
@@ -127,14 +115,13 @@ impl RepositoryDb {
                 },
                 hash,
             );
-            Self::write_block_inner(&db, &block, &[], false);
-            (0, true)
+            Self::write_block_inner(&db, &block, &[]);
+            0
         };
 
         Self {
             db,
             latest_block_number: watch::channel(latest_block_number).0,
-            log_index_started: Arc::new(AtomicBool::new(log_index_started)),
         }
     }
 
@@ -153,7 +140,6 @@ impl RepositoryDb {
         db: &RocksDB<RepositoryCF>,
         block: &Sealed<Block<TxHash>>,
         txs: &[Arc<StoredTxData>],
-        log_index_started: bool,
     ) {
         let block_number = block.number;
         let block_hash = block.hash();
@@ -189,7 +175,7 @@ impl RepositoryDb {
 
         let block_number_key = RepositoryCF::block_number_key();
         batch.put_cf(RepositoryCF::Meta, block_number_key, &block_number_bytes);
-        update_coverage(&mut batch, &block_number_bytes, log_index_started);
+        update_coverage(db, &mut batch, &block_number_bytes);
 
         REPOSITORIES_METRICS
             .block_data_size
@@ -201,9 +187,7 @@ impl RepositoryDb {
     }
 
     pub fn write_block(&self, block: &Sealed<Block<TxHash>>, txs: &[Arc<StoredTxData>]) {
-        let log_index_started = self.log_index_started.load(Ordering::Relaxed);
-        Self::write_block_inner(&self.db, block, txs, log_index_started);
-        self.log_index_started.store(true, Ordering::Relaxed);
+        Self::write_block_inner(&self.db, block, txs);
         self.latest_block_number.send_replace(block.number);
     }
 

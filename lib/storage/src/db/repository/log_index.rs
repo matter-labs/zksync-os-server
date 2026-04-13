@@ -102,19 +102,16 @@ fn with_chunk(
 }
 
 /// Updates the log index coverage metadata in `batch`.
-/// `log_index_started` indicates whether `log_index_first_block` is already set in the DB;
-/// if not, it is written now (it is only ever set once).
+/// Writes `log_index_first_block` if it is not already present in the DB
+/// (it is only ever set once); always updates `log_index_last_block`.
 pub(super) fn update_coverage(
+    db: &RocksDB<RepositoryCF>,
     batch: &mut WriteBatch<RepositoryCF>,
     block_number_bytes: &[u8],
-    log_index_started: bool,
 ) {
-    if !log_index_started {
-        batch.put_cf(
-            RepositoryCF::Meta,
-            RepositoryCF::log_index_first_block_key(),
-            block_number_bytes,
-        );
+    let first_block_key = RepositoryCF::log_index_first_block_key();
+    if db.get_cf(RepositoryCF::Meta, first_block_key).unwrap().is_none() {
+        batch.put_cf(RepositoryCF::Meta, first_block_key, block_number_bytes);
     }
     batch.put_cf(
         RepositoryCF::Meta,
@@ -305,12 +302,7 @@ mod tests {
     }
 
     /// Writes log index entries and coverage for `block_number` using the production functions.
-    fn index_block(
-        db: &RocksDB<RepositoryCF>,
-        block_number: u64,
-        logs: &[alloy::primitives::Log],
-        log_index_started: bool,
-    ) {
+    fn index_block(db: &RocksDB<RepositoryCF>, block_number: u64, logs: &[alloy::primitives::Log]) {
         let mut batch = db.new_write_batch();
         let mut cache = BitmapCache::default();
         index_logs(
@@ -322,7 +314,7 @@ mod tests {
         )
         .unwrap();
         cache.flush(&mut batch);
-        update_coverage(&mut batch, &block_number.to_be_bytes(), log_index_started);
+        update_coverage(db, &mut batch, &block_number.to_be_bytes());
         db.write(batch).unwrap();
     }
 
@@ -332,8 +324,8 @@ mod tests {
         let addr = Address::repeat_byte(1);
         let log = make_log(addr, &[]);
 
-        index_block(&db, 0, std::slice::from_ref(&log), false);
-        index_block(&db, 1, &[log], true);
+        index_block(&db, 0, std::slice::from_ref(&log));
+        index_block(&db, 1, &[log]);
 
         let (bitmap, covered) = query(
             &db,
@@ -353,7 +345,7 @@ mod tests {
         let topic = B256::repeat_byte(1);
         let log = make_log(Address::ZERO, &[topic]);
 
-        index_block(&db, 0, &[log], false);
+        index_block(&db, 0, &[log]);
 
         let (bitmap, covered) =
             query(&db, RepositoryCF::LogBlocksByTopic, topic.as_slice(), 0..10).unwrap();
@@ -367,9 +359,9 @@ mod tests {
         let addr = Address::repeat_byte(1);
         let log = make_log(addr, &[]);
 
-        index_block(&db, 0, std::slice::from_ref(&log), false);
-        index_block(&db, 1, std::slice::from_ref(&log), true);
-        index_block(&db, 2, &[log], true);
+        index_block(&db, 0, std::slice::from_ref(&log));
+        index_block(&db, 1, std::slice::from_ref(&log));
+        index_block(&db, 2, &[log]);
 
         // Request only blocks 1..=2 — block 0 must not appear.
         let (bitmap, covered) =
@@ -386,8 +378,8 @@ mod tests {
         let addr = Address::repeat_byte(1);
         let log = make_log(addr, &[]);
 
-        index_block(&db, 0, std::slice::from_ref(&log), false);
-        index_block(&db, 1, std::slice::from_ref(&log), true);
+        index_block(&db, 0, std::slice::from_ref(&log));
+        index_block(&db, 1, std::slice::from_ref(&log));
 
         let mut batch = db.new_write_batch();
         let mut cache = BitmapCache::default();
@@ -430,8 +422,8 @@ mod tests {
         let addr_a = Address::repeat_byte(1);
         let addr_b = Address::repeat_byte(2);
 
-        index_block(&db, 0, &[make_log(addr_a, &[])], false);
-        index_block(&db, 1, &[make_log(addr_b, &[])], true);
+        index_block(&db, 0, &[make_log(addr_a, &[])]);
+        index_block(&db, 1, &[make_log(addr_b, &[])]);
 
         let (bitmap_a, _) = query(
             &db,
@@ -460,8 +452,8 @@ mod tests {
 
         let last_in_chunk0 = CHUNK_SIZE - 1;
         let first_in_chunk1 = CHUNK_SIZE;
-        index_block(&db, last_in_chunk0, std::slice::from_ref(&log), false);
-        index_block(&db, first_in_chunk1, &[log], true);
+        index_block(&db, last_in_chunk0, std::slice::from_ref(&log));
+        index_block(&db, first_in_chunk1, &[log]);
 
         let (bitmap, covered) = query(
             &db,
@@ -485,9 +477,9 @@ mod tests {
         let (db, _dir) = open_test_db();
         let addr = Address::repeat_byte(1);
 
-        index_block(&db, 0, &[make_log(addr, &[])], false);
-        index_block(&db, 1, &[make_log(addr, &[])], true);
-        index_block(&db, 2, &[make_log(addr, &[])], true);
+        index_block(&db, 0, &[make_log(addr, &[])]);
+        index_block(&db, 1, &[make_log(addr, &[])]);
+        index_block(&db, 2, &[make_log(addr, &[])]);
 
         // Roll back blocks 0, 1, 2 in one batch.
         let mut batch = db.new_write_batch();
