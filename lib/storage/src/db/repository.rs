@@ -145,8 +145,8 @@ impl RepositoryDb {
         let block_hash = block.hash();
         let block_number_bytes = block_number.to_be_bytes();
         let block_hash_bytes = block_hash.to_vec();
-        let block_number_u32 = block_number as u32;
         let chunk = chunk_start(block_number);
+        let block_offset = (block_number - chunk) as u32;
 
         let mut batch = db.new_write_batch();
         batch.put_cf(
@@ -166,7 +166,7 @@ impl RepositoryDb {
                 &mut batch,
                 &mut bitmap_cache,
                 tx,
-                block_number_u32,
+                block_offset,
                 chunk,
             )
             .expect("write batch failed");
@@ -196,7 +196,7 @@ impl RepositoryDb {
         batch: &mut WriteBatch<RepositoryCF>,
         bitmap_cache: &mut BitmapCache,
         tx: &StoredTxData,
-        block_number: u32,
+        block_offset: u32,
         chunk: u64,
     ) -> RepositoryResult<()> {
         let tx_hash = tx.tx.hash();
@@ -223,7 +223,7 @@ impl RepositoryDb {
             tx_hash.as_slice(),
         );
 
-        index_logs(db, bitmap_cache, block_number, chunk, tx.receipt.logs())?;
+        index_logs(db, bitmap_cache, block_offset, chunk, tx.receipt.logs())?;
 
         Ok(())
     }
@@ -264,7 +264,7 @@ impl RepositoryDb {
                 batch.delete_cf(RepositoryCF::BlockData, &old_repo_block.hash().0);
 
                 let chunk = chunk_start(block_number);
-                let block_number_u32 = block_number as u32;
+                let block_offset = (block_number - chunk) as u32;
 
                 for tx_hash in &old_repo_block.body.transactions {
                     batch.delete_cf(RepositoryCF::Tx, &tx_hash.0);
@@ -286,7 +286,7 @@ impl RepositoryDb {
                     deindex_logs(
                         &self.db,
                         &mut bitmap_cache,
-                        block_number_u32,
+                        block_offset,
                         chunk,
                         stored_tx.receipt.logs(),
                     )?;

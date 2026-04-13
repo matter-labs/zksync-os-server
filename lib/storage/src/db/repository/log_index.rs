@@ -130,10 +130,13 @@ pub(super) fn rollback_coverage(batch: &mut WriteBatch<RepositoryCF>, block_numb
 }
 
 /// Adds all logs from a single transaction to the bitmap cache.
+/// `block_offset` is the block number relative to `chunk` (i.e. `block_number - chunk`);
+/// storing offsets rather than absolute block numbers keeps values within `[0, CHUNK_SIZE)`
+/// so they can never overflow `u32` regardless of how large block numbers grow.
 pub(super) fn index_logs<'a>(
     db: &RocksDB<RepositoryCF>,
     cache: &mut BitmapCache,
-    block_number: u32,
+    block_offset: u32,
     chunk: u64,
     logs: impl IntoIterator<Item = &'a alloy::primitives::Log>,
 ) -> RepositoryResult<()> {
@@ -144,7 +147,7 @@ pub(super) fn index_logs<'a>(
             RepositoryCF::LogBlocksByAddress,
             &address_chunk_key(log.address, chunk),
             |bm| {
-                bm.insert(block_number);
+                bm.insert(block_offset);
             },
         )?;
         for topic in log.topics() {
@@ -154,7 +157,7 @@ pub(super) fn index_logs<'a>(
                 RepositoryCF::LogBlocksByTopic,
                 &topic_chunk_key(*topic, chunk),
                 |bm| {
-                    bm.insert(block_number);
+                    bm.insert(block_offset);
                 },
             )?;
         }
@@ -163,10 +166,11 @@ pub(super) fn index_logs<'a>(
 }
 
 /// Removes all logs from a single transaction from the bitmap cache.
+/// `block_offset` is the block number relative to `chunk` (i.e. `block_number - chunk`).
 pub(super) fn deindex_logs<'a>(
     db: &RocksDB<RepositoryCF>,
     cache: &mut BitmapCache,
-    block_number: u32,
+    block_offset: u32,
     chunk: u64,
     logs: impl IntoIterator<Item = &'a alloy::primitives::Log>,
 ) -> RepositoryResult<()> {
@@ -177,7 +181,7 @@ pub(super) fn deindex_logs<'a>(
             RepositoryCF::LogBlocksByAddress,
             &address_chunk_key(log.address, chunk),
             |bm| {
-                bm.remove(block_number);
+                bm.remove(block_offset);
             },
         )?;
         for topic in log.topics() {
@@ -187,7 +191,7 @@ pub(super) fn deindex_logs<'a>(
                 RepositoryCF::LogBlocksByTopic,
                 &topic_chunk_key(*topic, chunk),
                 |bm| {
-                    bm.remove(block_number);
+                    bm.remove(block_offset);
                 },
             )?;
         }
@@ -225,12 +229,16 @@ fn read_range(
         let mut key = key_prefix.to_vec();
         key.extend_from_slice(&chunk.to_be_bytes());
         if let Some(bytes) = db.get_cf(cf, &key)? {
-            result |= deserialize_bitmap(&bytes)?;
+            // Bitmaps store offsets relative to chunk_start; shift back to absolute block numbers.
+            let chunk_base = chunk as u32;
+            result |= deserialize_bitmap(&bytes)?
+                .into_iter()
+                .map(|offset| chunk_base + offset)
+                .collect::<RoaringBitmap>();
         }
         chunk += CHUNK_SIZE;
     }
 
-    // Mask to the requested range (block numbers fit in u32 given current chain sizes).
     result.remove_range(..range.start as u32);
     result.remove_range(range.end as u32..);
     Ok(result)
@@ -303,13 +311,14 @@ mod tests {
 
     /// Writes log index entries and coverage for `block_number` using the production functions.
     fn index_block(db: &RocksDB<RepositoryCF>, block_number: u64, logs: &[alloy::primitives::Log]) {
+        let chunk = chunk_start(block_number);
         let mut batch = db.new_write_batch();
         let mut cache = BitmapCache::default();
         index_logs(
             db,
             &mut cache,
-            block_number as u32,
-            chunk_start(block_number),
+            (block_number - chunk) as u32,
+            chunk,
             logs,
         )
         .unwrap();
@@ -383,7 +392,7 @@ mod tests {
 
         let mut batch = db.new_write_batch();
         let mut cache = BitmapCache::default();
-        deindex_logs(&db, &mut cache, 1u32, chunk_start(1), &[log]).unwrap();
+        deindex_logs(&db, &mut cache, 1u32 - chunk_start(1) as u32, chunk_start(1), &[log]).unwrap();
         cache.flush(&mut batch);
         rollback_coverage(&mut batch, &0u64.to_be_bytes());
         db.write(batch).unwrap();
@@ -485,11 +494,12 @@ mod tests {
         let mut batch = db.new_write_batch();
         let mut cache = BitmapCache::default();
         for block in 0u64..=2 {
+            let chunk = chunk_start(block);
             deindex_logs(
                 &db,
                 &mut cache,
-                block as u32,
-                chunk_start(block),
+                (block - chunk) as u32,
+                chunk,
                 &[make_log(addr, &[])],
             )
             .unwrap();
