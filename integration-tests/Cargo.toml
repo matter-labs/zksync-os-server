@@ -46,6 +46,7 @@ serde_yaml.workspace = true
 # Needed for upgrade functionality tests
 zk_os_api.workspace = true
 zk_os_basic_system.workspace = true
+blake2.workspace = true
 
 [build-dependencies]
 flate2.workspace = true

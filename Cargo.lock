@@ -14133,6 +14133,7 @@ dependencies = [
  "async-trait",
  "backon",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "blake2",
  "flate2",
  "fs2",
  "futures",

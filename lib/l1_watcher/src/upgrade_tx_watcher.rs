@@ -9,8 +9,7 @@ use alloy::primitives::{Address, B256, BlockNumber, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
-use zk_os_api::helpers::set_properties_code;
-use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
+use blake2::{Blake2s256, Digest};
 use zksync_os_contract_interface::IBytecodeSupplier::EVMBytecodePublished;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
@@ -236,11 +235,70 @@ impl L1UpgradeTxWatcher {
     }
 
     /// Fetches bytecodes published to the `BytecodesSupplier` on L1, filtered by the
-    /// requested `hashes` (the `factory_deps` from the upgrade tx).
+    /// requested `hashes` (the `factory_deps` array from the upgrade tx).
     ///
-    /// Returns `(blake2s_hash, full_preimage)` pairs suitable for injection into the
-    /// VM's `PreimageSource`. The blake2s hash is computed over `code + padding + artifacts`
-    /// via `set_properties_code`, matching the hash the VM will use for lookups.
+    /// # The hash zoo
+    ///
+    /// EVM bytecode in this codebase is referenced by *three* distinct hashes; reading
+    /// them carelessly is how the "Iterator length exceeds expected preimage length"
+    /// panic was originally introduced. They are:
+    ///
+    /// 1. **`keccak256(raw_bytecode)`** — the "observable" hash. Returned by the EVM
+    ///    `EXTCODEHASH` opcode and the value `BytecodesSupplier.publishEVMBytecode`
+    ///    indexes its event by (see `era-contracts/.../BytecodesSupplier.sol:64`,
+    ///    which calls `ZKSyncOSBytecodeInfo.hashEVMBytecodeCalldata` — that is just
+    ///    `keccak256(_bytecode)`). Useful for `EXTCODEHASH` parity but **NOT** the
+    ///    key our preimage cache uses.
+    ///
+    /// 2. **`Blake2s256(raw_bytecode)`** — the "raw blake hash". This is the value
+    ///    the era-contracts docstring at `ZKSyncOSBytecodeInfo.sol:30` calls
+    ///    `_bytecodeBlakeHash` (NB: docstring says "Blake2b" but the VM uses
+    ///    Blake2s). It is the **lookup key** the `set_bytecode_on_address` system
+    ///    hook on L2 hands to the preimage cache (`zksync-os/system_hooks/.../
+    ///    set_bytecode_on_address.rs:178` → `account_cache.rs:933`), with
+    ///    `expected_preimage_len_in_bytes = observable_len`. The corresponding
+    ///    preimage body the cache must return is exactly the raw bytes (length =
+    ///    observable len). This is also what each entry in `factory_deps` of the
+    ///    upgrade tx must equal so that we can fetch the matching preimage here.
+    ///
+    /// 3. **`Blake2s256(raw + padding + artifacts)`** — the "padded blake hash",
+    ///    a.k.a. `account_properties.bytecode_hash`. This is what `set_properties_code`
+    ///    in `zksync-os/api/src/helpers.rs:78` computes. The system hook *recomputes*
+    ///    this hash in-VM from the raw bytecode (after deriving EVM artifacts via
+    ///    `evm_interpreter::BytecodePreprocessingData::create_artifacts`), records a
+    ///    fresh padded preimage under it, and writes it into `account.bytecode_hash`.
+    ///    All later same-account bytecode lookups in zksync-os go through hash (3),
+    ///    but **on the L1 wire it never appears** — neither the supplier nor the
+    ///    upgrade tx carries it. Mistaking (3) for (2) was the root cause of the
+    ///    panic this function used to trigger.
+    ///
+    /// # The preimage shape we must store
+    ///
+    /// The body inserted into the preimage source must be the **raw bytecode**
+    /// (length = observable len), keyed by hash (2). Two reasons:
+    ///
+    /// - **Length check.** `expose_preimage` in `preimage_cache.rs:116` rejects any
+    ///   iterator longer than `num_usize_words_for_u8_capacity(expected_len)`. With
+    ///   `expected_len = observable_len`, anything bigger (e.g. raw + padding +
+    ///   artifacts, length = `full_bytecode_len`) panics with the namesake error.
+    /// - **Proof-env hash check.** Same file, line 144: `Blake2s256(buffered) ==
+    ///   hash`, where `buffered` is exactly `expected_len` bytes. So the stored
+    ///   body must be raw bytes and the lookup hash must be `Blake2s256(raw)` —
+    ///   which is hash (2).
+    ///
+    /// EVM artifacts and the 8-byte word padding are *derived in-VM* by the hook and
+    /// stored as a *separate* preimage under hash (3); they never travel on L1.
+    /// That's a deliberate design choice — it keeps `BytecodesSupplier` publication
+    /// cost proportional to the raw bytecode length, and removes any cross-node
+    /// disagreement risk on artifact format.
+    ///
+    /// # Why we scan instead of filtering
+    ///
+    /// `EVMBytecodePublished` is indexed by hash (1) (`keccak256`), not hash (2)
+    /// (`Blake2s256`). Our `factory_deps` carries hash (2). We can't translate
+    /// between them without the bytecode itself, so we have to scan all events in
+    /// range and recompute Blake2s on each payload. If the supplier ever gains a
+    /// second event indexed by hash (2), this can become a topic-filtered lookup.
     async fn fetch_force_preimages(&self, hashes: &[B256]) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
         if hashes.is_empty() {
             return Ok(Vec::new());
@@ -253,6 +311,8 @@ impl L1UpgradeTxWatcher {
             .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS)
             .max(1u64);
 
+        // `requested` and the `factory_deps` slice both contain hash (2) values —
+        // the Blake2s-of-raw lookup keys the system hook will use on L2.
         let requested: std::collections::HashSet<B256> = hashes.iter().copied().collect();
         let mut by_hash: HashMap<B256, Vec<u8>> = HashMap::new();
 
@@ -260,6 +320,11 @@ impl L1UpgradeTxWatcher {
             let from_block = current_block
                 .saturating_sub(self.max_blocks_to_process - 1)
                 .max(start_block);
+            // The `EVMBytecodePublished` event is indexed by hash (1) (keccak256
+            // of the raw bytes), which is **not** the hash we're filtering by, so
+            // we don't add a topic1 filter — we'd have to translate from hash (2)
+            // to hash (1) which requires the bytecode itself. Instead we pull all
+            // events in the range and discard non-matches inside the loop.
             let filter = Filter::new()
                 .from_block(from_block)
                 .to_block(current_block)
@@ -271,26 +336,33 @@ impl L1UpgradeTxWatcher {
                 let published = EVMBytecodePublished::decode_log(&log.inner)?.data;
                 let raw_bytecode = published.bytecode.to_vec();
 
-                // Compute the ZKOS bytecode hash and full preimage (code + padding + artifacts)
-                // via `set_properties_code`, which matches the hash the VM uses for lookups.
-                let mut props = AccountProperties::default();
-                let full_preimage = set_properties_code(&mut props, &raw_bytecode);
-                let zkos_hash = B256::from(props.bytecode_hash.as_u8_array());
+                // Compute hash (2) from the event payload so we can match against
+                // `requested`. We deliberately do NOT use `set_properties_code`
+                // here — that would produce hash (3), which would silently fail to
+                // match anything in `factory_deps` (or, worse, match it via a
+                // misconfigured upgrade tx and then panic the VM on length).
+                let zkos_hash = B256::from_slice(Blake2s256::digest(&raw_bytecode).as_slice());
 
-                // Only keep bytecodes that were actually requested.
+                // Drop events that publish bytecodes the upgrade tx doesn't ask for.
                 if !requested.contains(&zkos_hash) {
                     continue;
                 }
 
                 if let Some(existing) = by_hash.get(&zkos_hash) {
-                    if existing != &full_preimage {
+                    if existing != &raw_bytecode {
+                        // Two different payloads producing the same Blake2s would
+                        // be a Blake2s collision (or a bug in the supplier). The
+                        // first occurrence wins so we stay deterministic.
                         tracing::warn!(
                             hash = ?zkos_hash,
                             "bytecode supplier emitted duplicate hash with different data; keeping first occurrence"
                         );
                     }
                 } else {
-                    by_hash.insert(zkos_hash, full_preimage);
+                    // Insert the **raw** bytecode (shape A — length = observable
+                    // len). The system hook will derive the padded shape B
+                    // internally and key it by hash (3) on the account.
+                    by_hash.insert(zkos_hash, raw_bytecode);
                 }
             }
 
@@ -471,6 +543,8 @@ async fn find_l1_block_by_protocol_version(
 mod tests {
     use super::*;
     use blake2::{Blake2s256, Digest as BlakeDigest};
+    use zk_os_api::helpers::set_properties_code;
+    use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
     /// Golden-value test using a known externally-verifiable result.
     /// `blake2s256(b"") = 69217a3079908094e11121d042354a7c1f55b6482ca1a51e1b250dfd1ed0eef9`
