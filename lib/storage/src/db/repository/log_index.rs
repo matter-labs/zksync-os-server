@@ -234,7 +234,8 @@ fn read_range(
     }
 
     // Mask to the requested range (block numbers fit in u32 given current chain sizes).
-    result &= RoaringBitmap::from_iter(range.start as u32..range.end as u32);
+    result.remove_range(..range.start as u32);
+    result.remove_range(range.end as u32..);
     Ok(result)
 }
 
