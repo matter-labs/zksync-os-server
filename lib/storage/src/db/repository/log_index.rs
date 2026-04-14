@@ -218,6 +218,10 @@ fn coverage(db: &RocksDB<RepositoryCF>) -> RepositoryResult<Option<Range<u64>>> 
 
 /// Reads all chunks overlapping `range` for `key_prefix` from `cf`, ORs them together,
 /// and masks to `range`.
+///
+/// Uses `range_iterator_cf` so that RocksDB can exploit per-prefix bloom filters
+/// (configured via `prefix_extractor_len`) to skip SST files that contain no chunks for
+/// this address or topic — useful when the queried address/topic is sparse.
 fn read_range(
     db: &RocksDB<RepositoryCF>,
     cf: RepositoryCF,
@@ -225,22 +229,29 @@ fn read_range(
     range: Range<u64>,
 ) -> RepositoryResult<RoaringBitmap> {
     let from_chunk = chunk_start(range.start);
-    let to_chunk = chunk_start(range.end.saturating_sub(1));
+    // Upper bound: first key that is lexicographically past the last chunk we need.
+    // chunk_start(range.end - 1) + CHUNK_SIZE is the chunk *after* the last relevant one,
+    // and since chunk bytes are the suffix, appending 0xFF..FF would also work, but an
+    // exact chunk key is cleaner and keeps us within the same prefix.
+    let to_chunk_exclusive = chunk_start(range.end.saturating_sub(1)) + CHUNK_SIZE;
+
+    let mut from_key = key_prefix.to_vec();
+    from_key.extend_from_slice(&from_chunk.to_be_bytes());
+    let mut to_key = key_prefix.to_vec();
+    to_key.extend_from_slice(&to_chunk_exclusive.to_be_bytes());
 
     let mut result = RoaringBitmap::new();
-    let mut chunk = from_chunk;
-    while chunk <= to_chunk {
-        let mut key = key_prefix.to_vec();
-        key.extend_from_slice(&chunk.to_be_bytes());
-        if let Some(bytes) = db.get_cf(cf, &key)? {
-            // Bitmaps store offsets relative to chunk_start; shift back to absolute block numbers.
-            let chunk_base = chunk as u32;
-            result |= deserialize_bitmap(&bytes)?
-                .into_iter()
-                .map(|offset| chunk_base + offset)
-                .collect::<RoaringBitmap>();
-        }
-        chunk += CHUNK_SIZE;
+    for (key, value) in db.range_iterator_cf(cf, &from_key, to_key) {
+        // Bitmaps store offsets relative to chunk_start; we need to recover the chunk base
+        // from the key suffix to shift offsets back to absolute block numbers.
+        let chunk_bytes: [u8; 8] = key[key_prefix.len()..]
+            .try_into()
+            .expect("chunk key suffix must be 8 bytes");
+        let chunk_base = u64::from_be_bytes(chunk_bytes) as u32;
+        result |= deserialize_bitmap(&value)?
+            .into_iter()
+            .map(|offset| chunk_base + offset)
+            .collect::<RoaringBitmap>();
     }
 
     result.remove_range(..range.start as u32);

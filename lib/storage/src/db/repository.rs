@@ -85,6 +85,16 @@ impl NamedColumnFamily for RepositoryCF {
             RepositoryCF::LogBlocksByTopic => "log_blocks_by_topic",
         }
     }
+
+    fn prefix_extractor_len(&self) -> Option<usize> {
+        match self {
+            // Keys are address[20] ++ chunk_start[8]; the prefix is the address.
+            RepositoryCF::LogBlocksByAddress => Some(20),
+            // Keys are topic[32] ++ chunk_start[8]; the prefix is the topic hash.
+            RepositoryCF::LogBlocksByTopic => Some(32),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
