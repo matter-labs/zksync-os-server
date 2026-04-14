@@ -6,6 +6,7 @@ pub use config::RpcConfig;
 use std::sync::Arc;
 use tokio::sync::watch;
 
+mod default_tracer;
 mod eth_call_handler;
 pub use eth_call_handler::EthCallHandler;
 mod eth_filter;

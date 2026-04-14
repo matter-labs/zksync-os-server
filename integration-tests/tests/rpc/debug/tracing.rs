@@ -6,7 +6,7 @@ use alloy::providers::ext::DebugApi;
 use alloy::rpc::types::TransactionRequest;
 use alloy::rpc::types::trace::geth::{
     CallConfig, CallFrame, GethDebugTracerType, GethDebugTracingCallOptions,
-    GethDebugTracingOptions, GethTrace,
+    GethDebugTracingOptions, GethDefaultTracingOptions, GethTrace,
 };
 use alloy::sol_types::{Revert, SolCall, SolError};
 use std::collections::HashMap;
@@ -314,6 +314,77 @@ async fn call_trace_block_reports_pubdata_exhaustion(builder: TesterBuilder) -> 
         })
         .expect("block trace should include reverted transaction");
     assert_pubdata_exhaustion_call_frame(&call_frame);
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+async fn debug_trace_transaction_and_block_default_struct_log_tracer(
+    tester: Tester,
+) -> anyhow::Result<()> {
+    let secondary_data = U256::from(42);
+    let calculate_value = U256::from(24);
+    let secondary_contract =
+        TracingSecondary::deploy(tester.l2_provider.clone(), secondary_data).await?;
+    let primary_contract =
+        TracingPrimary::deploy(tester.l2_provider.clone(), *secondary_contract.address()).await?;
+
+    let receipt = primary_contract
+        .calculate(calculate_value)
+        .send()
+        .await?
+        .with_timeout(Some(DEFAULT_TIMEOUT))
+        .get_receipt()
+        .await?;
+
+    let tx_trace = tester
+        .l2_provider
+        .debug_trace_transaction(
+            receipt.transaction_hash(),
+            GethDebugTracingOptions::default(),
+        )
+        .await?
+        .try_into_default_frame()
+        .expect("expected default struct log trace");
+    assert!(!tx_trace.failed);
+    assert_eq!(u128::from(tx_trace.gas), receipt.gas_used());
+    assert!(!tx_trace.struct_logs.is_empty());
+    let first_tx_log = tx_trace.struct_logs.first().expect("missing struct log");
+    assert_eq!(first_tx_log.depth, 1);
+    assert!(
+        first_tx_log.stack.is_some(),
+        "stack should be enabled by default"
+    );
+    assert!(
+        first_tx_log.memory.is_none(),
+        "memory should be disabled by default"
+    );
+    assert!(
+        first_tx_log.return_data.is_none(),
+        "return data should be disabled by default"
+    );
+
+    let block_trace = tester
+        .l2_provider
+        .debug_trace_block_by_number(
+            receipt
+                .block_number()
+                .expect("receipt should have block number")
+                .into(),
+            GethDebugTracingOptions::default(),
+        )
+        .await?;
+    let block_frame = block_trace
+        .iter()
+        .find_map(|trace| {
+            if trace.tx_hash() == Some(receipt.transaction_hash()) {
+                trace.success()?.clone().try_into_default_frame().ok()
+            } else {
+                None
+            }
+        })
+        .expect("block trace should include transaction");
+    assert!(!block_frame.struct_logs.is_empty());
 
     Ok(())
 }
@@ -784,6 +855,69 @@ async fn debug_trace_call_stack(tester: Tester) -> anyhow::Result<()> {
         )
         .to_lowercase(),
         "stored value must match the expected one"
+    );
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+async fn debug_trace_call_default_struct_log_tracer(tester: Tester) -> anyhow::Result<()> {
+    let secondary_data = U256::from(7);
+    let calculate_value = U256::from(3);
+    let expected_value = secondary_data * calculate_value;
+    let secondary_contract =
+        TracingSecondary::deploy(tester.l2_provider.clone(), secondary_data).await?;
+    let primary_contract =
+        TracingPrimary::deploy(tester.l2_provider.clone(), *secondary_contract.address()).await?;
+
+    let mut call_request = primary_contract
+        .calculate(calculate_value)
+        .into_transaction_request();
+    call_request.max_priority_fee_per_gas = Some(1);
+    call_request.max_fee_per_gas = Some(u128::MAX);
+    call_request.set_from(tester.l2_wallet.default_signer().address());
+
+    let trace = tester
+        .l2_provider
+        .debug_trace_call(
+            call_request,
+            BlockId::latest(),
+            GethDebugTracingCallOptions {
+                tracing_options: GethDebugTracingOptions {
+                    config: GethDefaultTracingOptions {
+                        enable_memory: Some(true),
+                        disable_stack: Some(true),
+                        enable_return_data: Some(true),
+                        limit: Some(1),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await?;
+    let frame = trace
+        .try_into_default_frame()
+        .expect("expected default struct log trace");
+    assert!(!frame.failed);
+    assert_eq!(
+        frame.return_value,
+        Bytes::from(expected_value.to_be_bytes::<32>().to_vec())
+    );
+    assert_eq!(frame.struct_logs.len(), 1, "limit should cap struct logs");
+    let first_log = frame.struct_logs.first().expect("missing struct log");
+    assert!(
+        first_log.stack.is_none(),
+        "stack capture should be disabled"
+    );
+    assert!(
+        first_log.memory.is_some(),
+        "memory capture should be enabled"
+    );
+    assert!(
+        first_log.return_data.is_some(),
+        "return data capture should be enabled"
     );
 
     Ok(())

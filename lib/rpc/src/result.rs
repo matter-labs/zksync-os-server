@@ -58,8 +58,7 @@ impl<Ok> ToRpcResult<Ok, EthError> for Result<Ok, EthError> {
 impl<Ok> ToRpcResult<Ok, DebugError> for Result<Ok, DebugError> {
     fn to_rpc_result(self) -> RpcResult<Ok> {
         self.map_err(|err| match err {
-            DebugError::UnsupportedDefaultTracer
-            | DebugError::UnsupportedTracer(_)
+            DebugError::UnsupportedTracer(_)
             | DebugError::UnsupportedTxIndex
             | DebugError::InvalidTracerConfig
             | DebugError::TransactionNotFound
