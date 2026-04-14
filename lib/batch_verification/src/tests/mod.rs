@@ -81,7 +81,6 @@ pub fn dummy_batch_metadata(batch_number: u64, from: u64, to: u64) -> BatchMetad
         last_block_number: to,
         pubdata_mode: zksync_os_types::PubdataMode::Calldata,
         tx_count: 0,
-        execution_version: 1,
         computational_native_used: None,
         logs: vec![],
         messages: vec![],

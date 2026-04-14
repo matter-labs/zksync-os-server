@@ -514,7 +514,6 @@ mod tests {
             last_block_number: batch_number,
             pubdata_mode: PubdataMode::Calldata,
             tx_count: 10,
-            execution_version: 1,
             computational_native_used: None,
             logs: vec![],
             messages: vec![],
