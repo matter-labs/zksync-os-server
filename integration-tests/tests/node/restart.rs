@@ -5,6 +5,7 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::sol;
+use anyhow::Context;
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ use zksync_os_integration_tests::provider::{ZksyncApi, ZksyncTestingProvider};
 use zksync_os_integration_tests::{CURRENT_TO_L1, StoppedTester, Tester, test_multisetup};
 use zksync_os_server::INTERNAL_CONFIG_FILE_NAME;
 use zksync_os_server::config::Config;
+use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 
 sol! {
     #[sol(rpc)]
@@ -362,6 +364,118 @@ async fn tester_reports_fatal_node_error() -> anyhow::Result<()> {
         err_text.contains("batch_sink") || err_text.contains("clear_failing_block_config_task"),
         "unexpected fatal error: {err_text}"
     );
+
+    Ok(())
+}
+
+/// Tests that the L1 sender correctly handles in-flight L1 transactions from a previous session
+/// when the node is restarted.
+///
+/// The happy path relies on `eth_getTransactionByAccountAndNonce` (a non-standard Geth extension)
+/// being available. On providers that don't support it, the L1 sender falls back to the normal
+/// send path, which would submit a conflicting transaction for the same batch — leading to a
+/// revert and a node crash. So this test is a meaningful regression check on providers that
+/// do support the method (such as a real Geth node or a compatible Anvil build).
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn node_recovers_in_flight_l1_transactions_after_restart() -> anyhow::Result<()> {
+    // Commit-only mode: FRI provers run but SNARK provers are disabled, so only commit
+    // transactions are submitted to L1. This keeps the test focused on the commit L1 sender.
+    let tester = Tester::setup_with_overrides(make_commit_only_config).await?;
+
+    // Generate L2 activity so the batcher has something to seal into a batch.
+    tester
+        .l2_provider
+        .send_transaction(
+            TransactionRequest::default()
+                .with_to(Address::random())
+                .with_value(U256::from(1u64)),
+        )
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    // Wait for the first batch to land on L1 so we have a clean confirmed baseline.
+    wait_for_l1_state(&tester, "first batch committed on L1", |state| {
+        state.last_committed_batch >= 1
+    })
+    .await?;
+
+    // Resolve the operator address so we can monitor its pending nonce.
+    let chain_id = tester.l2_provider.get_chain_id().await?;
+    let chain_layout = ChainLayout::Default { protocol_version: PROTOCOL_VERSION };
+    let operator_key = load_operator_private_key(chain_layout, chain_id)?;
+    let operator_address = PrivateKeySigner::from_str(&operator_key)?.address();
+
+    // Stop L1 auto-mining. From this point any L1 transaction submitted by the commit
+    // sender will stay pending in the mempool rather than being included in a block.
+    tester
+        .l1
+        .provider
+        .raw_request::<_, ()>("anvil_setAutomine".into(), (false,))
+        .await?;
+
+    // Generate a second batch so the commit L1 sender has something new to submit.
+    tester
+        .l2_provider
+        .send_transaction(
+            TransactionRequest::default()
+                .with_to(Address::random())
+                .with_value(U256::from(1u64)),
+        )
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    // Snapshot the confirmed nonce and wait until at least one commit transaction for batch 2
+    // appears in the mempool as a pending (unconfirmed) transaction.
+    let confirmed_nonce = tester
+        .l1
+        .provider
+        .get_transaction_count(operator_address)
+        .latest()
+        .await?;
+
+    tokio::time::timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            let pending_nonce = tester
+                .l1
+                .provider
+                .get_transaction_count(operator_address)
+                .pending()
+                .await?;
+            if pending_nonce > confirmed_nonce {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .context("timed out waiting for in-flight L1 transaction to appear in mempool")?
+    .context("polling for in-flight L1 transaction")?;
+
+    // Stop the node. The commit transaction for batch 2 remains in Anvil's mempool,
+    // simulating a crash or restart mid-flight.
+    let stopped = tester.stop().await?;
+
+    // Restart the node. On startup the commit L1 sender should detect the pending
+    // transaction via `eth_getTransactionByAccountAndNonce` and resume waiting for its
+    // receipt instead of re-submitting — which would produce a conflicting transaction
+    // and a revert once the original lands.
+    let restarted = stopped.start_with_overrides(make_commit_only_config).await?;
+
+    // Re-enable L1 mining so the pending commit transaction can be included in a block.
+    restarted
+        .l1
+        .provider
+        .raw_request::<_, ()>("anvil_setAutomine".into(), (true,))
+        .await?;
+
+    // Batch 2 must eventually appear as committed on L1, confirming that the recovered
+    // (or re-submitted) transaction landed successfully.
+    wait_for_l1_state(&restarted, "second batch committed after restart", |state| {
+        state.last_committed_batch >= 2
+    })
+    .await?;
 
     Ok(())
 }
