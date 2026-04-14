@@ -18,11 +18,13 @@ use alloy::primitives::Address;
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
-use alloy::providers::{PendingTransactionBuilder, PendingTransactionError, Provider, WalletProvider};
-use alloy::transports::TransportError;
-use anyhow::Context;
+use alloy::providers::{
+    PendingTransactionBuilder, PendingTransactionError, Provider, WalletProvider,
+};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
+use alloy::transports::TransportError;
+use anyhow::Context;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Instant;
@@ -107,7 +109,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
         &mut inbound,
         command_name,
     )
-    .await {
+    .await
+    {
         Ok(txs) => txs,
         Err(e) => {
             tracing::warn!(
@@ -130,8 +133,12 @@ pub async fn run_l1_sender<Input: SendToL1>(
         //
         // When there are no recovered transactions (every iteration after the first),
         // `recv_many` sleeps until at least one command arrives as normal.
-        if recovered.is_empty() || (recovered.len() < config.command_limit && inbound.peek_with(|_| ()).is_some()) {
-            let received = inbound.recv_many(&mut cmd_buffer, config.command_limit - recovered.len()).await;
+        if recovered.is_empty()
+            || (recovered.len() < config.command_limit && inbound.peek_with(|_| ()).is_some())
+        {
+            let received = inbound
+                .recv_many(&mut cmd_buffer, config.command_limit - recovered.len())
+                .await;
 
             if received == 0 {
                 tracing::info!("inbound channel closed");
@@ -382,9 +389,7 @@ where
             );
             return Ok(vec![]);
         }
-        anyhow::bail!(
-            "Error while probing eth_getTransactionByAccountAndNonce support: {e}"
-        );
+        anyhow::bail!("Error while probing eth_getTransactionByAccountAndNonce support: {e}");
     }
 
     // Method is supported. Fetch transaction data for every pending nonce.
