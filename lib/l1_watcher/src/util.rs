@@ -1,7 +1,7 @@
 use crate::watcher::L1WatcherError;
 use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
-use alloy::primitives::{Address, B256, BlockNumber, TxHash};
+use alloy::primitives::{Address, BlockNumber, TxHash};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
@@ -13,7 +13,6 @@ use std::time::Duration;
 use zksync_os_batch_types::{CommitBatchInfoExt, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
-use zksync_os_contract_interface::models::CommitBatchInfo;
 use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
 use zksync_os_types::ProtocolSemanticVersion;
 

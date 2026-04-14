@@ -6,7 +6,7 @@ use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Log, Topic, ValueOrArray};
 use alloy::sol_types::SolEvent;
 use std::collections::HashMap;
-use zksync_os_batch_types::{CommitBatchInfoExt, DiscoveredCommittedBatch};
+use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};

@@ -5,7 +5,7 @@ use alloy::primitives::Address;
 use alloy::providers::DynProvider;
 use alloy::rpc::types::Log;
 use tokio::sync::watch;
-use zksync_os_batch_types::{CommitBatchInfoExt, DiscoveredCommittedBatch};
+use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::WriteFinality;
