@@ -18,7 +18,9 @@ use alloy::primitives::Address;
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
-use alloy::providers::{PendingTransactionError, Provider, WalletProvider};
+use alloy::providers::{PendingTransactionBuilder, PendingTransactionError, Provider, WalletProvider};
+use alloy::transports::TransportError;
+use anyhow::Context;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use futures::future::BoxFuture;
@@ -29,6 +31,12 @@ use tokio::sync::watch;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_pipeline::PeekableReceiver;
+
+/// A code for "method not found" error response as declared in JSON-RPC 2.0 spec.
+const METHOD_NOT_FOUND_CODE: i64 = -32601;
+/// Estimated max amount of gas consumed by transaction sent by L1 sender is ~500k.
+/// We set the limit higher to be safe.
+const MAX_TX_GAS_USED: u64 = 2_000_000;
 
 /// Future that resolves into a (fallible) transaction receipt.
 type TransactionReceiptFuture =
@@ -46,7 +54,6 @@ type TransactionReceiptFuture =
 ///
 /// Known issues:
 ///   * Crashes when there is a gap in incoming L1 blocks (happens periodically with Infura provider)
-///   * Does not attempt to detect in-flight L1 transactions on startup - just crashes if they get mined
 ///
 /// Note: we pass `to_address` - L1 contract address to send transactions to.
 /// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
@@ -88,16 +95,50 @@ pub async fn run_l1_sender<Input: SendToL1>(
         tracing::info!("inbound channel closed");
         return Ok(());
     }
+
+    // On startup, detect any L1 transactions that were submitted in a previous session
+    // but not yet mined. We collect their hashes and paired commands here; the main loop
+    // registers Alloy watchers for them on its first iteration so that they are waited on
+    // alongside any newly-submitted transactions.
+    let mut recovered: Vec<(alloy::primitives::B256, Input)> = match recover_in_flight_txs(
+        &provider,
+        operator_address,
+        gateway,
+        &mut inbound,
+        command_name,
+    )
+    .await {
+        Ok(txs) => txs,
+        Err(e) => {
+            tracing::warn!(
+                command_name,
+                error = ?e,
+                "Failed to recover in-flight transactions. \
+                Falling through to normal send path. Server can still operate with restarts, but might work inefficiently"
+            );
+            Vec::new()
+        }
+    };
+
     // At this point, only actual SendToL1 commands are expected
     loop {
         latency_tracker.enter_state(L1SenderState::WaitingRecv);
-        // This sleeps until **at least one** command is received from the channel. Additionally,
-        // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
-        // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
-        // emptied in every iteration, its size never exceeds `self.command_limit`.
-        let received = inbound
-            .recv_many(&mut cmd_buffer, config.command_limit)
-            .await;
+        // When recovered transactions are present we must not block waiting for new
+        // commands — register their watchers immediately. Use `peek_with` to check
+        // non-blockingly whether anything is queued; if nothing is there yet, skip
+        // `recv_many` entirely and proceed with just the recovered batch.
+        //
+        // When there are no recovered transactions (every iteration after the first),
+        // `recv_many` sleeps until at least one command arrives as normal.
+        if recovered.is_empty() || (recovered.len() < config.command_limit && inbound.peek_with(|_| ()).is_some()) {
+            let received = inbound.recv_many(&mut cmd_buffer, config.command_limit - recovered.len()).await;
+
+            if received == 0 {
+                tracing::info!("inbound channel closed");
+                return Ok(());
+            }
+        }
+
         let mut commands = cmd_buffer
             .drain(..)
             .map(|cmd| -> anyhow::Result<Input> {
@@ -111,21 +152,32 @@ pub async fn run_l1_sender<Input: SendToL1>(
                 }
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        // This method only returns `0` if the channel has been closed and there are no more items
-        // in the queue.
-        if received == 0 {
-            tracing::info!("inbound channel closed");
-            return Ok(());
-        }
+
         latency_tracker.enter_state(L1SenderState::SendingToL1);
         let range = Input::display_range(&commands); // Only for logging
         tracing::info!(command_name, range, "sending L1 transactions");
         L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
+
+        // On the first iteration, create receipt watchers for any in-flight transactions
+        // recovered on startup and prepend them. Their nonces are lower than the ones we
+        // are about to assign, so they must be first in the ordering. On all subsequent
+        // iterations `recovered` is empty and this produces nothing.
+        let mut pending_txs: Vec<(TransactionReceiptFuture, Input, Instant)> = recovered
+            .drain(..)
+            .map(|(tx_hash, cmd)| {
+                let fut = PendingTransactionBuilder::new(provider.root().clone(), tx_hash)
+                    .with_required_confirmations(3)
+                    .get_receipt()
+                    .boxed();
+                (fut, cmd, Instant::now())
+            })
+            .collect();
+
         // It's important to preserve the order of commands -
         // so that we send them downstream also in order.
         // This holds true because l1 transactions are included in the order of sender nonce.
         // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
-        let pending_txs: Vec<(TransactionReceiptFuture, Input, Instant)> =
+        let new_txs: Vec<(TransactionReceiptFuture, Input, Instant)> =
             futures::stream::iter(commands.drain(..))
                 .then(|mut cmd| async {
                     let mut tx_request = tx_request_with_gas_fields(
@@ -188,7 +240,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         // reorg happens and transaction will not be included in the new fork (very-very
                         // unlikely), L1 sender will crash at some point (because a consequent L1
                         // transactions will fail) and recover from the new L1 state after restart.
-                        .with_required_confirmations(1)
+                        .with_required_confirmations(3)
                         // Ensure we don't wait indefinitely and crash if the transaction is not
                         // included on L1 in a reasonable time.
                         .with_timeout(Some(config.transaction_timeout));
@@ -224,6 +276,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                 // but this is not necessary for now - we wait for them to be included in parallel
                 .try_collect::<Vec<_>>()
                 .await?;
+        pending_txs.extend(new_txs);
         tracing::info!(command_name, range, "sent to L1, waiting for inclusion");
         latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
 
@@ -257,6 +310,149 @@ pub async fn run_l1_sender<Input: SendToL1>(
             }
         }
     }
+}
+
+/// Detects in-flight L1 transactions from a previous session and returns their hashes
+/// paired with the corresponding commands, ready to be handed to the main loop.
+///
+/// Uses `eth_getTransactionByAccountAndNonce`, a non-standard Geth extension, to resolve
+/// the transaction hash for each pending nonce. If the RPC method is unavailable or a
+/// transaction has been dropped from the mempool, recovery is skipped entirely and an
+/// empty vec is returned — the channel is left untouched so the normal send path takes over.
+async fn recover_in_flight_txs<F, P, Input>(
+    provider: &FillProvider<F, P>,
+    operator_address: Address,
+    gateway: bool,
+    inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
+    command_name: &str,
+) -> anyhow::Result<Vec<(alloy::primitives::B256, Input)>>
+where
+    F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
+    P: Provider<Ethereum>,
+    Input: SendToL1,
+{
+    // Compare the confirmed nonce ("latest") with the mempool nonce ("pending").
+    // A gap between them means there are transactions submitted in a previous session
+    // that have not yet been mined.
+    let latest_nonce = provider
+        .get_transaction_count(operator_address)
+        .latest()
+        .await
+        .context("get latest transaction count")?;
+    let pending_nonce = provider
+        .get_transaction_count(operator_address)
+        .pending()
+        .await
+        .context("get pending transaction count")?;
+
+    if pending_nonce <= latest_nonce {
+        return Ok(vec![]);
+    }
+
+    let in_flight_count = (pending_nonce - latest_nonce) as usize;
+    tracing::info!(
+        command_name,
+        latest_nonce,
+        pending_nonce,
+        in_flight_count,
+        "Detected in-flight L1 transactions on startup, attempting recovery",
+    );
+
+    // We fetch both `hash` and `input` (calldata) so we can sanity-check each
+    // transaction against its paired command during the pairing step below.
+    #[derive(Debug, serde::Deserialize)]
+    struct TxResponse {
+        hash: alloy::primitives::B256,
+        input: alloy::primitives::Bytes,
+    }
+
+    // Probe whether the provider supports `eth_getTransactionByAccountAndNonce` before
+    // iterating over all pending nonces.
+    if let Err(TransportError::ErrorResp(ref e)) = provider
+        .raw_request::<_, Option<TxResponse>>(
+            "eth_getTransactionByAccountAndNonce".into(),
+            (operator_address, latest_nonce),
+        )
+        .await
+    {
+        if e.code == METHOD_NOT_FOUND_CODE {
+            tracing::warn!(
+                command_name,
+                "eth_getTransactionByAccountAndNonce is not supported by current provider.",
+            );
+            return Ok(vec![]);
+        }
+        anyhow::bail!(
+            "Error while probing eth_getTransactionByAccountAndNonce support: {e}"
+        );
+    }
+
+    // Method is supported. Fetch transaction data for every pending nonce.
+    let mut in_flight_txs = Vec::with_capacity(in_flight_count);
+    for nonce in latest_nonce..pending_nonce {
+        match provider
+            .raw_request::<_, Option<TxResponse>>(
+                "eth_getTransactionByAccountAndNonce".into(),
+                (operator_address, nonce),
+            )
+            .await
+        {
+            Err(err) => {
+                return Err(err).context("fetch in-flight transaction by account and nonce");
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    command_name,
+                    nonce,
+                    "In-flight transaction at nonce {nonce} was dropped from the mempool.",
+                );
+                return Ok(vec![]);
+            }
+            Ok(Some(tx)) => in_flight_txs.push(tx),
+        }
+    }
+
+    // Pull one command per in-flight transaction. The pairing is valid because
+    // L1 transactions are included in nonce order, which matches the order that
+    // commands were originally submitted to the channel.
+    //
+    // As a sanity check we also verify that the on-chain calldata matches what
+    // the command would produce, catching any nonce/command ordering mismatch.
+    let mut paired = Vec::with_capacity(in_flight_count);
+    for tx in in_flight_txs {
+        let cmd = match inbound.recv().await {
+            Some(L1SenderCommand::SendToL1(cmd)) => cmd,
+            Some(L1SenderCommand::Passthrough(batch)) => {
+                anyhow::bail!(
+                    "Unexpected passthrough command for batch {:?} while recovering in-flight transactions",
+                    batch.batch_number()
+                );
+            }
+            None => {
+                anyhow::bail!("Input channel closed while recovering in-flight transactions");
+            }
+        };
+
+        let expected_input = cmd.solidity_call(gateway, &operator_address);
+        if tx.input != expected_input {
+            anyhow::bail!(
+                "In-flight transaction {tx_hash:?} calldata does not match the next \
+                 queued command ({cmd}). The L1 sender state is inconsistent — \
+                 aborting recovery.",
+                tx_hash = tx.hash,
+            );
+        }
+
+        paired.push((tx.hash, cmd));
+    }
+
+    tracing::info!(
+        command_name,
+        in_flight_count,
+        "Recovered in-flight transaction hashes; watchers will be registered on the next loop iteration",
+    );
+
+    Ok(paired)
 }
 
 async fn process_prepending_passthrough_commands<Input: SendToL1>(
@@ -344,8 +540,7 @@ async fn tx_request_with_gas_fields(
         .with_from(operator_address)
         .with_max_fee_per_gas(capped_max_fee_per_gas)
         .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas)
-        // Default value for `max_aggregated_tx_gas` from zksync-era, should always be enough
-        .with_gas_limit(15000000);
+        .with_gas_limit(MAX_TX_GAS_USED);
     Ok(tx)
 }
 
