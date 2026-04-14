@@ -252,10 +252,7 @@ impl FriJobManager {
                         .0;
                 fri_proof_verifier::verify_fri_proof(
                     batch_metadata.previous_stored_batch_info.state_commitment,
-                    batch_metadata
-                        .batch_info
-                        .clone()
-                        .into_stored(),
+                    batch_metadata.batch_info.clone().into_stored(),
                     program_proof,
                 )
             }

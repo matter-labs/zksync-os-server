@@ -146,7 +146,12 @@ impl ExecuteCommand {
             }
             _ => panic!(
                 "Unsupported protocol version: {}",
-                self.batches.first().unwrap().batch.batch_info.protocol_version
+                self.batches
+                    .first()
+                    .unwrap()
+                    .batch
+                    .batch_info
+                    .protocol_version
             ),
         };
 

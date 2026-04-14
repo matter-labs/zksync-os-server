@@ -186,11 +186,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             last_created_batch_at = Some(Instant::now());
 
             // Update prev_batch_info for the next iteration
-            prev_batch_info = batch_envelope
-                .batch
-                .batch_info
-                .clone()
-                .into_stored();
+            prev_batch_info = batch_envelope.batch.batch_info.clone().into_stored();
 
             BATCHER_METRICS
                 .transactions_per_batch
@@ -432,11 +428,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
 
         // Verify that the rebuilt batch matches the stored batch by comparing hashes
         if self.batcher_config.assert_rebuilt_batch_hashes {
-            let rebuilt_stored_batch_info = rebuilt_batch
-                .batch
-                .batch_info
-                .clone()
-                .into_stored();
+            let rebuilt_stored_batch_info = rebuilt_batch.batch.batch_info.clone().into_stored();
 
             anyhow::ensure!(
                 rebuilt_stored_batch_info.hash() == existing_batch.batch_info.hash(),
