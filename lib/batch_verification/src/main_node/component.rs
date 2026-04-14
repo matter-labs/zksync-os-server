@@ -120,6 +120,7 @@ struct BatchVerificationRunner {
     verify_request_tx: mpsc::Sender<VerifyBatch>,
     verify_result_rx: mpsc::Receiver<PeerVerifyBatchResult>,
     l1_chain_id: u64,
+    diamond_proxy_sl: Address,
     multisig_committer: Address,
     last_committed_batch_number: u64,
 }
@@ -155,6 +156,7 @@ impl BatchVerificationRunner {
             verify_request_tx: component.verify_request_tx,
             verify_result_rx: component.verify_result_rx,
             l1_chain_id: component.l1_state.sl_chain_id,
+            diamond_proxy_sl: component.l1_state.diamond_proxy_address_sl(),
             multisig_committer: component.l1_state.validator_timelock_sl,
             last_committed_batch_number: component.last_committed_batch_number,
         }
@@ -397,7 +399,8 @@ impl BatchVerificationRunner {
 
         let Ok(validated_signature) = signature.verify_signature(
             &batch_envelope.batch.previous_stored_batch_info,
-            &batch_envelope.batch.batch_info,
+            &batch_envelope.batch.batch_info.commit_info,
+            self.diamond_proxy_sl,
             self.l1_chain_id,
             self.multisig_committer,
             &batch_envelope.batch.protocol_version,
@@ -521,6 +524,7 @@ mod tests {
             verify_request_tx,
             verify_result_rx,
             l1_chain_id: CHAIN_ID,
+            diamond_proxy_sl: Address::ZERO,
             multisig_committer: MULTISIG_COMMITTER_DUMMY.parse().unwrap(),
             last_committed_batch_number,
         };
