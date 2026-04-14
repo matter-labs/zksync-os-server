@@ -121,6 +121,12 @@ impl CommittedBatchProvider {
         }
     }
 
+    /// Returns `DiscoveredCommittedBatch` from in-memory map if available.
+    pub fn get(&self, batch_number: u64) -> Option<DiscoveredCommittedBatch> {
+        let inner = self.inner.read().expect("lock poisoned");
+        inner.batches.get(&batch_number).cloned()
+    }
+
     /// Fetches a batch set with bounded concurrency to reduce startup latency without issuing an
     /// unbounded number of L1 requests.
     async fn load_batch_numbers(

@@ -336,7 +336,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
-        commit_proof_execute_block_numbers(runtime, &l1_state, &committed_batch_provider)
+        commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider)
             .await
             .expect("failed to resolve startup committed batches");
 
@@ -1363,63 +1363,37 @@ fn check_batch_verification_mismatch(
 }
 
 async fn commit_proof_execute_block_numbers(
-    runtime: &Runtime,
     l1_state: &L1State,
     committed_batch_provider: &CommittedBatchProvider,
 ) -> anyhow::Result<(u64, u64, u64)> {
     let last_committed_block = if l1_state.last_committed_batch == 0 {
         0
     } else {
-        wait_for_batch_or_shutdown(
-            runtime,
-            committed_batch_provider,
-            l1_state.last_committed_batch,
-        )
-        .await?
-        .last_block_number()
+        committed_batch_provider
+            .get(l1_state.last_committed_batch)
+            .expect("last_committed_batch is expected to be loaded")
+            .last_block_number()
     };
 
     // only used to log on node startup
     let last_proved_block = if l1_state.last_proved_batch == 0 {
         0
     } else {
-        wait_for_batch_or_shutdown(
-            runtime,
-            committed_batch_provider,
-            l1_state.last_proved_batch,
-        )
-        .await?
-        .last_block_number()
+        committed_batch_provider
+            .get(l1_state.last_proved_batch)
+            .expect("last_proved_batch is expected to be loaded")
+            .last_block_number()
     };
 
     let last_executed_block = if l1_state.last_executed_batch == 0 {
         0
     } else {
-        wait_for_batch_or_shutdown(
-            runtime,
-            committed_batch_provider,
-            l1_state.last_executed_batch,
-        )
-        .await?
-        .last_block_number()
+        committed_batch_provider
+            .get(l1_state.last_executed_batch)
+            .expect("last_executed_batch is expected to be loaded")
+            .last_block_number()
     };
     Ok((last_committed_block, last_proved_block, last_executed_block))
-}
-
-async fn wait_for_batch_or_shutdown(
-    runtime: &Runtime,
-    committed_batch_provider: &CommittedBatchProvider,
-    batch_number: u64,
-) -> anyhow::Result<zksync_os_batch_types::DiscoveredCommittedBatch> {
-    let shutdown = runtime.on_shutdown_signal().clone();
-    tokio::pin!(shutdown);
-
-    tokio::select! {
-        batch = committed_batch_provider.wait_for_batch(batch_number) => Ok(batch),
-        _ = &mut shutdown => anyhow::bail!(
-            "shutdown started while waiting for committed batch {batch_number} during startup"
-        ),
-    }
 }
 
 fn run_fake_snark_provers(
