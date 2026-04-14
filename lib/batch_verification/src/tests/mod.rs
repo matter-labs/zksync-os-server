@@ -72,10 +72,10 @@ pub fn dummy_batch_metadata(batch_number: u64, from: u64, to: u64) -> BatchMetad
         },
         batch_info: BatchInfo {
             commit_info: dummy_commit_batch_info(batch_number, from, to),
-            chain_address: Address::ZERO,
             upgrade_tx_hash: None,
             blob_sidecar: None,
         },
+        chain_address: Address::ZERO,
         first_block_number: from,
         last_block_number: to,
         pubdata_mode: zksync_os_types::PubdataMode::Calldata,

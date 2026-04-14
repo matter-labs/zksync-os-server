@@ -94,7 +94,7 @@ impl SendToL1 for CommitCommand {
                 .unzip();
 
             IMultisigCommitter::commitBatchesMultisigCall::new((
-                self.input.batch.batch_info.chain_address,
+                self.input.batch.chain_address,
                 U256::from(self.input.batch_number()),
                 U256::from(self.input.batch_number()),
                 encode_commit_batch_data(
@@ -111,7 +111,7 @@ impl SendToL1 for CommitCommand {
         } else {
             // todo: encode through `CommitCalldata` instead
             IExecutor::commitBatchesSharedBridgeCall::new((
-                self.input.batch.batch_info.chain_address,
+                self.input.batch.chain_address,
                 U256::from(self.input.batch_number()),
                 U256::from(self.input.batch_number()),
                 encode_commit_batch_data(

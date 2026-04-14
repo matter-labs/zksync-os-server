@@ -38,7 +38,7 @@ impl SendToL1 for ExecuteCommand {
 
     fn solidity_call(&self, gateway: bool, operator: &Address) -> Bytes {
         IExecutor::executeBatchesSharedBridgeCall::new((
-            self.batches.first().unwrap().batch.batch_info.chain_address,
+            self.batches.first().unwrap().batch.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
             U256::from(self.batches.last().unwrap().batch_number()),
             self.to_calldata_suffix(gateway, operator).into(),

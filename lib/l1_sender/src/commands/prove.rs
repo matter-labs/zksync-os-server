@@ -33,7 +33,7 @@ impl SendToL1 for ProofCommand {
 
     fn solidity_call(&self, _gateway: bool, _operator: &Address) -> Bytes {
         proveBatchesSharedBridgeCall::new((
-            self.batches.first().unwrap().batch.batch_info.chain_address,
+            self.batches.first().unwrap().batch.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
             U256::from(self.batches.last().unwrap().batch_number()),
             self.to_calldata_suffix().into(),

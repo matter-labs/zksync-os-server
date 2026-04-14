@@ -135,7 +135,6 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                 })
                 .collect(),
             self.chain_id,
-            self.diamond_proxy_sl,
             request.batch_number,
             request.pubdata_mode,
             self.l1_state.sl_chain_id,
@@ -153,7 +152,8 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
 
         let signature = BatchSignature::sign_batch(
             &request.prev_commit_data,
-            &batch_info,
+            &batch_info.commit_info,
+            self.diamond_proxy_sl,
             self.l1_state.sl_chain_id,
             self.l1_state.validator_timelock_sl,
             &blocks.first().unwrap().1.protocol_version,

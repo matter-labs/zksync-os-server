@@ -46,7 +46,6 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             })
             .collect(),
         chain_id,
-        chain_address_sl,
         batch_number,
         pubdata_mode,
         sl_chain_id,
@@ -94,6 +93,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         BatchMetadata {
             previous_stored_batch_info: prev_batch_info,
             batch_info,
+            chain_address: chain_address_sl,
             first_block_number: block_number_from,
             last_block_number: block_number_to,
             pubdata_mode,

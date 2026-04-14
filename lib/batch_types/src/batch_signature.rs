@@ -8,8 +8,6 @@ use zksync_os_contract_interface::calldata::encode_commit_batch_data;
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_types::ProtocolSemanticVersion;
 
-use crate::BatchInfo;
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BatchSignatureSet(Vec<ValidatedBatchSignature>);
 
@@ -62,7 +60,8 @@ impl BatchSignature {
     /// Sign a batch for `commitBatchesMultisig`
     pub async fn sign_batch(
         prev_batch_info: &StoredBatchInfo,
-        batch_info: &BatchInfo,
+        commit_batch_info: &CommitBatchInfo,
+        diamond_proxy_sl: Address,
         sl_chain_id: u64,
         multisig_committer: Address,
         protocol_version: &ProtocolSemanticVersion,
@@ -70,8 +69,8 @@ impl BatchSignature {
     ) -> Self {
         let digest = eip712_multisig_digest(
             prev_batch_info,
-            &batch_info.commit_info,
-            batch_info.chain_address,
+            commit_batch_info,
+            diamond_proxy_sl,
             sl_chain_id,
             multisig_committer,
             protocol_version,

@@ -482,7 +482,8 @@ mod tests {
         let addr = signer.address();
         let sig = BatchSignature::sign_batch(
             &batch.batch.previous_stored_batch_info,
-            &batch.batch.batch_info,
+            &batch.batch.batch_info.commit_info,
+            batch.batch.chain_address,
             CHAIN_ID,
             MULTISIG_COMMITTER_DUMMY.parse().unwrap(),
             &batch.batch.protocol_version,
