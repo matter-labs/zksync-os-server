@@ -19,8 +19,6 @@ pub struct BatchInfo {
     #[serde(flatten)]
     pub commit_info: CommitBatchInfo,
     /// Chain's diamond proxy address on L1.
-    // todo: this should not be a part of this struct as this is static information for the entire chain
-    //       but we cannot remove it without breaking backwards compatibility
     pub chain_address: Address,
     /// L1 protocol upgrade transaction that was finalized in this batch. Missing for the vast
     /// majority of batches.

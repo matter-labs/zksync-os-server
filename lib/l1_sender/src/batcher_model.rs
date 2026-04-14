@@ -20,7 +20,8 @@ use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion};
 ///    instead of putting computed CommitBatchInfo/StoredBatchInfo here (L1 contract-specific classes),
 ///    we may want to include lower-level fields
 ///
-///  Note that any change to this struct is breaking since we serialize it in `ProofStorage`
+///  Note that we serialize it in `ProofStorage`, so a change here will invalidate old entries
+///  This isn't really a problem as we only store the recent ones
 ///
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BatchMetadata {
