@@ -7,6 +7,19 @@ use zksync_os_contract_interface::IExecutor::BlockExecution;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::WriteFinality;
 
+/// Watches settlement-layer execution events and advances the executed finality frontier.
+///
+/// This component reads `BlockExecution` events, waits until the corresponding committed batch is
+/// available in `CommittedBatchProvider`, and then updates `WriteFinality` with the latest
+/// executed batch / block numbers.
+///
+/// Depends on `CommittedBatchProvider` to resolve the executed batch back to its committed block range;
+///
+/// Depended on by:
+/// - `PriorityTreeManager`, which replays and caches priority operations up to the executed
+///   frontier;
+/// - startup / replay code that reads executed finality to decide where block processing resumes;
+/// - RPC-facing storage initialization, which uses executed progress as part of node recovery.
 pub struct L1ExecuteWatcher<Finality> {
     contract_address: Address,
     next_batch_number: u64,

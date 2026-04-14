@@ -16,8 +16,16 @@ use zksync_os_contract_interface::models::StoredBatchInfo;
 const INIT_MAX_PARALLEL_BATCH_FETCHES: usize = 10;
 const WAIT_FOR_BATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// In-memory store of committed batches discovered either during startup catch-up or by live L1
-/// watcher.
+/// In-memory store of committed batches discovered on startup and by the live commit watcher.
+///
+/// This component provides a single lookup / wait API for committed batch metadata regardless of
+/// whether the batch came from startup catch-up or from the live `L1CommitWatcher`.
+///
+/// Depended on by:
+/// - `L1ExecuteWatcher`, which waits for a committed batch before marking it executed;
+/// - `Batcher`, which replays existing L1 batches before creating new ones;
+/// - `PriorityTreeManager`, which reconstructs / advances the priority tree using committed batch
+///   boundaries.
 ///
 /// Construct it with [`Self::new`], which eagerly loads the startup frontier batches needed by
 /// startup bookkeeping. Then run [`Self::init`] in a background task to populate the remaining
