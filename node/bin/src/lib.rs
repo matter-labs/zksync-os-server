@@ -302,31 +302,27 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let tree_db = tree_at_genesis.tree;
     let tree_for_rpc = Arc::new(tree_db.clone());
 
-    let committed_batch_provider = CommittedBatchProvider::new(&l1_state, || async {
-        let genesis_state = genesis.state().await;
-        load_genesis_stored_batch_info(genesis_state, genesis_root_hash, genesis_root_leaves)
-            .await
-            .unwrap()
-    })
+    let committed_batch_provider = CommittedBatchProvider::new(
+        &l1_state,
+        config.l1_watcher_config.max_blocks_to_process,
+        || async {
+            let genesis_state = genesis.state().await;
+            load_genesis_stored_batch_info(genesis_state, genesis_root_hash, genesis_root_leaves)
+                .await
+                .unwrap()
+        },
+    )
     .await
     .expect("failed to init CommittedBatchProvider");
 
     let committed_batch_provider_for_init = committed_batch_provider.clone();
     let l1_state_for_init = l1_state.clone();
     let max_blocks_to_process = config.l1_watcher_config.max_blocks_to_process;
-    let runtime_for_init = runtime.clone();
-    runtime.spawn_critical_with_shutdown_signal("committed batch provider init", |shutdown| async move {
-        tokio::pin!(shutdown);
-
-        tokio::select! {
-            result = committed_batch_provider_for_init.init(&l1_state_for_init, max_blocks_to_process) => {
-                if let Err(err) = result {
-                    tracing::error!(%err, "failed to initialize CommittedBatchProvider");
-                    let _ = runtime_for_init.initiate_graceful_shutdown();
-                }
-            }
-            _ = &mut shutdown => {}
-        }
+    runtime.spawn_critical_task("committed batch provider init", async move {
+        committed_batch_provider_for_init
+            .init(&l1_state_for_init, max_blocks_to_process)
+            .await
+            .expect("failed to initialize CommittedBatchProvider");
     });
 
     let state = State::new(&config.general_config, &genesis).await;

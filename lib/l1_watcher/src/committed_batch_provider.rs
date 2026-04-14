@@ -19,11 +19,10 @@ const WAIT_FOR_BATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// In-memory store of committed batches discovered either during startup catch-up or by live L1
 /// watcher.
 ///
-/// Construct it with [`Self::new`], then run [`Self::init`] in a background task to populate
-/// historical batches while consumers use [`Self::wait_for_batch`] to block until a specific batch
-/// becomes available. During startup, `init()` loads committed batches in the inclusive range
-/// `max(last_executed_batch, 1)..=last_committed_batch`, with the startup frontier batches loaded
-/// first.
+/// Construct it with [`Self::new`], which eagerly loads the startup frontier batches needed by
+/// startup bookkeeping. Then run [`Self::init`] in a background task to populate the remaining
+/// historical committed range while consumers use [`Self::wait_for_batch`] to block until a
+/// specific batch becomes available.
 #[derive(Debug, Clone)]
 pub struct CommittedBatchProvider {
     inner: Arc<RwLock<Inner>>,
@@ -36,12 +35,11 @@ struct Inner {
 }
 
 impl CommittedBatchProvider {
-    /// Creates an empty provider and inserts the genesis batch if startup state still points at it.
-    ///
-    /// Historical committed batches are intentionally not loaded here. Call [`Self::init`] in a
-    /// background task to populate the rest of the startup range.
+    /// Creates a provider, inserts the genesis batch if needed, and eagerly loads the startup
+    /// frontier batches used by startup bookkeeping.
     pub async fn new(
         l1_state: &L1State,
+        max_l1_blocks_to_scan: u64,
         load_genesis_batch_info: impl AsyncFnOnce() -> StoredBatchInfo,
     ) -> anyhow::Result<Self> {
         let provider = Self {
@@ -63,28 +61,29 @@ impl CommittedBatchProvider {
             });
         }
 
-        Ok(provider)
-    }
-
-    /// Loads historical committed batches discovered on startup.
-    ///
-    /// The three frontier batches used by startup bookkeeping are fetched first so callers waiting
-    /// on `last_committed_batch`, `last_proved_batch`, or `last_executed_batch` can proceed as
-    /// soon as possible. The remaining committed batches are fetched afterwards, with bounded
-    /// parallelism.
-    pub async fn init(&self, l1_state: &L1State, max_l1_blocks_to_scan: u64) -> anyhow::Result<()> {
-        let (prioritized_batch_numbers, remaining_batch_numbers) = startup_batch_numbers(
+        let (prioritized_batch_numbers, _) = startup_batch_numbers(
             l1_state.last_committed_batch,
             l1_state.last_proved_batch,
             l1_state.last_executed_batch,
         );
+        provider
+            .load_batch_numbers(
+                l1_state.diamond_proxy_sl.clone(),
+                max_l1_blocks_to_scan,
+                prioritized_batch_numbers,
+            )
+            .await?;
 
-        self.load_batch_numbers(
-            l1_state.diamond_proxy_sl.clone(),
-            max_l1_blocks_to_scan,
-            prioritized_batch_numbers,
-        )
-        .await?;
+        Ok(provider)
+    }
+
+    /// Loads the remaining historical committed batches discovered on startup.
+    pub async fn init(&self, l1_state: &L1State, max_l1_blocks_to_scan: u64) -> anyhow::Result<()> {
+        let (_, remaining_batch_numbers) = startup_batch_numbers(
+            l1_state.last_committed_batch,
+            l1_state.last_proved_batch,
+            l1_state.last_executed_batch,
+        );
         self.load_batch_numbers(
             l1_state.diamond_proxy_sl.clone(),
             max_l1_blocks_to_scan,
