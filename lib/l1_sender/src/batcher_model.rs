@@ -10,8 +10,8 @@ use time::UtcDateTime;
 use zksync_os_batch_types::{BatchInfo, BatchSignatureSet};
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_observability::LatencyDistributionTracker;
-use zksync_os_types::PubdataMode;
 use zksync_os_types::ProvingVersion;
+use zksync_os_types::PubdataMode;
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
 
@@ -39,8 +39,6 @@ pub struct BatchMetadata {
     pub pubdata_mode: PubdataMode,
     // note: can equal to zero
     pub tx_count: usize,
-    #[serde(default = "default_execution_version")]
-    pub execution_version: u32,
     #[serde(default)]
     pub computational_native_used: Option<u64>,
     #[serde(default)]
@@ -54,13 +52,17 @@ pub struct BatchMetadata {
 impl BatchMetadata {
     /// Gets batch metadata verification key hash.
     pub fn verification_key_hash(&self) -> anyhow::Result<&'static str> {
-        Ok(ProvingVersion::try_from(self.batch_info.protocol_version.clone())
-            .context("Failed to get proving version from protocol version")?
-            .vk_hash())
+        Ok(
+            ProvingVersion::try_from(self.batch_info.protocol_version.clone())
+                .context("Failed to get proving version from protocol version")?
+                .vk_hash(),
+        )
     }
 
     pub fn proving_version(&self) -> anyhow::Result<ProvingVersion> {
-        Ok(ProvingVersion::try_from(self.batch_info.protocol_version.clone())?)
+        Ok(ProvingVersion::try_from(
+            self.batch_info.protocol_version.clone(),
+        )?)
     }
 }
 
