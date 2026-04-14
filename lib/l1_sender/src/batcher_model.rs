@@ -66,10 +66,6 @@ impl BatchMetadata {
     }
 }
 
-fn default_execution_version() -> u32 {
-    1
-}
-
 fn default_pubdata_mode() -> PubdataMode {
     PubdataMode::Calldata
 }
