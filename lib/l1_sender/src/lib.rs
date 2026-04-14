@@ -39,6 +39,9 @@ const METHOD_NOT_FOUND_CODE: i64 = -32601;
 /// Estimated max amount of gas consumed by transaction sent by L1 sender is ~500k.
 /// We set the limit higher to be safe.
 const MAX_TX_GAS_USED: u64 = 2_000_000;
+/// Number of L1 confirmations required before a transaction is considered final.
+/// Set to 3 to provide resilience against shallow reorgs.
+const REQUIRED_CONFIRMATIONS: u64 = 3;
 
 /// Future that resolves into a (fallible) transaction receipt.
 type TransactionReceiptFuture =
@@ -173,7 +176,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
             .drain(..)
             .map(|(tx_hash, cmd)| {
                 let fut = PendingTransactionBuilder::new(provider.root().clone(), tx_hash)
-                    .with_required_confirmations(3)
+                    .with_required_confirmations(REQUIRED_CONFIRMATIONS)
                     .get_receipt()
                     .boxed();
                 (fut, cmd, Instant::now())
@@ -247,7 +250,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         // reorg happens and transaction will not be included in the new fork (very-very
                         // unlikely), L1 sender will crash at some point (because a consequent L1
                         // transactions will fail) and recover from the new L1 state after restart.
-                        .with_required_confirmations(3)
+                        .with_required_confirmations(REQUIRED_CONFIRMATIONS)
                         // Ensure we don't wait indefinitely and crash if the transaction is not
                         // included on L1 in a reasonable time.
                         .with_timeout(Some(config.transaction_timeout));
