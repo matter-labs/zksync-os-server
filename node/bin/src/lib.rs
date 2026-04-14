@@ -336,9 +336,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
-        commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider)
-            .await
-            .expect("failed to resolve startup committed batches");
+        commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider).await;
 
     let node_startup_state = NodeStateOnStartup {
         node_role,
@@ -1365,7 +1363,7 @@ fn check_batch_verification_mismatch(
 async fn commit_proof_execute_block_numbers(
     l1_state: &L1State,
     committed_batch_provider: &CommittedBatchProvider,
-) -> anyhow::Result<(u64, u64, u64)> {
+) -> (u64, u64, u64) {
     let last_committed_block = if l1_state.last_committed_batch == 0 {
         0
     } else {
@@ -1393,7 +1391,7 @@ async fn commit_proof_execute_block_numbers(
             .expect("last_executed_batch is expected to be loaded")
             .last_block_number()
     };
-    Ok((last_committed_block, last_proved_block, last_executed_block))
+    (last_committed_block, last_proved_block, last_executed_block)
 }
 
 fn run_fake_snark_provers(
