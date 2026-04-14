@@ -8,7 +8,7 @@ use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
 use zksync_os_batch_types::BlockMerkleTreeData;
-use zksync_os_batch_types::{BatchInfo, BatchSignature};
+use zksync_os_batch_types::{BatchSignature, CommitBatchInfoExt};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::TreeBatchOutput;
@@ -122,7 +122,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
         let state_view = self.read_state.state_view_at(request.last_block_number)?;
         let multichain_root = read_multichain_root(state_view);
 
-        let (batch_info, _) = BatchInfo::build(
+        let (batch_info, _) = CommitBatchInfoExt::build(
             blocks
                 .iter()
                 .map(|(block_output, replay_record, tree)| {

@@ -1,5 +1,5 @@
 use alloy::primitives::Address;
-use zksync_os_batch_types::BatchInfo;
+use zksync_os_batch_types::CommitBatchInfoExt;
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
@@ -28,12 +28,11 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
 ) -> anyhow::Result<BatchForSigning<ProverInput>> {
     let block_number_from = blocks.first().unwrap().1.block_context.block_number;
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
-    let execution_version = blocks.first().unwrap().1.block_context.execution_version;
     let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
 
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
-    let (batch_info, blob_sidecar) = BatchInfo::build(
+    let (batch_info, blob_sidecar) = CommitBatchInfoExt::build(
         blocks
             .iter()
             .map(|(block_output, replay_record, tree, _)| {

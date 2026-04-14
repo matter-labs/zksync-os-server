@@ -7,7 +7,7 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
-use zksync_os_batch_types::{BatchInfo, BatchSignatureSet};
+use zksync_os_batch_types::{BatchSignatureSet, CommitBatchInfoExt};
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_observability::LatencyDistributionTracker;
 use zksync_os_types::ProvingVersion;
@@ -30,7 +30,7 @@ pub struct BatchMetadata {
     // This is not purely commitment information, but we keep old serialization name for
     // backwards-compatibility.
     #[serde(rename = "commit_batch_info")]
-    pub batch_info: BatchInfo,
+    pub batch_info: CommitBatchInfoExt,
     pub chain_address: Address,
     pub blob_sidecar: Option<BlobTransactionSidecar>,
     pub first_block_number: u64,

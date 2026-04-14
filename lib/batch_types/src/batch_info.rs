@@ -14,17 +14,21 @@ use zksync_os_types::{
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 
+/// Commitment information about a batch.
+/// Contains enough data to restore `StoredBatchInfo` that got applied on-chain.
+/// Contains enough data to construct public input hash.
+/// todo: these fields should be a part of `CommitBatchInfo` but needs to be changed on L1 contracts' side first
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct BatchInfo {
+pub struct CommitBatchInfoExt {
     #[serde(flatten)]
     pub commit_info: CommitBatchInfo,
-    pub protocol_version: ProtocolSemanticVersion,
     /// L1 protocol upgrade transaction that was finalized in this batch. Missing for the vast
     /// majority of batches.
     pub upgrade_tx_hash: Option<B256>,
+    pub protocol_version: ProtocolSemanticVersion,
 }
 
-impl BatchInfo {
+impl CommitBatchInfoExt {
     #[allow(clippy::too_many_arguments)]
     pub fn build(
         blocks: Vec<(
@@ -242,7 +246,7 @@ impl BatchInfo {
     }
 }
 
-impl Deref for BatchInfo {
+impl Deref for CommitBatchInfoExt {
     type Target = CommitBatchInfo;
 
     fn deref(&self) -> &Self::Target {
@@ -250,7 +254,7 @@ impl Deref for BatchInfo {
     }
 }
 
-impl DerefMut for BatchInfo {
+impl DerefMut for CommitBatchInfoExt {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.commit_info
     }

@@ -5,7 +5,7 @@ use alloy::primitives::Address;
 use alloy::providers::DynProvider;
 use alloy::rpc::types::Log;
 use tokio::sync::watch;
-use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
+use zksync_os_batch_types::{CommitBatchInfoExt, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::WriteFinality;
@@ -118,15 +118,9 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
 
             tracing::debug!(batch_number, "discovered committed batch");
             let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
-            let committed_batch = util::fetch_commit_calldata(&self.zk_chain, tx_hash).await?;
-
-            // todo: stop using this struct once fully migrated from S3
-            let last_executed_batch_info = BatchInfo {
-                commit_info: committed_batch.commit_info,
-                protocol_version: committed_batch.protocol_version.clone(),
-                upgrade_tx_hash: committed_batch.upgrade_tx_hash,
-            };
-            let batch_info = last_executed_batch_info.into_stored();
+            let batch_info = util::fetch_committed_batch_data(&self.zk_chain, tx_hash)
+                .await?
+                .into_stored();
             let committed_batch = DiscoveredCommittedBatch {
                 batch_info,
                 block_range: report.firstBlockNumber..=report.lastBlockNumber,
