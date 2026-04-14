@@ -212,7 +212,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             );
 
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
-            if let Some(sidecar) = batch_envelope.batch.batch_info.blob_sidecar.clone() {
+            if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone() {
                 self.sidecar_sender
                     .send(sidecar)
                     .await

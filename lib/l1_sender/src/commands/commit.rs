@@ -127,7 +127,7 @@ impl SendToL1 for CommitCommand {
     }
 
     fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
-        self.input.batch.batch_info.blob_sidecar.clone()
+        self.input.batch.blob_sidecar.clone()
     }
 }
 

@@ -85,7 +85,6 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         let last_executed_batch_info = BatchInfo {
             commit_info: committed_batch.commit_info,
             upgrade_tx_hash: committed_batch.upgrade_tx_hash,
-            blob_sidecar: None,
         };
         let batch_info = last_executed_batch_info.into_stored(&committed_batch.protocol_version);
         Ok(DiscoveredCommittedBatch {

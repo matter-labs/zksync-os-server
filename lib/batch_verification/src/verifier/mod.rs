@@ -122,7 +122,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
         let state_view = self.read_state.state_view_at(request.last_block_number)?;
         let multichain_root = read_multichain_root(state_view);
 
-        let batch_info = BatchInfo::new(
+        let (batch_info, _) = BatchInfo::build(
             blocks
                 .iter()
                 .map(|(block_output, replay_record, tree)| {

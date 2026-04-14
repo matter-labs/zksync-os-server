@@ -21,13 +21,11 @@ pub struct BatchInfo {
     /// L1 protocol upgrade transaction that was finalized in this batch. Missing for the vast
     /// majority of batches.
     pub upgrade_tx_hash: Option<B256>,
-    /// Blobs sidecar that should be sent with commit operation.
-    pub blob_sidecar: Option<BlobTransactionSidecar>,
 }
 
 impl BatchInfo {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn build(
         blocks: Vec<(
             &BlockOutput,
             &BlockContext,
@@ -40,7 +38,7 @@ impl BatchInfo {
         sl_chain_id: u64,
         multichain_root: B256,
         protocol_version: &ProtocolSemanticVersion,
-    ) -> Self {
+    ) -> (Self, Option<BlobTransactionSidecar>) {
         let mut priority_operations_hash = keccak256([]);
         let mut number_of_layer1_txs = 0;
         let mut number_of_layer2_txs = 0;
@@ -173,11 +171,13 @@ impl BatchInfo {
             operator_da_input: da_fields.operator_da_input,
             sl_chain_id,
         };
-        Self {
-            commit_info,
-            upgrade_tx_hash,
-            blob_sidecar: da_fields.blob_sidecar,
-        }
+        (
+            Self {
+                commit_info,
+                upgrade_tx_hash,
+            },
+            da_fields.blob_sidecar,
+        )
     }
 
     /// Calculate keccak256 hash of BatchOutput part of public input

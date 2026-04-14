@@ -33,7 +33,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
 
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
-    let batch_info = BatchInfo::new(
+    let (batch_info, blob_sidecar) = BatchInfo::build(
         blocks
             .iter()
             .map(|(block_output, replay_record, tree, _)| {
@@ -94,6 +94,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             previous_stored_batch_info: prev_batch_info,
             batch_info,
             chain_address: chain_address_sl,
+            blob_sidecar,
             first_block_number: block_number_from,
             last_block_number: block_number_to,
             pubdata_mode,
