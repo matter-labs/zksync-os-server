@@ -347,7 +347,7 @@ async fn debug_trace_transaction_and_block_default_struct_log_tracer(
         .try_into_default_frame()
         .expect("expected default struct log trace");
     assert!(!tx_trace.failed);
-    assert_eq!(u128::from(tx_trace.gas), receipt.gas_used());
+    assert_eq!(tx_trace.gas, receipt.gas_used());
     assert!(!tx_trace.struct_logs.is_empty());
     let first_tx_log = tx_trace.struct_logs.first().expect("missing struct log");
     assert_eq!(first_tx_log.depth, 1);
