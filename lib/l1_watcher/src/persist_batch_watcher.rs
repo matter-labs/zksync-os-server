@@ -84,9 +84,10 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         // todo: stop using this struct once fully migrated from S3
         let last_executed_batch_info = BatchInfo {
             commit_info: committed_batch.commit_info,
+            protocol_version: committed_batch.protocol_version.clone(),
             upgrade_tx_hash: committed_batch.upgrade_tx_hash,
         };
-        let batch_info = last_executed_batch_info.into_stored(&committed_batch.protocol_version);
+        let batch_info = last_executed_batch_info.into_stored();
         Ok(DiscoveredCommittedBatch {
             batch_info,
             block_range: report.firstBlockNumber..=report.lastBlockNumber,

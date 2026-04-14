@@ -403,7 +403,7 @@ impl BatchVerificationRunner {
             self.diamond_proxy_sl,
             self.l1_chain_id,
             self.multisig_committer,
-            &batch_envelope.batch.protocol_version,
+            &batch_envelope.batch.batch_info.protocol_version,
         ) else {
             BATCH_VERIFICATION_SEQUENCER_METRICS.failed_responses[&"invalid_signature"].inc();
             tracing::warn!(
@@ -486,7 +486,7 @@ mod tests {
             batch.batch.chain_address,
             CHAIN_ID,
             MULTISIG_COMMITTER_DUMMY.parse().unwrap(),
-            &batch.batch.protocol_version,
+            &batch.batch.batch_info.protocol_version,
             &signer,
         )
         .await;

@@ -18,6 +18,7 @@ const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 pub struct BatchInfo {
     #[serde(flatten)]
     pub commit_info: CommitBatchInfo,
+    pub protocol_version: ProtocolSemanticVersion,
     /// L1 protocol upgrade transaction that was finalized in this batch. Missing for the vast
     /// majority of batches.
     pub upgrade_tx_hash: Option<B256>,
@@ -174,6 +175,7 @@ impl BatchInfo {
         (
             Self {
                 commit_info,
+                protocol_version: protocol_version.clone(),
                 upgrade_tx_hash,
             },
             da_fields.blob_sidecar,
@@ -181,10 +183,10 @@ impl BatchInfo {
     }
 
     /// Calculate keccak256 hash of BatchOutput part of public input
-    pub fn public_input_hash(&self, protocol_version: &ProtocolSemanticVersion) -> B256 {
+    pub fn public_input_hash(&self) -> B256 {
         let commit_info = &self.commit_info;
         let upgrade_tx_hash = self.upgrade_tx_hash.unwrap_or(B256::ZERO);
-        match protocol_version.minor {
+        match self.protocol_version.minor {
             // v30 and v31 use different packed layouts for batch output hash:
             // v31 inserts number_of_layer2_txs between L1 tx count and priority_operations_hash.
             30 => B256::from(keccak256(
@@ -219,12 +221,12 @@ impl BatchInfo {
                 )
                     .abi_encode_packed(),
             )),
-            _ => panic!("Unsupported protocol version: {protocol_version}"),
+            _ => panic!("Unsupported protocol version: {}", self.protocol_version),
         }
     }
 
-    pub fn into_stored(self, protocol_version: &ProtocolSemanticVersion) -> StoredBatchInfo {
-        let commitment = self.public_input_hash(protocol_version);
+    pub fn into_stored(self) -> StoredBatchInfo {
+        let commitment = self.public_input_hash();
         let commit_info = self.commit_info;
         StoredBatchInfo {
             batch_number: commit_info.batch_number,

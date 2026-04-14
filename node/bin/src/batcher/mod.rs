@@ -190,7 +190,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 .batch
                 .batch_info
                 .clone()
-                .into_stored(&batch_envelope.batch.protocol_version);
+                .into_stored();
 
             BATCHER_METRICS
                 .transactions_per_batch
@@ -436,7 +436,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 .batch
                 .batch_info
                 .clone()
-                .into_stored(&rebuilt_batch.batch.protocol_version);
+                .into_stored();
 
             anyhow::ensure!(
                 rebuilt_stored_batch_info.hash() == existing_batch.batch_info.hash(),

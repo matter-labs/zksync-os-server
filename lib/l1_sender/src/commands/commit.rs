@@ -100,7 +100,7 @@ impl SendToL1 for CommitCommand {
                 encode_commit_batch_data(
                     &self.input.batch.previous_stored_batch_info,
                     self.input.batch.batch_info.commit_info.clone(),
-                    self.input.batch.protocol_version.minor,
+                    self.input.batch.batch_info.protocol_version.minor,
                 )
                 .into(),
                 signers,
@@ -117,7 +117,7 @@ impl SendToL1 for CommitCommand {
                 encode_commit_batch_data(
                     &self.input.batch.previous_stored_batch_info,
                     self.input.batch.batch_info.commit_info.clone(),
-                    self.input.batch.protocol_version.minor,
+                    self.input.batch.batch_info.protocol_version.minor,
                 )
                 .into(),
             ))

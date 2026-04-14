@@ -255,7 +255,7 @@ impl FriJobManager {
                     batch_metadata
                         .batch_info
                         .clone()
-                        .into_stored(&batch_metadata.protocol_version),
+                        .into_stored(),
                     program_proof,
                 )
             }

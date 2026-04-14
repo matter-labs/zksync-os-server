@@ -103,7 +103,6 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
                 .map(|(block_output, _, _, _)| block_output.tx_results.len())
                 .sum(),
             execution_version,
-            protocol_version,
             computational_native_used: Some(
                 blocks
                     .iter()

@@ -72,6 +72,7 @@ pub fn dummy_batch_metadata(batch_number: u64, from: u64, to: u64) -> BatchMetad
         },
         batch_info: BatchInfo {
             commit_info: dummy_commit_batch_info(batch_number, from, to),
+            protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
             upgrade_tx_hash: None,
         },
         chain_address: Address::ZERO,
@@ -81,7 +82,6 @@ pub fn dummy_batch_metadata(batch_number: u64, from: u64, to: u64) -> BatchMetad
         pubdata_mode: zksync_os_types::PubdataMode::Calldata,
         tx_count: 0,
         execution_version: 1,
-        protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
         computational_native_used: None,
         logs: vec![],
         messages: vec![],
