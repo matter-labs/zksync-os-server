@@ -1159,6 +1159,7 @@ impl AnvilL1 {
                 .chain_id(L1_CHAIN_ID)
                 .arg("--load-state")
                 .arg(l1_state_path)
+                .block_time(1)
         })?;
 
         let wallet = provider.wallet().clone();
