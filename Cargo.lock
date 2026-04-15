@@ -14241,6 +14241,7 @@ dependencies = [
  "blake2",
  "futures",
  "rangemap",
+ "reth-tasks",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
