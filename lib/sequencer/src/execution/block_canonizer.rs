@@ -122,19 +122,19 @@ where
                                 produced_replay.block_context.block_number
                             );
                         }
-                        let block_number = produced_replay.block_context.block_number;
-                        let block_ts = produced_replay.block_context.timestamp;
                         if output
-                            .send(BlockPayload {
-                                output: block_output,
-                                record: produced_replay,
-                                command_type: cmd_type,
-                            })
+                            .send_and_record(
+                                BlockPayload {
+                                    output: block_output,
+                                    record: produced_replay,
+                                    command_type: cmd_type,
+                                },
+                                &self.health_reporter,
+                            )
                             .is_err()
                         {
                             anyhow::bail!("Outbound channel closed");
                         }
-                        self.health_reporter.record_processed(block_number, Some(block_ts));
                     } else {
                         tracing::info!(
                             "Received new block {} (block output hash: {}) from Consensus. \
@@ -166,19 +166,19 @@ where
                             replay_record.block_context.block_number,
                             replay_record.block_output_hash,
                         );
-                        let block_number = replay_record.block_context.block_number;
-                        let block_ts = replay_record.block_context.timestamp;
                         if output
-                            .send(BlockPayload {
-                                output: block_output,
-                                record: replay_record,
-                                command_type: cmd_type,
-                            })
+                            .send_and_record(
+                                BlockPayload {
+                                    output: block_output,
+                                    record: replay_record,
+                                    command_type: cmd_type,
+                                },
+                                &self.health_reporter,
+                            )
                             .is_err()
                         {
                             anyhow::bail!("Outbound channel closed");
                         }
-                        self.health_reporter.record_processed(block_number, Some(block_ts));
                         }
                         BlockCommandType::Produce | BlockCommandType::Rebuild => {
                             tracing::info!(

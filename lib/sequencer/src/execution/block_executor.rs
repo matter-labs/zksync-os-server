@@ -168,17 +168,18 @@ where
                 .set(replay_record.block_context.execution_version as u64);
 
             if output
-                .send(BlockPayload {
-                    output: block_output.clone(),
-                    record: replay_record.clone(),
-                    command_type: cmd_type,
-                })
+                .send_and_record(
+                    BlockPayload {
+                        output: block_output.clone(),
+                        record: replay_record.clone(),
+                        command_type: cmd_type,
+                    },
+                    &self.health_reporter,
+                )
                 .is_err()
             {
                 anyhow::bail!("Outbound channel closed");
             }
-            self.health_reporter
-                .record_processed(block_number, Some(replay_record.block_context.timestamp));
         }
     }
 }

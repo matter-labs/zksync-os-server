@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::time::Duration;
 use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_mempool::MarkingTxStream;
-use zksync_os_pipeline::HasBlockSeq;
+use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
@@ -33,7 +33,7 @@ pub enum BlockCommandType {
 
 /// Message flowing from `BlockExecutor` → `BlockCanonizer` → `BlockApplier`.
 ///
-/// A named struct rather than a raw tuple so that `HasBlockSeq` can be implemented
+/// A named struct rather than a raw tuple so that `HasBlockRangeEnd` can be implemented
 /// (orphan rule prevents impls on tuples of foreign types).
 #[derive(Clone, Debug)]
 pub struct BlockPayload {
@@ -42,8 +42,8 @@ pub struct BlockPayload {
     pub command_type: BlockCommandType,
 }
 
-impl HasBlockSeq for BlockPayload {
-    fn block_seq(&self) -> u64 {
+impl HasBlockRangeEnd for BlockPayload {
+    fn block_number(&self) -> u64 {
         self.record.block_context.block_number
     }
     fn block_timestamp(&self) -> Option<u64> {
@@ -53,15 +53,15 @@ impl HasBlockSeq for BlockPayload {
 
 /// Message flowing from `BlockApplier` → `TreeManager`.
 ///
-/// A named struct so that `HasBlockSeq` can be implemented.
+/// A named struct so that `HasBlockRangeEnd` can be implemented.
 #[derive(Clone, Debug)]
 pub struct AppliedBlock {
     pub output: BlockOutput,
     pub record: ReplayRecord,
 }
 
-impl HasBlockSeq for AppliedBlock {
-    fn block_seq(&self) -> u64 {
+impl HasBlockRangeEnd for AppliedBlock {
+    fn block_number(&self) -> u64 {
         self.record.block_context.block_number
     }
     fn block_timestamp(&self) -> Option<u64> {
@@ -201,25 +201,25 @@ mod tests {
     }
 
     #[test]
-    fn block_payload_has_block_seq() {
+    fn block_payload_has_block_range_end() {
         let r = make_replay_record(42, 1_700_000_000);
         let payload = BlockPayload {
             output: make_block_output(),
             record: r,
             command_type: BlockCommandType::Produce,
         };
-        assert_eq!(payload.block_seq(), 42);
+        assert_eq!(payload.block_number(), 42);
         assert_eq!(payload.block_timestamp(), Some(1_700_000_000));
     }
 
     #[test]
-    fn applied_block_has_block_seq() {
+    fn applied_block_has_block_range_end() {
         let r = make_replay_record(100, 1_700_000_100);
         let block = AppliedBlock {
             output: make_block_output(),
             record: r,
         };
-        assert_eq!(block.block_seq(), 100);
+        assert_eq!(block.block_number(), 100);
         assert_eq!(block.block_timestamp(), Some(1_700_000_100));
     }
 }

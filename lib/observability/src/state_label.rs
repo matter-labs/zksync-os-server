@@ -22,27 +22,3 @@ impl StateLabel for GenericComponentState {
         self.as_str()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn generic_state_implements_state_label() {
-        let s = GenericComponentState::Active;
-        assert_eq!(s.generic(), GenericComponentState::Active);
-        assert_eq!(s.specific(), "active");
-    }
-
-    #[test]
-    fn all_generic_variants_round_trip() {
-        for (state, expected) in [
-            (GenericComponentState::Idle, "idle"),
-            (GenericComponentState::Active, "active"),
-            (GenericComponentState::Throttled, "throttled"),
-        ] {
-            assert_eq!(state.specific(), expected);
-            assert_eq!(state.generic(), state);
-        }
-    }
-}

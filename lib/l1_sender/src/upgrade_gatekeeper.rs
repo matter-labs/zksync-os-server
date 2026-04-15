@@ -96,43 +96,23 @@ impl PipelineComponent for UpgradeGatekeeper {
         mut input: TrackedUnboundedReceiver<Self::Input>,
         output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
-        let UpgradeGatekeeper {
-            zk_chain_sl,
-            health_reporter,
-        } = self;
-
         loop {
-            health_reporter.enter_state(GenericComponentState::Idle);
+            self.health_reporter.enter_state(GenericComponentState::Idle);
             let Some(command) = input.recv().await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
 
             if let L1SenderCommand::SendToL1(command) = &command {
-                health_reporter.enter_state(GenericComponentState::Active);
+                self.health_reporter.enter_state(GenericComponentState::Active);
 
                 let batch_protocol_version = command.input().batch.protocol_version.clone();
-
-                // `self` was destructured above, so `zk_chain_sl` is a plain local variable here.
-                // The free function `wait_until_protocol_version` takes `&ZkChain<DynProvider>`
-                // directly, which matches that local — no `self` receiver is needed or available.
-                wait_until_protocol_version(&zk_chain_sl, &batch_protocol_version).await?;
+                wait_until_protocol_version(&self.zk_chain_sl, &batch_protocol_version).await?;
             }
 
-            let last_block = command.last_block_number();
-            let last_block_timestamp = match &command {
-                L1SenderCommand::SendToL1(cmd) => cmd
-                    .as_ref()
-                    .last()
-                    .map(|e| e.batch.batch_info.last_block_timestamp),
-                L1SenderCommand::Passthrough(envelope) => {
-                    Some(envelope.batch.batch_info.last_block_timestamp)
-                }
-            };
-            if output.send(command).is_err() {
+            if output.send_and_record(command, &self.health_reporter).is_err() {
                 anyhow::bail!("Outbound channel closed");
             }
-            health_reporter.record_processed(last_block, last_block_timestamp);
         }
     }
 }

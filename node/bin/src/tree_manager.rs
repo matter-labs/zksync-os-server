@@ -37,29 +37,26 @@ impl PipelineComponent for TreeManager {
         mut input: TrackedUnboundedReceiver<Self::Input>,
         output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
-        let tree = self.tree;
-        let health_reporter = self.health_reporter;
-
         // only used to skip blocks that were already processed by the tree -
         // will be removed once idempotency is handled on the framework level
-        let mut last_processed_block = tree.latest_version()?.expect("tree wasn't initialized");
+        let mut last_processed_block = self.tree.latest_version()?.expect("tree wasn't initialized");
         loop {
-            health_reporter.enter_state(GenericComponentState::Idle);
+            self.health_reporter.enter_state(GenericComponentState::Idle);
 
             let Some(AppliedBlock {
                 output: block_output,
                 record: replay_record,
-            }) = input.recv_and_record(&health_reporter).await
+            }) = input.recv_and_record(&self.health_reporter).await
             else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
-            health_reporter.enter_state(GenericComponentState::Active);
+            self.health_reporter.enter_state(GenericComponentState::Active);
             let started_at = Instant::now();
             let block_number = block_output.header.number;
 
             if block_number <= last_processed_block {
-                let mut tree_clone = tree.clone();
+                let mut tree_clone = self.tree.clone();
                 tokio::task::spawn_blocking(move || {
                     tree_clone.truncate_recent_versions(block_number)
                 })
@@ -82,10 +79,10 @@ impl PipelineComponent for TreeManager {
                 .collect::<Vec<_>>();
 
             let count = tree_entries.len();
-            let mut tree_clone = tree.clone();
+            let mut tree_clone = self.tree.clone();
             let tree_batch_output =
                 tokio::task::spawn_blocking(move || tree_clone.extend(&tree_entries)).await??;
-            last_processed_block = tree
+            last_processed_block = self.tree
                 .latest_version()?
                 .expect("uninitialized tree after applying a block");
             assert_eq!(last_processed_block, block_number);
@@ -108,11 +105,11 @@ impl PipelineComponent for TreeManager {
             TREE_METRICS.block_number.set(block_number);
             let tree_block = BlockMerkleTreeData {
                 block_start: MerkleTreeVersion {
-                    tree: tree.clone(),
+                    tree: self.tree.clone(),
                     block: block_number - 1,
                 },
                 block_end: MerkleTreeVersion {
-                    tree: tree.clone(),
+                    tree: self.tree.clone(),
                     block: block_number,
                 },
             };

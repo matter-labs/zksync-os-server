@@ -114,36 +114,24 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
                     .boxed()
                     .map(report_exit("Batch response processor"));
 
-            // Destructure to get health_reporter by value while passing &self to BatchVerifier::new
-            // (avoiding partial move conflict by using struct literal construction)
-            let BatchVerificationPipelineStep {
-                config,
-                threshold,
-                validators,
-                last_committed_batch_number,
-                l1_state,
-                health_reporter,
-                _phantom,
-            } = self;
-
             BATCH_VERIFICATION_SEQUENCER_METRICS
                 .threshold
-                .set(threshold);
+                .set(self.threshold);
             BATCH_VERIFICATION_SEQUENCER_METRICS
                 .validators_count
-                .set(validators.len());
+                .set(self.validators.len());
 
             let verifier = BatchVerifier {
-                config,
-                accepted_signers: validators,
-                threshold,
+                config: self.config,
+                accepted_signers: self.validators,
+                threshold: self.threshold,
                 request_id_counter: AtomicU64::new(1),
                 response_channels,
                 server,
-                l1_chain_id: l1_state.sl_chain_id,
-                multisig_committer: l1_state.validator_timelock_sl,
-                last_committed_batch_number,
-                health_reporter,
+                l1_chain_id: self.l1_state.sl_chain_id,
+                multisig_committer: self.l1_state.validator_timelock_sl,
+                last_committed_batch_number: self.last_committed_batch_number,
+                health_reporter: self.health_reporter,
             };
             let verifier_fut = verifier
                 .run(input, output)
@@ -154,23 +142,13 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
             Ok(())
         } else {
             while let Some(batch) = input.recv_and_record(&self.health_reporter).await {
-                forward_batch(
-                    &output,
-                    batch.with_signatures(BatchSignatureData::NotNeeded),
-                )?;
+                output
+                    .send(batch.with_signatures(BatchSignatureData::NotNeeded))
+                    .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
             }
             Ok(())
         }
     }
-}
-
-fn forward_batch<E>(
-    output: &TrackedUnboundedSender<SignedBatchEnvelope<E>>,
-    batch_envelope: SignedBatchEnvelope<E>,
-) -> anyhow::Result<()> {
-    output
-        .send(batch_envelope)
-        .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))
 }
 
 /// Takes BatchVerificationResponse from server and routes them to appropriate
@@ -278,12 +256,13 @@ impl BatchVerifier {
                     "Skipping signing of already committed batch {}",
                     batch_envelope.batch_number()
                 );
-                forward_batch(
-                    &singed_batcher_sender,
-                    batch_envelope
-                        .with_stage(BatchExecutionStage::BatchSigned)
-                        .with_signatures(BatchSignatureData::AlreadyCommitted),
-                )?;
+                singed_batcher_sender
+                    .send(
+                        batch_envelope
+                            .with_stage(BatchExecutionStage::BatchSigned)
+                            .with_signatures(BatchSignatureData::AlreadyCommitted),
+                    )
+                    .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
                 continue;
             }
 
@@ -329,12 +308,13 @@ impl BatchVerifier {
             metrics.attempts_to_success.observe(retry_count + 1);
             metrics.total_latency.observe(start_time.elapsed());
 
-            forward_batch(
-                &singed_batcher_sender,
-                batch_envelope
-                    .with_signatures(BatchSignatureData::Signed { signatures })
-                    .with_stage(BatchExecutionStage::BatchSigned),
-            )?;
+            singed_batcher_sender
+                .send(
+                    batch_envelope
+                        .with_signatures(BatchSignatureData::Signed { signatures })
+                        .with_stage(BatchExecutionStage::BatchSigned),
+                )
+                .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
         }
     }
 

@@ -69,6 +69,14 @@ impl PipelineComponent for FriProvingPipelineStep {
         mut input: TrackedUnboundedReceiver<Self::Input>,
         output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
+        // Health reporting is intentionally delegated to FriJobManager rather than
+        // using recv_and_record / send_and_record here. FRI proving is asynchronous:
+        // a batch arrives via `input`, gets queued in FriJobManager, and the proof
+        // comes back later via `batches_with_proof_receiver`. Recording at channel
+        // level would report a batch as "processed" the moment it is queued, not when
+        // the proof is ready. FriJobManager calls record_processed when a proof is
+        // submitted, so the health watermark reflects actual proving progress.
+
         // Forward batches: pipeline input → FriJobManager (add_job) → pipeline output (via proofs channel)
         // Two concurrent tasks handle the bidirectional flow
         tokio::select! {

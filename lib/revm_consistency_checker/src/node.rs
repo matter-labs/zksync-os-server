@@ -110,21 +110,17 @@ where
         mut input: TrackedUnboundedReceiver<Self::Input>,
         output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
-        let Self {
-            state,
-            internal_config_manager,
-            revert_enabled,
-            health_reporter,
-        } = self;
         // Remember unsupported execution versions to log only one warning for it.
         let mut warned_unsupported_versions: HashSet<u32> = HashSet::new();
 
         loop {
-            health_reporter.enter_state(GenericComponentState::Idle);
+            self.health_reporter.enter_state(GenericComponentState::Idle);
+            // Plain recv: health is recorded via send_and_record after the check completes.
+            // Recording on recv would advance the watermark before the block is validated.
             let Some(AppliedBlock {
                 output: block_output,
                 record: replay_record,
-            }) = input.recv_and_record(&health_reporter).await
+            }) = input.recv().await
             else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
@@ -154,10 +150,10 @@ where
                 }
             };
 
-            health_reporter.enter_state(GenericComponentState::Active);
+            self.health_reporter.enter_state(GenericComponentState::Active);
             let state_block_number = replay_record.block_context.block_number - 1;
             let block_hashes = replay_record.block_context.block_hashes;
-            let state_view = state
+            let state_view = self.state
                 .state_view_at(state_block_number)
                 .map_err(anyhow::Error::from)?;
 
@@ -210,24 +206,23 @@ where
                     &block_output,
                     &replay_record,
                     &compare_report,
-                    revert_enabled,
-                    &internal_config_manager,
+                    self.revert_enabled,
+                    &self.internal_config_manager,
                 )?;
             }
 
             if output
-                .send(AppliedBlock {
-                    output: block_output.clone(),
-                    record: replay_record.clone(),
-                })
+                .send_and_record(
+                    AppliedBlock {
+                        output: block_output.clone(),
+                        record: replay_record.clone(),
+                    },
+                    &self.health_reporter,
+                )
                 .is_err()
             {
                 anyhow::bail!("Outbound channel closed");
             }
-            health_reporter.record_processed(
-                replay_record.block_context.block_number,
-                Some(replay_record.block_context.timestamp),
-            );
         }
     }
 }

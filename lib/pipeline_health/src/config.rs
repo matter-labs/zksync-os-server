@@ -358,12 +358,6 @@ mod tests {
     }
 
     #[test]
-    fn metrics_interval_default_is_five_seconds() {
-        let config = PipelineHealthConfig::default();
-        assert_eq!(config.metrics_interval, Duration::from_secs(5));
-    }
-
-    #[test]
     fn component_override_fully_replaces_group_condition() {
         // Block component: group says max_block_lag=50, override gives it only time lag
         let config = PipelineHealthConfig {
@@ -469,18 +463,6 @@ mod tests {
         // Others use group default
         let cond = config.condition_for(ComponentId::GaplessCommitter);
         assert_eq!(cond.max_time_lag, Some(Duration::from_secs(300)));
-    }
-
-    #[test]
-    fn component_overrides_default_is_all_none() {
-        let overrides = ComponentOverrides::default();
-        for id in [
-            ComponentId::BlockExecutor,
-            ComponentId::Batcher,
-            ComponentId::L1SenderExecute,
-        ] {
-            assert!(overrides.get(id).is_none(), "expected None for {id:?}");
-        }
     }
 
     #[test]

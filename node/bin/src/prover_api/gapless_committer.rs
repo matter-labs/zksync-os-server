@@ -38,13 +38,11 @@ impl PipelineComponent for GaplessCommitter {
         mut input: TrackedUnboundedReceiver<Self::Input>,
         output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
-        let health_reporter = self.health_reporter;
-
         let mut buffer: BTreeMap<u64, SignedBatchEnvelope<FriProof>> = BTreeMap::new();
         let mut next_expected_batch_number = self.next_expected_batch_number;
 
         loop {
-            health_reporter.enter_state(GenericComponentState::Idle);
+            self.health_reporter.enter_state(GenericComponentState::Idle);
             // Plain recv: do NOT record health on arrival. A batch sitting in the
             // reorder buffer has not been committed; recording it here would report
             // a position ahead of what has actually been processed.
@@ -52,7 +50,7 @@ impl PipelineComponent for GaplessCommitter {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
-            health_reporter.enter_state(GenericComponentState::Active);
+            self.health_reporter.enter_state(GenericComponentState::Active);
             buffer.insert(batch.batch_number(), batch);
 
             // Flush ready batches in order.
@@ -71,9 +69,6 @@ impl PipelineComponent for GaplessCommitter {
                     ready.last().unwrap().batch_number()
                 );
                 for batch in ready {
-                    // Save the position info before consuming the batch.
-                    let last_block_number = batch.batch.last_block_number;
-                    let last_block_timestamp = batch.batch.batch_info.last_block_timestamp;
                     let batch = batch.with_stage(BatchExecutionStage::FriProofStored);
                     let stored_batch = StoredBatch::V1(batch);
                     self.proof_storage
@@ -90,12 +85,10 @@ impl PipelineComponent for GaplessCommitter {
                         .map(L1SenderCommand::SendToL1)
                         .context("Committer batch signature failure")?
                     };
-                    output
-                        .send(result)
-                        .ok()
-                        .context("outbound channel closed")?;
                     // Record health only after the batch has been committed and sent downstream.
-                    health_reporter.record_processed(last_block_number, Some(last_block_timestamp));
+                    if output.send_and_record(result, &self.health_reporter).is_err() {
+                        anyhow::bail!("Outbound channel closed");
+                    }
                 }
             }
         }

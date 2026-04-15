@@ -34,37 +34,27 @@ impl PipelineComponent for GaplessL1ProofSender {
         mut input: TrackedUnboundedReceiver<Self::Input>,
         output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
-        let health_reporter = self.health_reporter;
-
         let mut buffer: BTreeMap<u64, L1SenderCommand<ProofCommand>> = BTreeMap::new();
         let mut next_expected_batch_number = self.next_expected_batch_number;
 
         loop {
-            health_reporter.enter_state(GenericComponentState::Idle);
+            self.health_reporter.enter_state(GenericComponentState::Idle);
             match input.recv().await {
                 Some(command) => {
-                    health_reporter.enter_state(GenericComponentState::Active);
+                    self.health_reporter.enter_state(GenericComponentState::Active);
 
                     buffer.insert(command.first_batch_number(), command);
 
                     // Flush ready commands
                     while let Some(next_command) = buffer.remove(&next_expected_batch_number) {
-                        let last_block = next_command.last_block_number();
-                        let last_block_timestamp = match &next_command {
-                            L1SenderCommand::SendToL1(cmd) => cmd
-                                .as_ref()
-                                .last()
-                                .map(|e| e.batch.batch_info.last_block_timestamp),
-                            L1SenderCommand::Passthrough(envelope) => {
-                                Some(envelope.batch.batch_info.last_block_timestamp)
-                            }
-                        };
                         next_expected_batch_number += next_command.batch_count() as u64;
-                        if output.send(next_command).is_err() {
+                        if output
+                            .send_and_record(next_command, &self.health_reporter)
+                            .is_err()
+                        {
                             anyhow::bail!("Outbound channel closed");
                         }
-                        health_reporter.record_processed(last_block, last_block_timestamp);
-                        health_reporter.enter_state(GenericComponentState::Active);
+                        self.health_reporter.enter_state(GenericComponentState::Active);
                     }
                 }
                 None => {

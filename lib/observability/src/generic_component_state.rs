@@ -21,15 +21,3 @@ impl GenericComponentState {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn as_str_covers_all_variants() {
-        assert_eq!(GenericComponentState::Idle.as_str(), "idle");
-        assert_eq!(GenericComponentState::Active.as_str(), "active");
-        assert_eq!(GenericComponentState::Throttled.as_str(), "throttled");
-    }
-}

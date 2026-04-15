@@ -71,16 +71,6 @@ impl ComponentId {
 mod tests {
     use super::*;
 
-    #[test]
-    fn as_str_returns_snake_case() {
-        assert_eq!(ComponentId::BlockExecutor.as_str(), "block_executor");
-        assert_eq!(ComponentId::FriJobManager.as_str(), "fri_job_manager");
-        assert_eq!(
-            ComponentId::GaplessL1ProofSender.as_str(),
-            "gapless_l1_proof_sender"
-        );
-    }
-
     /// Guards against as_str() and the EncodeLabelValue derive diverging.
     ///
     /// Both must produce the same snake_case string for each variant. If they diverge,

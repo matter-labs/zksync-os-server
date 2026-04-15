@@ -1,4 +1,4 @@
-use crate::has_block_seq::HasBlockSeq;
+use crate::has_block_range_end::HasBlockRangeEnd;
 use tokio::sync::mpsc;
 
 /// A sender for an unbounded channel.
@@ -11,6 +11,28 @@ impl<T> TrackedUnboundedSender<T> {
     /// Returns `Err` only if the receiver has been dropped.
     pub fn send(&self, value: T) -> Result<(), mpsc::error::SendError<T>> {
         self.inner.send(value)
+    }
+}
+
+impl<T: HasBlockRangeEnd> TrackedUnboundedSender<T> {
+    /// Send an item and immediately record it as processed with the health reporter.
+    ///
+    /// Extracts block info from the item before consuming it, sends, then calls
+    /// `record_processed`. Recording only happens if the send succeeds — if the
+    /// receiver has been dropped the error is returned and nothing is recorded.
+    ///
+    /// This is the sender-side counterpart of
+    /// [`TrackedUnboundedReceiver::recv_and_record`].
+    pub fn send_and_record(
+        &self,
+        value: T,
+        reporter: &zksync_os_observability::ComponentHealthReporter,
+    ) -> Result<(), mpsc::error::SendError<T>> {
+        let block_number = value.block_number();
+        let block_timestamp = value.block_timestamp();
+        self.inner.send(value)?;
+        reporter.record_processed(block_number, block_timestamp);
+        Ok(())
     }
 }
 
@@ -146,7 +168,7 @@ impl<T> TrackedUnboundedReceiver<T> {
     }
 }
 
-impl<T: HasBlockSeq> TrackedUnboundedReceiver<T> {
+impl<T: HasBlockRangeEnd> TrackedUnboundedReceiver<T> {
     /// Receive the next item and immediately record it as processed with the health reporter.
     /// Replaces the manual `let last_block = ...; reporter.record_processed(...)` pattern.
     pub async fn recv_and_record(
@@ -154,7 +176,7 @@ impl<T: HasBlockSeq> TrackedUnboundedReceiver<T> {
         reporter: &zksync_os_observability::ComponentHealthReporter,
     ) -> Option<T> {
         let item = self.recv().await?;
-        reporter.record_processed(item.block_seq(), item.block_timestamp());
+        reporter.record_processed(item.block_number(), item.block_timestamp());
         Some(item)
     }
 
@@ -189,7 +211,7 @@ impl<T: HasBlockSeq> TrackedUnboundedReceiver<T> {
             // The last one (index `start + n - 1`) has the highest sequence number
             // because the channel preserves send order.
             let last = &buf[start + n - 1];
-            reporter.record_processed(last.block_seq(), last.block_timestamp());
+            reporter.record_processed(last.block_number(), last.block_timestamp());
         }
         n
     }
@@ -262,15 +284,15 @@ mod tests {
 
     #[tokio::test]
     async fn recv_and_record_calls_reporter() {
-        use crate::has_block_seq::HasBlockSeq;
+        use crate::has_block_range_end::HasBlockRangeEnd;
         use zksync_os_observability::ComponentHealthReporter;
 
         struct Msg {
             seq: u64,
             ts: u64,
         }
-        impl HasBlockSeq for Msg {
-            fn block_seq(&self) -> u64 {
+        impl HasBlockRangeEnd for Msg {
+            fn block_number(&self) -> u64 {
                 self.seq
             }
             fn block_timestamp(&self) -> Option<u64> {
@@ -292,18 +314,74 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn send_and_record_records_on_success() {
+        use crate::has_block_range_end::HasBlockRangeEnd;
+        use zksync_os_observability::ComponentHealthReporter;
+
+        struct Msg {
+            seq: u64,
+            ts: u64,
+        }
+        impl HasBlockRangeEnd for Msg {
+            fn block_number(&self) -> u64 {
+                self.seq
+            }
+            fn block_timestamp(&self) -> Option<u64> {
+                Some(self.ts)
+            }
+        }
+
+        let (tx, mut rx) = tracked_unbounded_channel::<Msg>();
+        let (reporter, health_rx) = ComponentHealthReporter::new("test");
+
+        assert!(tx
+            .send_and_record(Msg { seq: 7, ts: 700 }, &reporter)
+            .is_ok());
+        // Reporter updated immediately after send.
+        assert_eq!(health_rx.borrow().last_processed_block_number, Some(7));
+        assert_eq!(health_rx.borrow().last_processed_block_timestamp, Some(700));
+        // Item was actually delivered.
+        assert_eq!(rx.recv().await.unwrap().seq, 7);
+    }
+
+    #[tokio::test]
+    async fn send_and_record_does_not_record_when_receiver_dropped() {
+        use crate::has_block_range_end::HasBlockRangeEnd;
+        use zksync_os_observability::ComponentHealthReporter;
+
+        struct Msg {
+            seq: u64,
+        }
+        impl HasBlockRangeEnd for Msg {
+            fn block_number(&self) -> u64 {
+                self.seq
+            }
+        }
+
+        let (tx, rx) = tracked_unbounded_channel::<Msg>();
+        drop(rx);
+        let (reporter, health_rx) = ComponentHealthReporter::new("test");
+
+        assert!(tx
+            .send_and_record(Msg { seq: 1 }, &reporter)
+            .is_err());
+        // Reporter must NOT have been updated — send failed.
+        assert_eq!(health_rx.borrow().last_processed_block_number, None);
+    }
+
     /// Helper type shared by recv_many_and_record tests.
     mod recv_many_and_record_tests {
         use super::*;
-        use crate::has_block_seq::HasBlockSeq;
+        use crate::has_block_range_end::HasBlockRangeEnd;
         use zksync_os_observability::ComponentHealthReporter;
 
         pub(super) struct Msg {
             pub seq: u64,
             pub ts: u64,
         }
-        impl HasBlockSeq for Msg {
-            fn block_seq(&self) -> u64 {
+        impl HasBlockRangeEnd for Msg {
+            fn block_number(&self) -> u64 {
                 self.seq
             }
             fn block_timestamp(&self) -> Option<u64> {

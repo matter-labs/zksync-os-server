@@ -12,7 +12,7 @@ pub struct AdjacentSnapshot {
 /// Compute adjacent block and time diffs for each downstream component.
 ///
 /// `adjacency` is a slice of (upstream, downstream) pairs.
-/// `snapshots` maps each ComponentId to (last_processed_block_seq, last_processed_block_timestamp).
+/// `snapshots` maps each ComponentId to (last_processed_block_number, last_processed_block_timestamp).
 ///
 /// Returns a HashMap keyed by downstream ComponentId. Components with no upstream adjacency
 /// pair are absent from the result — callers treat their lag as 0 (BlockExecutor, the head)

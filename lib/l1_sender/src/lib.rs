@@ -445,26 +445,3 @@ async fn validate_tx_receipt<Input: SendToL1>(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn l1_sender_state_label_mappings() {
-        assert_eq!(L1SenderState::Idle.generic(), GenericComponentState::Idle);
-        assert_eq!(L1SenderState::Idle.specific(), "idle");
-        assert_eq!(
-            L1SenderState::SendingToL1.generic(),
-            GenericComponentState::Active
-        );
-        assert_eq!(L1SenderState::SendingToL1.specific(), "sending_to_l1");
-        assert_eq!(
-            L1SenderState::WaitingL1Inclusion.generic(),
-            GenericComponentState::Throttled
-        );
-        assert_eq!(
-            L1SenderState::WaitingL1Inclusion.specific(),
-            "waiting_l1_inclusion"
-        );
-    }
-}

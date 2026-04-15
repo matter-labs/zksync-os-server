@@ -67,6 +67,13 @@ impl PipelineComponent for SnarkProvingPipelineStep {
         mut input: TrackedUnboundedReceiver<Self::Input>,
         output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
+        // Health reporting is intentionally delegated to SnarkJobManager rather than
+        // using recv_and_record / send_and_record here. SNARK proving is asynchronous:
+        // a batch arrives via `input`, gets queued in SnarkJobManager, and the proof
+        // command comes back later via `proof_commands_receiver`. Recording at channel
+        // level would report a batch as "processed" when queued, not when proved.
+        // SnarkJobManager calls record_processed when a proof is submitted.
+
         // Forward batches: pipeline input → SnarkJobManager → pipeline output
         // Two concurrent tasks handle the bidirectional flow
         tokio::select! {

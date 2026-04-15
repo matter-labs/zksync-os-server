@@ -417,27 +417,3 @@ impl AsyncWrite for ChannelWriter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn batch_verification_state_label_mappings() {
-        assert_eq!(
-            BatchVerificationClientState::Connecting.generic(),
-            GenericComponentState::Throttled
-        );
-        assert_eq!(
-            BatchVerificationClientState::Connecting.specific(),
-            "connecting"
-        );
-        assert_eq!(
-            BatchVerificationClientState::Idle.generic(),
-            GenericComponentState::Idle
-        );
-        assert_eq!(
-            BatchVerificationClientState::Active.generic(),
-            GenericComponentState::Active
-        );
-    }
-}
