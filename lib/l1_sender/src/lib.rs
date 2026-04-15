@@ -86,7 +86,6 @@ pub async fn run_l1_sender<Input: SendToL1>(
     let operator_address =
         register_operator::<_, Input>(&mut provider, config.operator_signer).await?;
     let mut cmd_buffer = Vec::with_capacity(config.command_limit);
-
     // Process all potential passthrough commands first
     if process_prepending_passthrough_commands(
         &mut inbound,
@@ -102,10 +101,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
     }
 
     // On startup, detect any L1 transactions that were submitted in a previous session
-    // but not yet mined. We collect their hashes and paired commands here; the main loop
-    // registers Alloy watchers for them on its first iteration so that they are waited on
-    // alongside any newly-submitted transactions.
-    let mut recovered: Vec<(alloy::primitives::B256, Input)> = match recover_in_flight_txs(
+    // but not yet mined, and pair them with the corresponding queued commands.
+    let mut recovered = match recover_in_flight_txs(
         &provider,
         operator_address,
         gateway,
@@ -114,15 +111,10 @@ pub async fn run_l1_sender<Input: SendToL1>(
     )
     .await
     {
-        Ok(txs) => txs,
-        Err(e) => {
-            tracing::warn!(
-                command_name,
-                error = ?e,
-                "Failed to recover in-flight transactions. \
-                Falling through to normal send path. Server can still operate with restarts, but might work inefficiently"
-            );
-            Vec::new()
+        Ok(paired) => paired,
+        Err(err) => {
+            tracing::warn!("Error during in-flight transaction recovery: {err}");
+            vec![]
         }
     };
 
@@ -322,13 +314,18 @@ pub async fn run_l1_sender<Input: SendToL1>(
     }
 }
 
-/// Detects in-flight L1 transactions from a previous session and returns their hashes
-/// paired with the corresponding commands, ready to be handed to the main loop.
+/// Detects in-flight L1 transactions from a previous session, pairs each one with the
+/// corresponding queued command, and returns them ready to hand to the main loop.
 ///
 /// Uses `eth_getTransactionByAccountAndNonce`, a non-standard Geth extension, to resolve
-/// the transaction hash for each pending nonce. If the RPC method is unavailable or a
-/// transaction has been dropped from the mempool, recovery is skipped entirely and an
-/// empty vec is returned — the channel is left untouched so the normal send path takes over.
+/// the transaction hash for each pending nonce. Returns `Ok(vec![])` when recovery should
+/// be skipped: no nonce gap, RPC method unsupported, or a transaction dropped from the
+/// mempool.
+///
+/// For each in-flight tx, the next command is peeked (without consuming) and its calldata
+/// is compared against the on-chain input. On a match the command is consumed and paired.
+/// On the first mismatch the loop stops and whatever has been paired so far is returned —
+/// the unmatched command remains in `inbound` for the normal send path.
 async fn recover_in_flight_txs<F, P, Input>(
     provider: &FillProvider<F, P>,
     operator_address: Address,
@@ -368,8 +365,6 @@ where
         "Detected in-flight L1 transactions on startup, attempting recovery",
     );
 
-    // We fetch both `hash` and `input` (calldata) so we can sanity-check each
-    // transaction against its paired command during the pairing step below.
     #[derive(Debug, serde::Deserialize)]
     struct TxResponse {
         hash: alloy::primitives::B256,
@@ -395,10 +390,13 @@ where
         anyhow::bail!("Error while probing eth_getTransactionByAccountAndNonce support: {e}");
     }
 
-    // Method is supported. Fetch transaction data for every pending nonce.
-    let mut in_flight_txs = Vec::with_capacity(in_flight_count);
+    // For each pending nonce, fetch the in-flight tx then peek at the next queued command.
+    // If the command's calldata matches what is on-chain, consume and pair it. On the first
+    // mismatch, stop — the unmatched command stays in `inbound` and will be re-sent by the
+    // normal send path (replacing the in-flight tx at that nonce).
+    let mut paired = Vec::with_capacity(in_flight_count);
     for nonce in latest_nonce..pending_nonce {
-        match provider
+        let tx = match provider
             .raw_request::<_, Option<TxResponse>>(
                 "eth_getTransactionByAccountAndNonce".into(),
                 (operator_address, nonce),
@@ -406,7 +404,7 @@ where
             .await
         {
             Err(err) => {
-                return Err(err).context("fetch in-flight transaction by account and nonce");
+                anyhow::bail!("Failed to fetch in-flight transaction at nonce {nonce}: {err}");
             }
             Ok(None) => {
                 tracing::warn!(
@@ -414,50 +412,47 @@ where
                     nonce,
                     "In-flight transaction at nonce {nonce} was dropped from the mempool.",
                 );
-                return Ok(vec![]);
+                return Ok(paired);
             }
-            Ok(Some(tx)) => in_flight_txs.push(tx),
-        }
-    }
-
-    // Pull one command per in-flight transaction. The pairing is valid because
-    // L1 transactions are included in nonce order, which matches the order that
-    // commands were originally submitted to the channel.
-    //
-    // As a sanity check we also verify that the on-chain calldata matches what
-    // the command would produce, catching any nonce/command ordering mismatch.
-    let mut paired = Vec::with_capacity(in_flight_count);
-    for tx in in_flight_txs {
-        let cmd = match inbound.recv().await {
-            Some(L1SenderCommand::SendToL1(cmd)) => cmd,
-            Some(L1SenderCommand::Passthrough(batch)) => {
-                anyhow::bail!(
-                    "Unexpected passthrough command for batch {:?} while recovering in-flight transactions",
-                    batch.batch_number()
-                );
-            }
-            None => {
-                anyhow::bail!("Input channel closed while recovering in-flight transactions");
-            }
+            Ok(Some(tx)) => tx,
         };
 
-        let expected_input = cmd.solidity_call(gateway, &operator_address);
-        if tx.input != expected_input {
-            anyhow::bail!(
-                "In-flight transaction {tx_hash:?} calldata does not match the next \
-                 queued command ({cmd}). The L1 sender state is inconsistent — \
-                 aborting recovery.",
-                tx_hash = tx.hash,
-            );
-        }
+        // Peek at the next command without consuming it so that a mismatch leaves
+        // `inbound` intact for the normal send path.
+        let matches = inbound
+            .peek_recv(|raw_cmd| {
+                let L1SenderCommand::SendToL1(cmd) = raw_cmd else {
+                    return false;
+                };
+                cmd.solidity_call(gateway, &operator_address) == tx.input
+            })
+            .await;
 
-        paired.push((tx.hash, cmd));
+        match matches {
+            None => anyhow::bail!("inbound channel closed during in-flight recovery"),
+            Some(false) => {
+                tracing::warn!(
+                    command_name,
+                    nonce,
+                    "In-flight transaction calldata does not match the next queued command. \
+                     Stopping recovery at nonce {nonce}.",
+                );
+                break;
+            }
+            Some(true) => {
+                let Some(L1SenderCommand::SendToL1(cmd)) = inbound.recv().await else {
+                    unreachable!("peek succeeded, recv must return the same item");
+                };
+                paired.push((tx.hash, cmd));
+            }
+        }
     }
 
     tracing::info!(
         command_name,
+        recovered = paired.len(),
         in_flight_count,
-        "Recovered in-flight transaction hashes; watchers will be registered on the next loop iteration",
+        "Recovered in-flight transactions; watchers will be registered on the next loop iteration",
     );
 
     Ok(paired)
