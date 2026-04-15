@@ -139,13 +139,6 @@ impl<T> TrackedUnboundedReceiver<T> {
         self.buf.front().map(f)
     }
 
-    /// Prepend items to the front of the local buffer (e.g. for rescheduling).
-    pub fn prepend(mut self, items: Vec<T>) -> Self {
-        for item in items.into_iter().rev() {
-            self.buf.push_front(item);
-        }
-        self
-    }
 
     pub fn is_closed(&self) -> bool {
         self.inner.is_closed()
