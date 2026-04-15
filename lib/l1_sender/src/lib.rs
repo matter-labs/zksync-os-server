@@ -40,8 +40,7 @@ const METHOD_NOT_FOUND_CODE: i64 = -32601;
 /// We set the limit higher to be safe.
 const MAX_TX_GAS_USED: u64 = 2_000_000;
 /// Number of L1 confirmations required before a transaction is considered final.
-/// Set to 3 to provide resilience against shallow reorgs.
-const REQUIRED_CONFIRMATIONS: u64 = 3;
+const REQUIRED_CONFIRMATIONS: u64 = 1;
 
 /// Future that resolves into a (fallible) transaction receipt.
 type TransactionReceiptFuture =
