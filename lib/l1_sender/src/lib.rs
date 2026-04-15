@@ -363,11 +363,11 @@ where
         input: alloy::primitives::Bytes,
     }
 
-    // Probe whether the provider supports `eth_getTransactionByAccountAndNonce` before
+    // Probe whether the provider supports `eth_getTransactionBySenderAndNonce` before
     // iterating over all pending nonces.
     if let Err(TransportError::ErrorResp(ref e)) = provider
         .raw_request::<_, Option<TxResponse>>(
-            "eth_getTransactionByAccountAndNonce".into(),
+            "eth_getTransactionBySenderAndNonce".into(),
             (operator_address, latest_nonce),
         )
         .await
@@ -375,11 +375,11 @@ where
         if e.code == METHOD_NOT_FOUND_CODE {
             tracing::warn!(
                 command_name,
-                "eth_getTransactionByAccountAndNonce is not supported by current provider.",
+                "eth_getTransactionBySenderAndNonce is not supported by current provider.",
             );
             return Ok(vec![]);
         }
-        anyhow::bail!("Error while probing eth_getTransactionByAccountAndNonce support: {e}");
+        anyhow::bail!("Error while probing eth_getTransactionBySenderAndNonce support: {e}");
     }
 
     // For each pending nonce, fetch the in-flight tx then peek at the next queued command.
@@ -390,7 +390,7 @@ where
     for nonce in latest_nonce..pending_nonce {
         let tx = match provider
             .raw_request::<_, Option<TxResponse>>(
-                "eth_getTransactionByAccountAndNonce".into(),
+                "eth_getTransactionBySenderAndNonce".into(),
                 (operator_address, nonce),
             )
             .await

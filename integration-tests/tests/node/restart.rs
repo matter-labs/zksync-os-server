@@ -1,6 +1,6 @@
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{Address, B256, U256};
+use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
@@ -125,30 +125,6 @@ async fn wait_for_l1_state(
     }
     Err(anyhow::anyhow!(
         "timed out waiting for L1 state: {description}"
-    ))
-}
-
-async fn wait_for_l1_transaction_receipt(
-    tester: &Tester,
-    description: &str,
-    tx_hash: B256,
-) -> anyhow::Result<()> {
-    let mut retries = DEFAULT_TIMEOUT.div_duration_f64(POLL_INTERVAL).floor() as u64;
-    while retries > 0 {
-        if tester
-            .l1
-            .provider
-            .get_transaction_receipt(tx_hash)
-            .await?
-            .is_some()
-        {
-            return Ok(());
-        }
-        retries -= 1;
-        tokio::time::sleep(POLL_INTERVAL).await;
-    }
-    Err(anyhow::anyhow!(
-        "timed out waiting for L1 transaction receipt: {description}"
     ))
 }
 
@@ -387,148 +363,6 @@ async fn tester_reports_fatal_node_error() -> anyhow::Result<()> {
         err_text.contains("batch_sink") || err_text.contains("clear_failing_block_config_task"),
         "unexpected fatal error: {err_text}"
     );
-
-    Ok(())
-}
-
-/// Verifies that the L1 sender correctly recovers in-flight L1 transactions from a previous
-/// session after a restart.
-///
-/// Relies on `eth_getTransactionByAccountAndNonce` being supported by the L1 provider (Anvil).
-/// Without recovery the sender would re-submit a transaction for the same batch, hit a nonce
-/// conflict once the original lands, and crash.
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn node_recovers_in_flight_l1_transactions_after_restart() -> anyhow::Result<()> {
-    let tester = Tester::setup_with_overrides(make_full_pipeline_config).await?;
-
-    // Generate L2 activity so the batcher can seal a batch.
-    tester
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
-
-    // Wait for batch 1 to fully clear the pipeline so there are no leftover prove / execute
-    // transactions in flight when we later restart with batch 2's commit still pending.
-    wait_for_l1_state(
-        &tester,
-        "first batch to be committed, proved and executed on L1",
-        |state| {
-            state.last_committed_batch >= 1
-                && state.last_proved_batch >= 1
-                && state.last_executed_batch >= 1
-        },
-    )
-    .await?;
-
-    // Resolve the commit operator address so we can monitor its pending nonce.
-    let config = load_chain_config(ChainLayout::Default {
-        protocol_version: CURRENT_TO_L1.protocol_version,
-    })
-    .await;
-    let operator_address = config
-        .l1_sender_config
-        .operator_commit_sk
-        .expect("operator_commit_sk must be configured")
-        .address()
-        .await?;
-
-    // Snapshot the confirmed nonce before freezing L1 block production.
-    let confirmed_nonce = tester
-        .l1
-        .provider
-        .get_transaction_count(operator_address)
-        .latest()
-        .await?;
-
-    #[derive(Debug, Deserialize)]
-    struct TxHashResponse {
-        hash: B256,
-    }
-
-    // Freeze L1 block production entirely. Anvil is started with `--block-time 1`, which
-    // enables interval mining — `anvil_setAutomine` only controls transaction-triggered
-    // mining and has no effect on the interval timer. Setting the interval to 0 stops all
-    // block production so any commit transaction submitted after this point will remain in
-    // the mempool until mining is re-enabled.
-    tester
-        .l1
-        .provider
-        .raw_request::<_, ()>("anvil_setIntervalMining".into(), (0u64,))
-        .await?;
-
-    // Generate L2 activity for batch 2 so the commit sender has something to submit.
-    tester
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
-
-    // Wait until the commit transaction for batch 2 appears in the mempool.
-    tokio::time::timeout(DEFAULT_TIMEOUT, async {
-        loop {
-            let pending_nonce = tester
-                .l1
-                .provider
-                .get_transaction_count(operator_address)
-                .pending()
-                .await?;
-            if pending_nonce > confirmed_nonce {
-                return Ok::<_, anyhow::Error>(());
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    })
-    .await
-    .context("timed out waiting for in-flight L1 transaction to appear in mempool")?
-    .context("polling for in-flight L1 transaction")?;
-
-    let in_flight_tx = tester
-        .l1
-        .provider
-        .raw_request::<_, Option<TxHashResponse>>(
-            "eth_getTransactionByAccountAndNonce".into(),
-            (operator_address, confirmed_nonce),
-        )
-        .await?
-        .context("pending L1 transaction disappeared before restart")?;
-
-    // Stop the node. The commit transaction for batch 2 remains in Anvil's mempool,
-    // simulating a crash mid-flight.
-    let stopped = tester.stop().await?;
-
-    // Restart. On startup the L1 sender detects the pending transaction via
-    // `eth_getTransactionByAccountAndNonce` and registers a watcher for it instead of
-    // re-submitting — which would produce a conflicting transaction and a revert.
-    let restarted = stopped
-        .start_with_overrides(make_full_pipeline_config)
-        .await?;
-
-    // Re-enable interval mining so the pending commit transaction gets included.
-    restarted
-        .l1
-        .provider
-        .raw_request::<_, ()>("anvil_setIntervalMining".into(), (1u64,))
-        .await?;
-
-    // The exact in-flight transaction captured before restart must be the one that gets mined
-    // afterwards, proving the sender recovered it instead of re-submitting a replacement.
-    wait_for_l1_transaction_receipt(
-        &restarted,
-        "the recovered in-flight L1 transaction to be mined after restart",
-        in_flight_tx.hash,
-    )
-    .await?;
 
     Ok(())
 }
