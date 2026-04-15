@@ -5,7 +5,6 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::sol;
-use anyhow::Context;
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
