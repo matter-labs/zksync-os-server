@@ -402,7 +402,9 @@ async fn node_recovers_in_flight_l1_transactions_after_restart() -> anyhow::Resu
 
     // Resolve the operator address so we can monitor its pending nonce.
     let chain_id = tester.l2_provider.get_chain_id().await?;
-    let chain_layout = ChainLayout::Default { protocol_version: PROTOCOL_VERSION };
+    let chain_layout = ChainLayout::Default {
+        protocol_version: PROTOCOL_VERSION,
+    };
     let operator_key = load_operator_private_key(chain_layout, chain_id)?;
     let operator_address = PrivateKeySigner::from_str(&operator_key)?.address();
 
@@ -461,7 +463,9 @@ async fn node_recovers_in_flight_l1_transactions_after_restart() -> anyhow::Resu
     // transaction via `eth_getTransactionByAccountAndNonce` and resume waiting for its
     // receipt instead of re-submitting — which would produce a conflicting transaction
     // and a revert once the original lands.
-    let restarted = stopped.start_with_overrides(make_commit_only_config).await?;
+    let restarted = stopped
+        .start_with_overrides(make_commit_only_config)
+        .await?;
 
     // Re-enable L1 mining so the pending commit transaction can be included in a block.
     restarted
@@ -472,9 +476,11 @@ async fn node_recovers_in_flight_l1_transactions_after_restart() -> anyhow::Resu
 
     // Batch 2 must eventually appear as committed on L1, confirming that the recovered
     // (or re-submitted) transaction landed successfully.
-    wait_for_l1_state(&restarted, "second batch committed after restart", |state| {
-        state.last_committed_batch >= 2
-    })
+    wait_for_l1_state(
+        &restarted,
+        "second batch committed after restart",
+        |state| state.last_committed_batch >= 2,
+    )
     .await?;
 
     Ok(())
