@@ -17,7 +17,8 @@ use std::{
 
 use rocksdb::{
     BlockBasedOptions, Cache, ColumnFamily, ColumnFamilyDescriptor, DB, DBPinnableSlice, Direction,
-    IteratorMode, Options, PrefixRange, ReadOptions, SliceTransform, WriteOptions, perf, properties,
+    IteratorMode, Options, PrefixRange, ReadOptions, SliceTransform, WriteOptions, perf,
+    properties,
 };
 use thread_local::ThreadLocal;
 use vise::MetricsFamily;
@@ -445,7 +446,8 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
             }
 
             let memtable_capacity = options.large_memtable_capacity.filter(|_| requires_tuning);
-            let mut cf_options = Self::rocksdb_options(memtable_capacity, Some(block_based_options));
+            let mut cf_options =
+                Self::rocksdb_options(memtable_capacity, Some(block_based_options));
             if let Some(len) = prefix_extractor_len {
                 cf_options.set_prefix_extractor(SliceTransform::create_fixed_prefix(len));
             }
@@ -685,7 +687,11 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
         options.set_prefix_same_as_start(true);
         self.inner
             .db
-            .iterator_cf_opt(cf_handle, options, IteratorMode::From(from, Direction::Forward))
+            .iterator_cf_opt(
+                cf_handle,
+                options,
+                IteratorMode::From(from, Direction::Forward),
+            )
             .map(Result::unwrap)
             .fuse()
         // ^ unwrap() is safe for the same reasons as in `prefix_iterator_cf()`.
