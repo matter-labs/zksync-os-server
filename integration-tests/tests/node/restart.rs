@@ -415,7 +415,7 @@ async fn node_recovers_in_flight_l1_transactions_after_restart() -> anyhow::Resu
 
     // Wait for batch 1 to fully clear the pipeline so there are no leftover prove / execute
     // transactions in flight when we later restart with batch 2's commit still pending.
-    let committed_state = wait_for_l1_state(
+    wait_for_l1_state(
         &tester,
         "first batch to be committed, proved and executed on L1",
         |state| {
@@ -423,12 +423,6 @@ async fn node_recovers_in_flight_l1_transactions_after_restart() -> anyhow::Resu
                 && state.last_proved_batch >= 1
                 && state.last_executed_batch >= 1
         },
-    )
-    .await?;
-    wait_for_l1_block_number(
-        &tester,
-        "extra L1 confirmations after the first execution",
-        |block_number| block_number >= committed_state.sl_block_number + 3,
     )
     .await?;
 
