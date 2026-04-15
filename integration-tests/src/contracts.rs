@@ -201,7 +201,9 @@ impl<P1: Provider, P2: Provider<Zksync>> L1Nullifier<P1, P2> {
             .enumerate()
             .find(|(_, log)| log.sender == L1_MESSENGER_ADDRESS)
             .expect("no L2->L1 logs found in withdrawal receipt");
-        let proof_retry_timeout = Duration::from_secs(120);
+        // Use the same global timeout so this step doesn't become a bottleneck when the
+        // gateway proof pipeline takes longer under load (e.g., during the full test suite).
+        let proof_retry_timeout = crate::assert_traits::DEFAULT_TIMEOUT;
         let proof_retry_delay = Duration::from_secs(1);
         let proof_retry_started_at = Instant::now();
         let proof = loop {
