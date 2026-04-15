@@ -122,9 +122,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
     loop {
         latency_tracker.enter_state(L1SenderState::WaitingRecv);
         // When recovered transactions are present we must not block waiting for new
-        // commands — register their watchers immediately. Use `peek_with` to check
-        // non-blockingly whether anything is queued; if nothing is there yet, skip
-        // `recv_many` entirely and proceed with just the recovered batch.
+        // commands — register their watchers immediately.
         //
         // When there are no recovered transactions (every iteration after the first),
         // `recv_many` sleeps until at least one command arrives as normal.
@@ -317,12 +315,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
 /// Detects in-flight L1 transactions from a previous session, pairs each one with the
 /// corresponding queued command, and returns them ready to hand to the main loop.
 ///
-/// Uses `eth_getTransactionByAccountAndNonce`, a non-standard Geth extension, to resolve
-/// the transaction hash for each pending nonce. Returns `Ok(vec![])` when recovery should
-/// be skipped: no nonce gap, RPC method unsupported, or a transaction dropped from the
-/// mempool.
-///
-/// For each in-flight tx, the next command is peeked (without consuming) and its calldata
+/// For each in-flight tx, the next command is peeked and its calldata
 /// is compared against the on-chain input. On a match the command is consumed and paired.
 /// On the first mismatch the loop stops and whatever has been paired so far is returned —
 /// the unmatched command remains in `inbound` for the normal send path.
