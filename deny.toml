@@ -8,6 +8,9 @@ feature-depth = 1
 
 [advisories]
 ignore = [
+    # `rand` unsoundness with custom logger using `rand::rng()`. Too many
+    # transitive deps still pin 0.8.5, so upgrading is not feasible right now.
+    "RUSTSEC-2026-0097",
 ]
 
 [bans]

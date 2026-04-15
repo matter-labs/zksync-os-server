@@ -116,6 +116,7 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs() ->
             config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
                 from_block: block_to_empty,
                 blocks_to_empty: vec![block_to_empty],
+                reset_timestamps: false,
             });
         })
         .await?;

@@ -33,3 +33,4 @@ semver = { workspace = true, features = ["serde"] }
 anyhow.workspace = true
 pin-project.workspace = true
 auto_impl.workspace = true
+roaring.workspace = true

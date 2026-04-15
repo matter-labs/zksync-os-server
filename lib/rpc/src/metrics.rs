@@ -19,7 +19,24 @@ pub struct ApiMetrics {
     pub requests_in_batch_count: LabeledFamily<String, Histogram<u64>>,
     #[metrics(labels = ["method", "code"])]
     pub errors: LabeledFamily<(String, i32), Counter, 2>,
+    #[metrics(labels = ["method"])]
+    pub cancelled: LabeledFamily<String, Counter>,
 }
 
 #[vise::register]
 pub static API_METRICS: vise::Global<ApiMetrics> = vise::Global::new();
+
+/// Metrics for the transaction submission pipeline.
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "tx_submission")]
+pub struct TxSubmissionMetrics {
+    /// Time spent validating and inserting a transaction into the local mempool.
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub mempool_latency: Histogram<Duration>,
+    /// Time spent forwarding a transaction to the main node (external nodes only).
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub forwarding_latency: Histogram<Duration>,
+}
+
+#[vise::register]
+pub static TX_SUBMISSION_METRICS: vise::Global<TxSubmissionMetrics> = vise::Global::new();

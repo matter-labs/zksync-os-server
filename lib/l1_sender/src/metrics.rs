@@ -98,6 +98,11 @@ pub struct L1SenderMetrics {
     /// Last nonce used
     #[metrics(labels = ["command"])]
     pub nonce: LabeledFamily<&'static str, Gauge<u64>>,
+
+    /// Time from tx submission (send_raw_transaction success) to L1 inclusion confirmation (seconds).
+    /// Buckets cover 0.5s → ~17 minutes in doubling steps, spanning normal (15-30s) to heavily congested (10min+).
+    #[metrics(labels = ["command"], buckets = Buckets::exponential(0.5..=1024.0, 2.0))]
+    pub tx_inclusion_latency_seconds: LabeledFamily<&'static str, Histogram<f64>>,
 }
 
 impl L1SenderMetrics {

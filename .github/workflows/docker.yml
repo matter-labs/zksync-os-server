@@ -63,6 +63,7 @@ jobs:
             type=ref,event=tag
             type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
             type=sha,format=short,prefix=,suffix=-{{date 'x'}},enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+            type=sha,format=long,prefix=,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
             type=ref,event=pr
 
       - name: Define whether to save cache

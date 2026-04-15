@@ -17,6 +17,7 @@ use zksync_os_integration_tests::config::{ChainLayout, load_chain_config};
 use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_integration_tests::provider::{ZksyncApi, ZksyncTestingProvider};
 use zksync_os_integration_tests::{CURRENT_TO_L1, StoppedTester, Tester, test_multisetup};
+use zksync_os_server::INTERNAL_CONFIG_FILE_NAME;
 use zksync_os_server::config::Config;
 
 sol! {
@@ -72,6 +73,27 @@ fn make_full_pipeline_config(config: &mut Config) {
     config.prover_api_config.fake_fri_provers.min_age = Duration::ZERO;
     config.prover_api_config.fake_snark_provers.enabled = true;
     config.prover_api_config.fake_snark_provers.max_batch_age = Duration::ZERO;
+}
+
+fn configure_failing_block(config: &mut Config, failing_block: u64) {
+    let internal_config_path = config
+        .general_config
+        .rocks_db_path
+        .join(INTERNAL_CONFIG_FILE_NAME);
+    let internal_config = serde_json::json!({
+        "failing_block": failing_block,
+    });
+    std::fs::create_dir_all(
+        internal_config_path
+            .parent()
+            .expect("internal config path must have a parent"),
+    )
+    .expect("failed to create internal config parent directory");
+    std::fs::write(
+        &internal_config_path,
+        serde_json::to_vec(&internal_config).expect("failed to serialize internal config"),
+    )
+    .expect("failed to write internal config");
 }
 
 async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
@@ -307,6 +329,38 @@ async fn node_recovers_from_l1_batch_revert_after_restart_v30() -> anyhow::Resul
     assert!(
         executed_state.last_executed_batch >= executed_batch,
         "post-revert execution should advance normally"
+    );
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn tester_reports_fatal_node_error() -> anyhow::Result<()> {
+    let mut tester = Tester::setup_with_overrides(|config| {
+        make_full_pipeline_config(config);
+        configure_failing_block(config, 1);
+    })
+    .await?;
+
+    tester
+        .l2_provider
+        .send_transaction(
+            TransactionRequest::default()
+                .with_to(Address::random())
+                .with_value(U256::from(1u64)),
+        )
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    let err = tester
+        .wait_for_fatal_error_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let err_text = err.to_string();
+    assert!(
+        err_text.contains("batch_sink") || err_text.contains("clear_failing_block_config_task"),
+        "unexpected fatal error: {err_text}"
     );
 
     Ok(())

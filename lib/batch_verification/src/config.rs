@@ -7,9 +7,7 @@ use secrecy::SecretString;
 #[derive(Clone, Debug)]
 pub struct BatchVerificationConfig {
     pub server_enabled: bool,
-    pub listen_address: String,
     pub client_enabled: bool,
-    pub connect_address: String,
     pub threshold: u64,
     pub accepted_signers: Vec<String>,
     pub request_timeout: Duration,

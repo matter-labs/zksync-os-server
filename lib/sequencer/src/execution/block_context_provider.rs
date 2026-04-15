@@ -11,8 +11,8 @@ use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    BlockStartCursors, ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion,
-    SystemTxEnvelope, SystemTxType, ZkEnvelope, ZkTransaction,
+    BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, SystemTxEnvelope, SystemTxType,
+    ZkEnvelope, ZkTransaction,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -296,12 +296,17 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     );
                 }
 
+                let timestamp = if rebuild.reset_timestamp {
+                    (millis_since_epoch() / 1000) as u64
+                } else {
+                    rebuild.replay_record.block_context.timestamp
+                };
                 let block_context = BlockContext {
                     eip1559_basefee: rebuild.replay_record.block_context.eip1559_basefee,
                     native_price: rebuild.replay_record.block_context.native_price,
                     pubdata_price: rebuild.replay_record.block_context.pubdata_price,
                     block_number,
-                    timestamp: rebuild.replay_record.block_context.timestamp,
+                    timestamp,
                     blob_fee: rebuild.replay_record.block_context.blob_fee,
                     chain_id: self.chain_id,
                     coinbase: self.fee_collector_address,
@@ -376,8 +381,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         Ok(prepared_command)
     }
 
-    pub fn remove_transactions(&self, tx_hashes: Vec<TxHash>) {
-        self.pool.remove_transactions(tx_hashes);
+    pub fn purge_transactions(&self, tx_hashes: Vec<TxHash>) {
+        self.pool.purge_transactions(tx_hashes);
     }
 
     pub async fn on_canonical_state_change(
@@ -401,12 +406,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 .next_l1_priority_id
                 .set(self.next_cursors.l1_priority_id);
         }
-        if let Some(last_interop_log_index) = outcome.last_interop_log_index {
+        if let Some(last_interop_log_id) = outcome.last_interop_log_id {
             self.next_interop_tx_allowed_after = Instant::now() + self.service_block_delay;
-            self.next_cursors.interop_event_index = InteropRootsLogIndex {
-                block_number: last_interop_log_index.block_number,
-                index_in_block: last_interop_log_index.index_in_block + 1,
-            };
+            self.next_cursors.interop_root_id = last_interop_log_id + 1;
         }
 
         if let Some(last_migration_number) = outcome.last_migration_number {

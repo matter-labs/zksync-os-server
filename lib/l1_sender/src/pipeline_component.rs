@@ -8,6 +8,7 @@ use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, WalletProvider};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
 /// Generic L1 Sender pipeline component
@@ -17,6 +18,7 @@ pub struct L1Sender<F: TxFiller<Ethereum>, P: Provider<Ethereum>, C> {
     pub config: L1SenderConfig<C>,
     pub to_address: Address,
     pub gateway: bool,
+    pub commit_submitted_tx: Option<watch::Sender<u64>>,
 }
 
 #[async_trait]
@@ -44,6 +46,7 @@ where
             self.provider,
             self.config,
             self.gateway,
+            self.commit_submitted_tx,
         )
         .await
     }

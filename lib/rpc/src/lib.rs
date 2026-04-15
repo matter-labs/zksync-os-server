@@ -76,6 +76,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     tx_forwarder: Option<DynProvider>,
     gateway_provider: Option<DynProvider>,
     runtime: &Runtime,
+    wait_for_db: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
 
@@ -151,9 +152,17 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         .await
         .context("Failed building HTTP JSON-RPC server")?;
 
-    let server_handle = server.start(rpc);
-
     runtime.spawn_critical_with_graceful_shutdown_signal("rpc server", |shutdown| async move {
+        tokio::pin!(shutdown);
+
+        tokio::select! {
+            _ready = wait_for_db => {}
+            _guard = &mut shutdown => {
+                return;
+            }
+        }
+
+        let server_handle = server.start(rpc);
         tokio::select! {
             // The JSON-RPC server stopped on its own before shutdown was requested.
             _ = server_handle.clone().stopped() => {
@@ -166,7 +175,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
                 unreachable!("eth_filter.watch_and_clear_stale_filters() is an infinite loop")
             }
             // Graceful shutdown was requested; stop accepting RPC traffic and wait for the server to exit.
-            _guard = shutdown => {
+            _guard = &mut shutdown => {
                 server_handle.stop().expect("failed to stop server");
                 server_handle.stopped().await;
                 tracing::info!("RPC server graceful shutdown complete");

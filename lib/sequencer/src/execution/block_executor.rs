@@ -161,7 +161,7 @@ where
                 .await;
             let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
             self.block_context_provider
-                .remove_transactions(purged_txs_hashes);
+                .purge_transactions(purged_txs_hashes);
 
             state_overlay_buffer.add_block(
                 block_number,

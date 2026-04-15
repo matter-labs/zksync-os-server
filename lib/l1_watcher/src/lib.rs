@@ -38,5 +38,3 @@ pub use migration_finalized_watcher::MigrationFinalizedWatcher;
 
 mod settlement_layer_watcher;
 pub use settlement_layer_watcher::SettlementLayerWatcher;
-
-mod factory_deps;

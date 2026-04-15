@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use zksync_os_storage_api::ReadFinality;
 
-use super::metrics::BATCH_VERIFICATION_CLIENT_METRICS;
+use super::metrics::BATCH_VERIFICATION_RESPONDER_METRICS;
 
 /// Cache of blocks that are to be used for batch verification
 /// Accepts blocks only in ascending order. Old blocks are evicted when not
@@ -40,10 +40,10 @@ impl<Finality: ReadFinality, Data> BlockCache<Finality, Data> {
         self.remove_lower_then(self.finality.get_finality_status().last_committed_block + 1);
 
         if let Some((start, end)) = self.range {
-            BATCH_VERIFICATION_CLIENT_METRICS.update_cache_range(start, end);
+            BATCH_VERIFICATION_RESPONDER_METRICS.update_cache_range(start, end);
         } else {
             // some synthetic value that will be ok on a graph. size is right (empty)
-            BATCH_VERIFICATION_CLIENT_METRICS
+            BATCH_VERIFICATION_RESPONDER_METRICS
                 .update_cache_range(block_number, block_number.saturating_sub(1));
         }
         Ok(())
