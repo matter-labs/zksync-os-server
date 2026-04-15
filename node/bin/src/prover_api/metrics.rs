@@ -85,6 +85,8 @@ pub enum PickJobResult {
     NoJob,
     /// Request failed with error
     Error,
+    /// Client disconnected before the response was sent
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]

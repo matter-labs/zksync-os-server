@@ -6,7 +6,7 @@ use alloy::primitives::{Address, U256, address};
 use alloy::providers::{DynProvider, Provider};
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::time::Duration;
 
 const L2_BRIDGEHUB_ADDRESS: Address = address!("0x0000000000000000000000000000000000010002");
@@ -34,9 +34,18 @@ pub struct L1State {
     pub last_committed_batch: u64,
     pub last_proved_batch: u64,
     pub last_executed_batch: u64,
+    /// Block number on SL that was used to query `last_committed_batch`, `last_proved_batch`, `last_executed_batch`.
+    pub sl_block_number: u64,
     pub da_input_mode: BatchDaInputMode,
     pub l1_chain_id: u64,
     pub sl_chain_id: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BatchFinality {
+    last_committed_batch: u64,
+    last_proved_batch: u64,
+    last_executed_batch: u64,
 }
 
 impl L1State {
@@ -86,10 +95,16 @@ impl L1State {
         let diamond_proxy_sl = bridgehub_sl.zk_chain().await?;
         let validator_timelock_sl = bridgehub_sl.validator_timelock_address().await?;
 
-        let latest = BlockId::latest();
-        let last_committed_batch = diamond_proxy_sl.get_total_batches_committed(latest).await?;
-        let last_proved_batch = diamond_proxy_sl.get_total_batches_proved(latest).await?;
-        let last_executed_batch = diamond_proxy_sl.get_total_batches_executed(latest).await?;
+        let latest_sl_block_number = diamond_proxy_sl.provider().get_block_number().await?;
+        let last_committed_batch = diamond_proxy_sl
+            .get_total_batches_committed(latest_sl_block_number.into())
+            .await?;
+        let last_proved_batch = diamond_proxy_sl
+            .get_total_batches_proved(latest_sl_block_number.into())
+            .await?;
+        let last_executed_batch = diamond_proxy_sl
+            .get_total_batches_executed(latest_sl_block_number.into())
+            .await?;
 
         let pubdata_pricing_mode = diamond_proxy_sl.get_pubdata_pricing_mode().await?;
         let da_input_mode = match pubdata_pricing_mode {
@@ -133,6 +148,7 @@ impl L1State {
             last_committed_batch,
             last_proved_batch,
             last_executed_batch,
+            sl_block_number: latest_sl_block_number,
             da_input_mode,
             l1_chain_id,
             sl_chain_id,
@@ -164,9 +180,9 @@ impl L1State {
         Ok(())
     }
 
-    /// Equivalent to [`Self::fetch`] that also waits until the pending L1 state is consistent with the
-    /// latest L1 state (i.e., there are no pending transactions that are committing/proving/executing
-    /// batches on L1).
+    /// Equivalent to [`Self::fetch`] that also waits until the pending SL state is consistent with the
+    /// latest SL state (i.e., there are no pending transactions that are committing / proving /
+    /// executing batches on the settlement layer).
     ///
     /// NOTE: This should only be called on the main node as ENs will observe pending changes that
     /// are being submitted by the main node.
@@ -178,18 +194,16 @@ impl L1State {
     ) -> anyhow::Result<Self> {
         let this = Self::fetch(l1_provider, gateway_provider, bridgehub_address, chain_id).await?;
         let zk_chain_sl = &this.diamond_proxy_sl;
-        let last_committed_batch =
-            wait_to_finalize(|block_id| zk_chain_sl.get_total_batches_committed(block_id))
-                .await
-                .context("getTotalBatchesCommitted")?;
-        let last_proved_batch =
-            wait_to_finalize(|block_id| zk_chain_sl.get_total_batches_proved(block_id))
-                .await
-                .context("getTotalBatchesVerified")?;
-        let last_executed_batch =
-            wait_to_finalize(|block_id| zk_chain_sl.get_total_batches_executed(block_id))
-                .await
-                .context("getTotalBatchesExecuted")?;
+        let (sl_block_number, batch_finality) =
+            wait_to_finalize(zk_chain_sl.provider(), |block_id| async move {
+                Ok(BatchFinality {
+                    last_committed_batch: zk_chain_sl.get_total_batches_committed(block_id).await?,
+                    last_proved_batch: zk_chain_sl.get_total_batches_proved(block_id).await?,
+                    last_executed_batch: zk_chain_sl.get_total_batches_executed(block_id).await?,
+                })
+            })
+            .await
+            .context("failed to fetch finalized batch state")?;
         Ok(Self {
             bridgehub_l1: this.bridgehub_l1,
             bridgehub_sl: this.bridgehub_sl,
@@ -197,9 +211,10 @@ impl L1State {
             diamond_proxy_sl: this.diamond_proxy_sl,
             validator_timelock_sl: this.validator_timelock_sl,
             batch_verification: this.batch_verification,
-            last_committed_batch,
-            last_proved_batch,
-            last_executed_batch,
+            last_committed_batch: batch_finality.last_committed_batch,
+            last_proved_batch: batch_finality.last_proved_batch,
+            last_executed_batch: batch_finality.last_executed_batch,
+            sl_block_number,
             da_input_mode: this.da_input_mode,
             l1_chain_id: this.l1_chain_id,
             sl_chain_id: this.sl_chain_id,
@@ -227,13 +242,11 @@ impl L1State {
     }
 }
 
-/// Waits until provided function returns consistent values for both `latest` and `pending` block ids.
-async fn wait_to_finalize<
-    T: PartialEq + tracing::Value + Display,
-    Fut: Future<Output = crate::Result<T>>,
->(
+/// Waits until the pending SL state matches the latest finalized SL block.
+async fn wait_to_finalize<T: Debug + PartialEq, Fut: Future<Output = crate::Result<T>>>(
+    provider: &DynProvider,
     f: impl Fn(BlockId) -> Fut,
-) -> anyhow::Result<T> {
+) -> anyhow::Result<(u64, T)> {
     /// Ethereum blocks are mined every ~12 seconds on average, but we wait in 1-second intervals
     /// optimistically to save time on startup.
     const RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new()
@@ -246,28 +259,39 @@ async fn wait_to_finalize<
     // Note: we do not retry networking errors here. We only retry if the pending state is ahead of latest
     // Outer `Result` is used for retries, inner result is propagated as is.
     let result = (|| async {
-        let last_value = f(BlockId::latest())
+        let latest_block_number = provider
+            .get_block_number()
+            .await
+            .context("failed to get latest block number");
+        let latest_block_number = match latest_block_number {
+            Ok(latest_block_number) => latest_block_number,
+            Err(err) => return Ok(Err(err)),
+        };
+        let last_value = f(latest_block_number.into())
             .await
             .context("failed to get latest value");
         match last_value {
-            Ok(last_value) if last_value == pending_value => Ok(Ok(last_value)),
-            Ok(last_value) => Err(last_value),
-            Err(_) => Ok(last_value),
+            Ok(last_value) if last_value == pending_value => {
+                Ok(Ok((latest_block_number, last_value)))
+            }
+            Ok(last_value) => Err((latest_block_number, last_value)),
+            Err(err) => Ok(Err(err)),
         }
     })
     .retry(RETRY_BUILDER)
-    .notify(|last_value, _| {
+    .notify(|(latest_block_number, last_value), _| {
         tracing::info!(
-            pending_value,
-            last_value,
-            "encountered a pending state change on L1; waiting for it to finalize"
+            pending_value = ?pending_value,
+            latest_block_number,
+            latest_value = ?last_value,
+            "encountered a pending SL state change; waiting for it to finalize"
         );
     })
     .await;
 
     match result {
         Ok(last_result) => {
-            let last_value = last_result?;
+            let (latest_block_number, last_value) = last_result?;
             // Sanity-check that the pending state has not changed since we started waiting.
             let pending_value = f(BlockId::pending())
                 .await
@@ -277,11 +301,11 @@ async fn wait_to_finalize<
                     "pending state changed while waiting for it to finalize; another main node could already be running"
                 ))
             } else {
-                Ok(last_value)
+                Ok((latest_block_number, last_value))
             }
         }
-        Err(last_value) => Err(anyhow::anyhow!(
-            "pending state did not finalize in time; last value: {last_value}"
+        Err((latest_block_number, last_value)) => Err(anyhow::anyhow!(
+            "pending state did not finalize in time at SL block {latest_block_number}; last value: {last_value:?}"
         )),
     }
 }

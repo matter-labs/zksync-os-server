@@ -1,4 +1,4 @@
-//! Support for representing the version of the `zks` protocol
+//! Support for representing the version of the `zks` protocol.
 
 use crate::wire::message::ZksMessageId;
 use crate::wire::replays::{WireReplayRecord, v0, v1, v2};
@@ -6,8 +6,8 @@ use alloy::primitives::bytes::BufMut;
 use alloy::rlp::{Decodable, Encodable, Error as RlpError};
 use std::fmt::Debug;
 
-/// Any protocol version along with its pinned wire formats.
-pub trait AnyZksProtocolVersion: Debug + Send + Sync + Unpin + Clone + 'static {
+/// Type-level specification for a `zks` protocol version and its pinned wire formats.
+pub trait ZksProtocolVersionSpec: Debug + Send + Sync + Unpin + Clone + 'static {
     /// Wire format for replay record.
     type Record: WireReplayRecord;
 
@@ -19,7 +19,7 @@ pub trait AnyZksProtocolVersion: Debug + Send + Sync + Unpin + Clone + 'static {
 #[derive(Debug, Clone)]
 pub struct ZksProtocolV0;
 
-impl AnyZksProtocolVersion for ZksProtocolV0 {
+impl ZksProtocolVersionSpec for ZksProtocolV0 {
     type Record = v0::ReplayRecord;
 
     const VERSION: ZksVersion = ZksVersion::Zks0;
@@ -30,21 +30,32 @@ impl AnyZksProtocolVersion for ZksProtocolV0 {
 #[derive(Debug, Clone)]
 pub struct ZksProtocolV1;
 
-impl AnyZksProtocolVersion for ZksProtocolV1 {
+impl ZksProtocolVersionSpec for ZksProtocolV1 {
     type Record = v1::ReplayRecord;
 
     const VERSION: ZksVersion = ZksVersion::Zks1;
 }
 
-/// Protocol version 1 is the initial implementation that supports `GetBlockReplays` and `BlockReplays`
-/// message types.
+/// Protocol version 2 keeps the replay transport from v1 but upgrades the replay record encoding.
 #[derive(Debug, Clone)]
 pub struct ZksProtocolV2;
 
-impl AnyZksProtocolVersion for ZksProtocolV2 {
+impl ZksProtocolVersionSpec for ZksProtocolV2 {
     type Record = v2::ReplayRecord;
 
     const VERSION: ZksVersion = ZksVersion::Zks2;
+}
+
+/// Protocol version 3 keeps replay record encoding from v2 and adds verifier-related messages:
+/// `VerifierRoleRequest`, `VerifierChallenge`, `VerifierAuth`, `VerifyBatch`, and
+/// `VerifyBatchResult`.
+#[derive(Debug, Clone)]
+pub struct ZksProtocolV3;
+
+impl ZksProtocolVersionSpec for ZksProtocolV3 {
+    type Record = v2::ReplayRecord;
+
+    const VERSION: ZksVersion = ZksVersion::Zks3;
 }
 
 /// Error thrown when failed to parse a valid [`ZksVersion`].
@@ -62,14 +73,16 @@ pub enum ZksVersion {
     Zks1 = 1,
     /// The `zks` protocol version 2.
     Zks2 = 2,
+    /// The `zks` protocol version 3.
+    Zks3 = 3,
 }
 
 impl ZksVersion {
     /// The latest known zks version
-    pub const LATEST: Self = Self::Zks1;
+    pub const LATEST: Self = Self::Zks3;
 
     /// All known zks versions
-    pub const ALL_VERSIONS: &'static [Self] = &[Self::Zks0, Self::Zks1];
+    pub const ALL_VERSIONS: &'static [Self] = &[Self::Zks0, Self::Zks1, Self::Zks2, Self::Zks3];
 
     /// Returns the max message id for the given version.
     const fn max_message_id(&self) -> u8 {
@@ -77,12 +90,18 @@ impl ZksVersion {
             ZksVersion::Zks0 => ZksMessageId::BlockReplays as u8,
             ZksVersion::Zks1 => ZksMessageId::BlockReplays as u8,
             ZksVersion::Zks2 => ZksMessageId::BlockReplays as u8,
+            ZksVersion::Zks3 => ZksMessageId::VerifyBatchResult as u8,
         }
     }
 
     /// Returns the total number of message types for the given version.
     pub(crate) const fn message_count(&self) -> u8 {
         self.max_message_id() + 1
+    }
+
+    /// Returns whether this version recognizes the given message ID.
+    pub(crate) const fn supports_message(&self, message: ZksMessageId) -> bool {
+        message.as_u8() <= self.max_message_id()
     }
 }
 
@@ -124,6 +143,7 @@ impl TryFrom<u8> for ZksVersion {
             0 => Ok(Self::Zks0),
             1 => Ok(Self::Zks1),
             2 => Ok(Self::Zks2),
+            3 => Ok(Self::Zks3),
             _ => Err(ParseVersionError(u.to_string())),
         }
     }
@@ -143,6 +163,7 @@ impl From<ZksVersion> for &'static str {
             ZksVersion::Zks0 => "0",
             ZksVersion::Zks1 => "1",
             ZksVersion::Zks2 => "2",
+            ZksVersion::Zks3 => "3",
         }
     }
 }
@@ -150,13 +171,14 @@ impl From<ZksVersion> for &'static str {
 #[cfg(test)]
 mod tests {
     use super::ZksVersion;
+    use crate::wire::message::ZksMessageId;
     use alloy::primitives::bytes::BytesMut;
     use alloy_rlp::{Decodable, Encodable, Error as RlpError};
 
     #[test]
     fn test_zks_version_rlp_encode() {
         // Version 0 is purposefully left out as it encodes to 0x80 (prefix for 0-length string)
-        let versions = [ZksVersion::Zks1, ZksVersion::Zks2];
+        let versions = [ZksVersion::Zks1, ZksVersion::Zks2, ZksVersion::Zks3];
 
         for version in versions {
             let mut encoded = BytesMut::new();
@@ -173,7 +195,8 @@ mod tests {
             (0_u8, Ok(ZksVersion::Zks0)),
             (1_u8, Ok(ZksVersion::Zks1)),
             (2_u8, Ok(ZksVersion::Zks2)),
-            (3_u8, Err(RlpError::Custom("invalid zks version"))),
+            (3_u8, Ok(ZksVersion::Zks3)),
+            (4_u8, Err(RlpError::Custom("invalid zks version"))),
         ];
 
         for (input, expected) in test_cases {
@@ -183,6 +206,45 @@ mod tests {
             let mut slice = encoded.as_ref();
             let result = ZksVersion::decode(&mut slice);
             assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_message_counts_match_protocol_surface() {
+        let test_cases = [
+            (ZksVersion::Zks0, 2),
+            (ZksVersion::Zks1, 2),
+            (ZksVersion::Zks2, 2),
+            (ZksVersion::Zks3, 7),
+        ];
+
+        for (version, expected_count) in test_cases {
+            assert_eq!(version.message_count(), expected_count);
+        }
+    }
+
+    #[test]
+    fn test_supports_message_matches_version_capabilities() {
+        let old_messages = [ZksMessageId::GetBlockReplays, ZksMessageId::BlockReplays];
+        let new_messages = [
+            ZksMessageId::VerifierRoleRequest,
+            ZksMessageId::VerifierChallenge,
+            ZksMessageId::VerifierAuth,
+            ZksMessageId::VerifyBatch,
+            ZksMessageId::VerifyBatchResult,
+        ];
+
+        for version in [ZksVersion::Zks0, ZksVersion::Zks1, ZksVersion::Zks2] {
+            for message in old_messages {
+                assert!(version.supports_message(message));
+            }
+            for message in new_messages {
+                assert!(!version.supports_message(message));
+            }
+        }
+
+        for message in old_messages.into_iter().chain(new_messages) {
+            assert!(ZksVersion::Zks3.supports_message(message));
         }
     }
 }

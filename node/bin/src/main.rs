@@ -298,6 +298,7 @@ fn load_internal_config(config: &mut Config) {
             config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
                 from_block: failing_block,
                 blocks_to_empty: vec![failing_block],
+                reset_timestamps: false,
             });
         }
     }

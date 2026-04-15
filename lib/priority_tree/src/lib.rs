@@ -211,14 +211,10 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                         .wait_for(|f| next_batch_number <= f.last_executed_batch)
                         .await
                         .context("failed to wait for next finalized batch")?;
-                    // Below should be infallible as batch is guaranteed to have been processed as
-                    // executed. Hence, already discovered as committed.
-                    // todo: non-local reasoning, refactor once `CommittedBatchProvider` loads
-                    //       batches asynchronously
                     let range = self
                         .committed_batch_provider
-                        .get(next_batch_number)
-                        .with_context(|| format!("unexpected state: batch {next_batch_number} was executed but not discovered as committed"))?
+                        .wait_for_batch(next_batch_number)
+                        .await
                         .block_range;
                     let ranges = vec![(next_batch_number, range)];
                     (None, ranges)

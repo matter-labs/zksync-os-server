@@ -50,11 +50,14 @@ use reth_tasks::Runtime;
 use ruint::aliases::U256;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
-use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
+use zksync_os_batch_verification::{
+    BatchVerificationConfig as BatchVerificationPolicyConfig, BatchVerificationPipelineStep,
+    BatchVerificationResponder, effective_verification_policy,
+};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_gas_adjuster::GasAdjuster;
@@ -81,7 +84,12 @@ use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_network::RecordOverride;
-use zksync_os_network::service::{NetworkService, ZksProtocolConfig};
+use zksync_os_network::VerifyBatch;
+use zksync_os_network::protocol::{
+    ExternalNodeProtocolConfig, ExternalNodeVerifierConfig, MainNodeProtocolConfig,
+    ZksProtocolConfig,
+};
+use zksync_os_network::service::{NetworkService, PeerVerifyBatch, PeerVerifyBatchResult};
 use zksync_os_observability::{ComponentHealth, ComponentHealthReporter, GENERAL_METRICS};
 use zksync_os_pipeline::Pipeline;
 use zksync_os_pipeline_health::{ComponentId, PipelineHealthMonitor};
@@ -129,7 +137,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     if node_role.is_main() && !config.general_config.run_priority_tree {
         panic!("`general_run_priority_tree` must be true for Main Node");
     }
-
     let process_started_at = Instant::now();
     GENERAL_METRICS.process_started_at[&(NODE_VERSION, role)].set(
         SystemTime::now()
@@ -297,9 +304,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let tree_db = tree_at_genesis.tree;
     let tree_for_rpc = Arc::new(tree_db.clone());
 
-    // todo: this can take a while; ideally committed batches should be loaded in the background
-    //       and then `get()` method can be made async so that it waits for relevant batch to load
-    let committed_batch_provider = CommittedBatchProvider::init(
+    let committed_batch_provider = CommittedBatchProvider::new(
         &l1_state,
         config.l1_watcher_config.max_blocks_to_process,
         || async {
@@ -311,6 +316,16 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     )
     .await
     .expect("failed to init CommittedBatchProvider");
+
+    let committed_batch_provider_for_init = committed_batch_provider.clone();
+    let l1_state_for_init = l1_state.clone();
+    let max_blocks_to_process = config.l1_watcher_config.max_blocks_to_process;
+    runtime.spawn_critical_task("committed batch provider init", async move {
+        committed_batch_provider_for_init
+            .init(&l1_state_for_init, max_blocks_to_process)
+            .await
+            .expect("failed to initialize CommittedBatchProvider");
+    });
 
     let state = State::new(&config.general_config, &genesis).await;
 
@@ -393,8 +408,16 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     node_startup_state.assert_consistency();
 
-    // Channel between NetworkService and Sequencer
+    // MN sends `VerifyBatch` requests to the network and receives `PeerVerifyBatchResult`s back.
+    let (verify_request_tx, verify_request_rx) = tokio::sync::mpsc::channel::<VerifyBatch>(16);
+    let (verify_result_tx, verify_result_rx) =
+        tokio::sync::mpsc::channel::<PeerVerifyBatchResult>(128);
+    // `replay_*` carries replay records from the network service into the EN pipeline.
     let (replay_sender, replays_for_sequencer) = tokio::sync::mpsc::channel(128);
+    // EN receives peer verification requests and broadcasts signed responses back to the network.
+    let (verify_batch_tx, verify_batch_rx) = tokio::sync::mpsc::channel::<PeerVerifyBatch>(128);
+    let (outgoing_verify_results, _) =
+        tokio::sync::broadcast::channel::<PeerVerifyBatchResult>(128);
 
     let ConsensusRuntimeParts {
         canonization_engine,
@@ -403,30 +426,52 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     } = loopback_consensus();
     if config.network_config.enabled {
         tracing::info!("initializing p2p networking");
-
-        let network_service = NetworkService::new(
-            config.network_config.clone().into(),
-            ZksProtocolConfig {
-                node_role,
-                starting_block,
-                // This will be gone once we migrate away from record overrides
-                record_overrides: config
-                    .sequencer_config
-                    .en_replay_record_overrides
-                    .iter()
-                    .map(|(block_number, db_key)| RecordOverride {
-                        block_number: *block_number,
-                        db_key: db_key.clone(),
-                    })
-                    .collect(),
-                replay_sender,
-            },
-            block_replay_storage.clone(),
-            zk_provider_factory,
-        )
-        .await
+        let batch_verification_policy_config: BatchVerificationPolicyConfig =
+            config.batch_verification_config.clone().into();
+        let network_service = if node_role.is_main() {
+            let (_, accepted_verifier_signers) =
+                effective_verification_policy(&batch_verification_policy_config, &l1_state);
+            NetworkService::new(
+                config.network_config.clone().into(),
+                ZksProtocolConfig::MainNode(MainNodeProtocolConfig {
+                    accepted_verifier_signers,
+                    verify_result_tx: verify_result_tx.clone(),
+                }),
+                block_replay_storage.clone(),
+                zk_provider_factory,
+            )
+            .await
+        } else {
+            let record_overrides = config
+                .sequencer_config
+                .en_replay_record_overrides
+                .iter()
+                .map(|(block_number, db_key)| RecordOverride {
+                    block_number: *block_number,
+                    db_key: db_key.clone(),
+                })
+                .collect();
+            NetworkService::new(
+                config.network_config.clone().into(),
+                ZksProtocolConfig::ExternalNode(ExternalNodeProtocolConfig {
+                    starting_block: Arc::new(RwLock::new(starting_block)),
+                    record_overrides,
+                    replay_sender,
+                    verification: config.batch_verification_config.client_enabled.then(|| {
+                        ExternalNodeVerifierConfig {
+                            signing_key: config.batch_verification_config.signing_key.clone(),
+                            verify_batch_tx: verify_batch_tx.clone(),
+                            outgoing_verify_results: outgoing_verify_results.clone(),
+                        }
+                    }),
+                }),
+                block_replay_storage.clone(),
+                zk_provider_factory,
+            )
+            .await
+        }
         .expect("failed to create network service");
-        network_service.spawn(runtime);
+        network_service.spawn(runtime, node_role.is_main().then_some(verify_request_rx));
     } else if node_role.is_main() {
         tracing::info!(
             "p2p networking is disabled; to enable set `network.enabled=true` and populate `network.secret_key`"
@@ -441,6 +486,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
+    // Channel from L1Sender<CommitCommand> to L1CommitWatcher.
+    // Initialized to startup's last_committed_batch so any commit above that value
+    // which the pipeline didn't submit in this session triggers a restart.
+    let (commit_submitted_tx, commit_submitted_rx) =
+        watch::channel(node_startup_state.l1_state.last_committed_batch);
+
     tracing::info!("Initializing L1 Watchers");
     runtime.spawn_critical_task(
         "l1 commit watcher",
@@ -449,7 +500,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
+            l1_state.sl_block_number,
             node_startup_state.l1_state.l1_chain_id,
+            node_role.is_main().then_some(commit_submitted_rx),
         )
         .await
         .expect("failed to start L1 commit watcher")
@@ -549,7 +602,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 InteropWatcher::create_watcher(
                     node_startup_state.l1_state.bridgehub_sl.clone(),
                     config.l1_watcher_config.clone().into(),
-                    next_cursors.interop_event_index.clone(),
+                    next_cursors.interop_root_id,
                     interop_roots_subpool.clone(),
                     node_startup_state.l1_state.l1_chain_id,
                 )
@@ -825,7 +878,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     let pipeline_health = if node_role.is_main() {
-        // Main Node
         run_main_node_pipeline(
             &config,
             sl_provider.clone(),
@@ -845,10 +897,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             canonization_engine,
             leadership,
             stop_receiver.clone(),
+            commit_submitted_tx,
+            verify_request_tx,
+            verify_result_rx,
         )
         .await
     } else {
-        // External Node
         run_en_pipeline(
             &config,
             replays_for_sequencer,
@@ -865,6 +919,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             stop_receiver.clone(),
             tx_acceptance_state_sender,
             chain_id,
+            verify_batch_rx,
+            outgoing_verify_results.clone(),
         )
         .await
     };
@@ -898,10 +954,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         });
     }
 
-    // Wait for repositories to be ready to be used in RPC.
-    repositories.wait_for_db_ready_to_process_blocks().await;
-
     // =========== Start JSON RPC ========
+    let repositories_for_wait = repositories.clone();
+    let wait_for_db = async move {
+        // Wait for repositories to be ready to be used in RPC.
+        repositories_for_wait
+            .wait_for_db_ready_to_process_blocks()
+            .await;
+    };
     zksync_os_rpc::spawn(
         config.rpc_config.into(),
         chain_id,
@@ -915,12 +975,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         main_node_provider,
         gateway_provider.map(|p| p.erased()),
         runtime,
+        wait_for_db,
     )
     .await
     .expect("failed to spawn rpc server");
     let startup_time = process_started_at.elapsed();
     GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
-    tracing::info!("All components initialized in {startup_time:?}");
+    tracing::info!("All components scheduled for initialization in {startup_time:?}");
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -946,6 +1007,9 @@ async fn run_main_node_pipeline(
     canonization_engine: BlockCanonizationEngine,
     leadership: LeadershipSignal,
     stop_receiver: watch::Receiver<bool>,
+    commit_submitted_tx: watch::Sender<u64>,
+    verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
+    verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
 ) -> PipelineHealth {
     let pubdata_mode = config
         .l1_sender_config
@@ -1234,6 +1298,8 @@ async fn run_main_node_pipeline(
             config.batch_verification_config.clone().into(),
             node_state_on_startup.l1_state.clone(),
             node_state_on_startup.l1_state.last_committed_batch,
+            verify_request_tx,
+            verify_result_rx,
             batch_verification_reporter,
         ))
         .pipe(fri_proving_step)
@@ -1254,6 +1320,7 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
             health_reporter: l1_sender_commit_reporter,
+            commit_submitted_tx: Some(commit_submitted_tx),
         })
         .pipe(snark_proving_step)
         .pipe(GaplessL1ProofSender::new(
@@ -1266,6 +1333,7 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
             health_reporter: l1_sender_prove_reporter,
+            commit_submitted_tx: None,
         })
         .pipe(
             PriorityTreePipelineStep::new(
@@ -1283,6 +1351,7 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
             health_reporter: l1_sender_execute_reporter,
+            commit_submitted_tx: None,
         })
         .pipe(BatchSink::new(internal_config_manager));
 
@@ -1327,6 +1396,8 @@ async fn run_en_pipeline(
     stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
+    verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
+    outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
 ) -> PipelineHealth {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
@@ -1368,14 +1439,6 @@ async fn run_en_pipeline(
         &mut health_entries,
         ComponentId::TreeManager,
     );
-    let batch_verification_client_reporter =
-        config.batch_verification_config.client_enabled.then(|| {
-            make_reporter(
-                &mut pipeline_monitor,
-                &mut health_entries,
-                ComponentId::BatchVerification,
-            )
-        });
     let priority_tree_reporter = config.general_config.run_priority_tree.then(|| {
         make_reporter(
             &mut pipeline_monitor,
@@ -1383,6 +1446,18 @@ async fn run_en_pipeline(
             ComponentId::PriorityTree,
         )
     });
+    // pipe_if eagerly constructs both branches, so we always create the reporter.
+    // Only register it with the monitor when the client is actually enabled —
+    // otherwise the reporter (and the whole BatchVerificationResponder) is dropped.
+    let batch_verification_client_reporter = if config.batch_verification_config.client_enabled {
+        make_reporter(
+            &mut pipeline_monitor,
+            &mut health_entries,
+            ComponentId::BatchVerificationResponder,
+        )
+    } else {
+        ComponentHealthReporter::new(ComponentId::BatchVerificationResponder.as_str()).0
+    };
 
     let component_health = Arc::new(health_entries);
 
@@ -1425,22 +1500,22 @@ async fn run_en_pipeline(
         .pipe(TreeManager {
             tree: tree.clone(),
             health_reporter: tree_manager_reporter,
-        });
-
-    let pipeline = if config.batch_verification_config.client_enabled {
-        pipeline.pipe(BatchVerificationClient::new(
-            chain_id,
-            config.batch_verification_config.connect_address.clone(),
-            config.batch_verification_config.signing_key.clone(),
-            finality.clone(),
-            node_state_on_startup.l1_state.clone(),
-            state.clone(),
-            batch_verification_client_reporter
-                .expect("batch verification reporter must exist when client is enabled"),
-        ))
-    } else {
-        pipeline.pipe(NoOpSink::new())
-    };
+        })
+        .pipe_if(
+            config.batch_verification_config.client_enabled,
+            BatchVerificationResponder::new(
+                chain_id,
+                node_state_on_startup.l1_state.diamond_proxy_address_sl(),
+                config.batch_verification_config.signing_key.clone(),
+                finality.clone(),
+                node_state_on_startup.l1_state.clone(),
+                state.clone(),
+                verify_batch_rx,
+                outgoing_verify_results,
+                batch_verification_client_reporter,
+            ),
+            NoOpSink::new(),
+        );
 
     let registered = pipeline_monitor.registered_component_ids();
     let adjacency: Arc<Vec<(ComponentId, ComponentId)>> = Arc::new(
@@ -1577,7 +1652,7 @@ async fn commit_proof_execute_block_numbers(
     } else {
         committed_batch_provider
             .get(l1_state.last_committed_batch)
-            .expect("last committed batch was not discovered on L1")
+            .expect("last_committed_batch is expected to be loaded")
             .last_block_number()
     };
 
@@ -1587,7 +1662,7 @@ async fn commit_proof_execute_block_numbers(
     } else {
         committed_batch_provider
             .get(l1_state.last_proved_batch)
-            .expect("last proved batch was not discovered on L1")
+            .expect("last_proved_batch is expected to be loaded")
             .last_block_number()
     };
 
@@ -1596,7 +1671,7 @@ async fn commit_proof_execute_block_numbers(
     } else {
         committed_batch_provider
             .get(l1_state.last_executed_batch)
-            .expect("last executed batch was not discovered on L1")
+            .expect("last_executed_batch is expected to be loaded")
             .last_block_number()
     };
     (last_committed_block, last_proved_block, last_executed_block)

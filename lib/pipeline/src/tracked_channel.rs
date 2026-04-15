@@ -139,7 +139,6 @@ impl<T> TrackedUnboundedReceiver<T> {
         self.buf.front().map(f)
     }
 
-
     pub fn is_closed(&self) -> bool {
         self.inner.is_closed()
     }
@@ -328,9 +327,10 @@ mod tests {
         let (tx, mut rx) = tracked_unbounded_channel::<Msg>();
         let (reporter, health_rx) = ComponentHealthReporter::new("test");
 
-        assert!(tx
-            .send_and_record(Msg { seq: 7, ts: 700 }, &reporter)
-            .is_ok());
+        assert!(
+            tx.send_and_record(Msg { seq: 7, ts: 700 }, &reporter)
+                .is_ok()
+        );
         // Reporter updated immediately after send.
         assert_eq!(health_rx.borrow().last_processed_block_number, Some(7));
         assert_eq!(health_rx.borrow().last_processed_block_timestamp, Some(700));
@@ -356,9 +356,7 @@ mod tests {
         drop(rx);
         let (reporter, health_rx) = ComponentHealthReporter::new("test");
 
-        assert!(tx
-            .send_and_record(Msg { seq: 1 }, &reporter)
-            .is_err());
+        assert!(tx.send_and_record(Msg { seq: 1 }, &reporter).is_err());
         // Reporter must NOT have been updated — send failed.
         assert_eq!(health_rx.borrow().last_processed_block_number, None);
     }

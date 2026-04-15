@@ -48,7 +48,10 @@ impl L1Watcher {
         let mut timer = tokio::time::interval(self.poll_interval);
         loop {
             timer.tick().await;
-            self.poll().await.expect("watcher failed");
+            if let Err(e) = self.poll().await {
+                tracing::error!("l1 watcher fatal error: {e}");
+                panic!("watcher failed: {e}");
+            }
         }
     }
 
@@ -137,6 +140,10 @@ pub enum L1WatcherError {
     Contract(#[from] zksync_os_contract_interface::Error),
     #[error(transparent)]
     Other(anyhow::Error),
+    #[error(
+        "batch {0} was committed on L1 but not submitted by this session; likely a pending tx from a prior crash"
+    )]
+    UnexpectedCommit(u64),
     #[error("output has been closed")]
     OutputClosed,
 }

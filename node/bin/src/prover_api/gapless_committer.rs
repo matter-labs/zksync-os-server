@@ -42,7 +42,8 @@ impl PipelineComponent for GaplessCommitter {
         let mut next_expected_batch_number = self.next_expected_batch_number;
 
         loop {
-            self.health_reporter.enter_state(GenericComponentState::Idle);
+            self.health_reporter
+                .enter_state(GenericComponentState::Idle);
             // Plain recv: do NOT record health on arrival. A batch sitting in the
             // reorder buffer has not been committed; recording it here would report
             // a position ahead of what has actually been processed.
@@ -50,7 +51,8 @@ impl PipelineComponent for GaplessCommitter {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
-            self.health_reporter.enter_state(GenericComponentState::Active);
+            self.health_reporter
+                .enter_state(GenericComponentState::Active);
             buffer.insert(batch.batch_number(), batch);
 
             // Flush ready batches in order.
@@ -86,7 +88,10 @@ impl PipelineComponent for GaplessCommitter {
                         .context("Committer batch signature failure")?
                     };
                     // Record health only after the batch has been committed and sent downstream.
-                    if output.send_and_record(result, &self.health_reporter).is_err() {
+                    if output
+                        .send_and_record(result, &self.health_reporter)
+                        .is_err()
+                    {
                         anyhow::bail!("Outbound channel closed");
                     }
                 }

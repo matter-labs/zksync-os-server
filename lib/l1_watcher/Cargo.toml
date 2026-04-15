@@ -15,20 +15,17 @@ zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_batch_types.workspace = true
 zksync_os_mempool.workspace = true
-
-# Needed to recalculate the bytecode hashes during upgrade tx processing
 zk_os_api.workspace = true
 zk_os_basic_system.workspace = true
 
 async-trait.workspace = true
 alloy = { workspace = true, default-features = false, features = ["reqwest", "rpc-types", "providers"] }
 anyhow.workspace = true
+blake2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 vise.workspace = true
 thiserror.workspace = true
-serde_json.workspace = true
-serde.workspace = true
 futures.workspace = true
 backon.workspace = true
 rangemap.workspace = true

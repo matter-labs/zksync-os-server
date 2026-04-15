@@ -6,6 +6,7 @@
 pub mod v0;
 pub mod v1;
 pub mod v2;
+pub mod v3;
 
 mod impls;
 
@@ -18,11 +19,14 @@ use zksync_os_storage_api::ReplayRecord as StorageReplayRecord;
 /// A request for a peer to return block replays starting at the requested block number.
 /// The peer MUST start streaming indefinite number of [`BlockReplays`] responses.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable)]
+#[rlp(trailing)]
 pub struct GetBlockReplays {
     /// The block number that the peer should start returning replay blocks from.
     pub starting_block: u64,
     /// Records for which DB keys should be overridden. Used only for debugging.
     pub record_overrides: Vec<RecordOverride>,
+    /// Maximum number of consecutive replay records to include in each response message.
+    pub max_blocks_per_message: Option<u64>,
 }
 
 /// Specifies one overridden block replay record. This allows EN to sync replay record that is not

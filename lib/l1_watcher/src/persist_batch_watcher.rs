@@ -11,12 +11,17 @@ use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBat
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
-/// Persists executed batches via [`WriteBatch`].
-/// Note: batches are discovered by `commit_watcher.rs` from L1 as soon as they are committed.
-/// However, `commit_watcher.rs` only saves them **in memory** (via `committed_batch_provider.rs`).
-/// Only when batch is also executed on L1, this logic kicks in and batches are **persisted on disc**.
-/// Committed batches can be rolled back on L1, which is not the case for executed - so this separation
-/// ensures that we don't need to rollback any persistent node state on L1 commit rollback.
+/// Watches commit and execute events together and persists only irreversibly executed batches.
+///
+/// This component keeps committed batches in memory until the matching `BlockExecution` event
+/// arrives, and only then writes a `PersistedBatch` through `WriteBatch`. That split avoids having
+/// to roll back persistent storage for batches that were committed but later reverted on L1.
+///
+/// Depended on by:
+/// - `ExecutedBatchStorage`, which is the concrete persistent store typically passed into this
+///   watcher;
+/// - `RpcStorage` and RPC namespaces, which read persisted batch data to answer batch- and
+///   proof-related requests;
 pub struct L1PersistBatchWatcher<BatchStorage> {
     zk_chain: ZkChain<DynProvider>,
     batch_storage: BatchStorage,

@@ -74,6 +74,8 @@ alloy::sol! {
         ) external;
 
         function getProtocolVersion(uint256 _chainId) external view returns (uint256);
+
+        function L1_BYTECODES_SUPPLIER() external view returns (address);
     }
 
     // Represents the diamond proxy of the ZK chain on L1
@@ -88,10 +90,20 @@ alloy::sol! {
         function getTransactionFilterer() external view returns (address);
 
         // Admin facet
-        function upgradeChainFromVersion(uint256 _protocolVersion, DiamondCutData calldata _cutData) external;
+        function upgradeChainFromVersion(
+            address, // _chainAddress (unused in this specific implementation)
+            uint256 _oldProtocolVersion,
+            DiamondCutData calldata _diamondCut
+        ) external;
         function getTotalBatchesCommitted() external view returns (uint256);
         function getTotalBatchesVerified() external view returns (uint256);
         function getTotalBatchesExecuted() external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    contract ZkChainV30 {
+        // Admin facet
+        function upgradeChainFromVersion(uint256 _protocolVersion, DiamondCutData calldata _cutData) external;
     }
 
     #[sol(rpc)]
@@ -179,13 +191,8 @@ alloy::sol! {
 
     #[sol(rpc)]
     contract BytecodesSupplier {
-        /// @notice Publishes the bytecode hash and the bytecode itself.
-        /// @param _bytecode Bytecode to be published.
-        function publishBytecode(bytes calldata _bytecode) public;
-
-        /// @notice Publishes multiple bytecodes.
-        /// @param _bytecodes Array of bytecodes to be published.
-        function publishBytecodes(bytes[] calldata _bytecodes) external;
+        /// @notice Publishes multiple EVM bytecodes.
+        function publishEVMBytecodes(bytes[] calldata _bytecodes) external;
     }
 
     // Bytecode for committer facet is hardcoded, since putting it to dependencies would significantly

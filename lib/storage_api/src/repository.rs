@@ -1,10 +1,36 @@
 use crate::model::{StoredTxData, TxMeta};
 use alloy::consensus::Block;
-use alloy::primitives::{Address, BlockHash, BlockNumber, Sealed, TxHash, TxNonce};
+use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Sealed, TxHash, TxNonce};
+use roaring::RoaringBitmap;
 use std::fmt::Debug;
+use std::ops::Range;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_rocksdb::rocksdb;
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
+
+/// Log index over persisted blocks, mapping addresses and topics to the block numbers where they
+/// appear. Blocks outside the returned covered range must fall back to a bloom scan.
+pub trait LogIndex: Debug + Send + Sync + 'static {
+    /// Returns blocks in `range` where `address` emitted at least one log, and the sub-range of
+    /// `range` that the index actually covers. An empty covered range means no index is available.
+    fn blocks_for_address(
+        &self,
+        _address: Address,
+        _range: Range<u64>,
+    ) -> RepositoryResult<(RoaringBitmap, Range<u64>)> {
+        Ok((RoaringBitmap::new(), 0..0))
+    }
+
+    /// Returns blocks in `range` where `topic` appears at any topic position, and the sub-range of
+    /// `range` that the index actually covers. An empty covered range means no index is available.
+    fn blocks_for_topic(
+        &self,
+        _topic: B256,
+        _range: Range<u64>,
+    ) -> RepositoryResult<(RoaringBitmap, Range<u64>)> {
+        Ok((RoaringBitmap::new(), 0..0))
+    }
+}
 
 /// Sealed block (i.e. pre-computed hash) along with transaction hashes included in that block.
 /// This is the structure stored in the repository and hence what is served in its API.
@@ -14,7 +40,7 @@ pub type RepositoryBlock = Sealed<Block<TxHash>>;
 /// Read-only view on repositories that can fetch data required for RPC but not for VM execution.
 ///
 /// This includes auxiliary data such as block headers, raw transactions and transaction receipts.
-pub trait ReadRepository: Debug + Send + Sync + 'static {
+pub trait ReadRepository: LogIndex {
     /// Get sealed block with transaction hashes by its number.
     fn get_block_by_number(&self, number: BlockNumber)
     -> RepositoryResult<Option<RepositoryBlock>>;
@@ -76,4 +102,6 @@ pub enum RepositoryError {
     Eip2718(#[from] alloy::eips::eip2718::Eip2718Error),
     #[error(transparent)]
     Rlp(#[from] alloy::rlp::Error),
+    #[error("failed to deserialize log index bitmap: {0}")]
+    BitmapDeserialize(String),
 }

@@ -121,4 +121,3 @@ pub struct ExecutionMetrics {
 
 #[vise::register]
 pub(crate) static EXECUTION_METRICS: vise::Global<ExecutionMetrics> = vise::Global::new();
-

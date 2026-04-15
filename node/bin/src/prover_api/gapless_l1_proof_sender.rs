@@ -38,10 +38,12 @@ impl PipelineComponent for GaplessL1ProofSender {
         let mut next_expected_batch_number = self.next_expected_batch_number;
 
         loop {
-            self.health_reporter.enter_state(GenericComponentState::Idle);
+            self.health_reporter
+                .enter_state(GenericComponentState::Idle);
             match input.recv().await {
                 Some(command) => {
-                    self.health_reporter.enter_state(GenericComponentState::Active);
+                    self.health_reporter
+                        .enter_state(GenericComponentState::Active);
 
                     buffer.insert(command.first_batch_number(), command);
 
@@ -54,7 +56,8 @@ impl PipelineComponent for GaplessL1ProofSender {
                         {
                             anyhow::bail!("Outbound channel closed");
                         }
-                        self.health_reporter.enter_state(GenericComponentState::Active);
+                        self.health_reporter
+                            .enter_state(GenericComponentState::Active);
                     }
                 }
                 None => {

@@ -1,8 +1,10 @@
 use crate::db::RepositoryDb;
 use crate::in_memory::RepositoryInMemory;
 use crate::metrics::REPOSITORIES_METRICS;
+use alloy::primitives::B256;
 use alloy::primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce};
-use std::ops::Div;
+use roaring::RoaringBitmap;
+use std::ops::{Div, Range};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,7 +14,8 @@ use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
 use zksync_os_storage_api::{
-    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta, WriteRepository,
+    LogIndex, ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+    WriteRepository,
 };
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 
@@ -103,6 +106,24 @@ impl RepositoryManager {
             tokio::time::sleep(Duration::from_secs(1)).await;
             tracing::debug!("waiting for `db_ready_to_process_blocks`");
         }
+    }
+}
+
+impl LogIndex for RepositoryManager {
+    fn blocks_for_address(
+        &self,
+        address: Address,
+        range: Range<u64>,
+    ) -> RepositoryResult<(RoaringBitmap, Range<u64>)> {
+        self.db.blocks_for_address(address, range)
+    }
+
+    fn blocks_for_topic(
+        &self,
+        topic: B256,
+        range: Range<u64>,
+    ) -> RepositoryResult<(RoaringBitmap, Range<u64>)> {
+        self.db.blocks_for_topic(topic, range)
     }
 }
 

@@ -92,6 +92,8 @@ pub struct ComponentOverrides {
     #[config(nest)]
     pub prover_input_generator: Option<ComponentConditionOverride>,
     #[config(nest)]
+    pub batch_verification_responder: Option<ComponentConditionOverride>,
+    #[config(nest)]
     pub batcher: Option<ComponentConditionOverride>,
     #[config(nest)]
     pub batch_verification: Option<ComponentConditionOverride>,
@@ -123,6 +125,7 @@ impl ComponentOverrides {
             ComponentId::BlockApplier => self.block_applier.as_ref(),
             ComponentId::TreeManager => self.tree_manager.as_ref(),
             ComponentId::ProverInputGenerator => self.prover_input_generator.as_ref(),
+            ComponentId::BatchVerificationResponder => self.batch_verification_responder.as_ref(),
             ComponentId::Batcher => self.batcher.as_ref(),
             ComponentId::BatchVerification => self.batch_verification.as_ref(),
             ComponentId::FriJobManager => self.fri_job_manager.as_ref(),
@@ -209,7 +212,8 @@ impl PipelineHealthConfig {
             | ComponentId::BlockApplier
             | ComponentId::TreeManager
             | ComponentId::BlockCanonizer
-            | ComponentId::ProverInputGenerator => BackpressureCondition {
+            | ComponentId::ProverInputGenerator
+            | ComponentId::BatchVerificationResponder => BackpressureCondition {
                 max_block_lag: self.block_pipeline.max_block_lag,
                 max_time_lag: self.block_pipeline.max_time_lag,
             },

@@ -7,6 +7,7 @@ use alloy::primitives::Address;
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, WalletProvider};
 use async_trait::async_trait;
+use tokio::sync::watch;
 use zksync_os_observability::ComponentHealthReporter;
 use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 
@@ -18,6 +19,7 @@ pub struct L1Sender<F: TxFiller<Ethereum>, P: Provider<Ethereum>, C> {
     pub to_address: Address,
     pub gateway: bool,
     pub health_reporter: ComponentHealthReporter,
+    pub commit_submitted_tx: Option<watch::Sender<u64>>,
 }
 
 #[async_trait]
@@ -45,6 +47,7 @@ where
             self.config,
             self.gateway,
             self.health_reporter,
+            self.commit_submitted_tx,
         )
         .await
     }

@@ -114,7 +114,8 @@ where
         let mut warned_unsupported_versions: HashSet<u32> = HashSet::new();
 
         loop {
-            self.health_reporter.enter_state(GenericComponentState::Idle);
+            self.health_reporter
+                .enter_state(GenericComponentState::Idle);
             // Plain recv: health is recorded via send_and_record after the check completes.
             // Recording on recv would advance the watermark before the block is validated.
             let Some(AppliedBlock {
@@ -150,10 +151,12 @@ where
                 }
             };
 
-            self.health_reporter.enter_state(GenericComponentState::Active);
+            self.health_reporter
+                .enter_state(GenericComponentState::Active);
             let state_block_number = replay_record.block_context.block_number - 1;
             let block_hashes = replay_record.block_context.block_hashes;
-            let state_view = self.state
+            let state_view = self
+                .state
                 .state_view_at(state_block_number)
                 .map_err(anyhow::Error::from)?;
 

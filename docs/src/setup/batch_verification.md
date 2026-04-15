@@ -16,8 +16,8 @@ can reproduce a batch and sign it before the batch is treated as ready to commit
 
 L2-only mode is for data availability. In this setup:
 
-- the main node runs the batch verification server;
-- selected ENs connect to it and sign approvals;
+- the main node broadcasts batch verification requests to verifier peers over the p2p network;
+- selected ENs receive those requests and sign approvals from their local replay state;
 - the main node requires enough EN approvals before the batch can move forward.
 
 The value of this mode is that committed batches must already be reproducible by the participating
@@ -58,11 +58,8 @@ when settlement-layer-backed mode is active, includes them in the settlement-lay
 Enable and configure the main node / sequencer with these options:
 
 - `batch_verification_server_enabled`
-  Enables the batch verification server on the main node. Without this, the main node does not
-  collect EN signatures.
-- `batch_verification_listen_address`
-  Address the main node listens on for batch verification client connections, for example
-  `0.0.0.0:3072`.
+  Enables batch verification request collection on the main node. Without this, the main node
+  does not collect EN signatures.
 - `batch_verification_threshold`
   Minimum number of EN signatures required by the main node. If settlement-layer-backed mode is
   active, the effective threshold is `max(local threshold, settlement-layer threshold)`.
@@ -83,10 +80,7 @@ Enable and configure the main node / sequencer with these options:
 Each EN that participates in 2FA needs these options:
 
 - `batch_verification_client_enabled`
-  Enables the EN batch verification client.
-- `batch_verification_connect_address`
-  URL of the main node batch verification server, for example `http://10.10.1.1:3072`. This EN
-  will connect to that server and return approvals from its local replay state.
+  Enables the EN verifier role on the p2p network.
 - `batch_verification_signing_key`
   Private key used by the EN to sign batch approvals. Its address must be present in the local
   accepted signer list for L2-only mode, or in the settlement-layer validator set for

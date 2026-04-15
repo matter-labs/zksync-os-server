@@ -1,9 +1,13 @@
 use crate::config::NetworkConfig;
-use crate::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
-use crate::version::{ZksProtocolV1, ZksProtocolV2};
-use crate::wire::replays::RecordOverride;
+use crate::protocol::{
+    ConnectionRegistry, ExternalNodeProtocolConfig, HandlerSharedState, MainNodeProtocolConfig,
+    ProtocolEvent, ZksProtocolConfig, ZksProtocolHandler,
+};
+use crate::session::PeerSessionStore;
+use crate::version::{ZksProtocolV1, ZksProtocolV2, ZksProtocolV3};
+use crate::wire::message::ZksMessage;
+use crate::{VerifyBatch, VerifyBatchResult};
 use alloy::eips::eip2124::Head;
-use alloy::primitives::BlockNumber;
 use backon::{ConstantBuilder, Retryable};
 use futures::future::join_all;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, Hardforks};
@@ -15,21 +19,22 @@ use reth_network::types::peers::config::PeerBackoffDurations;
 use reth_network::{
     NetworkConfig as RethNetworkConfig, NetworkConfigBuilder, NetworkManager, PeersConfig,
 };
+use reth_network_peers::PeerId;
 use reth_network_peers::{NodeRecord, TrustedPeer};
 use reth_provider::BlockNumReader;
 use reth_tasks::Runtime;
+use std::collections::HashMap;
 use std::future::Future;
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use zksync_os_metadata::NODE_CLIENT_VERSION;
-use zksync_os_storage_api::{ReadReplay, ReplayRecord};
-use zksync_os_types::NodeRole;
+use zksync_os_storage_api::ReadReplay;
 
 /// Max number of active devp2p connections.
-const MAX_ACTIVE_CONNECTIONS: usize = 10;
+const MAX_ACTIVE_CONNECTIONS: usize = 25;
 /// Retry boot node DNS resolution for up to ~2 minutes so discv5 bootstrap has usable peers.
 const BOOT_NODE_RESOLUTION_RETRY_DELAY: Duration = Duration::from_secs(5);
 const BOOT_NODE_RESOLUTION_MAX_RETRIES: usize = 24;
@@ -140,25 +145,32 @@ where
 
 /// Manages the entire network state including all RLPx subprotocols and discv5 peer discovery.
 ///
-/// This type is supposed to be consumed through [`NetworkService::run`] that registers it as an
+/// This type is supposed to be consumed through [`NetworkService::spawn`] that registers it as an
 /// endless task that consistently drives the state of the entire network forward.
 #[derive(Debug)]
 pub struct NetworkService {
     network_manager: NetworkManager,
     protocol_rx: mpsc::UnboundedReceiver<ProtocolEvent>,
+    peer_sessions: Arc<RwLock<PeerSessionStore>>,
+    connection_registry: ConnectionRegistry,
 }
 
-pub struct ZksProtocolConfig {
-    pub node_role: NodeRole,
-    pub starting_block: BlockNumber,
-    pub record_overrides: Vec<RecordOverride>,
-    pub replay_sender: mpsc::Sender<ReplayRecord>,
+#[derive(Debug, Clone)]
+pub struct PeerVerifyBatch {
+    pub peer_id: PeerId,
+    pub message: VerifyBatch,
+}
+
+#[derive(Debug, Clone)]
+pub struct PeerVerifyBatchResult {
+    pub peer_id: PeerId,
+    pub message: VerifyBatchResult,
 }
 
 impl NetworkService {
     pub async fn new(
         config: NetworkConfig,
-        zks_config: ZksProtocolConfig,
+        protocol_config: ZksProtocolConfig,
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
     ) -> Result<Self, NetworkError> {
@@ -253,9 +265,26 @@ impl NetworkService {
             .network_id(Some(chain_spec.chain_id()))
             // Use genesis as chain head
             .set_head(genesis);
-        let net_cfg =
-            Self::register_rlpx_sub_protocols(cfg_builder, zks_config, replay, protocol_tx)
-                .build(client);
+        let connection_registry: ConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let cfg_builder = match protocol_config {
+            ZksProtocolConfig::MainNode(protocol) => Self::register_main_node_rlpx_sub_protocols(
+                cfg_builder,
+                protocol,
+                replay,
+                protocol_tx,
+                connection_registry.clone(),
+            ),
+            ZksProtocolConfig::ExternalNode(protocol) => {
+                Self::register_external_node_rlpx_sub_protocols(
+                    cfg_builder,
+                    protocol,
+                    replay,
+                    protocol_tx,
+                    connection_registry.clone(),
+                )
+            }
+        };
+        let net_cfg = cfg_builder.build(client);
         tracing::debug!(?net_cfg, "starting p2p network service");
         // Create network manager. We are not interested in `txpool` because transaction gossip is
         // disabled. `request_handler` is also unused as it is specific to `eth` protocol.
@@ -265,44 +294,92 @@ impl NetworkService {
         Ok(Self {
             network_manager,
             protocol_rx,
+            peer_sessions: Arc::new(RwLock::new(PeerSessionStore::default())),
+            connection_registry,
         })
     }
 
-    fn register_rlpx_sub_protocols(
+    fn register_main_node_rlpx_sub_protocols(
         builder: NetworkConfigBuilder,
-        config: ZksProtocolConfig,
+        protocol: MainNodeProtocolConfig,
         replay: impl ReadReplay + Clone,
         protocol_tx: mpsc::UnboundedSender<ProtocolEvent>,
+        connection_registry: ConnectionRegistry,
     ) -> NetworkConfigBuilder {
-        // Shared between all `zks` versions. For example, if we replay first 1000 blocks using v1
-        // and then start replaying using v2, we should respect those 1000 replay records we have
-        // already received using v1.
-        let starting_block = Arc::new(RwLock::new(config.starting_block));
-        let state = ProtocolState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS);
+        let state = HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS);
         builder
             // Support for v1 must be dropped before upgrade to protocol version v31.0. Otherwise,
             // we might send invalid record to ENs that are still using v1 protocol (`starting_migration_number`
             // in those record is always 0).
-            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _>::new(
+            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _>::for_main_node(
                 replay.clone(),
-                config.node_role,
-                starting_block.clone(),
-                config.record_overrides.clone(),
+                protocol.clone(),
                 state.clone(),
-                config.replay_sender.clone(),
+                connection_registry.clone(),
             ))
-            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV2, _>::new(
+            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV2, _>::for_main_node(
+                replay.clone(),
+                protocol.clone(),
+                state.clone(),
+                connection_registry.clone(),
+            ))
+            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV3, _>::for_main_node(
                 replay,
-                config.node_role,
-                starting_block,
-                config.record_overrides,
+                protocol,
                 state,
-                config.replay_sender,
+                connection_registry,
             ))
     }
 
-    /// Consume the service by registering it as an endless task that drives the network state.
-    pub fn spawn(mut self, runtime: &Runtime) {
+    fn register_external_node_rlpx_sub_protocols(
+        builder: NetworkConfigBuilder,
+        protocol: ExternalNodeProtocolConfig,
+        replay: impl ReadReplay + Clone,
+        protocol_tx: mpsc::UnboundedSender<ProtocolEvent>,
+        connection_registry: ConnectionRegistry,
+    ) -> NetworkConfigBuilder {
+        let state = HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS);
+        builder
+            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _>::for_external_node(
+                replay.clone(),
+                protocol.clone(),
+                state.clone(),
+                connection_registry.clone(),
+            ))
+            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV2, _>::for_external_node(
+                replay.clone(),
+                protocol.clone(),
+                state.clone(),
+                connection_registry.clone(),
+            ))
+            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV3, _>::for_external_node(
+                replay,
+                protocol,
+                state,
+                connection_registry,
+            ))
+    }
+
+    /// Consume the service by registering it as the set of long-running tasks that drive p2p
+    /// networking forward.
+    ///
+    /// When `verify_request_rx` is provided, an additional main-node-only dispatcher task is
+    /// spawned to forward outgoing `VerifyBatch` requests to eligible peers. Passing `None`
+    /// disables that dispatcher while keeping the core network and protocol event tasks running.
+    pub fn spawn(
+        mut self,
+        runtime: &Runtime,
+        verify_request_rx: Option<mpsc::Receiver<VerifyBatch>>,
+    ) {
+        let peer_sessions = Arc::clone(&self.peer_sessions);
+        let connection_registry = Arc::clone(&self.connection_registry);
+        if let Some(mut verify_request_rx) = verify_request_rx {
+            runtime.spawn_critical_task("p2p verify dispatcher", async move {
+                while let Some(request) = verify_request_rx.recv().await {
+                    dispatch_verify_batch(&peer_sessions, &connection_registry, request).await;
+                }
+            });
+        }
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "p2p network task",
             |shutdown| async move {
@@ -314,15 +391,180 @@ impl NetworkService {
                 tracing::info!("p2p network graceful shutdown complete");
             },
         );
-        runtime.spawn_critical_task("p2p protocol logger", async move {
+        runtime.spawn_critical_task("p2p session tracker", async move {
             while let Some(event) = self.protocol_rx.recv().await {
-                // For now events are only used for diagnostical reasons (new connection got
-                // established or max connections reached). In the future we might have other events
-                // that we would want to process here somehow.
-                tracing::trace!(?event, "received zks protocol event");
+                let now = Instant::now();
+                let mut peer_sessions = self.peer_sessions.write().unwrap();
+                match event {
+                    ProtocolEvent::Established {
+                        peer_id,
+                        remote_addr,
+                        ..
+                    } => {
+                        peer_sessions.insert(now, peer_id, remote_addr);
+                        tracing::debug!(
+                            peer_id = %peer_id,
+                            session = ?peer_sessions.get(peer_id),
+                            "peer connected"
+                        );
+                    }
+                    ProtocolEvent::Closed { peer_id } => {
+                        let removed = peer_sessions.remove(peer_id);
+                        tracing::debug!(
+                            peer_id = %peer_id,
+                            session = ?removed,
+                            "peer session closed"
+                        );
+                    }
+                    ProtocolEvent::ReplayRequested {
+                        peer_id,
+                        starting_block,
+                    } => {
+                        peer_sessions.replay_requested(peer_id, starting_block);
+                        tracing::debug!(
+                            peer_id = %peer_id,
+                            session = ?peer_sessions.get(peer_id),
+                            "peer replay requested"
+                        );
+                    }
+                    ProtocolEvent::VerifierRoleRequested { peer_id } => {
+                        peer_sessions.verifier_role_requested(peer_id);
+                        tracing::debug!(
+                            peer_id = %peer_id,
+                            session = ?peer_sessions.get(peer_id),
+                            "peer verifier role requested"
+                        );
+                    }
+                    ProtocolEvent::VerifierChallengeSent { peer_id, nonce } => {
+                        peer_sessions.verifier_challenged(peer_id, nonce);
+                        tracing::debug!(
+                            peer_id = %peer_id,
+                            session = ?peer_sessions.get(peer_id),
+                            "peer verifier challenge sent"
+                        );
+                    }
+                    ProtocolEvent::VerifierAuthorized { peer_id, signer } => {
+                        peer_sessions.verifier_authorized(peer_id, signer);
+                        tracing::debug!(
+                            peer_id = %peer_id,
+                            session = ?peer_sessions.get(peer_id),
+                            "peer verifier authorized"
+                        );
+                    }
+                    ProtocolEvent::VerifierUnauthorized { peer_id, signer } => {
+                        peer_sessions.verifier_unauthorized(peer_id, signer);
+                        tracing::debug!(
+                            peer_id = %peer_id,
+                            session = ?peer_sessions.get(peer_id),
+                            "peer verifier unauthorized"
+                        );
+                    }
+                    ProtocolEvent::ReplayBlockSent {
+                        peer_id,
+                        block_number,
+                    } => {
+                        peer_sessions.replay_block_sent(now, peer_id, block_number);
+                        tracing::debug!(
+                            peer_id = %peer_id,
+                            session = ?peer_sessions.get(peer_id),
+                            "peer replay progress updated"
+                        );
+                    }
+                    ProtocolEvent::MaxActiveConnectionsExceeded { max_connections } => {
+                        tracing::warn!(max_connections, "max active connections exceeded");
+                    }
+                }
             }
         });
     }
+}
+
+/// Dispatches a verify request to all currently eligible verifier peers.
+///
+/// Eligibility is derived from [`PeerSessionStore`], then cross-checked against the live
+/// [`ConnectionRegistry`] before sending. Only `zks/3` peers can receive `VerifyBatch`.
+async fn dispatch_verify_batch(
+    peer_sessions: &Arc<RwLock<PeerSessionStore>>,
+    connection_registry: &ConnectionRegistry,
+    request: VerifyBatch,
+) {
+    let required_block = request.last_block_number;
+    let eligible_peers: Vec<_> = {
+        let peer_sessions = peer_sessions.read().unwrap();
+        peer_sessions
+            .authorized_verifier_peers(required_block)
+            .collect()
+    };
+
+    if eligible_peers.is_empty() {
+        tracing::warn!(
+            request_id = request.request_id,
+            batch_number = request.batch_number,
+            required_block,
+            "skipping verify request: no eligible verifier peers"
+        );
+        return;
+    }
+
+    let dispatch_targets: Vec<_> = {
+        let connection_registry = connection_registry.read().unwrap();
+        eligible_peers
+            .into_iter()
+            .map(|peer_id| (peer_id, connection_registry.get(&peer_id).cloned()))
+            .collect()
+    };
+    let mut sent = 0usize;
+    for (peer_id, connection) in dispatch_targets {
+        let Some(connection) = connection else {
+            tracing::warn!(
+                peer_id = %peer_id,
+                request_id = request.request_id,
+                batch_number = request.batch_number,
+                "skipping verify request: missing active connection"
+            );
+            continue;
+        };
+        if connection.version < crate::version::ZksVersion::Zks3 {
+            tracing::warn!(
+                peer_id = %peer_id,
+                request_id = request.request_id,
+                batch_number = request.batch_number,
+                version = ?connection.version,
+                "skipping verify request: peer is not on zks/3"
+            );
+            continue;
+        }
+        if connection
+            .outbound_tx
+            .send(ZksMessage::<ZksProtocolV3>::VerifyBatch(request.clone()).encoded())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                peer_id = %peer_id,
+                request_id = request.request_id,
+                batch_number = request.batch_number,
+                "failed to dispatch verify request"
+            );
+            continue;
+        }
+        sent += 1;
+        tracing::info!(
+            peer_id = %peer_id,
+            request_id = request.request_id,
+            batch_number = request.batch_number,
+            required_block,
+            "dispatched verify request"
+        );
+    }
+
+    tracing::info!(
+        request_id = request.request_id,
+        batch_number = request.batch_number,
+        required_block,
+        sent,
+        "finished verify request dispatch"
+    );
 }
 
 #[cfg(test)]
@@ -331,14 +573,26 @@ mod tests {
     use super::BOOT_NODE_RESOLUTION_RETRY_BUILDER;
     use super::BOOT_NODE_RESOLUTION_RETRY_DELAY;
     use super::BootNodeResolutionState;
+    use super::ConnectionRegistry;
+    use super::dispatch_verify_batch;
     use super::resolve_boot_nodes_once;
+    use crate::VerifyBatch;
+    use crate::protocol::PeerConnectionHandle;
+    use crate::session::PeerSessionStore;
+    use crate::version::{ZksProtocolV3, ZksVersion};
+    use crate::wire::message::ZksMessage;
+    use alloy::primitives::{Address, B512, Bytes};
     use backon::{Retryable, Sleeper};
     use reth_network::error::NetworkError;
+    use reth_network_peers::PeerId;
     use reth_network_peers::{NodeRecord, TrustedPeer};
     use std::collections::{HashMap, VecDeque};
     use std::future::Future;
     use std::io;
-    use std::sync::{Arc, Mutex};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::sync::{Arc, Mutex, RwLock};
+    use std::time::Instant;
+    use tokio::sync::mpsc;
 
     const NODE_A: &str = "enode://6f8a80d14311c39f35f516fa664deaaaa13e85b2f7493f37f6144d86991ec012937307647bd3b9a82abe2974e1407241d54947bbb39763a4cac9f77166ad92a0@node-a.internal:30303?discport=30301";
     const NODE_B: &str = "enode://1dd9d65c4552b5eb43d5ad55a2ee3f56c6cbc1c64a5c8d659f51fcd51bace24351232b8d7821617d2b29b54b81cdefb9b3e9c37d7fd5f63270bcc9e1a6f6a439@node-b.internal:30303?discport=30301";
@@ -538,5 +792,147 @@ mod tests {
             vec![trusted_peer(NODE_A_IP), trusted_peer(NODE_B_IP)]
         );
         assert!(sleeps.lock().unwrap().is_empty());
+    }
+
+    fn peer_id(byte: u8) -> PeerId {
+        B512::repeat_byte(byte)
+    }
+
+    fn socket_addr(port: u16) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+    }
+
+    fn verify_request() -> VerifyBatch {
+        VerifyBatch {
+            request_id: 41,
+            batch_number: 7,
+            first_block_number: 100,
+            last_block_number: 120,
+            pubdata_mode: 0,
+            commit_data: Bytes::from_static(b"commit"),
+            prev_commit_data: Bytes::from_static(b"prev"),
+            execution_protocol_version: 31,
+        }
+    }
+
+    fn add_authorized_peer(
+        store: &mut PeerSessionStore,
+        peer_id: PeerId,
+        last_block_sent: u64,
+        signer: Address,
+    ) {
+        let now = Instant::now();
+        store.insert(now, peer_id, socket_addr(30_300 + u16::from(peer_id[0])));
+        store.replay_requested(peer_id, 1);
+        store.replay_block_sent(now, peer_id, last_block_sent);
+        store.verifier_authorized(peer_id, signer);
+    }
+
+    #[test_log::test(tokio::test(flavor = "current_thread"))]
+    async fn dispatch_verify_batch_sends_only_to_authorized_caught_up_zks3_peers() {
+        let eligible_zks3_peer = peer_id(0x11);
+        let lagging_zks3_peer = peer_id(0x22);
+        let zks2_peer = peer_id(0x33);
+        let unauthorized_peer = peer_id(0x44);
+        let missing_connection_peer = peer_id(0x55);
+        let signer = Address::repeat_byte(0xAA);
+
+        let mut store = PeerSessionStore::default();
+        add_authorized_peer(&mut store, eligible_zks3_peer, 120, signer);
+        add_authorized_peer(&mut store, lagging_zks3_peer, 119, signer);
+        add_authorized_peer(&mut store, zks2_peer, 120, signer);
+        add_authorized_peer(&mut store, missing_connection_peer, 120, signer);
+        let now = Instant::now();
+        store.insert(now, unauthorized_peer, socket_addr(30_368));
+        store.replay_requested(unauthorized_peer, 1);
+        store.replay_block_sent(now, unauthorized_peer, 120);
+        store.verifier_unauthorized(unauthorized_peer, Some(signer));
+
+        let peer_sessions = Arc::new(RwLock::new(store));
+        let connection_registry: ConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
+
+        let (eligible_tx, mut eligible_rx) = mpsc::channel(1);
+        let (lagging_tx, mut lagging_rx) = mpsc::channel(1);
+        let (zks2_tx, mut zks2_rx) = mpsc::channel(1);
+        let (unauthorized_tx, mut unauthorized_rx) = mpsc::channel(1);
+
+        {
+            let mut registry = connection_registry.write().unwrap();
+            registry.insert(
+                eligible_zks3_peer,
+                PeerConnectionHandle {
+                    version: ZksVersion::Zks3,
+                    outbound_tx: eligible_tx,
+                },
+            );
+            registry.insert(
+                lagging_zks3_peer,
+                PeerConnectionHandle {
+                    version: ZksVersion::Zks3,
+                    outbound_tx: lagging_tx,
+                },
+            );
+            registry.insert(
+                zks2_peer,
+                PeerConnectionHandle {
+                    version: ZksVersion::Zks2,
+                    outbound_tx: zks2_tx,
+                },
+            );
+            registry.insert(
+                unauthorized_peer,
+                PeerConnectionHandle {
+                    version: ZksVersion::Zks3,
+                    outbound_tx: unauthorized_tx,
+                },
+            );
+        }
+
+        let request = verify_request();
+        dispatch_verify_batch(&peer_sessions, &connection_registry, request.clone()).await;
+
+        let encoded =
+            tokio::time::timeout(std::time::Duration::from_millis(250), eligible_rx.recv())
+                .await
+                .expect("eligible zks/3 peer should receive verify request")
+                .expect("eligible zks/3 peer channel closed");
+        let mut slice = encoded.as_ref();
+        let decoded = ZksMessage::<ZksProtocolV3>::decode_message(&mut slice).unwrap();
+        match decoded {
+            ZksMessage::VerifyBatch(actual) => assert_eq!(actual, request),
+            other => panic!("unexpected message dispatched: {other:?}"),
+        }
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), lagging_rx.recv())
+                .await
+                .is_err()
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), zks2_rx.recv())
+                .await
+                .is_err()
+        );
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                unauthorized_rx.recv()
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "current_thread"))]
+    async fn dispatch_verify_batch_returns_when_no_eligible_peers_exist() {
+        let peer_sessions = Arc::new(RwLock::new(PeerSessionStore::default()));
+        let connection_registry: ConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            dispatch_verify_batch(&peer_sessions, &connection_registry, verify_request()),
+        )
+        .await
+        .expect("dispatch should return immediately when there are no eligible peers");
     }
 }

@@ -1,3 +1,4 @@
+use crate::metrics::TRANSACTION_POOL_METRICS;
 use crate::subpools::interop_fee::InteropFeeSubpool;
 use crate::subpools::interop_roots::InteropRootsSubpool;
 use crate::subpools::l1::L1Subpool;
@@ -15,9 +16,7 @@ use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
 use tokio::time::Instant;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{
-    InteropRootsLogIndex, L1TxSerialId, SystemTxType, UpgradeMetadata, ZkEnvelope, ZkTransaction,
-};
+use zksync_os_types::{L1TxSerialId, SystemTxType, UpgradeMetadata, ZkEnvelope, ZkTransaction};
 
 /// General pool that provides unified access to all transaction sources in the system.
 ///
@@ -158,7 +157,21 @@ impl<T: L2Subpool> Pool<T> {
         }
     }
 
+    /// Removes transactions from the local pool when forwarding to the main node fails after
+    /// local insertion. Records them in the `forwarding_rollback_transactions` metric.
     pub fn remove_transactions(&self, tx_hashes: Vec<TxHash>) {
+        TRANSACTION_POOL_METRICS
+            .forwarding_rollback_transactions
+            .inc_by(tx_hashes.len() as u64);
+        self.l2_subpool.remove_transactions(tx_hashes);
+    }
+
+    /// Removes transactions that were rejected by the ZK VM during block execution and
+    /// records them in the `purged_transactions` metric.
+    pub fn purge_transactions(&self, tx_hashes: Vec<TxHash>) {
+        TRANSACTION_POOL_METRICS
+            .purged_transactions
+            .inc_by(tx_hashes.len() as u64);
         self.l2_subpool.remove_transactions(tx_hashes);
     }
 
@@ -213,7 +226,7 @@ impl<T: L2Subpool> Pool<T> {
         self.upgrade_subpool
             .on_canonical_state_change(&replay_record.protocol_version, upgrade_txs)
             .await;
-        let last_interop_log_index = self
+        let last_interop_log_id = self
             .interop_roots_subpool
             .on_canonical_state_change(interop_txs)
             .await;
@@ -254,7 +267,7 @@ impl<T: L2Subpool> Pool<T> {
             });
 
         StateChangeOutcome {
-            last_interop_log_index,
+            last_interop_log_id,
             last_l1_priority_id,
             last_migration_number,
             last_interop_fee_number,
@@ -273,8 +286,8 @@ pub struct StreamOutcome<'a> {
 
 #[derive(Debug, Default)]
 pub struct StateChangeOutcome {
-    /// Last interop log index that was imported after canonical state change.
-    pub last_interop_log_index: Option<InteropRootsLogIndex>,
+    /// Last interop log_id that was imported after canonical state change.
+    pub last_interop_log_id: Option<u64>,
     /// Last L1 priority ID that was executed after canonical state change.
     pub last_l1_priority_id: Option<L1TxSerialId>,
     /// Last migration number that was executed after canonical state change.

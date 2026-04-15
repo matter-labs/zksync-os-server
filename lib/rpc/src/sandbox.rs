@@ -392,6 +392,10 @@ impl EvmTracer for CallTracer {
     }
 
     fn on_event(&mut self, address: Address, topics: Vec<B256>, data: &[u8]) {
+        if self.only_top_call && self.current_call_depth > 1 {
+            return;
+        }
+
         if self.collect_logs {
             let call = self.unfinished_calls.last_mut().expect("Should exist");
             call.logs.push(CallLogFrame {
@@ -442,6 +446,10 @@ impl EvmTracer for CallTracer {
         _new_internal_bytecode_hash: B256,
         new_observable_bytecode_length: u32,
     ) {
+        if self.only_top_call && self.current_call_depth > 1 {
+            return;
+        }
+
         let call = self.unfinished_calls.last_mut().expect("Should exist");
 
         if call.typ == "CREATE" || call.typ == "CREATE2" {
@@ -477,8 +485,13 @@ impl EvmTracer for CallTracer {
 
     /// Opcode failed for some reason. Note: call frame ends immediately
     fn on_opcode_error(&mut self, error: &EvmError, _frame_state: impl EvmFrameInterface) {
-        if self.only_top_call && self.current_call_depth > 1 {
+        if self.only_top_call
+            && (self.current_call_depth > 1 || self.create_operation_requested.is_some())
+        {
             // Ignore errors in subcalls if only the top call should be traced
+            if self.create_operation_requested.is_some() {
+                self.create_operation_requested = None;
+            }
             return;
         }
 
@@ -494,16 +507,22 @@ impl EvmTracer for CallTracer {
     /// Special cases, when error happens in frame before any opcode is executed (unfortunately we can't provide access to state)
     /// Note: call frame ends immediately
     fn on_call_error(&mut self, error: &EvmError) {
-        if self.only_top_call && self.current_call_depth > 1 {
+        if self.only_top_call
+            && (self.current_call_depth > 1 || self.create_operation_requested.is_some())
+        {
             // Ignore errors in subcalls if only the top call should be traced
+            if self.create_operation_requested.is_some() {
+                self.create_operation_requested = None;
+            }
             return;
         }
 
         let current_call = self.unfinished_calls.last_mut().expect("Should exist");
         current_call.error = Some(fmt_error_msg(error));
 
-        // Sanity check
-        assert!(self.create_operation_requested.is_none());
+        if self.create_operation_requested.is_some() {
+            self.create_operation_requested = None;
+        }
     }
 
     /// We should treat selfdestruct as a special kind of a call
@@ -513,6 +532,10 @@ impl EvmTracer for CallTracer {
         token_value: U256,
         frame_state: impl EvmFrameInterface,
     ) {
+        if self.only_top_call && self.current_call_depth > 1 {
+            return;
+        }
+
         // Following Geth implementation: https://github.com/ethereum/go-ethereum/blob/2dbb580f51b61d7ff78fceb44b06835827704110/core/vm/instructions.go#L894
         //
         // It's debatable whether post-Cancun SELFDESTRUCT invocation should create a "SELFDESTURCT"
@@ -613,6 +636,84 @@ mod tests {
     use alloy::sol_types::{Revert, SolError};
     use zksync_os_interface::tracing::EvmTracer;
     use zksync_os_interface::types::ExecutionOutput;
+
+    #[derive(Default)]
+    struct TestStack;
+
+    impl zksync_os_interface::tracing::EvmStackInterface for TestStack {
+        fn to_slice(&self) -> &[U256] {
+            &[]
+        }
+
+        fn len(&self) -> usize {
+            0
+        }
+
+        fn peek_n(&self, _index: usize) -> Result<&U256, EvmError> {
+            unreachable!("stack access is not expected in these tests")
+        }
+    }
+
+    #[derive(Default)]
+    struct TestFrame {
+        address: Address,
+        stack: TestStack,
+    }
+
+    impl EvmFrameInterface for TestFrame {
+        fn instruction_pointer(&self) -> usize {
+            0
+        }
+
+        fn resources(&self) -> EvmResources {
+            EvmResources::default()
+        }
+
+        fn stack(&self) -> &impl zksync_os_interface::tracing::EvmStackInterface {
+            &self.stack
+        }
+
+        fn caller(&self) -> Address {
+            Address::ZERO
+        }
+
+        fn address(&self) -> Address {
+            self.address
+        }
+
+        fn calldata(&self) -> &[u8] {
+            &[]
+        }
+
+        fn return_data(&self) -> &[u8] {
+            &[]
+        }
+
+        fn heap(&self) -> &[u8] {
+            &[]
+        }
+
+        fn bytecode(&self) -> &[u8] {
+            &[]
+        }
+
+        fn call_value(&self) -> &U256 {
+            static ZERO: U256 = U256::ZERO;
+            &ZERO
+        }
+
+        fn refund_counter(&self) -> u32 {
+            0
+        }
+
+        fn is_static(&self) -> bool {
+            false
+        }
+
+        fn is_constructor(&self) -> bool {
+            false
+        }
+    }
 
     fn make_tx_output(execution_result: ExecutionResult) -> TxOutput {
         TxOutput {
@@ -749,5 +850,84 @@ mod tests {
             tracer.create_operation_requested,
             Some(CreateType::Create2)
         ));
+    }
+
+    #[test]
+    fn only_top_call_ignores_nested_logs() {
+        let mut tracer = CallTracer::new_with_config(vec![], true, true);
+        tracer.current_call_depth = 2;
+        tracer.unfinished_calls.push(make_empty_call_frame());
+
+        tracer.on_event(
+            Address::from([0x22; 20]),
+            vec![B256::from([0x33; 32])],
+            &[0x44],
+        );
+
+        assert!(tracer.unfinished_calls[0].logs.is_empty());
+    }
+
+    #[test]
+    fn only_top_call_ignores_nested_selfdestruct() {
+        let mut tracer = CallTracer::new_with_config(vec![], false, true);
+        tracer.current_call_depth = 2;
+        tracer.unfinished_calls.push(make_empty_call_frame());
+
+        tracer.on_selfdestruct(
+            Address::from([0x22; 20]),
+            U256::from(7),
+            TestFrame {
+                address: Address::from([0x11; 20]),
+                ..Default::default()
+            },
+        );
+
+        assert!(tracer.unfinished_calls[0].calls.is_empty());
+    }
+
+    #[test]
+    fn only_top_call_ignores_nested_create_bytecode_changes() {
+        let mut tracer = CallTracer::new_with_config(vec![], false, true);
+        tracer.current_call_depth = 2;
+        let original_output = Bytes::from(vec![0xca, 0xfe]);
+        tracer.unfinished_calls.push(CallFrame {
+            output: Some(original_output.clone()),
+            ..make_create_call_frame()
+        });
+
+        tracer.on_bytecode_change(
+            Address::from([0x22; 20]),
+            Some(&[0xde, 0xad, 0xbe, 0xef]),
+            B256::ZERO,
+            4,
+        );
+
+        assert_eq!(tracer.unfinished_calls[0].output, Some(original_output));
+    }
+
+    #[test]
+    fn only_top_call_ignores_nested_create_pre_frame_opcode_error() {
+        let mut tracer = CallTracer::new_with_config(vec![], false, true);
+        tracer.current_call_depth = 1;
+        tracer.unfinished_calls.push(make_empty_call_frame());
+        tracer.on_create_request(false);
+
+        tracer.on_opcode_error(&EvmError::OutOfGas, TestFrame::default());
+
+        assert!(tracer.unfinished_calls[0].error.is_none());
+        assert!(tracer.create_operation_requested.is_none());
+    }
+
+    #[test]
+    fn only_top_call_ignores_nested_create_pre_frame_call_error() {
+        let mut tracer = CallTracer::new_with_config(vec![], false, true);
+        tracer.current_call_depth = 1;
+        tracer.unfinished_calls.push(make_empty_call_frame());
+        tracer.on_create_request(true);
+
+        tracer.on_call_error(&EvmError::OutOfGas);
+
+        assert!(tracer.unfinished_calls[0].error.is_none());
+        assert!(tracer.create_operation_requested.is_none());
     }
 }

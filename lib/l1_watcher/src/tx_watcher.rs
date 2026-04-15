@@ -11,6 +11,11 @@ use zksync_os_contract_interface::ZkChain;
 use zksync_os_mempool::subpools::l1::L1Subpool;
 use zksync_os_types::L1PriorityEnvelope;
 
+/// Watches L1 priority transaction events and feeds them into the L1 transaction subpool.
+///
+/// This component reads `NewPriorityRequest` events from the L1 mailbox, waits until the same
+/// priority request is visible from the settlement layer, and then inserts the corresponding
+/// `L1PriorityEnvelope` into `L1Subpool`.
 pub struct L1TxWatcher {
     contract_address: Address,
     next_l1_priority_id: u64,

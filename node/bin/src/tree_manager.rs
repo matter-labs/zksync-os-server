@@ -39,9 +39,13 @@ impl PipelineComponent for TreeManager {
     ) -> anyhow::Result<()> {
         // only used to skip blocks that were already processed by the tree -
         // will be removed once idempotency is handled on the framework level
-        let mut last_processed_block = self.tree.latest_version()?.expect("tree wasn't initialized");
+        let mut last_processed_block = self
+            .tree
+            .latest_version()?
+            .expect("tree wasn't initialized");
         loop {
-            self.health_reporter.enter_state(GenericComponentState::Idle);
+            self.health_reporter
+                .enter_state(GenericComponentState::Idle);
 
             let Some(AppliedBlock {
                 output: block_output,
@@ -51,7 +55,8 @@ impl PipelineComponent for TreeManager {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
-            self.health_reporter.enter_state(GenericComponentState::Active);
+            self.health_reporter
+                .enter_state(GenericComponentState::Active);
             let started_at = Instant::now();
             let block_number = block_output.header.number;
 
@@ -82,7 +87,8 @@ impl PipelineComponent for TreeManager {
             let mut tree_clone = self.tree.clone();
             let tree_batch_output =
                 tokio::task::spawn_blocking(move || tree_clone.extend(&tree_entries)).await??;
-            last_processed_block = self.tree
+            last_processed_block = self
+                .tree
                 .latest_version()?
                 .expect("uninitialized tree after applying a block");
             assert_eq!(last_processed_block, block_number);

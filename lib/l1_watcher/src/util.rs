@@ -14,7 +14,7 @@ use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
 use zksync_os_contract_interface::models::CommitBatchInfo;
-use zksync_os_contract_interface::{IExecutor, ZkChain};
+use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
 use zksync_os_types::ProtocolSemanticVersion;
 
 pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
@@ -273,6 +273,62 @@ pub async fn find_l1_execute_block_by_batch_number(
         Ok(res >= batch_number)
     })
     .await
+}
+
+/// Finds the first L1 block where `totalPublishedInteropRoots >= next_interop_root_id`.
+/// Uses binary search for efficiency.
+pub async fn find_l1_block_by_interop_root_id(
+    bridgehub: Bridgehub<DynProvider>,
+    next_interop_root_id: u64,
+) -> anyhow::Result<BlockNumber> {
+    if next_interop_root_id == 0 {
+        return Ok(0);
+    }
+
+    // Binary search via `eth_call` with historical block IDs is not supported on Anvil with
+    // `--load-state`. Fall back to block 0 so the watcher starts from genesis and catches up
+    // via `eth_getLogs`, which Anvil does support.
+    if bridgehub.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
+        return Ok(0);
+    }
+
+    let message_root_address = bridgehub.message_root_address().await?;
+    let message_root = Arc::new(MessageRoot::new(
+        message_root_address,
+        bridgehub.provider().clone(),
+    ));
+
+    let latest = message_root.provider().get_block_number().await?;
+
+    let guarded_predicate =
+        async |message_root: Arc<MessageRoot<DynProvider>>, block: u64| -> anyhow::Result<bool> {
+            if !message_root.code_exists_at_block(block.into()).await? {
+                return Ok(false);
+            }
+            let res = message_root
+                .total_published_interop_roots(block.into())
+                .await?;
+            Ok(res >= next_interop_root_id)
+        };
+
+    if !guarded_predicate(message_root.clone(), latest).await? {
+        anyhow::bail!(
+            "Condition not satisfied up to latest block: contract not deployed yet \
+             or target not reached.",
+        );
+    }
+
+    let (mut lo, mut hi) = (0, latest);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if guarded_predicate(message_root.clone(), mid).await? {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+
+    Ok(lo)
 }
 
 /// Fetches and decodes stored batch data for batch `batch_number` that is expected to have been

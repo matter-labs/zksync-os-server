@@ -555,6 +555,10 @@ pub struct RebuildBlocksConfig {
     /// List of blocks to empty (i.e., remove all transactions from).
     #[config(default, with = Delimited::new(","))]
     pub blocks_to_empty: Vec<u64>,
+    /// Whether to reset timestamps of rebuilt blocks to the current time.
+    /// If false, original timestamps are kept. If true then current time is used.
+    #[config(default_t = false)]
+    pub reset_timestamps: bool,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
@@ -766,6 +770,13 @@ pub struct L1SenderConfig {
     #[config(default_t = 1 * TimeUnit::Seconds)]
     pub poll_interval: Duration,
 
+    /// Maximum time to wait for an L1 transaction to be included.
+    ///
+    /// Normally 15-30 seconds is sufficient for normal-priority transactions; 60-120s covers most
+    /// lower-gas-price cases. 600 seconds is a conservative default that handles heavy congestion.
+    #[config(default_t = 600 * TimeUnit::Seconds)]
+    pub transaction_timeout: Duration,
+
     /// Use Fusaka blob transaction format if the timestamp has passed.
     ///
     /// Defaults to `2^64-1` which is practically never. This is needed for local setup as anvil
@@ -842,9 +853,19 @@ pub struct BatcherConfig {
     #[config(default_t = true)]
     pub enabled: bool,
 
-    /// How long to keep a batch open before sealing it.
-    /// On mainnet environments with low load, consider setting a higher value (e.g. 3 hours),
-    /// as L1 settlement has a non-trivial gas overhead per each batch.
+    /// Maximum time a batch stays open before being sealed.
+    ///
+    /// The deadline is computed as `first_block_timestamp + batch_timeout`, where
+    /// `first_block_timestamp` is the L2 timestamp of the first block in the batch. Using an
+    /// L2 timestamp as the anchor makes the deadline restart-resilient: it does not reset when
+    /// the server restarts mid-batch.
+    ///
+    /// Set this to `settlement_sli - expected_proving_time - expected_l1_submission_time`.
+    /// The operator is responsible for reserving enough headroom for proving and L1 submission,
+    /// since proving time is non-deterministic and cannot be reliably modelled as a fixed buffer.
+    ///
+    /// On mainnet environments with low load, consider a higher value (e.g. 3 hours), as L1
+    /// settlement has a non-trivial gas overhead per batch.
     #[config(default_t = 60 * TimeUnit::Seconds)]
     pub batch_timeout: Duration,
 
@@ -1082,38 +1103,40 @@ pub struct OtlpConfig {
     pub logging_endpoint: Option<String>,
 }
 
-/// Configuration for batch verification client and server
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+/// Configuration for batch verification over the p2p network.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct BatchVerificationConfig {
-    /// [server] If we are collecting batch verification signatures
+    /// [main node] If we are collecting batch verification signatures.
     #[config(default_t = false)]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| !*value || root.network_config.enabled,
+        "requires `network.enabled=true`"
+    ))]
     pub server_enabled: bool,
-    /// [server] Batch verification server address to listen on.
-    #[config(default_t = "0.0.0.0:3055".into())]
-    pub listen_address: String,
-    /// [en] If we are signing batches
+    /// [external node] If we are signing batches.
     #[config(default_t = false)]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| !*value || root.network_config.enabled,
+        "requires `network.enabled=true`"
+    ))]
     pub client_enabled: bool,
-    /// [en] Batch verification server address to connect to.
-    #[config(default_t = "127.0.0.1:3072".into())]
-    pub connect_address: String,
-    /// [server] Threshold (number of needed signatures)
+    /// [main node] Threshold (number of needed signatures).
     #[config(default_t = 1)]
     pub threshold: u64,
-    /// [server] Accepted signer pubkeys
+    /// [main node] Accepted signer pubkeys.
     #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()], with = Delimited::new(","))]
     pub accepted_signers: Vec<String>,
-    /// [server] Iteration timeout
+    /// [main node] Iteration timeout.
     #[config(default_t = Duration::from_secs(5))]
     pub request_timeout: Duration,
-    /// [server] Retry delay between attempts
+    /// [main node] Retry delay between attempts.
     #[config(default_t = Duration::from_secs(1))]
     pub retry_delay: Duration,
-    /// [server] Total timeout
+    /// [main node] Total timeout.
     #[config(default_t = Duration::from_secs(300))]
     pub total_timeout: Duration,
-    /// [en] Signing key
+    /// [external node] Signing key.
     // default address 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
     #[config(default_t = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110".into())]
     pub signing_key: SecretString,
@@ -1307,6 +1330,7 @@ impl L1SenderConfig {
             max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
+            transaction_timeout: self.transaction_timeout,
             fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
             phantom_data: Default::default(),
         }
@@ -1374,8 +1398,9 @@ impl From<MempoolTxValidatorConfig> for zksync_os_mempool::TxValidatorConfig {
 impl From<RebuildBlocksConfig> for RebuildOptions {
     fn from(c: RebuildBlocksConfig) -> Self {
         Self {
-            rebuild_from_block: c.from_block,
+            from_block: c.from_block,
             blocks_to_empty: c.blocks_to_empty.into_iter().collect(),
+            reset_timestamps: c.reset_timestamps,
         }
     }
 }
@@ -1384,9 +1409,7 @@ impl From<BatchVerificationConfig> for zksync_os_batch_verification::BatchVerifi
     fn from(c: BatchVerificationConfig) -> Self {
         Self {
             server_enabled: c.server_enabled,
-            listen_address: c.listen_address,
             client_enabled: c.client_enabled,
-            connect_address: c.connect_address,
             threshold: c.threshold,
             accepted_signers: c.accepted_signers,
             request_timeout: c.request_timeout,
@@ -1592,6 +1615,7 @@ mod tests {
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
                 command_limit: 16,
                 poll_interval: Duration::from_millis(100),
+                transaction_timeout: Duration::from_secs(600),
                 fusaka_upgrade_timestamp: u64::MAX,
                 enabled: true,
                 pubdata_mode: Some(PubdataMode::Blobs),
@@ -1705,5 +1729,22 @@ mod tests {
         );
         assert!(err.contains("`l1_sender.operator_commit_sk`"));
         assert!(err.contains("must be different"));
+    }
+
+    #[tokio::test]
+    async fn batch_verification_requires_networking() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.batch_verification_config.server_enabled = true;
+        config.batch_verification_config.client_enabled = true;
+        config.network_config.enabled = false;
+
+        let err = config.validate().await.unwrap_err().to_string();
+
+        assert!(
+            err.contains("`batch_verification.server_enabled` requires `network.enabled=true`")
+        );
+        assert!(
+            err.contains("`batch_verification.client_enabled` requires `network.enabled=true`")
+        );
     }
 }

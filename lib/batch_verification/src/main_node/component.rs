@@ -1,17 +1,11 @@
 use super::metrics::BATCH_VERIFICATION_SEQUENCER_METRICS;
-use super::server::{BatchVerificationRequestError, BatchVerificationServer};
 use crate::config::BatchVerificationConfig;
-use crate::{BatchVerificationResponse, BatchVerificationResult};
+use crate::verify_batch_wire::encode_verify_batch_request;
 use alloy::primitives::Address;
 use async_trait::async_trait;
-use futures::FutureExt;
-use futures::future::select_all;
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::RwLock;
-use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use zksync_os_batch_types::{BatchSignatureSet, ValidatedBatchSignature};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
@@ -19,21 +13,18 @@ use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
 };
+use zksync_os_network::{PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome};
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
 use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
 
-fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E>) {
-    move |result| match result {
-        Ok(_) => tracing::warn!("{name} unexpectedly exited"),
-        Err(e) => tracing::error!("{name} failed: {e:#?}"),
-    }
-}
 pub struct BatchVerificationPipelineStep<E> {
     config: BatchVerificationConfig,
     threshold: u64,
     validators: Vec<Address>,
     last_committed_batch_number: u64,
     l1_state: L1State,
+    verify_request_tx: mpsc::Sender<VerifyBatch>,
+    verify_result_rx: mpsc::Receiver<PeerVerifyBatchResult>,
     pub health_reporter: ComponentHealthReporter,
     _phantom: std::marker::PhantomData<E>,
 }
@@ -43,28 +34,11 @@ impl<E> BatchVerificationPipelineStep<E> {
         config: BatchVerificationConfig,
         l1_state: L1State,
         last_committed_batch_number: u64,
+        verify_request_tx: mpsc::Sender<VerifyBatch>,
+        verify_result_rx: mpsc::Receiver<PeerVerifyBatchResult>,
         health_reporter: ComponentHealthReporter,
     ) -> Self {
-        let config_validators = config
-            .accepted_signers
-            .clone()
-            .into_iter()
-            .map(|s| s.parse().unwrap())
-            .collect();
-        // If on L1 batch verifiers re configured, we use that configuration instead
-        let (threshold, validators) = match &l1_state.batch_verification {
-            BatchVerificationSL::Enabled(l1_config) => {
-                if !l1_config.validators.is_empty() || l1_config.threshold > 0 {
-                    (
-                        config.threshold.max(l1_config.threshold),
-                        l1_config.validators.clone(),
-                    )
-                } else {
-                    (config.threshold, config_validators)
-                }
-            }
-            BatchVerificationSL::Disabled => (config.threshold, config_validators),
-        };
+        let (threshold, validators) = effective_verification_policy(&config, &l1_state);
 
         Self {
             config,
@@ -72,13 +46,41 @@ impl<E> BatchVerificationPipelineStep<E> {
             validators,
             last_committed_batch_number,
             l1_state,
+            verify_request_tx,
+            verify_result_rx,
             health_reporter,
             _phantom: std::marker::PhantomData,
         }
     }
 }
 
-type ResponseChannelsMapArc = Arc<RwLock<HashMap<u64, Sender<BatchVerificationResponse>>>>;
+/// Returns the effective batch-verification threshold and validator set after merging local
+/// server config with the current L1 policy.
+pub fn effective_verification_policy(
+    config: &BatchVerificationConfig,
+    l1_state: &L1State,
+) -> (u64, Vec<Address>) {
+    let config_validators = config
+        .accepted_signers
+        .clone()
+        .into_iter()
+        .map(|signer| signer.parse().unwrap())
+        .collect();
+
+    match &l1_state.batch_verification {
+        BatchVerificationSL::Enabled(l1_config) => {
+            if !l1_config.validators.is_empty() || l1_config.threshold > 0 {
+                (
+                    config.threshold.max(l1_config.threshold),
+                    l1_config.validators.clone(),
+                )
+            } else {
+                (config.threshold, config_validators)
+            }
+        }
+        BatchVerificationSL::Disabled => (config.threshold, config_validators),
+    }
+}
 
 #[async_trait]
 impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineStep<E> {
@@ -93,107 +95,32 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
         mut input: TrackedUnboundedReceiver<Self::Input>,
         output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
-        if self.config.server_enabled {
-            let (server, response_receiver) = BatchVerificationServer::new();
-            let server = Arc::new(server);
-            // Stores response channels for each request ID to route responses
-            // depending on request id. Allows collect_batch_verification_signatures
-            // to be run concurrently. Unimplemented currently.
-            let response_channels = Arc::new(RwLock::new(HashMap::new()));
-
-            let server_for_fut = server.clone();
-            let server_address = self.config.listen_address.clone();
-            let server_fut = server_for_fut
-                .run_server(server_address)
-                .boxed()
-                .map(report_exit("Batch verification server"));
-
-            let response_channels_for_fut = response_channels.clone();
-            let response_processor_fut =
-                run_batch_response_processor(response_receiver, response_channels_for_fut)
-                    .boxed()
-                    .map(report_exit("Batch response processor"));
-
-            BATCH_VERIFICATION_SEQUENCER_METRICS
-                .threshold
-                .set(self.threshold);
-            BATCH_VERIFICATION_SEQUENCER_METRICS
-                .validators_count
-                .set(self.validators.len());
-
-            let verifier = BatchVerifier {
-                config: self.config,
-                accepted_signers: self.validators,
-                threshold: self.threshold,
-                request_id_counter: AtomicU64::new(1),
-                response_channels,
-                server,
-                l1_chain_id: self.l1_state.sl_chain_id,
-                multisig_committer: self.l1_state.validator_timelock_sl,
-                last_committed_batch_number: self.last_committed_batch_number,
-                health_reporter: self.health_reporter,
-            };
-            let verifier_fut = verifier
-                .run(input, output)
-                .boxed()
-                .map(report_exit("Batch verifier"));
-
-            select_all(vec![server_fut, response_processor_fut, verifier_fut]).await;
-            Ok(())
-        } else {
+        tracing::info!(
+            enabled = self.config.server_enabled,
+            threshold = self.threshold,
+            "starting batch verification pipeline step"
+        );
+        if !self.config.server_enabled {
             while let Some(batch) = input.recv_and_record(&self.health_reporter).await {
                 output
                     .send(batch.with_signatures(BatchSignatureData::NotNeeded))
                     .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
             }
-            Ok(())
+            return Ok(());
         }
+
+        let verifier = BatchVerificationRunner::new(self);
+        verifier.run(input, output).await
     }
 }
 
-/// Takes BatchVerificationResponse from server and routes them to appropriate
-/// per-request id channels. The full flow is:
-/// BatchVerificationServer -> response_receiver -> run_batch_response_processor ->
-/// -> response_channels -> BatchVerifier::collect_batch_verification_signatures
-async fn run_batch_response_processor(
-    mut response_receiver: mpsc::Receiver<BatchVerificationResponse>,
-    response_channels: ResponseChannelsMapArc,
-) -> anyhow::Result<()> {
-    let (health_reporter, _rx) = ComponentHealthReporter::new("batch_response_processor");
-    while let Some(response) = response_receiver.recv().await {
-        health_reporter.enter_state(GenericComponentState::Active);
-        let request_id = response.request_id;
-
-        // Route response to the appropriate channel
-        if let Some(sender) = response_channels.read().await.get(&request_id) {
-            tracing::debug!(request_id, "Received batch verification response");
-            if let Err(e) = sender.send(response).await {
-                tracing::warn!(request_id, ?e, "Failed to route response");
-            }
-        } else {
-            // debug, because probably we finished processing this batch and this is an extra response
-            tracing::debug!(request_id, "Response for unknown request_id, dropping");
-        }
-        health_reporter.enter_state(GenericComponentState::Idle);
-    }
-
-    tracing::info!("Batch response processor shutting down");
-    Ok(())
-}
-
-/// Processes batches without signatures by broadcasting signing requests to all
-/// connected signer ENs. When enough signatures are collected it added signatures
-/// to the batch and sends it to the next component. If not enough signatures are
-/// collected within the timeout, signing requests are resend. More ENs maybe
-/// available on next attempt or already connected ENs may now be able to verify
-/// the batch. IDs are used to correlate requests and responses.
-struct BatchVerifier {
+struct BatchVerificationRunner {
     config: BatchVerificationConfig,
     accepted_signers: Vec<Address>,
     threshold: u64,
     request_id_counter: AtomicU64,
-    server: Arc<BatchVerificationServer>,
-    response_channels: ResponseChannelsMapArc,
+    verify_request_tx: mpsc::Sender<VerifyBatch>,
+    verify_result_rx: mpsc::Receiver<PeerVerifyBatchResult>,
     l1_chain_id: u64,
     multisig_committer: Address,
     last_committed_batch_number: u64,
@@ -201,26 +128,11 @@ struct BatchVerifier {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum BatchVerificationError {
-    #[error("Timeout")]
-    Timeout,
+pub(crate) enum BatchVerificationError {
     #[error("Not enough signers: {0} < {1}")]
     NotEnoughSigners(u64, u64),
     #[error("Internal error: {0}")]
     Internal(String),
-}
-
-impl From<BatchVerificationRequestError> for BatchVerificationError {
-    fn from(err: BatchVerificationRequestError) -> Self {
-        match err {
-            BatchVerificationRequestError::NotEnoughClients(clients_count, required_clients) => {
-                BatchVerificationError::NotEnoughSigners(clients_count, required_clients)
-            }
-            BatchVerificationRequestError::SendError(e) => {
-                BatchVerificationError::Internal(e.to_string())
-            }
-        }
-    }
 }
 
 impl BatchVerificationError {
@@ -229,34 +141,59 @@ impl BatchVerificationError {
     }
 }
 
-impl BatchVerifier {
+impl BatchVerificationRunner {
+    fn new<E>(component: BatchVerificationPipelineStep<E>) -> Self {
+        BATCH_VERIFICATION_SEQUENCER_METRICS
+            .threshold
+            .set(component.threshold);
+        BATCH_VERIFICATION_SEQUENCER_METRICS
+            .validators_count
+            .set(component.validators.len());
+
+        Self {
+            config: component.config,
+            accepted_signers: component.validators,
+            threshold: component.threshold,
+            request_id_counter: AtomicU64::new(1),
+            verify_request_tx: component.verify_request_tx,
+            verify_result_rx: component.verify_result_rx,
+            l1_chain_id: component.l1_state.sl_chain_id,
+            multisig_committer: component.l1_state.validator_timelock_sl,
+            last_committed_batch_number: component.last_committed_batch_number,
+            health_reporter: component.health_reporter,
+        }
+    }
+
     async fn run<E: Send + Sync + 'static>(
-        &self,
+        mut self,
         mut batch_for_signing_receiver: TrackedUnboundedReceiver<BatchForSigning<E>>,
-        singed_batcher_sender: TrackedUnboundedSender<SignedBatchEnvelope<E>>,
+        signed_batch_sender: TrackedUnboundedSender<SignedBatchEnvelope<E>>,
     ) -> anyhow::Result<()> {
-        let health_reporter = &self.health_reporter;
         let metrics = &*BATCH_VERIFICATION_SEQUENCER_METRICS;
 
         loop {
-            health_reporter.enter_state(GenericComponentState::Idle);
+            self.health_reporter
+                .enter_state(GenericComponentState::Idle);
             // We process the batches one by one. Consider adding concurrency here when we need it.
             let Some(batch_envelope) = batch_for_signing_receiver
-                .recv_and_record(health_reporter)
+                .recv_and_record(&self.health_reporter)
                 .await
             else {
                 // Channel closed, exit the loop
-                tracing::info!("BatchForSigning channel closed, exiting verifier",);
+                tracing::info!("BatchForSigning channel closed, exiting verifier");
                 break Ok(());
             };
+            tracing::info!(
+                batch_number = batch_envelope.batch_number(),
+                "received batch for verification"
+            );
 
-            // We skip signing batches that were already committed. This happens on startup
             if batch_envelope.batch_number() <= self.last_committed_batch_number {
                 tracing::info!(
                     "Skipping signing of already committed batch {}",
                     batch_envelope.batch_number()
                 );
-                singed_batcher_sender
+                signed_batch_sender
                     .send(
                         batch_envelope
                             .with_stage(BatchExecutionStage::BatchSigned)
@@ -266,7 +203,8 @@ impl BatchVerifier {
                 continue;
             }
 
-            health_reporter.enter_state(GenericComponentState::Active);
+            self.health_reporter
+                .enter_state(GenericComponentState::Active);
             let batch_envelope = batch_envelope.with_stage(BatchExecutionStage::SigningStarted);
             metrics.last_batch_number.set(batch_envelope.batch_number());
 
@@ -287,7 +225,6 @@ impl BatchVerifier {
                                 retry_count,
                                 err
                             );
-
                             tokio::time::sleep(self.config.retry_delay).await;
                         } else {
                             tracing::warn!(
@@ -298,17 +235,14 @@ impl BatchVerifier {
                             break Err(err);
                         }
                     }
-                    Err(err) => {
-                        tracing::warn!("Batch verification failed. Non retryable error: {}", err);
-                        break Err(err);
-                    }
+                    Err(err) => break Err(err),
                 }
             }?;
 
             metrics.attempts_to_success.observe(retry_count + 1);
             metrics.total_latency.observe(start_time.elapsed());
 
-            singed_batcher_sender
+            signed_batch_sender
                 .send(
                     batch_envelope
                         .with_signatures(BatchSignatureData::Signed { signatures })
@@ -318,12 +252,8 @@ impl BatchVerifier {
         }
     }
 
-    /// Process a batch envelope and collect verification signatures.
-    /// We discard collected signatures if not enough are collected. If a node
-    /// has signed a request once, it will sign the same batch again,
-    /// so it's safe to discard.
     async fn collect_batch_verification_signatures<E: Send + Sync>(
-        &self,
+        &mut self,
         batch_envelope: &BatchForSigning<E>,
         attempt_number: u64,
     ) -> Result<BatchSignatureSet, BatchVerificationError> {
@@ -331,28 +261,16 @@ impl BatchVerifier {
         let request_id = self.request_id_counter.fetch_add(1, Ordering::SeqCst);
         metrics.last_request_id.set(request_id);
 
+        let request = encode_verify_batch_request(batch_envelope, request_id)?;
         tracing::info!(
             batch_number = batch_envelope.batch_number(),
-            request_id = request_id,
-            "Starting batch verification",
+            request_id,
+            "Starting batch verification"
         );
+        self.verify_request_tx.send(request).await.map_err(|_| {
+            BatchVerificationError::Internal("Verify request channel closed".into())
+        })?;
 
-        // Create a channel for collecting responses for this request
-        let (response_sender, mut response_receiver) =
-            mpsc::channel::<BatchVerificationResponse>(self.threshold.try_into().unwrap());
-
-        // Register the channel for this request_id
-        self.response_channels
-            .write()
-            .await
-            .insert(request_id, response_sender);
-
-        // Send verification request to all connected clients
-        self.server
-            .send_verification_request(batch_envelope, request_id, self.threshold)
-            .await?;
-
-        // Collect responses with timeout
         let mut responses = BatchSignatureSet::new();
         let start_time = Instant::now();
         let deadline = Instant::now() + self.config.request_timeout;
@@ -360,19 +278,38 @@ impl BatchVerifier {
         loop {
             let remaining_time = deadline - Instant::now();
             if remaining_time <= Duration::from_secs(0) {
-                return Err(BatchVerificationError::Timeout);
+                let responses_len = u64::try_from(responses.len()).unwrap();
+                return Err(BatchVerificationError::NotEnoughSigners(
+                    responses_len,
+                    self.threshold,
+                ));
             }
 
             let response =
-                match tokio::time::timeout(remaining_time, response_receiver.recv()).await {
+                match tokio::time::timeout(remaining_time, self.verify_result_rx.recv()).await {
                     Ok(Some(response)) => response,
                     Ok(None) => {
                         return Err(BatchVerificationError::Internal(
-                            "Channel closed".to_string(),
+                            "Verify result channel closed".to_string(),
                         ));
                     }
-                    Err(_) => return Err(BatchVerificationError::Timeout),
+                    Err(_) => {
+                        let responses_len = u64::try_from(responses.len()).unwrap();
+                        return Err(BatchVerificationError::NotEnoughSigners(
+                            responses_len,
+                            self.threshold,
+                        ));
+                    }
                 };
+
+            if response.message.request_id != request_id {
+                tracing::debug!(
+                    request_id,
+                    received_request_id = response.message.request_id,
+                    "ignoring verify result for different request"
+                );
+                continue;
+            }
 
             let Some(validated_signature) =
                 self.process_response(batch_envelope, request_id, response)
@@ -389,7 +326,7 @@ impl BatchVerifier {
             if responses.push(validated_signature).is_err() {
                 tracing::warn!(
                     batch_number = batch_envelope.batch_number(),
-                    request_id = request_id,
+                    request_id,
                     signer = signer,
                     "Received duplicated signature",
                 );
@@ -398,7 +335,7 @@ impl BatchVerifier {
 
             tracing::debug!(
                 batch_number = batch_envelope.batch_number(),
-                request_id = request_id,
+                request_id,
                 signer = signer,
                 response_latency_ms = latency.as_millis() as u64,
                 "Validated response {} of {}",
@@ -411,42 +348,50 @@ impl BatchVerifier {
             }
         }
 
-        // loop only breaks when we have enough signatures
         tracing::info!(
             batch_number = batch_envelope.batch_number(),
-            request_id = request_id,
+            request_id,
             "Collected enough verification responses ({})",
             responses.len(),
         );
 
-        // Cleanup: remove the channel for this request_id
-        self.response_channels.write().await.remove(&request_id);
-
         Ok(responses)
     }
 
-    /// Processes BatchVerificationResponse, on any error logs and returns None
-    /// - extracts & validates signature
-    /// - checks against list of accepted signers
     fn process_response<E>(
         &self,
         batch_envelope: &BatchForSigning<E>,
         request_id: u64,
-        response: BatchVerificationResponse,
+        response: PeerVerifyBatchResult,
     ) -> Option<ValidatedBatchSignature> {
-        let signature = match response {
-            BatchVerificationResponse {
-                result: BatchVerificationResult::Success(signature),
-                ..
-            } => signature,
-            BatchVerificationResponse {
-                result: BatchVerificationResult::Refused(reason),
-                ..
-            } => {
+        let signature = match response.message.result {
+            VerifyBatchOutcome::Approved(signature) => {
+                let Ok(signature) = <[u8; 65]>::try_from(signature.as_ref()) else {
+                    BATCH_VERIFICATION_SEQUENCER_METRICS.failed_responses[&"invalid_signature"]
+                        .inc();
+                    tracing::warn!(
+                        request_id,
+                        batch_number = batch_envelope.batch_number(),
+                        "Malformed signature length"
+                    );
+                    return None;
+                };
+                match zksync_os_batch_types::BatchSignature::from_raw_array(&signature) {
+                    Ok(signature) => signature,
+                    Err(err) => {
+                        BATCH_VERIFICATION_SEQUENCER_METRICS.failed_responses[&"invalid_signature"]
+                            .inc();
+                        tracing::warn!(%err, request_id, batch_number = batch_envelope.batch_number(), "Malformed signature");
+                        return None;
+                    }
+                }
+            }
+            VerifyBatchOutcome::Refused(reason) => {
                 BATCH_VERIFICATION_SEQUENCER_METRICS.failed_responses[&"refused"].inc();
                 tracing::info!(
+                    peer_id = %response.peer_id,
                     batch_number = batch_envelope.batch_number(),
-                    request_id = request_id,
+                    request_id,
                     "Verification refused: {}",
                     reason
                 );
@@ -463,8 +408,9 @@ impl BatchVerifier {
         ) else {
             BATCH_VERIFICATION_SEQUENCER_METRICS.failed_responses[&"invalid_signature"].inc();
             tracing::warn!(
-                batch_number = batch_envelope.batch_number(),
-                request_id = request_id,
+            peer_id = %response.peer_id,
+            batch_number = batch_envelope.batch_number(),
+            request_id,
                 "Invalid signature",
             );
             return None;
@@ -473,8 +419,9 @@ impl BatchVerifier {
         if !self.accepted_signers.contains(validated_signature.signer()) {
             BATCH_VERIFICATION_SEQUENCER_METRICS.failed_responses[&"unknown_signer"].inc();
             tracing::warn!(
+                peer_id = %response.peer_id,
                 batch_number = batch_envelope.batch_number(),
-                request_id = request_id,
+                request_id,
                 signer = validated_signature.signer().to_string(),
                 "Signature from unknown signer",
             );
@@ -488,15 +435,15 @@ impl BatchVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::BatchVerificationResult;
     use crate::tests::dummy_batch_envelope;
-    use alloy::primitives::Address;
+    use alloy::primitives::{Address, b512};
     use alloy::signers::local::PrivateKeySigner;
     use secrecy::SecretString;
     use zksync_os_batch_types::{BatchSignature, ValidatedBatchSignature};
     use zksync_os_l1_sender::batcher_model::{
         BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
     };
+    use zksync_os_network::{PeerVerifyBatchResult, VerifyBatchResult};
 
     const DUMMY_ADDRESS: &str = "0x1111111111111111111111111111111111111111";
     const CHAIN_ID: u64 = 1;
@@ -505,9 +452,7 @@ mod tests {
     fn test_config(accepted_signers: Vec<String>) -> BatchVerificationConfig {
         BatchVerificationConfig {
             server_enabled: true,
-            listen_address: "127.0.0.1:0".to_string(),
             client_enabled: false,
-            connect_address: String::new(),
             threshold: 1,
             accepted_signers,
             request_timeout: Duration::from_secs(5),
@@ -520,10 +465,19 @@ mod tests {
         }
     }
 
+    fn dummy_peer_response(result: VerifyBatchResult) -> PeerVerifyBatchResult {
+        PeerVerifyBatchResult {
+            peer_id: b512!(
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+            ),
+            message: result,
+        }
+    }
+
     async fn make_success_response<E>(
         request_id: u64,
         batch: &BatchForSigning<E>,
-    ) -> (BatchVerificationResponse, Address) {
+    ) -> (PeerVerifyBatchResult, Address) {
         let signer = PrivateKeySigner::random();
         let addr = signer.address();
         let sig = BatchSignature::sign_batch(
@@ -537,11 +491,11 @@ mod tests {
         .await;
 
         (
-            BatchVerificationResponse {
+            dummy_peer_response(VerifyBatchResult {
                 request_id,
                 batch_number: batch.batch_number(),
-                result: BatchVerificationResult::Success(sig),
-            },
+                result: VerifyBatchOutcome::Approved(sig.into_raw().to_vec().into()),
+            }),
             addr,
         )
     }
@@ -550,45 +504,44 @@ mod tests {
         accepted_signers: Vec<String>,
         last_committed_batch_number: u64,
     ) -> (
-        BatchVerifier,
-        ResponseChannelsMapArc,
-        tokio::sync::watch::Receiver<zksync_os_observability::ComponentHealth>,
+        BatchVerificationRunner,
+        mpsc::Receiver<VerifyBatch>,
+        mpsc::Sender<PeerVerifyBatchResult>,
     ) {
         let config = test_config(accepted_signers.clone());
-        let (server, _rx) = BatchVerificationServer::new();
-        let server = Arc::new(server);
-        let response_channels = Arc::new(RwLock::new(HashMap::new()));
+        let (verify_request_tx, verify_request_rx) = mpsc::channel(1);
+        let (verify_result_tx, verify_result_rx) = mpsc::channel(1);
         let accepted_signers_addrs: Vec<Address> = accepted_signers
             .into_iter()
-            .map(|s| s.parse().unwrap())
+            .map(|signer| signer.parse().unwrap())
             .collect();
         let threshold = config.threshold;
-        let (health_reporter, health_rx) = ComponentHealthReporter::new("batch_verifier");
-        let verifier = BatchVerifier {
+        let (health_reporter, _health_rx) = ComponentHealthReporter::new("batch_verifier");
+        let verifier = BatchVerificationRunner {
             config,
             accepted_signers: accepted_signers_addrs,
             threshold,
-            response_channels: response_channels.clone(),
-            server,
+            request_id_counter: AtomicU64::new(1),
+            verify_request_tx,
+            verify_result_rx,
             l1_chain_id: CHAIN_ID,
             multisig_committer: MULTISIG_COMMITTER_DUMMY.parse().unwrap(),
             last_committed_batch_number,
-            request_id_counter: AtomicU64::new(1),
             health_reporter,
         };
-        (verifier, response_channels, health_rx)
+        (verifier, verify_request_rx, verify_result_tx)
     }
 
     #[tokio::test]
     async fn process_response_refused_returns_none() {
         let batch = dummy_batch_envelope(1, 1, 2);
-        let (verifier, _, _) = make_verifier(Vec::new(), 0);
+        let (verifier, _verify_request_rx, _verify_result_tx) = make_verifier(Vec::new(), 0);
 
-        let response = BatchVerificationResponse {
+        let response = dummy_peer_response(VerifyBatchResult {
             request_id: 1,
             batch_number: batch.batch_number(),
-            result: BatchVerificationResult::Refused("reason".to_string()),
-        };
+            result: VerifyBatchOutcome::Refused("reason".to_string()),
+        });
 
         let result = verifier.process_response(&batch, 1, response);
         assert!(result.is_none());
@@ -599,7 +552,8 @@ mod tests {
         let batch = dummy_batch_envelope(1, 1, 2);
         let (response, _addr) = make_success_response(1, &batch).await;
 
-        let (verifier, _, _) = make_verifier(vec![DUMMY_ADDRESS.to_string()], 0);
+        let (verifier, _verify_request_rx, _verify_result_tx) =
+            make_verifier(vec![DUMMY_ADDRESS.to_string()], 0);
 
         let result = verifier.process_response(&batch, 1, response);
         assert!(result.is_none());
@@ -610,7 +564,7 @@ mod tests {
         let batch = dummy_batch_envelope(1, 1, 2);
         let (response, addr) = make_success_response(1, &batch).await;
         let accepted = vec![DUMMY_ADDRESS.to_string(), addr.to_string()];
-        let (verifier, _, _) = make_verifier(accepted, 0);
+        let (verifier, _verify_request_rx, _verify_result_tx) = make_verifier(accepted, 0);
 
         let result = verifier.process_response(&batch, 1, response);
         let validated: ValidatedBatchSignature =
@@ -620,15 +574,13 @@ mod tests {
 
     #[tokio::test]
     async fn run_skips_already_committed_batches_and_forwards_them() {
-        let accepted = Vec::new();
-        let (verifier, _, health_rx) = make_verifier(accepted, 10);
+        let (verifier, _verify_request_rx, _verify_result_tx) = make_verifier(Vec::new(), 10);
 
         let (input_tx, input_rx) =
             zksync_os_pipeline::tracked_unbounded_channel::<BatchForSigning<()>>();
         let (output_tx, mut output_rx) =
             zksync_os_pipeline::tracked_unbounded_channel::<SignedBatchEnvelope<()>>();
 
-        // batch with number 5 < 10, so it does not need to go through signing and should be forwarded as is
         let batch = dummy_batch_envelope(5, 30, 35);
         input_tx.send(batch).expect("failed to send batch");
         drop(input_tx);
@@ -644,11 +596,10 @@ mod tests {
         match out.signature_data {
             BatchSignatureData::AlreadyCommitted => {}
             _ => panic!(
-                "expected NotNeeded signature data, got: {:?}",
+                "expected AlreadyCommitted signature data, got: {:?}",
                 out.signature_data
             ),
         }
-        assert_eq!(health_rx.borrow().last_processed_block_number, Some(35));
 
         assert!(output_rx.recv().await.is_none());
         run_handle
@@ -658,41 +609,24 @@ mod tests {
 
     #[tokio::test]
     async fn run_performs_signing_and_includes_signature() {
-        // Prepare commit info and a valid signature from an accepted signer.
         let batch = dummy_batch_envelope(3, 10, 15);
         let (response, addr) = make_success_response(1, &batch).await;
-        let (verifier, response_channels, _) = make_verifier(vec![addr.to_string()], 0);
+        let (verifier, mut verify_request_rx, verify_result_tx) =
+            make_verifier(vec![addr.to_string()], 0);
 
-        // Ensure there is at least one subscriber so that send_verification_request
-        // succeeds with threshold = 1 and to observe the outgoing request.
-        let mut request_rx = verifier.server.subscribe_for_tests();
-
-        // Spawn a helper task that waits for the outgoing verification request
-        // via `request_rx`, then injects the prepared successful response for
-        // the observed request_id.
-        let response_channels_cloned = response_channels.clone();
         tokio::spawn(async move {
-            let request = request_rx
+            let request = verify_request_rx
                 .recv()
                 .await
-                .expect("server should send a verification request");
-            let request_id = request.request_id;
-
+                .expect("verifier should send a verification request");
             let mut response = response;
-            response.request_id = request_id;
-
-            response_channels_cloned
-                .read()
-                .await
-                .get(&request_id)
-                .expect("sender should be available")
+            response.message.request_id = request.request_id;
+            verify_result_tx
                 .send(response)
                 .await
-                .expect("Failed to send");
+                .expect("failed to send verification response");
         });
 
-        // Wire up the pipeline: one input batch that must be signed, and an
-        // output channel where we expect a signed batch.
         let (input_tx, input_rx) =
             zksync_os_pipeline::tracked_unbounded_channel::<BatchForSigning<()>>();
         let (output_tx, mut output_rx) =

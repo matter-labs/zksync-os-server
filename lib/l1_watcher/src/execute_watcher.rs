@@ -3,12 +3,23 @@ use crate::{CommittedBatchProvider, L1WatcherConfig, ProcessL1Event, util};
 use alloy::primitives::Address;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
-use backon::{ConstantBuilder, Retryable};
-use std::time::Duration;
 use zksync_os_contract_interface::IExecutor::BlockExecution;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::WriteFinality;
 
+/// Watches settlement-layer execution events and advances the executed finality frontier.
+///
+/// This component reads `BlockExecution` events, waits until the corresponding committed batch is
+/// available in `CommittedBatchProvider`, and then updates `WriteFinality` with the latest
+/// executed batch / block numbers.
+///
+/// Depends on `CommittedBatchProvider` to resolve the executed batch back to its committed block range;
+///
+/// Depended on by:
+/// - `PriorityTreeManager`, which replays and caches priority operations up to the executed
+///   frontier;
+/// - startup / replay code that reads executed finality to decide where block processing resumes;
+/// - RPC-facing storage initialization, which uses executed progress as part of node recovery.
 pub struct L1ExecuteWatcher<Finality> {
     contract_address: Address,
     next_batch_number: u64,
@@ -89,19 +100,10 @@ impl<Finality: WriteFinality> ProcessL1Event for L1ExecuteWatcher<Finality> {
                 "skipping already processed executed batch",
             );
         } else {
-            // We might discover batch execute event before we discover commit event. In this case
-            // we retry for up to 30s (enough for two L1 blocks to be mined).
-            let discovered_batch = (|| async {
-                self.committed_batch_provider
-                    .get(batch_number)
-                    .ok_or_else(|| L1WatcherError::BatchNotCommitted(batch_number))
-            })
-            .retry(
-                ConstantBuilder::default()
-                    .with_max_times(30)
-                    .with_delay(Duration::from_secs(1)),
-            )
-            .await?;
+            let discovered_batch = self
+                .committed_batch_provider
+                .wait_for_batch(batch_number)
+                .await;
             let last_executed_block = discovered_batch.last_block_number();
             self.finality.update_finality_status(|finality| {
                 assert!(

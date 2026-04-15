@@ -14,7 +14,7 @@ pub use finality::{ReadFinality, WriteFinality};
 
 mod repository;
 pub use repository::{
-    ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult, WriteRepository,
+    LogIndex, ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult, WriteRepository,
 };
 
 mod metered_state;

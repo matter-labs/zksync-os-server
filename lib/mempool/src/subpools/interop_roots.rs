@@ -5,8 +5,7 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
 use zksync_os_types::{
-    IndexedInteropRoot, InteropRoot, InteropRootsLogIndex, SystemTxEnvelope, SystemTxType,
-    ZkTransaction,
+    IndexedInteropRoot, InteropRoot, SystemTxEnvelope, SystemTxType, ZkTransaction,
 };
 
 #[derive(Clone)]
@@ -21,7 +20,7 @@ pub struct InteropRootsSubpool {
 /// canonical chain yet. Note that some prefix might have already been executed in sequencer (as
 /// they were returned from [`InteropRootsSubpool::interop_transactions_with_delay`]).
 struct Inner {
-    pending_roots: BTreeMap<InteropRootsLogIndex, InteropRoot>,
+    pending_roots: BTreeMap<u64, InteropRoot>,
 }
 
 impl InteropRootsSubpool {
@@ -43,8 +42,8 @@ impl InteropRootsSubpool {
             (
                 self.inner.clone(),
                 self.notify.clone(),
-                InteropRootsLogIndex::default(),
-                VecDeque::default(),
+                0u64,
+                VecDeque::<(u64, InteropRoot)>::default(),
             ),
             move |(inner, notify, mut cursor, mut buffer)| async move {
                 sleep_until(next_tx_allowed_after).await;
@@ -55,12 +54,9 @@ impl InteropRootsSubpool {
 
                     {
                         let inner = inner.read().unwrap();
-                        for (id, root) in inner.pending_roots.range(&cursor..) {
-                            cursor = InteropRootsLogIndex {
-                                block_number: id.block_number,
-                                index_in_block: id.index_in_block + 1,
-                            };
-                            buffer.push_front(root.clone());
+                        for (id, root) in inner.pending_roots.range(cursor..) {
+                            cursor = id + 1;
+                            buffer.push_front((*id, root.clone()));
                         }
                     }
 
@@ -68,12 +64,18 @@ impl InteropRootsSubpool {
                         let amount_of_roots_to_take = buffer.len().min(self.interop_roots_per_tx);
                         let starting_index = buffer.len() - amount_of_roots_to_take;
 
-                        let roots_to_consume = buffer
+                        let roots_to_consume: Vec<(u64, InteropRoot)> = buffer
                             .drain(starting_index..)
                             .rev() // reversing iterator as last element is the one received earliest
-                            .collect::<Vec<_>>();
+                            .collect();
 
-                        let envelope = SystemTxEnvelope::import_interop_roots(roots_to_consume);
+                        // Use the log_id of the last (largest) root as the salt for uniqueness.
+                        let last_log_id = roots_to_consume
+                            .last()
+                            .expect("roots_to_consume is non-empty")
+                            .0;
+                        let roots = roots_to_consume.into_iter().map(|(_, r)| r).collect();
+                        let envelope = SystemTxEnvelope::import_interop_roots(roots, last_log_id);
                         drop(notified);
                         return Some((envelope.into(), (inner, notify, cursor, buffer)));
                     }
@@ -90,11 +92,11 @@ impl InteropRootsSubpool {
             .write()
             .unwrap()
             .pending_roots
-            .insert(root.log_index, root.root);
+            .insert(root.log_id, root.root);
         self.notify.notify_waiters();
     }
 
-    async fn pop_wait(&self) -> (InteropRootsLogIndex, InteropRoot) {
+    async fn pop_wait(&self) -> (u64, InteropRoot) {
         loop {
             let notified = self.notify.notified();
             {
@@ -107,17 +109,14 @@ impl InteropRootsSubpool {
         }
     }
 
-    /// Cleans up the stream and removes all roots that were sent in transactions
-    /// Returns the last log index of executed interop root
-    pub async fn on_canonical_state_change(
-        &self,
-        txs: Vec<&SystemTxEnvelope>,
-    ) -> Option<InteropRootsLogIndex> {
+    /// Cleans up the stream and removes all roots that were sent in transactions.
+    /// Returns the last log_id of the executed interop root.
+    pub async fn on_canonical_state_change(&self, txs: Vec<&SystemTxEnvelope>) -> Option<u64> {
         if txs.is_empty() {
             return None;
         }
 
-        let mut log_index = InteropRootsLogIndex::default();
+        let mut last_log_id = None;
 
         for tx in txs {
             let SystemTxType::ImportInteropRoots(roots_count) = *tx.system_subtype() else {
@@ -125,16 +124,21 @@ impl InteropRootsSubpool {
             };
 
             let mut roots = Vec::with_capacity(roots_count as usize);
+            let mut tx_last_log_id = None;
             for _ in 0..roots_count {
                 let (id, root) = self.pop_wait().await;
                 roots.push(root);
-                log_index = id;
+                tx_last_log_id = Some(id);
             }
-            let envelope = SystemTxEnvelope::import_interop_roots(roots);
+            last_log_id = tx_last_log_id;
+            let envelope = SystemTxEnvelope::import_interop_roots(
+                roots,
+                tx_last_log_id.expect("roots_count > 0"),
+            );
 
             assert_eq!(&envelope, tx);
         }
 
-        Some(log_index)
+        last_log_id
     }
 }

@@ -13,7 +13,7 @@ use zksync_os_genesis::Genesis;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{
-    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+    LogIndex, ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
 use zksync_os_types::{ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 
@@ -242,6 +242,8 @@ impl RepositoryDb {
         Ok(())
     }
 }
+
+impl LogIndex for RepositoryDb {}
 
 impl ReadRepository for RepositoryDb {
     fn get_block_by_number(

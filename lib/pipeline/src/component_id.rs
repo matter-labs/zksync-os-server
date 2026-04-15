@@ -15,6 +15,8 @@ pub enum ComponentId {
     // Both pipelines — sinks (unmonitored)
     BatchSink,
     NoOpSink,
+    // Both pipelines — batch verification
+    BatchVerificationResponder,
     // Main node — consensus
     BlockCanonizer,
     // Main node — proving and settlement
@@ -49,6 +51,7 @@ impl ComponentId {
             Self::TreeManager => "tree_manager",
             Self::BatchSink => "batch_sink",
             Self::NoOpSink => "noop_sink",
+            Self::BatchVerificationResponder => "batch_verification_responder",
             Self::BlockCanonizer => "block_canonizer",
             Self::ProverInputGenerator => "prover_input_generator",
             Self::Batcher => "batcher",
@@ -93,6 +96,10 @@ mod tests {
             (ComponentId::TreeManager, "tree_manager"),
             (ComponentId::BatchSink, "batch_sink"),
             (ComponentId::NoOpSink, "noop_sink"),
+            (
+                ComponentId::BatchVerificationResponder,
+                "batch_verification_responder",
+            ),
             (ComponentId::BlockCanonizer, "block_canonizer"),
             (ComponentId::ProverInputGenerator, "prover_input_generator"),
             (ComponentId::Batcher, "batcher"),

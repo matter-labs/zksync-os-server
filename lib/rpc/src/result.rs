@@ -39,12 +39,67 @@ macro_rules! impl_to_rpc_result {
     };
 }
 
-impl_to_rpc_result!(EthSendRawTransactionError);
-impl_to_rpc_result!(EthFilterError);
-impl_to_rpc_result!(EthError);
 impl_to_rpc_result!(ZksError);
-impl_to_rpc_result!(DebugError);
 impl_to_rpc_result!(UnstableError);
+
+impl<Ok> ToRpcResult<Ok, EthError> for Result<Ok, EthError> {
+    fn to_rpc_result(self) -> RpcResult<Ok> {
+        self.map_err(|err| match err {
+            EthError::BlockNotFound(_)
+            | EthError::NonceMaxValue
+            | EthError::InvalidRewardPercentiles => invalid_params_rpc_err(err.to_string()),
+            EthError::RpcStorage(_) | EthError::Repository(_) | EthError::State(_) => {
+                internal_rpc_err(err.to_string())
+            }
+        })
+    }
+}
+
+impl<Ok> ToRpcResult<Ok, DebugError> for Result<Ok, DebugError> {
+    fn to_rpc_result(self) -> RpcResult<Ok> {
+        self.map_err(|err| match err {
+            DebugError::UnsupportedDefaultTracer
+            | DebugError::UnsupportedTracer(_)
+            | DebugError::UnsupportedTxIndex
+            | DebugError::InvalidTracerConfig
+            | DebugError::TransactionNotFound
+            | DebugError::BlockNotFound => invalid_params_rpc_err(err.to_string()),
+            DebugError::InternalError | DebugError::Repository(_) | DebugError::State(_) => {
+                internal_rpc_err(err.to_string())
+            }
+            DebugError::Call(e) => Result::<(), _>::Err(e).to_rpc_result().unwrap_err(),
+        })
+    }
+}
+
+impl<Ok> ToRpcResult<Ok, EthSendRawTransactionError> for Result<Ok, EthSendRawTransactionError> {
+    fn to_rpc_result(self) -> RpcResult<Ok> {
+        self.map_err(|err| match err {
+            EthSendRawTransactionError::FailedToDecodeSignedTransaction
+            | EthSendRawTransactionError::InvalidTransactionSignature
+            | EthSendRawTransactionError::BlacklistedSigner => {
+                invalid_params_rpc_err(err.to_string())
+            }
+            EthSendRawTransactionError::NotAcceptingTransactions(_)
+            | EthSendRawTransactionError::PoolError(_)
+            | EthSendRawTransactionError::ForwardError(_) => internal_rpc_err(err.to_string()),
+        })
+    }
+}
+
+impl<Ok> ToRpcResult<Ok, EthFilterError> for Result<Ok, EthFilterError> {
+    fn to_rpc_result(self) -> RpcResult<Ok> {
+        self.map_err(|err| match err {
+            EthFilterError::BlockNotFound(_)
+            | EthFilterError::FilterNotFound(_)
+            | EthFilterError::QueryExceedsMaxBlocks(_)
+            | EthFilterError::QueryExceedsMaxResults { .. } => {
+                invalid_params_rpc_err(err.to_string())
+            }
+            EthFilterError::RepositoryError(_) => internal_rpc_err(err.to_string()),
+        })
+    }
+}
 
 impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
     fn to_rpc_result(self) -> RpcResult<Ok> {

@@ -97,20 +97,25 @@ impl PipelineComponent for UpgradeGatekeeper {
         output: TrackedUnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         loop {
-            self.health_reporter.enter_state(GenericComponentState::Idle);
+            self.health_reporter
+                .enter_state(GenericComponentState::Idle);
             let Some(command) = input.recv().await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
 
             if let L1SenderCommand::SendToL1(command) = &command {
-                self.health_reporter.enter_state(GenericComponentState::Active);
+                self.health_reporter
+                    .enter_state(GenericComponentState::Active);
 
                 let batch_protocol_version = command.input().batch.protocol_version.clone();
                 wait_until_protocol_version(&self.zk_chain_sl, &batch_protocol_version).await?;
             }
 
-            if output.send_and_record(command, &self.health_reporter).is_err() {
+            if output
+                .send_and_record(command, &self.health_reporter)
+                .is_err()
+            {
                 anyhow::bail!("Outbound channel closed");
             }
         }
