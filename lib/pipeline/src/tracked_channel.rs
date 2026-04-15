@@ -22,7 +22,7 @@ impl<T: HasBlockRangeEnd> TrackedUnboundedSender<T> {
     /// receiver has been dropped the error is returned and nothing is recorded.
     ///
     /// This is the sender-side counterpart of
-    /// [`TrackedUnboundedReceiver::recv_and_record`].
+    /// [`TrackedUnboundedReceiver::recv_and_record_picked`].
     pub fn send_and_record(
         &self,
         value: T,
@@ -55,10 +55,10 @@ impl<T> TrackedUnboundedReceiver<T> {
     /// Try to receive the next item without blocking.
     ///
     /// # Health reporting
-    /// This method does **not** call `record_processed`. If you need health
-    /// reporting at receive time use [`recv_and_record`](Self::recv_and_record)
+    /// This method does **not** call `record_picked`. If you need health
+    /// reporting at receive time use [`recv_and_record_picked`](Self::recv_and_record_picked)
     /// for single items. For `try_recv` callers the typical pattern is to track
-    /// progress manually and call `record_processed` after the batch is handled.
+    /// progress manually and call `record_picked` after the batch is handled.
     pub fn try_recv(&mut self) -> Result<T, mpsc::error::TryRecvError> {
         if let Some(v) = self.buf.pop_front() {
             Ok(v)
@@ -77,11 +77,11 @@ impl<T> TrackedUnboundedReceiver<T> {
     /// so this asymmetry is not a problem in practice, but callers should be aware.
     ///
     /// # Health reporting
-    /// This method does **not** call `record_processed`. If your consumer records
+    /// This method does **not** call `record_picked`. If your consumer records
     /// progress at receive time (most pipeline stages), use
-    /// [`recv_many_and_record`](Self::recv_many_and_record) instead — it records
+    /// [`recv_many_and_record_picked`](Self::recv_many_and_record_picked) instead — it records
     /// the last item's sequence number after each batch. Switching from `recv` /
-    /// `recv_and_record` to this method without also adding health reporting silently
+    /// `recv_and_record_picked` to this method without also adding health reporting silently
     /// stops the health reporter from advancing.
     pub async fn recv_many(&mut self, buf: &mut Vec<T>, limit: usize) -> usize {
         // Drain local peek buffer first.
@@ -161,20 +161,21 @@ impl<T> TrackedUnboundedReceiver<T> {
 }
 
 impl<T: HasBlockRangeEnd> TrackedUnboundedReceiver<T> {
-    /// Receive the next item and immediately record it as processed with the health reporter.
-    /// Replaces the manual `let last_block = ...; reporter.record_processed(...)` pattern.
-    pub async fn recv_and_record(
+    /// Receive the next item and immediately record it as picked with the health reporter.
+    /// Fires at dequeue time (before any processing), recording the "picked" watermark.
+    /// Replaces the manual `let last_block = ...; reporter.record_picked(...)` pattern.
+    pub async fn recv_and_record_picked(
         &mut self,
         reporter: &zksync_os_observability::ComponentHealthReporter,
     ) -> Option<T> {
         let item = self.recv().await?;
-        reporter.record_processed(item.block_number(), item.block_timestamp());
+        reporter.record_picked(item.block_number(), item.block_timestamp());
         Some(item)
     }
 
-    /// Receive up to `limit` items and record the highest-sequence item as processed.
+    /// Receive up to `limit` items and record the highest-sequence item as picked.
     ///
-    /// This is the batching counterpart of [`recv_and_record`](Self::recv_and_record).
+    /// This is the batching counterpart of [`recv_and_record_picked`](Self::recv_and_record_picked).
     /// Use this instead of bare [`recv_many`](Self::recv_many) whenever your consumer
     /// records health progress at receive time — otherwise the health reporter silently
     /// stops advancing when you switch to batched receives.
@@ -188,9 +189,9 @@ impl<T: HasBlockRangeEnd> TrackedUnboundedReceiver<T> {
     ///
     /// # Returns
     /// Number of items appended to `buf` (same as [`recv_many`](Self::recv_many)).
-    /// Returns `0` only when the channel is closed; in that case `record_processed`
+    /// Returns `0` only when the channel is closed; in that case `record_picked`
     /// is **not** called because there is no new progress to report.
-    pub async fn recv_many_and_record(
+    pub async fn recv_many_and_record_picked(
         &mut self,
         buf: &mut Vec<T>,
         limit: usize,
@@ -203,7 +204,7 @@ impl<T: HasBlockRangeEnd> TrackedUnboundedReceiver<T> {
             // The last one (index `start + n - 1`) has the highest sequence number
             // because the channel preserves send order.
             let last = &buf[start + n - 1];
-            reporter.record_processed(last.block_number(), last.block_timestamp());
+            reporter.record_picked(last.block_number(), last.block_timestamp());
         }
         n
     }
@@ -275,7 +276,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recv_and_record_calls_reporter() {
+    async fn recv_and_record_picked_calls_reporter() {
         use crate::has_block_range_end::HasBlockRangeEnd;
         use zksync_os_observability::ComponentHealthReporter;
 
@@ -296,12 +297,15 @@ mod tests {
         tx.send(Msg { seq: 10, ts: 1000 }).unwrap();
 
         let (reporter, health_rx) = ComponentHealthReporter::new("test");
-        let item = rx.recv_and_record(&reporter).await.unwrap();
+        let item = rx.recv_and_record_picked(&reporter).await.unwrap();
         assert_eq!(item.seq, 10);
-        // Verify reporter updated (last_processed_block_number should be Some(10))
-        assert_eq!(health_rx.borrow().last_processed_block_number, Some(10));
+        // Verify reporter updated (last_picked should be Some with block_number 10)
         assert_eq!(
-            health_rx.borrow().last_processed_block_timestamp,
+            health_rx.borrow().last_picked.as_ref().map(|c| c.block_number),
+            Some(10)
+        );
+        assert_eq!(
+            health_rx.borrow().last_picked.as_ref().and_then(|c| c.timestamp),
             Some(1000)
         );
     }
@@ -332,8 +336,14 @@ mod tests {
                 .is_ok()
         );
         // Reporter updated immediately after send.
-        assert_eq!(health_rx.borrow().last_processed_block_number, Some(7));
-        assert_eq!(health_rx.borrow().last_processed_block_timestamp, Some(700));
+        assert_eq!(
+            health_rx.borrow().last_processed.as_ref().map(|c| c.block_number),
+            Some(7)
+        );
+        assert_eq!(
+            health_rx.borrow().last_processed.as_ref().and_then(|c| c.timestamp),
+            Some(700)
+        );
         // Item was actually delivered.
         assert_eq!(rx.recv().await.unwrap().seq, 7);
     }
@@ -358,11 +368,11 @@ mod tests {
 
         assert!(tx.send_and_record(Msg { seq: 1 }, &reporter).is_err());
         // Reporter must NOT have been updated — send failed.
-        assert_eq!(health_rx.borrow().last_processed_block_number, None);
+        assert!(health_rx.borrow().last_processed.is_none());
     }
 
-    /// Helper type shared by recv_many_and_record tests.
-    mod recv_many_and_record_tests {
+    /// Helper type shared by recv_many_and_record_picked tests.
+    mod recv_many_and_record_picked_tests {
         use super::*;
         use crate::has_block_range_end::HasBlockRangeEnd;
         use zksync_os_observability::ComponentHealthReporter;
@@ -390,14 +400,20 @@ mod tests {
 
             let (reporter, health_rx) = ComponentHealthReporter::new("test");
             let mut buf = vec![];
-            let n = rx.recv_many_and_record(&mut buf, 10, &reporter).await;
+            let n = rx.recv_many_and_record_picked(&mut buf, 10, &reporter).await;
 
             assert_eq!(n, 3);
             assert_eq!(buf.len(), 3);
             // Only the LAST item (seq=3, ts=300) should be recorded — it has the
             // highest sequence number in the batch and is the progress high-watermark.
-            assert_eq!(health_rx.borrow().last_processed_block_number, Some(3));
-            assert_eq!(health_rx.borrow().last_processed_block_timestamp, Some(300));
+            assert_eq!(
+                health_rx.borrow().last_picked.as_ref().map(|c| c.block_number),
+                Some(3)
+            );
+            assert_eq!(
+                health_rx.borrow().last_picked.as_ref().and_then(|c| c.timestamp),
+                Some(300)
+            );
         }
 
         /// Works correctly for a single item (degenerate batch of one).
@@ -408,18 +424,21 @@ mod tests {
 
             let (reporter, health_rx) = ComponentHealthReporter::new("test");
             let mut buf = vec![];
-            let n = rx.recv_many_and_record(&mut buf, 10, &reporter).await;
+            let n = rx.recv_many_and_record_picked(&mut buf, 10, &reporter).await;
 
             assert_eq!(n, 1);
-            assert_eq!(health_rx.borrow().last_processed_block_number, Some(42));
             assert_eq!(
-                health_rx.borrow().last_processed_block_timestamp,
+                health_rx.borrow().last_picked.as_ref().map(|c| c.block_number),
+                Some(42)
+            );
+            assert_eq!(
+                health_rx.borrow().last_picked.as_ref().and_then(|c| c.timestamp),
                 Some(9999)
             );
         }
 
         /// When the channel is closed before the first item, returns 0 and does NOT
-        /// call record_processed (there is no progress to report).
+        /// call record_picked (there is no progress to report).
         #[tokio::test]
         async fn closed_channel_returns_zero_and_does_not_record() {
             let (tx, mut rx) = tracked_unbounded_channel::<Msg>();
@@ -427,12 +446,12 @@ mod tests {
 
             let (reporter, health_rx) = ComponentHealthReporter::new("test");
             let mut buf = vec![];
-            let n = rx.recv_many_and_record(&mut buf, 10, &reporter).await;
+            let n = rx.recv_many_and_record_picked(&mut buf, 10, &reporter).await;
 
             assert_eq!(n, 0);
             assert_eq!(buf.len(), 0);
             // Reporter must NOT have been updated — there was nothing to record.
-            assert_eq!(health_rx.borrow().last_processed_block_number, None);
+            assert!(health_rx.borrow().last_picked.is_none());
         }
 
         /// With a pre-filled buf, records only the last of the NEWLY received items,
@@ -454,16 +473,19 @@ mod tests {
             // overwrite it — but since we only record from new items, seq=21 is recorded.
             let mut buf: Vec<Msg> = vec![Msg { seq: 50, ts: 5000 }];
 
-            let n = rx.recv_many_and_record(&mut buf, 10, &reporter).await;
+            let n = rx.recv_many_and_record_picked(&mut buf, 10, &reporter).await;
 
             // 2 new items were received on top of the 1 pre-existing one.
             assert_eq!(n, 2);
             assert_eq!(buf.len(), 3);
             // The reporter should reflect seq=21 (the last NEW item), not seq=50 (the
             // stale pre-existing entry).
-            assert_eq!(health_rx.borrow().last_processed_block_number, Some(21));
             assert_eq!(
-                health_rx.borrow().last_processed_block_timestamp,
+                health_rx.borrow().last_picked.as_ref().map(|c| c.block_number),
+                Some(21)
+            );
+            assert_eq!(
+                health_rx.borrow().last_picked.as_ref().and_then(|c| c.timestamp),
                 Some(2100)
             );
         }

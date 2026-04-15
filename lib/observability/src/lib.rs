@@ -31,7 +31,9 @@ mod metrics;
 pub use metrics::GENERAL_METRICS;
 
 mod component_health_reporter;
-pub use component_health_reporter::{ComponentHealth, ComponentHealthReporter};
+pub use component_health_reporter::{
+    BatchTrackingCoordinates, BlockTrackingCoordinates, ComponentHealth, ComponentHealthReporter,
+};
 
 /// Internal trait used in `ObservabilityGuard::with_timeout()` to inspect action results.
 trait InspectResults {
