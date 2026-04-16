@@ -386,7 +386,7 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
         };
         db_options.set_max_open_files(max_open_files);
         let existing_cfs = DB::list_cf(&db_options, path).unwrap_or_else(|err| {
-            tracing::warn!(
+            tracing::info!(
                 db_name = CF::DB_NAME,
                 path = ?path,
                 ?err,
@@ -411,7 +411,7 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
             })
             .collect();
         if !obsolete_cfs.is_empty() {
-            tracing::warn!(
+            tracing::info!(
                 db_name = CF::DB_NAME,
                 ?path,
                 ?obsolete_cfs,
