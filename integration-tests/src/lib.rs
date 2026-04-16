@@ -149,14 +149,15 @@ pub struct Tester {
     #[allow(dead_code)]
     tempdir: Arc<tempfile::TempDir>,
 
-    // Needed to be able to connect external nodes
-    node_record: NodeRecord,
+    // Present only when p2p networking is enabled for this test node.
+    node_record: Option<NodeRecord>,
     l2_rpc_address: String,
     gateway_rpc_url: Option<String>,
     sl_provider: EthDynProvider,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
     enable_prover_input_generation: bool,
+    enable_p2p: bool,
     supporting_nodes: Vec<Tester>,
 }
 
@@ -167,6 +168,7 @@ pub struct StoppedTester {
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
     enable_prover_input_generation: bool,
+    enable_p2p: bool,
 }
 
 impl Tester {
@@ -281,9 +283,12 @@ impl Tester {
         &self,
         config_overrides: Option<impl FnOnce(&mut Config)>,
     ) -> anyhow::Result<Self> {
+        let boot_node = self.node_record.clone().context(
+            "main node was started without p2p networking; use `TesterBuilder::enable_p2p()`",
+        )?;
         let overrides_fun = |config: &mut Config| {
             config.general_config.node_role = NodeRole::ExternalNode;
-            config.network_config.boot_nodes = vec![self.node_record.into()];
+            config.network_config.boot_nodes = vec![boot_node.into()];
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
             config.l1_sender_config.pubdata_mode = None;
             config.general_config.gateway_rpc_url = self.gateway_rpc_url.clone();
@@ -296,6 +301,7 @@ impl Tester {
             self.l1.clone(),
             false,
             self.enable_prover_input_generation,
+            true,
             Some(overrides_fun),
             self.chain_layout,
         )
@@ -317,6 +323,7 @@ impl Tester {
             log_state,
             chain_layout,
             enable_prover_input_generation,
+            enable_p2p,
             ..
         } = self;
         if !runtime.graceful_shutdown_with_timeout(NODE_SHUTDOWN_TIMEOUT) {
@@ -328,6 +335,7 @@ impl Tester {
             log_state,
             chain_layout,
             enable_prover_input_generation,
+            enable_p2p,
         })
     }
 
@@ -349,6 +357,7 @@ impl Tester {
         l1: AnvilL1,
         enable_prover: bool,
         enable_prover_input_generation: bool,
+        enable_p2p: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
         chain_layout: ChainLayout<'static>,
     ) -> anyhow::Result<Self> {
@@ -357,6 +366,7 @@ impl Tester {
             l1,
             enable_prover,
             enable_prover_input_generation,
+            enable_p2p,
             config_overrides,
             tempdir,
             None,
@@ -369,6 +379,7 @@ impl Tester {
         l1: AnvilL1,
         enable_prover: bool,
         enable_prover_input_generation: bool,
+        enable_p2p: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
         tempdir: Arc<TempDir>,
         log_state: Option<NodeLogState>,
@@ -377,7 +388,11 @@ impl Tester {
         // Initialize and **hold** locked ports for the duration of node initialization.
         let l2_locked_port = LockedPort::acquire_unused().await?;
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
-        let network_locked_port = LockedPort::acquire_unused().await?;
+        let network_locked_port = if enable_p2p {
+            Some(LockedPort::acquire_unused().await?)
+        } else {
+            None
+        };
         let status_locked_port = LockedPort::acquire_unused().await?;
         let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
@@ -438,18 +453,33 @@ impl Tester {
             address: status_address,
         };
 
-        let network_secret_key = zksync_os_network::rng_secret_key();
-        let node_record = NodeRecord::from_secret_key(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), network_locked_port.port),
-            &network_secret_key,
-        );
-        let network_config = NetworkConfig {
-            enabled: true,
-            secret_key: Some(network_secret_key),
-            address: Ipv4Addr::LOCALHOST,
-            interface: None,
-            port: network_locked_port.port,
-            boot_nodes: vec![],
+        let (network_config, node_record) = if let Some(network_locked_port) = &network_locked_port
+        {
+            let network_secret_key = zksync_os_network::rng_secret_key();
+            let node_record = NodeRecord::from_secret_key(
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), network_locked_port.port),
+                &network_secret_key,
+            );
+            (
+                NetworkConfig {
+                    enabled: true,
+                    secret_key: Some(network_secret_key),
+                    address: Ipv4Addr::LOCALHOST,
+                    interface: None,
+                    port: network_locked_port.port,
+                    boot_nodes: vec![],
+                },
+                Some(node_record),
+            )
+        } else {
+            (
+                NetworkConfig {
+                    enabled: false,
+                    secret_key: None,
+                    ..default_config.network_config.clone()
+                },
+                None,
+            )
         };
 
         let mut config = Config {
@@ -645,6 +675,7 @@ impl Tester {
             tempdir: tempdir.clone(),
             chain_layout,
             enable_prover_input_generation,
+            enable_p2p,
             supporting_nodes: Vec::new(),
         })
     }
@@ -668,6 +699,7 @@ impl StoppedTester {
             self.l1,
             false,
             self.enable_prover_input_generation,
+            self.enable_p2p,
             None::<fn(&mut Config)>,
             self.tempdir,
             Some(self.log_state.restarted()),
@@ -684,6 +716,7 @@ impl StoppedTester {
             self.l1,
             false,
             self.enable_prover_input_generation,
+            self.enable_p2p,
             Some(config_overrides),
             self.tempdir,
             Some(self.log_state.restarted()),
@@ -793,6 +826,7 @@ async fn ensure_test_wallet_funded(
 struct NodeBuilderOptions {
     enable_prover: bool,
     enable_prover_input_generation: bool,
+    enable_p2p: bool,
     block_time: Option<Duration>,
     batch_verification_threshold: Option<u64>,
     fee_config: Option<FeeConfig>,
@@ -805,6 +839,7 @@ impl Default for NodeBuilderOptions {
         Self {
             enable_prover: false,
             enable_prover_input_generation: true,
+            enable_p2p: false,
             block_time: None,
             batch_verification_threshold: None,
             fee_config: None,
@@ -864,7 +899,13 @@ impl TesterBuilder {
         self
     }
 
+    pub fn enable_p2p(mut self) -> Self {
+        self.options.enable_p2p = true;
+        self
+    }
+
     pub fn batch_verification(mut self, threshold: u64) -> Self {
+        self.options.enable_p2p = true;
         self.options.batch_verification_threshold = Some(threshold);
         self
     }
@@ -909,6 +950,7 @@ impl TesterBuilder {
                     l1,
                     options.enable_prover,
                     options.enable_prover_input_generation,
+                    options.enable_p2p,
                     Some(move |config: &mut Config| options.apply_to_config(config)),
                     chain_layout,
                 )
@@ -1006,6 +1048,11 @@ impl GatewayTesterBuilder {
         self
     }
 
+    pub fn enable_chain_p2p(mut self) -> Self {
+        self.chain_options.enable_p2p = true;
+        self
+    }
+
     fn chain_options(mut self, chain_options: NodeBuilderOptions) -> Self {
         self.chain_options = chain_options;
         self
@@ -1026,6 +1073,7 @@ impl GatewayTesterBuilder {
             l1.clone(),
             false,
             self.chain_options.enable_prover_input_generation,
+            false,
             None::<fn(&mut Config)>,
             ChainLayout::Gateway { protocol_version },
         )
@@ -1052,6 +1100,7 @@ impl GatewayTesterBuilder {
                 l1.clone(),
                 chain_options.enable_prover,
                 chain_options.enable_prover_input_generation,
+                chain_options.enable_p2p,
                 Some(move |config: &mut Config| {
                     config.general_config.gateway_rpc_url = Some(gateway_rpc_url.clone());
                     chain_options.apply_to_config(config);
