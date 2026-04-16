@@ -171,6 +171,11 @@ pub struct StoppedTester {
     enable_p2p: bool,
 }
 
+struct NodeLaunchState {
+    tempdir: Arc<TempDir>,
+    log_state: Option<NodeLogState>,
+}
+
 impl Tester {
     pub fn l1_provider(&self) -> &EthDynProvider {
         &self.l1.provider
@@ -284,7 +289,7 @@ impl Tester {
         &self,
         config_overrides: Option<impl FnOnce(&mut Config)>,
     ) -> anyhow::Result<Self> {
-        let boot_node = self.node_record.clone().context(
+        let boot_node = self.node_record.context(
             "main node was started without p2p networking; use `TesterBuilder::enable_p2p()`",
         )?;
         let overrides_fun = |config: &mut Config| {
@@ -369,8 +374,10 @@ impl Tester {
             enable_prover_input_generation,
             enable_p2p,
             config_overrides,
-            tempdir,
-            None,
+            NodeLaunchState {
+                tempdir,
+                log_state: None,
+            },
             chain_layout,
         )
         .await
@@ -382,10 +389,10 @@ impl Tester {
         enable_prover_input_generation: bool,
         enable_p2p: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
-        tempdir: Arc<TempDir>,
-        log_state: Option<NodeLogState>,
+        launch_state: NodeLaunchState,
         chain_layout: ChainLayout<'static>,
     ) -> anyhow::Result<Self> {
+        let NodeLaunchState { tempdir, log_state } = launch_state;
         // Initialize and **hold** locked ports for the duration of node initialization.
         let l2_locked_port = LockedPort::acquire_unused().await?;
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
@@ -702,8 +709,10 @@ impl StoppedTester {
             self.enable_prover_input_generation,
             self.enable_p2p,
             None::<fn(&mut Config)>,
-            self.tempdir,
-            Some(self.log_state.restarted()),
+            NodeLaunchState {
+                tempdir: self.tempdir,
+                log_state: Some(self.log_state.restarted()),
+            },
             self.chain_layout,
         )
         .await
@@ -719,8 +728,10 @@ impl StoppedTester {
             self.enable_prover_input_generation,
             self.enable_p2p,
             Some(config_overrides),
-            self.tempdir,
-            Some(self.log_state.restarted()),
+            NodeLaunchState {
+                tempdir: self.tempdir,
+                log_state: Some(self.log_state.restarted()),
+            },
             self.chain_layout,
         )
         .await
