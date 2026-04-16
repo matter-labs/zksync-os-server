@@ -25,6 +25,13 @@ impl TxAcceptanceGate {
     }
 
     pub async fn run(self, mut stop_receiver: watch::Receiver<bool>) {
+        // Pre-flight stop check: if stop was already set before run() was called,
+        // watch::changed() would never fire (no new change to observe), causing the
+        // gate to hang indefinitely. Match the same guard used by PipelineHealthMonitor.
+        if *stop_receiver.borrow_and_update() {
+            return;
+        }
+
         // Evaluate immediately so the initial state is correct before any changes arrive.
         self.evaluate_and_send();
 

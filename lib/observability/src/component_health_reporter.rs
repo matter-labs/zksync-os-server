@@ -2,15 +2,11 @@ use crate::generic_component_state::GenericComponentState;
 use crate::state_label::StateLabel;
 use tokio::{sync::watch, time::Instant};
 
-/// Block-space coordinates: block number, optional timestamp, and when this
-/// coordinate was last recorded (for stall detection in the monitor).
-/// `recorded_at` is internal — not serialised in HTTP responses.
+/// Block-space coordinates: block number and optional timestamp.
 #[derive(Clone, Debug)]
 pub struct BlockTrackingCoordinates {
     pub block_number: u64,
     pub timestamp: Option<u64>,
-    #[allow(dead_code)]
-    pub(crate) recorded_at: Instant,
 }
 
 impl BlockTrackingCoordinates {
@@ -18,7 +14,6 @@ impl BlockTrackingCoordinates {
         Self {
             block_number,
             timestamp,
-            recorded_at: Instant::now(),
         }
     }
 }
@@ -26,14 +21,11 @@ impl BlockTrackingCoordinates {
 /// Batch-space coordinates for range-processing components (FriJobManager,
 /// SnarkJobManager). Carries batch number alongside the batch's last block
 /// number and timestamp so operators can identify in-flight batches directly.
-/// `recorded_at` is internal — not serialised in HTTP responses.
 #[derive(Clone, Debug)]
 pub struct BatchTrackingCoordinates {
     pub batch_number: u64,
     pub last_block_number: u64,
     pub timestamp: Option<u64>,
-    #[allow(dead_code)]
-    pub(crate) recorded_at: Instant,
 }
 
 impl BatchTrackingCoordinates {
@@ -42,7 +34,6 @@ impl BatchTrackingCoordinates {
             batch_number,
             last_block_number,
             timestamp,
-            recorded_at: Instant::now(),
         }
     }
 }

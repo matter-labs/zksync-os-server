@@ -150,17 +150,6 @@ impl<T: L2Subpool> Pool<T> {
                     });
                 }
 
-                // No transactions immediately available in any subpool.
-                // Return the live L1/L2 stream so execute_block_in_vm can collect
-                // transactions that arrive during the block_time window and then
-                // seal an empty block once the deadline fires.
-                _ = std::future::ready(()) => {
-                    return Some(StreamOutcome {
-                        upgrade_metadata,
-                        stream: MarkingTxStream::markable(l1_l2_stream, l2_marker),
-                    });
-                }
-
                 else => {
                     return None;
                 }

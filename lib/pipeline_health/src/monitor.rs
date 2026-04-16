@@ -165,7 +165,7 @@ impl PipelineHealthMonitor {
         );
         for (id, _) in &self.components {
             let cond = self.config.condition_for(*id);
-            tracing::info!(
+            tracing::debug!(
                 "PipelineHealthMonitor: component {} threshold — max_block_lag={:?}, max_time_lag={:?}, max_batch_lag={:?}",
                 id.as_str(),
                 cond.max_block_lag,
@@ -174,7 +174,7 @@ impl PipelineHealthMonitor {
             );
         }
         for &(up, down) in &self.adjacency {
-            tracing::info!(
+            tracing::debug!(
                 "PipelineHealthMonitor: adjacency pair {} → {}",
                 up.as_str(),
                 down.as_str(),
@@ -253,10 +253,6 @@ impl PipelineHealthMonitor {
             std::collections::HashMap::new();
         let mut picked_map: std::collections::HashMap<ComponentId, (u64, Option<u64>)> =
             std::collections::HashMap::new();
-        // snapshots holds last_processed values for backward-compatible Prometheus metrics
-        // (head-relative block lag and time lag).
-        let mut snapshots: std::collections::HashMap<ComponentId, (u64, Option<u64>)> =
-            std::collections::HashMap::new();
 
         for (id, rx) in &self.components {
             let h = rx.borrow();
@@ -278,7 +274,6 @@ impl PipelineHealthMonitor {
                 .unwrap_or((0, None));
             processed_map.insert(*id, processed);
             picked_map.insert(*id, picked);
-            snapshots.insert(*id, processed);
         }
 
         let mut batch_processed_map: std::collections::HashMap<ComponentId, u64> =
@@ -359,8 +354,6 @@ impl PipelineHealthMonitor {
             .components
             .iter()
             .flat_map(|(id, _rx)| {
-                let &(_comp_seq, _comp_ts) =
-                    snapshots.get(id).expect("id came from self.components");
                 let adj = adjacent.get(id);
 
                 // block_lag: adjacent diff (upstream_seq − comp_seq).
@@ -442,7 +435,7 @@ impl PipelineHealthMonitor {
         // between the acceptance commit and this loop, causing metric values to contradict
         // the acceptance state that was just published.
         for (id, _rx) in &self.components {
-            let &(comp_seq, comp_ts) = snapshots.get(id).expect("id came from self.components");
+            let &(comp_seq, comp_ts) = processed_map.get(id).expect("id came from self.components");
             MONITOR_METRICS.backpressure_active[id].set(active_component_ids.contains(id) as u64);
             MONITOR_METRICS.component_last_processed_block[id].set(comp_seq);
             MONITOR_METRICS.component_block_lag[id].set(head_seq.saturating_sub(comp_seq));
@@ -513,8 +506,9 @@ impl PipelineHealthMonitor {
         let mut causes = Vec::new();
 
         if let Some(max_lag) = condition.max_block_lag {
-            // block_lag is pre-computed by caller: adjacent diff (upstream_seq − component_seq)
-            // if an adjacency is registered, otherwise head_seq − component_seq.
+            // block_lag is pre-computed by caller: adjacent diff (upstream_seq − component_seq).
+            // The startup assert guarantees every monitored component with a threshold has an
+            // adjacency pair, so this is always the true per-hop channel occupancy.
             if block_lag > max_lag {
                 causes.push(BackpressureCause {
                     component: id.as_str(),
@@ -527,8 +521,8 @@ impl PipelineHealthMonitor {
         }
 
         if let (Some(max_time_lag), Some(actual)) = (condition.max_time_lag, time_lag) {
-            // time_lag is pre-computed by caller: adjacent diff when adjacency is registered,
-            // head-relative otherwise. None when timestamps are unavailable.
+            // time_lag is pre-computed by caller: adjacent diff (upstream_ts − component_ts).
+            // None when timestamps are unavailable or the component has no upstream.
             if actual > max_time_lag {
                 causes.push(BackpressureCause {
                     component: id.as_str(),

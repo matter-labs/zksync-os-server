@@ -118,7 +118,7 @@ impl FriJobManager {
         let timestamp = Some(batch_envelope.batch.batch_info.last_block_timestamp);
         let batch_number = batch_envelope.batch_number();
 
-        tracing::info!(
+        tracing::debug!(
             batch_number,
             "FriJobManager: queuing FRI job for batch {batch_number}, last_block={last_block}"
         );
@@ -158,7 +158,7 @@ impl FriJobManager {
     pub async fn peek_batch_data(&self, batch_number: u64) -> Option<(&str, ProverInput)> {
         match self.jobs.get_prover_input(batch_number).await {
             Some((vk_hash, prover_input)) => {
-                tracing::info!("Batch data is peeked for batch number {batch_number}");
+                tracing::debug!("Batch data is peeked for batch number {batch_number}");
                 Some((vk_hash, prover_input))
             }
             None => {
@@ -248,7 +248,7 @@ impl FriJobManager {
             .with_stage(BatchExecutionStage::FriProvedReal);
 
         permit.send(envelope);
-        tracing::info!(
+        tracing::debug!(
             batch_number,
             "FriJobManager: real FRI proof accepted for batch {batch_number}, last_block={last_block}, prover={prover_id}"
         );
@@ -378,7 +378,7 @@ impl FriJobManager {
             .with_stage(BatchExecutionStage::FriProvedFake);
 
         permit.send(envelope);
-        tracing::info!(
+        tracing::debug!(
             batch_number,
             "FriJobManager: fake FRI proof accepted for batch {batch_number}, last_block={last_block}, prover={prover_id}"
         );

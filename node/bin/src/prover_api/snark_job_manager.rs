@@ -68,7 +68,7 @@ impl SnarkJobManager {
         let timestamp = Some(batch_envelope.batch.batch_info.last_block_timestamp);
         let batch_number = batch_envelope.batch_number();
 
-        tracing::info!(
+        tracing::debug!(
             batch_number,
             "SnarkJobManager: queuing SNARK job for batch {batch_number}, last_block={last_block}"
         );
@@ -212,7 +212,7 @@ impl SnarkJobManager {
                 .iter()
                 .filter(|(_, proof)| !proof.is_fake())
                 .count();
-            tracing::info!(
+            tracing::debug!(
                 "consuming fake proofs for SNARKing for batches {}-{} ({} real proofs; {} fake proofs)",
                 assigned.first().unwrap().0.batch_number,
                 assigned.last().unwrap().0.batch_number,
@@ -252,7 +252,7 @@ impl SnarkJobManager {
         let last_block_timestamp = last.batch.batch_info.last_block_timestamp;
         let batch_number = last.batch_number();
         let batch_count = proof_command.as_ref().len();
-        tracing::info!(
+        tracing::debug!(
             batch_number,
             "SnarkJobManager: sending SNARK proof downstream for batch {batch_number}, batch_count={batch_count}, last_block={seq}"
         );

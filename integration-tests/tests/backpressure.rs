@@ -103,6 +103,27 @@ async fn backpressure_triggers_and_clears_under_l1_stall(
         .build()
         .await?;
 
+    // Keep the mempool non-empty so block production keeps running.
+    // Without transactions, the block executor waits for pending txs and never advances,
+    // meaning no batches get sealed and the adjacent lag never builds up.
+    let tx_load = {
+        let provider = node.l2_provider.clone();
+        tokio::spawn(async move {
+            let gas_price = provider
+                .get_gas_price()
+                .await
+                .expect("failed to fetch gas price for backpressure test");
+            loop {
+                let tx = TransactionRequest::default()
+                    .to(Address::random())
+                    .value(U256::from(1u64))
+                    .with_gas_price(gas_price * 10);
+                let _ = provider.send_transaction(tx).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+    };
+
     // Disable L1 block production. Anvil accepts transactions into the mempool but
     // does not mine them until automine is re-enabled.
     node.l1_provider()
@@ -280,6 +301,7 @@ async fn backpressure_triggers_and_clears_under_l1_stall(
         serde_json::to_string_pretty(&cleared_health).unwrap()
     );
 
+    tx_load.abort();
     Ok(())
 }
 

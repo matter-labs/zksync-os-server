@@ -66,7 +66,7 @@ impl PipelineComponent for GaplessL1ProofSender {
                         let flushing_batch = next_expected_batch_number;
                         let flushing_last_block = next_command.last_block_number();
                         next_expected_batch_number += next_command.batch_count() as u64;
-                        tracing::info!(
+                        tracing::debug!(
                             "GaplessL1ProofSender: sending batch {flushing_batch} (last_block={flushing_last_block}) downstream, next_expected={next_expected_batch_number}"
                         );
                         if output

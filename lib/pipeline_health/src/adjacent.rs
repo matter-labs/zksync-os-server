@@ -27,8 +27,8 @@ pub struct AdjacentSnapshot {
 /// or ignore the result (unmonitored components with no thresholds).
 /// The monitor's startup assert guarantees that every other monitored component has a pair.
 /// Adjacency pairs where either component is absent from the respective map are silently
-/// skipped, so callers in HTTP handlers or other contexts where a panic is unsafe get a
-/// graceful result.
+/// skipped. Note: fan-in topology (a downstream component appearing in more than one pair)
+/// still panics — see the # Panics section below.
 ///
 /// # Panics
 /// - If a downstream component appears in more than one pair (fan-in topology).

@@ -13,11 +13,12 @@ pub struct MonitorMetrics {
     /// Last block number successfully processed by this component.
     pub component_last_processed_block: Family<ComponentId, Gauge<u64>>,
     /// Blocks queued between this component and its upstream neighbour.
-    /// Computed as upstream.last_processed_block_number − this.last_processed_block_number.
+    /// Computed as upstream.last_processed_block_number − this.last_picked_block_number.
+    /// (Pure channel occupancy: blocks forwarded by upstream not yet dequeued by this component.)
     pub component_block_diff_to_upstream: Family<ComponentId, Gauge<u64>>,
     /// Block-timestamp lag in seconds between this component and its upstream neighbour.
-    /// Computed as upstream.last_processed_block_timestamp − this.last_processed_block_timestamp.
-    /// 0 if either timestamp is unavailable.
+    /// Computed as upstream.last_processed_block_timestamp − this.last_picked_block_timestamp.
+    /// (Channel occupancy in time units.) 0 if either timestamp is unavailable.
     pub component_time_diff_to_upstream_seconds: Family<ComponentId, Gauge<f64>>,
     /// Batches queued between this component and its upstream neighbour.
     /// Computed as upstream.batch_number − this.last_batch_picked.

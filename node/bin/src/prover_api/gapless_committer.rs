@@ -78,7 +78,7 @@ impl PipelineComponent for GaplessCommitter {
             }
 
             if !ready.is_empty() {
-                tracing::info!(
+                tracing::debug!(
                     "GaplessCommitter: saving {} batches {}-{} to proof_storage, buffer_size={}",
                     ready.len(),
                     ready[0].batch_number(),

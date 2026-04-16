@@ -31,6 +31,10 @@ pub(crate) struct CauseJson {
     pub threshold_blocks: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual_blocks: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold_batches: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_batches: Option<u64>,
 }
 
 pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
@@ -50,6 +54,8 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
                         actual_secs: None,
                         threshold_blocks: None,
                         actual_blocks: None,
+                        threshold_batches: None,
+                        actual_batches: None,
                     }]
                 }
                 NotAcceptingReason::PipelineBackpressure { causes } => causes
@@ -62,6 +68,8 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
                             actual_secs: Some(actual.as_secs_f64()),
                             threshold_blocks: None,
                             actual_blocks: None,
+                            threshold_batches: None,
+                            actual_batches: None,
                         },
                         BackpressureTrigger::BlockLagTooHigh { threshold, actual } => CauseJson {
                             component: Some(c.component),
@@ -70,14 +78,18 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
                             actual_secs: None,
                             threshold_blocks: Some(*threshold),
                             actual_blocks: Some(*actual),
+                            threshold_batches: None,
+                            actual_batches: None,
                         },
                         BackpressureTrigger::BatchLagTooHigh { threshold, actual } => CauseJson {
                             component: Some(c.component),
                             trigger: "batch_lag_too_high",
                             threshold_secs: None,
                             actual_secs: None,
-                            threshold_blocks: Some(*threshold),
-                            actual_blocks: Some(*actual),
+                            threshold_blocks: None,
+                            actual_blocks: None,
+                            threshold_batches: Some(*threshold),
+                            actual_batches: Some(*actual),
                         },
                     })
                     .collect(),
@@ -207,6 +219,33 @@ mod tests {
         assert_eq!(body.causes[0].trigger, "time_lag_too_high");
         assert_eq!(body.causes[0].threshold_secs, Some(30.0));
         assert_eq!(body.causes[0].actual_secs, Some(45.0));
+    }
+
+    #[tokio::test]
+    async fn batch_lag_backpressure_serializes_with_batch_fields() {
+        use zksync_os_types::{BackpressureCause, BackpressureTrigger, NotAcceptingReason};
+        let mut state = make_state();
+        let cause = BackpressureCause {
+            component: "snark_job_manager",
+            trigger: BackpressureTrigger::BatchLagTooHigh {
+                threshold: 3,
+                actual: 7,
+            },
+        };
+        let (_tx, rx) = watch::channel(TransactionAcceptanceState::NotAccepting(vec![
+            NotAcceptingReason::PipelineBackpressure {
+                causes: vec![cause],
+            },
+        ]));
+        state.acceptance_state = rx;
+        let (status, Json(body)) = health(State(state)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.causes[0].trigger, "batch_lag_too_high");
+        assert_eq!(body.causes[0].threshold_batches, Some(3));
+        assert_eq!(body.causes[0].actual_batches, Some(7));
+        // block fields must NOT be set for a batch-lag cause
+        assert!(body.causes[0].threshold_blocks.is_none());
+        assert!(body.causes[0].actual_blocks.is_none());
     }
 
     #[tokio::test]
