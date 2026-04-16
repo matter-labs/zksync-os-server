@@ -668,9 +668,9 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
         // ^ unwrap() is safe for the same reasons as in `prefix_iterator_cf()`.
     }
 
-    /// Iterates over key-value pairs in `cf` in lexical order from `from` (inclusive) up to
-    /// `to` (exclusive).  When the column family has a prefix extractor configured and `from` and
-    /// `to` share the same extracted prefix, RocksDB uses prefix bloom filters to skip SST files
+    /// Iterates over key-value pairs in `cf` in lexical order over `range` (start inclusive,
+    /// end exclusive).  When the column family has a prefix extractor configured and both bounds
+    /// share the same extracted prefix, RocksDB uses prefix bloom filters to skip SST files
     /// that contain no keys with that prefix.
     pub fn range_iterator_cf<'a>(
         &'a self,
