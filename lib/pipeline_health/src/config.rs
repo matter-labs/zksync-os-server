@@ -10,6 +10,7 @@ pub use zksync_os_pipeline::ComponentId;
 pub struct BackpressureCondition {
     pub max_block_lag: Option<u64>,
     pub max_time_lag: Option<Duration>,
+    pub max_batch_lag: Option<u64>,
 }
 
 /// Backpressure thresholds for block-level pipeline components:
@@ -50,6 +51,10 @@ pub struct BatchPipelineCondition {
     /// exceeds this duration. Only evaluated when the component has reported a timestamp
     /// via record_processed(block_number, Some(timestamp)).
     pub max_time_lag: Option<Duration>,
+    /// Trigger backpressure when a batch-pipeline component has more than N batches
+    /// queued between it and its upstream neighbour.
+    /// Computed as upstream.batch_number − downstream.last_batch_picked.
+    pub max_batch_lag: Option<u64>,
 }
 
 /// Backpressure thresholds for a single component, overriding its group default.
@@ -74,6 +79,8 @@ pub struct ComponentConditionOverride {
     pub max_block_lag: Option<u64>,
     /// Override the time-lag threshold for this component.
     pub max_time_lag: Option<Duration>,
+    /// Override the batch-lag threshold for this component (batch-pipeline components only).
+    pub max_batch_lag: Option<u64>,
 }
 
 /// Per-component backpressure condition overrides. Any component listed here has its
@@ -198,11 +205,13 @@ impl PipelineHealthConfig {
                 BackpressureCondition {
                     max_block_lag: o.max_block_lag,
                     max_time_lag: o.max_time_lag,
+                    max_batch_lag: o.max_batch_lag,
                 }
             } else {
                 BackpressureCondition {
                     max_block_lag: None,
                     max_time_lag: None,
+                    max_batch_lag: None,
                 }
             };
         }
@@ -216,6 +225,7 @@ impl PipelineHealthConfig {
             | ComponentId::BatchVerificationResponder => BackpressureCondition {
                 max_block_lag: self.block_pipeline.max_block_lag,
                 max_time_lag: self.block_pipeline.max_time_lag,
+                max_batch_lag: None, // block components never have batch lag
             },
             // All batch-level components use time lag as the primary signal.
             // max_block_lag is also supported but must be set well above batch_size
@@ -233,6 +243,7 @@ impl PipelineHealthConfig {
             | ComponentId::L1SenderExecute => BackpressureCondition {
                 max_block_lag: self.batch_pipeline.max_block_lag,
                 max_time_lag: self.batch_pipeline.max_time_lag,
+                max_batch_lag: self.batch_pipeline.max_batch_lag,
             },
             // Unmonitored components are never subject to backpressure.
             ComponentId::ConsensusNodeCommandSource
@@ -242,6 +253,7 @@ impl PipelineHealthConfig {
             | ComponentId::RevmConsistencyChecker => BackpressureCondition {
                 max_block_lag: None,
                 max_time_lag: None,
+                max_batch_lag: None,
             },
         }
     }
@@ -290,6 +302,7 @@ mod tests {
             batch_pipeline: BatchPipelineCondition {
                 max_block_lag: None,
                 max_time_lag: Some(Duration::from_secs(300)),
+                max_batch_lag: None,
             },
             ..Default::default()
         };
@@ -374,6 +387,7 @@ mod tests {
                     enabled: true,
                     max_block_lag: None,
                     max_time_lag: Some(Duration::from_secs(30)),
+                    max_batch_lag: None,
                 }),
                 ..Default::default()
             },
@@ -398,12 +412,14 @@ mod tests {
             batch_pipeline: BatchPipelineCondition {
                 max_block_lag: None,
                 max_time_lag: Some(Duration::from_secs(300)),
+                max_batch_lag: None,
             },
             component_overrides: ComponentOverrides {
                 batcher: Some(ComponentConditionOverride {
                     enabled: false,
                     max_block_lag: None,
                     max_time_lag: None,
+                    max_batch_lag: None,
                 }),
                 ..Default::default()
             },
@@ -432,6 +448,7 @@ mod tests {
                     enabled: true,
                     max_block_lag: None,
                     max_time_lag: None,
+                    max_batch_lag: None,
                 }),
                 ..Default::default()
             },
@@ -449,12 +466,14 @@ mod tests {
             batch_pipeline: BatchPipelineCondition {
                 max_block_lag: None,
                 max_time_lag: Some(Duration::from_secs(300)),
+                max_batch_lag: None,
             },
             component_overrides: ComponentOverrides {
                 l1_sender_commit: Some(ComponentConditionOverride {
                     enabled: true,
                     max_block_lag: None,
                     max_time_lag: Some(Duration::from_secs(60)),
+                    max_batch_lag: None,
                 }),
                 ..Default::default()
             },
@@ -475,6 +494,7 @@ mod tests {
             batch_pipeline: BatchPipelineCondition {
                 max_block_lag: Some(200),
                 max_time_lag: None,
+                max_batch_lag: None,
             },
             ..Default::default()
         };
@@ -506,6 +526,7 @@ mod tests {
             batch_pipeline: BatchPipelineCondition {
                 max_block_lag: Some(200),
                 max_time_lag: None,
+                max_batch_lag: None,
             },
             ..Default::default()
         };

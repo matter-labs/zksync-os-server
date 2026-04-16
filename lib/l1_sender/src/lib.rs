@@ -125,7 +125,13 @@ pub async fn run_l1_sender<Input: SendToL1>(
         //
         // Intentionally using bare `recv_many` (not `recv_many_and_record`): record_processed is
         // called only after the L1 transactions are mined (see `record_processed` calls below).
-        // record_picked is called immediately after receive to track channel-dequeue time.
+        //
+        // NOTE: record_picked is intentionally NOT called here. L1Sender drains the input channel
+        // quickly (before waiting for L1 confirmation), so if we reported last_picked at dequeue
+        // time the adjacent-lag formula (upstream.last_processed − downstream.last_picked) would
+        // always be near zero even when L1 mining is stalled. By leaving last_picked = None the
+        // monitor falls back to using last_processed for the downstream side, which correctly
+        // captures the gap between what UpgradeGatekeeper sent and what L1Sender confirmed.
         let received = inbound
             .recv_many(&mut cmd_buffer, config.command_limit)
             .await;
@@ -134,21 +140,6 @@ pub async fn run_l1_sender<Input: SendToL1>(
         if received == 0 {
             tracing::info!("inbound channel closed");
             return Ok(());
-        }
-        // Record pick coordinates for the last (highest) command in the batch.
-        // Must be done before drain() below empties cmd_buffer.
-        if let Some(last_cmd) = cmd_buffer.last() {
-            let last_block = last_cmd.last_block_number();
-            let last_timestamp = match last_cmd {
-                L1SenderCommand::SendToL1(cmd) => cmd
-                    .as_ref()
-                    .last()
-                    .map(|e| e.batch.batch_info.last_block_timestamp),
-                L1SenderCommand::Passthrough(batch) => {
-                    Some(batch.batch.batch_info.last_block_timestamp)
-                }
-            };
-            health_reporter.record_picked(last_block, last_timestamp);
         }
         let mut commands = cmd_buffer
             .drain(..)
@@ -301,6 +292,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
                 .as_ref()
                 .last()
                 .map(|e| e.batch.batch_info.last_block_timestamp);
+            // Capture batch number before command.into() moves the command.
+            let last_batch = command.as_ref().last().map(|e| e.batch_number());
             for mut output_envelope in command.into() {
                 output_envelope.set_stage(Input::MINED_STAGE);
                 outbound
@@ -310,6 +303,9 @@ pub async fn run_l1_sender<Input: SendToL1>(
             }
             if let Some(lb) = last_block {
                 health_reporter.record_processed(lb, last_block_timestamp);
+            }
+            if let Some(bn) = last_batch {
+                health_reporter.record_batch_number(bn);
             }
         }
     }
@@ -346,14 +342,13 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
                             batch_number = batch.batch_number(),
                             "Not actually sending to L1, just passing through"
                         );
-                        // Capture before with_stage() moves batch.
-                        let last_block = batch.batch.last_block_number;
-                        let last_block_timestamp = batch.batch.batch_info.last_block_timestamp;
                         outbound
-                            .send((*batch).with_stage(Input::PASSTHROUGH_STAGE))
+                            .send_and_record(
+                                (*batch).with_stage(Input::PASSTHROUGH_STAGE),
+                                health_reporter,
+                            )
                             .ok()
                             .context("outbound channel closed")?;
-                        health_reporter.record_processed(last_block, Some(last_block_timestamp));
                     }
                 }
             }

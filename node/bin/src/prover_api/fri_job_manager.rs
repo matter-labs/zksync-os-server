@@ -116,18 +116,40 @@ impl FriJobManager {
         // Capture coordinates before moving into jobs
         let last_block = batch_envelope.batch.last_block_number;
         let timestamp = Some(batch_envelope.batch.batch_info.last_block_timestamp);
+        let batch_number = batch_envelope.batch_number();
 
+        tracing::info!(
+            batch_number,
+            "FriJobManager: queuing FRI job for batch {batch_number}, last_block={last_block}"
+        );
         self.jobs.add_job(batch_envelope).await;
+        tracing::debug!(
+            batch_number,
+            "FriJobManager: FRI job {batch_number} accepted into queue, last_block={last_block}"
+        );
 
         self.health_reporter.record_picked(last_block, timestamp);
+        self.health_reporter.record_batch_picked(batch_number);
         self.update_in_flight_health().await;
     }
 
     async fn update_in_flight_health(&self) {
         let range = self.jobs.in_flight_range().await;
         let (first, last) = match range {
-            Some((f, l)) => (Some(f), Some(l)),
-            None => (None, None),
+            Some((f, l)) => {
+                tracing::debug!(
+                    "FriJobManager: in-flight range updated: batches {}-{}, blocks {}-{}",
+                    f.batch_number,
+                    l.batch_number,
+                    f.last_block_number,
+                    l.last_block_number,
+                );
+                (Some(f), Some(l))
+            }
+            None => {
+                tracing::debug!("FriJobManager: in-flight range cleared (queue empty)");
+                (None, None)
+            }
         };
         self.health_reporter.record_in_flight_range(first, last);
     }
@@ -209,8 +231,7 @@ impl FriJobManager {
             // (another submit won), we still return success to keep the API idempotent.
             tracing::warn!(
                 batch_number,
-                prover_id,
-                "Job already removed (racing submit)"
+                "FriJobManager: batch {batch_number} job already removed (racing submit), prover={prover_id}"
             );
             return Ok(());
         };
@@ -227,6 +248,10 @@ impl FriJobManager {
             .with_stage(BatchExecutionStage::FriProvedReal);
 
         permit.send(envelope);
+        tracing::info!(
+            batch_number,
+            "FriJobManager: real FRI proof accepted for batch {batch_number}, last_block={last_block}, prover={prover_id}"
+        );
         self.health_reporter
             .record_processed(last_block, Some(last_block_timestamp));
         self.health_reporter.record_batch_number(batch_number);
@@ -264,7 +289,7 @@ impl FriJobManager {
                 let program_proof =
                     bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
                         .map_err(|err| {
-                            tracing::warn!(batch_number, ?err, "Failed to deserialize proof");
+                            tracing::warn!(batch_number, "FriJobManager: failed to deserialize proof for batch {batch_number}: {err:?}");
                             SubmitError::DeserializationFailed(err)
                         })?
                         .0;
@@ -289,9 +314,7 @@ impl FriJobManager {
         {
             tracing::warn!(
                 batch_number,
-                expected = ?expected_hash_u32s,
-                actual = ?proof_final_register_values,
-                "Proof verification failed",
+                "FriJobManager: proof verification failed for batch {batch_number}: expected={expected_hash_u32s:?}, actual={proof_final_register_values:?}"
             );
 
             // Persist the failed proof with some information about the batch for debugging
@@ -310,11 +333,13 @@ impl FriJobManager {
             if let Err(save_err) = self.proof_storage.save_failed_proof(&failed_proof).await {
                 tracing::error!(
                     batch_number,
-                    ?save_err,
-                    "Failed to persist failed proof for debugging",
+                    "FriJobManager: failed to persist failed proof for batch {batch_number}: {save_err:?}"
                 );
             } else {
-                tracing::info!(batch_number, prover_id, "Failed proof saved for debugging",);
+                tracing::info!(
+                    batch_number,
+                    "FriJobManager: failed proof saved for batch {batch_number}, prover={prover_id}"
+                );
             }
 
             return Err(SubmitError::FriProofVerificationError {
@@ -353,6 +378,10 @@ impl FriJobManager {
             .with_stage(BatchExecutionStage::FriProvedFake);
 
         permit.send(envelope);
+        tracing::info!(
+            batch_number,
+            "FriJobManager: fake FRI proof accepted for batch {batch_number}, last_block={last_block}, prover={prover_id}"
+        );
         self.health_reporter
             .record_processed(last_block, Some(last_block_timestamp));
         self.health_reporter.record_batch_number(batch_number);

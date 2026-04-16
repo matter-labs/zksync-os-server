@@ -7,6 +7,9 @@ pub struct AdjacentSnapshot {
     pub block_diff: u64,
     /// upstream_ts − downstream_ts as Duration; None when either timestamp is absent.
     pub time_diff: Option<Duration>,
+    /// upstream.batch_number − downstream.last_batch_picked (saturating).
+    /// None when either component has no batch tracking (block-pipeline components).
+    pub batch_diff: Option<u64>,
 }
 
 /// Compute adjacent block and time diffs for each downstream component.
@@ -33,6 +36,8 @@ pub fn compute_adjacent_snapshots(
     adjacency: &[(ComponentId, ComponentId)],
     processed: &HashMap<ComponentId, (u64, Option<u64>)>,
     picked: &HashMap<ComponentId, (u64, Option<u64>)>,
+    batch_processed: &HashMap<ComponentId, u64>,
+    batch_picked: &HashMap<ComponentId, u64>,
 ) -> HashMap<ComponentId, AdjacentSnapshot> {
     // Fan-in guard: HashMap::insert would silently overwrite earlier entries.
     {
@@ -57,11 +62,16 @@ pub fn compute_adjacent_snapshots(
                 (Some(u), Some(d)) => Some(Duration::from_secs(u.saturating_sub(d))),
                 _ => None,
             };
+            let batch_diff = batch_processed
+                .get(&up)
+                .zip(batch_picked.get(&down))
+                .map(|(&up_batch, &down_batch)| up_batch.saturating_sub(down_batch));
             Some((
                 down,
                 AdjacentSnapshot {
                     block_diff,
                     time_diff,
+                    batch_diff,
                 },
             ))
         })
@@ -82,7 +92,13 @@ mod tests {
         snapshots.insert(ComponentId::BlockExecutor, snap(100, None));
         snapshots.insert(ComponentId::BlockCanonizer, snap(90, None));
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
-        let result = compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
+        let result = compute_adjacent_snapshots(
+            &adjacency,
+            &snapshots,
+            &snapshots,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert_eq!(result[&ComponentId::BlockCanonizer].block_diff, 10);
         assert!(result[&ComponentId::BlockCanonizer].time_diff.is_none());
     }
@@ -93,7 +109,13 @@ mod tests {
         snapshots.insert(ComponentId::BlockExecutor, snap(100, Some(2000)));
         snapshots.insert(ComponentId::BlockCanonizer, snap(90, Some(1960)));
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
-        let result = compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
+        let result = compute_adjacent_snapshots(
+            &adjacency,
+            &snapshots,
+            &snapshots,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert_eq!(
             result[&ComponentId::BlockCanonizer].time_diff,
             Some(Duration::from_secs(40))
@@ -106,7 +128,13 @@ mod tests {
         snapshots.insert(ComponentId::BlockExecutor, snap(100, None));
         snapshots.insert(ComponentId::BlockCanonizer, snap(90, Some(1960)));
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
-        let result = compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
+        let result = compute_adjacent_snapshots(
+            &adjacency,
+            &snapshots,
+            &snapshots,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(result[&ComponentId::BlockCanonizer].time_diff.is_none());
     }
 
@@ -116,7 +144,13 @@ mod tests {
         snapshots.insert(ComponentId::BlockExecutor, snap(100, Some(2000)));
         snapshots.insert(ComponentId::BlockCanonizer, snap(90, None));
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
-        let result = compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
+        let result = compute_adjacent_snapshots(
+            &adjacency,
+            &snapshots,
+            &snapshots,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(result[&ComponentId::BlockCanonizer].time_diff.is_none());
     }
 
@@ -126,7 +160,13 @@ mod tests {
         snapshots.insert(ComponentId::BlockExecutor, snap(90, None));
         snapshots.insert(ComponentId::BlockCanonizer, snap(100, None));
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
-        let result = compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
+        let result = compute_adjacent_snapshots(
+            &adjacency,
+            &snapshots,
+            &snapshots,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert_eq!(result[&ComponentId::BlockCanonizer].block_diff, 0);
     }
 
@@ -140,7 +180,13 @@ mod tests {
             (ComponentId::BlockExecutor, ComponentId::BlockCanonizer),
             (ComponentId::BlockCanonizer, ComponentId::BlockApplier),
         ];
-        let result = compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
+        let result = compute_adjacent_snapshots(
+            &adjacency,
+            &snapshots,
+            &snapshots,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         // Canonizer diff from Executor: 200-195=5 blocks, 2000-1950=50s
         assert_eq!(result[&ComponentId::BlockCanonizer].block_diff, 5);
         assert_eq!(
@@ -158,7 +204,13 @@ mod tests {
     #[test]
     fn empty_adjacency_returns_empty_map() {
         let snapshots: HashMap<ComponentId, (u64, Option<u64>)> = HashMap::new();
-        let result = compute_adjacent_snapshots(&[], &snapshots, &snapshots);
+        let result = compute_adjacent_snapshots(
+            &[],
+            &snapshots,
+            &snapshots,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(result.is_empty());
     }
 
@@ -174,7 +226,13 @@ mod tests {
             (ComponentId::BlockExecutor, ComponentId::BlockApplier),
             (ComponentId::BlockCanonizer, ComponentId::BlockApplier),
         ];
-        compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
+        compute_adjacent_snapshots(
+            &adjacency,
+            &snapshots,
+            &snapshots,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
     }
 
     #[test]
@@ -183,7 +241,13 @@ mod tests {
         snapshots.insert(ComponentId::BlockCanonizer, snap(90, None));
         // BlockExecutor absent from processed map — pair is silently skipped, no panic
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
-        let result = compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
+        let result = compute_adjacent_snapshots(
+            &adjacency,
+            &snapshots,
+            &snapshots,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(result.is_empty());
     }
 
@@ -197,7 +261,13 @@ mod tests {
         picked.insert(ComponentId::BlockCanonizer, (95u64, None));
 
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
-        let result = compute_adjacent_snapshots(&adjacency, &processed, &picked);
+        let result = compute_adjacent_snapshots(
+            &adjacency,
+            &processed,
+            &picked,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert_eq!(result[&ComponentId::BlockCanonizer].block_diff, 5);
     }
 }

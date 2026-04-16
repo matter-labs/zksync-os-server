@@ -6,8 +6,6 @@ use crate::model::debug_formatting::BlockOutputDebug;
 use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
 use futures::StreamExt;
-use std::pin::Pin;
-use tokio::time::Sleep;
 use vise::EncodeLabelValue;
 use zk_ee::memory::stack_trait::Stack;
 use zksync_os_interface::error::InvalidTransaction;
@@ -60,7 +58,9 @@ pub async fn execute_block_in_vm<V: ViewState>(
         SealPolicy::Decide(d, _) => Some(d),
         SealPolicy::UntilExhausted { .. } => None,
     };
-    let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx attempt
+    // Arm the deadline immediately so the block seals after block_time even when
+    // the transaction stream is empty or slow to produce its first item.
+    let mut deadline = deadline_dur.map(|dur| Box::pin(tokio::time::sleep(dur)));
     let mut interop_roots_count = 0;
     let expect_sl_chain_id_tx_after_upgrade = command.expect_sl_chain_id_tx_after_upgrade;
 
@@ -111,18 +111,6 @@ pub async fn execute_block_in_vm<V: ViewState>(
                 );
 
                 all_processed_txs.push(tx.clone());
-
-                // Arm the deadline on the first tx attempt (success or failure).
-                // This prevents indefinite hangs when all L2 txs fail validation
-                // (e.g. BaseFeeGreaterThanMaxFee) and no L1 txs arrive to break
-                // the deadlock. Without this, the block executor would wait forever
-                // because the deadline only armed on success, and the sender is
-                // marked invalid in the BestTransactions iterator after a failure.
-                // Note that this behavior may result in an empty block being mined,
-                // which is supported server behavour.
-                if deadline.is_none() && let Some(dur) = deadline_dur {
-                    deadline = Some(Box::pin(tokio::time::sleep(dur)));
-                }
 
                 match runner.execute_next_tx(tx.clone().encode())
                     .await

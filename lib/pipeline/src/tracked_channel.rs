@@ -30,8 +30,12 @@ impl<T: HasBlockRangeEnd> TrackedUnboundedSender<T> {
     ) -> Result<(), mpsc::error::SendError<T>> {
         let block_number = value.block_number();
         let block_timestamp = value.block_timestamp();
+        let batch_number = value.batch_number();
         self.inner.send(value)?;
         reporter.record_processed(block_number, block_timestamp);
+        if let Some(bn) = batch_number {
+            reporter.record_batch_number(bn);
+        }
         Ok(())
     }
 }
@@ -301,11 +305,19 @@ mod tests {
         assert_eq!(item.seq, 10);
         // Verify reporter updated (last_picked should be Some with block_number 10)
         assert_eq!(
-            health_rx.borrow().last_picked.as_ref().map(|c| c.block_number),
+            health_rx
+                .borrow()
+                .last_picked
+                .as_ref()
+                .map(|c| c.block_number),
             Some(10)
         );
         assert_eq!(
-            health_rx.borrow().last_picked.as_ref().and_then(|c| c.timestamp),
+            health_rx
+                .borrow()
+                .last_picked
+                .as_ref()
+                .and_then(|c| c.timestamp),
             Some(1000)
         );
     }
@@ -337,11 +349,19 @@ mod tests {
         );
         // Reporter updated immediately after send.
         assert_eq!(
-            health_rx.borrow().last_processed.as_ref().map(|c| c.block_number),
+            health_rx
+                .borrow()
+                .last_processed
+                .as_ref()
+                .map(|c| c.block_number),
             Some(7)
         );
         assert_eq!(
-            health_rx.borrow().last_processed.as_ref().and_then(|c| c.timestamp),
+            health_rx
+                .borrow()
+                .last_processed
+                .as_ref()
+                .and_then(|c| c.timestamp),
             Some(700)
         );
         // Item was actually delivered.
@@ -400,18 +420,28 @@ mod tests {
 
             let (reporter, health_rx) = ComponentHealthReporter::new("test");
             let mut buf = vec![];
-            let n = rx.recv_many_and_record_picked(&mut buf, 10, &reporter).await;
+            let n = rx
+                .recv_many_and_record_picked(&mut buf, 10, &reporter)
+                .await;
 
             assert_eq!(n, 3);
             assert_eq!(buf.len(), 3);
             // Only the LAST item (seq=3, ts=300) should be recorded — it has the
             // highest sequence number in the batch and is the progress high-watermark.
             assert_eq!(
-                health_rx.borrow().last_picked.as_ref().map(|c| c.block_number),
+                health_rx
+                    .borrow()
+                    .last_picked
+                    .as_ref()
+                    .map(|c| c.block_number),
                 Some(3)
             );
             assert_eq!(
-                health_rx.borrow().last_picked.as_ref().and_then(|c| c.timestamp),
+                health_rx
+                    .borrow()
+                    .last_picked
+                    .as_ref()
+                    .and_then(|c| c.timestamp),
                 Some(300)
             );
         }
@@ -424,15 +454,25 @@ mod tests {
 
             let (reporter, health_rx) = ComponentHealthReporter::new("test");
             let mut buf = vec![];
-            let n = rx.recv_many_and_record_picked(&mut buf, 10, &reporter).await;
+            let n = rx
+                .recv_many_and_record_picked(&mut buf, 10, &reporter)
+                .await;
 
             assert_eq!(n, 1);
             assert_eq!(
-                health_rx.borrow().last_picked.as_ref().map(|c| c.block_number),
+                health_rx
+                    .borrow()
+                    .last_picked
+                    .as_ref()
+                    .map(|c| c.block_number),
                 Some(42)
             );
             assert_eq!(
-                health_rx.borrow().last_picked.as_ref().and_then(|c| c.timestamp),
+                health_rx
+                    .borrow()
+                    .last_picked
+                    .as_ref()
+                    .and_then(|c| c.timestamp),
                 Some(9999)
             );
         }
@@ -446,7 +486,9 @@ mod tests {
 
             let (reporter, health_rx) = ComponentHealthReporter::new("test");
             let mut buf = vec![];
-            let n = rx.recv_many_and_record_picked(&mut buf, 10, &reporter).await;
+            let n = rx
+                .recv_many_and_record_picked(&mut buf, 10, &reporter)
+                .await;
 
             assert_eq!(n, 0);
             assert_eq!(buf.len(), 0);
@@ -473,7 +515,9 @@ mod tests {
             // overwrite it — but since we only record from new items, seq=21 is recorded.
             let mut buf: Vec<Msg> = vec![Msg { seq: 50, ts: 5000 }];
 
-            let n = rx.recv_many_and_record_picked(&mut buf, 10, &reporter).await;
+            let n = rx
+                .recv_many_and_record_picked(&mut buf, 10, &reporter)
+                .await;
 
             // 2 new items were received on top of the 1 pre-existing one.
             assert_eq!(n, 2);
@@ -481,11 +525,19 @@ mod tests {
             // The reporter should reflect seq=21 (the last NEW item), not seq=50 (the
             // stale pre-existing entry).
             assert_eq!(
-                health_rx.borrow().last_picked.as_ref().map(|c| c.block_number),
+                health_rx
+                    .borrow()
+                    .last_picked
+                    .as_ref()
+                    .map(|c| c.block_number),
                 Some(21)
             );
             assert_eq!(
-                health_rx.borrow().last_picked.as_ref().and_then(|c| c.timestamp),
+                health_rx
+                    .borrow()
+                    .last_picked
+                    .as_ref()
+                    .and_then(|c| c.timestamp),
                 Some(2100)
             );
         }

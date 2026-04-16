@@ -76,6 +76,10 @@ pub struct ComponentHealth {
     /// Only populated for batch-pipeline components (Batcher and downstream).
     /// High-watermark semantics.
     pub batch_number: Option<u64>,
+    /// Last batch number dequeued from the input channel by this component.
+    /// High-watermark semantics. Absent until first batch received.
+    /// Only populated for batch-pipeline components that receive batches from upstream.
+    pub last_batch_picked: Option<u64>,
 }
 
 /// Uses `watch::Sender` — updates are infallible, no background task, no global state.
@@ -97,6 +101,7 @@ impl ComponentHealthReporter {
             in_flight_first: None,
             in_flight_last: None,
             batch_number: None,
+            last_batch_picked: None,
         };
         let (sender, receiver) = watch::channel(initial);
         (Self { sender, component }, receiver)
@@ -161,6 +166,20 @@ impl ComponentHealthReporter {
         });
     }
 
+    /// Record when a batch was dequeued from the input channel (before any processing).
+    /// High-watermark semantics: stale out-of-order calls are ignored.
+    pub fn record_batch_picked(&self, batch_number: u64) {
+        self.sender.send_if_modified(|health| {
+            if let Some(current) = health.last_batch_picked
+                && batch_number < current
+            {
+                return false;
+            }
+            health.last_batch_picked = Some(batch_number);
+            true
+        });
+    }
+
     /// Record the last completed batch number for batch-pipeline components.
     /// High-watermark semantics: stale out-of-order calls are ignored.
     pub fn record_batch_number(&self, batch_number: u64) {
@@ -216,8 +235,14 @@ mod tests {
         let (reporter, rx) = ComponentHealthReporter::new("test");
         reporter.record_processed(100, Some(1_000));
         reporter.record_processed(80, Some(800)); // stale
-        assert_eq!(rx.borrow().last_processed.as_ref().unwrap().block_number, 100);
-        assert_eq!(rx.borrow().last_processed.as_ref().unwrap().timestamp, Some(1_000));
+        assert_eq!(
+            rx.borrow().last_processed.as_ref().unwrap().block_number,
+            100
+        );
+        assert_eq!(
+            rx.borrow().last_processed.as_ref().unwrap().timestamp,
+            Some(1_000)
+        );
     }
 
     #[tokio::test]
@@ -225,7 +250,10 @@ mod tests {
         let (reporter, rx) = ComponentHealthReporter::new("test");
         reporter.record_processed(50, Some(500));
         reporter.record_processed(50, Some(501));
-        assert_eq!(rx.borrow().last_processed.as_ref().unwrap().timestamp, Some(501));
+        assert_eq!(
+            rx.borrow().last_processed.as_ref().unwrap().timestamp,
+            Some(501)
+        );
     }
 
     #[tokio::test]
@@ -252,8 +280,14 @@ mod tests {
         let (r2, rx2) = ComponentHealthReporter::new("c2");
         r1.record_processed(10, None);
         r2.record_processed(20, None);
-        assert_eq!(rx1.borrow().last_processed.as_ref().unwrap().block_number, 10);
-        assert_eq!(rx2.borrow().last_processed.as_ref().unwrap().block_number, 20);
+        assert_eq!(
+            rx1.borrow().last_processed.as_ref().unwrap().block_number,
+            10
+        );
+        assert_eq!(
+            rx2.borrow().last_processed.as_ref().unwrap().block_number,
+            20
+        );
     }
 
     // --- New tests ---

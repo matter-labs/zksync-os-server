@@ -135,7 +135,9 @@ impl PipelineHealthMonitor {
                     continue;
                 }
                 let cond = self.config.condition_for(id);
-                let has_threshold = cond.max_block_lag.is_some() || cond.max_time_lag.is_some();
+                let has_threshold = cond.max_block_lag.is_some()
+                    || cond.max_time_lag.is_some()
+                    || cond.max_batch_lag.is_some();
                 assert!(
                     !has_threshold || downstream_set.contains(&id),
                     "component {:?} has backpressure thresholds but no adjacency pair registered; \
@@ -151,6 +153,32 @@ impl PipelineHealthMonitor {
         // would hang indefinitely if the sender was already dropped or set to true.
         if *self.stop_receiver.borrow_and_update() {
             return;
+        }
+
+        // Log startup summary: registered components, adjacency pairs, and effective thresholds.
+        // This is the single most useful log for confirming correct wiring before a test run.
+        tracing::info!(
+            "PipelineHealthMonitor starting: {} components, {} adjacency pairs, metrics_interval={:?}",
+            self.components.len(),
+            self.adjacency.len(),
+            self.config.metrics_interval,
+        );
+        for (id, _) in &self.components {
+            let cond = self.config.condition_for(*id);
+            tracing::info!(
+                "PipelineHealthMonitor: component {} threshold — max_block_lag={:?}, max_time_lag={:?}, max_batch_lag={:?}",
+                id.as_str(),
+                cond.max_block_lag,
+                cond.max_time_lag,
+                cond.max_batch_lag,
+            );
+        }
+        for &(up, down) in &self.adjacency {
+            tracing::info!(
+                "PipelineHealthMonitor: adjacency pair {} → {}",
+                up.as_str(),
+                down.as_str(),
+            );
         }
 
         // Snapshot current state immediately so operators see accurate lag at monitor startup
@@ -191,7 +219,10 @@ impl PipelineHealthMonitor {
             Some((_, rx)) => {
                 let h = rx.borrow();
                 (
-                    h.last_processed.as_ref().map(|c| c.block_number).unwrap_or(0),
+                    h.last_processed
+                        .as_ref()
+                        .map(|c| c.block_number)
+                        .unwrap_or(0),
                     h.last_processed.as_ref().and_then(|c| c.timestamp),
                 )
             }
@@ -230,16 +261,56 @@ impl PipelineHealthMonitor {
         for (id, rx) in &self.components {
             let h = rx.borrow();
             let processed = (
-                h.last_processed.as_ref().map(|c| c.block_number).unwrap_or(0),
+                h.last_processed
+                    .as_ref()
+                    .map(|c| c.block_number)
+                    .unwrap_or(0),
                 h.last_processed.as_ref().and_then(|c| c.timestamp),
             );
-            let picked = (
-                h.last_picked.as_ref().map(|c| c.block_number).unwrap_or(0),
-                h.last_picked.as_ref().and_then(|c| c.timestamp),
-            );
+            // Fall back to last_processed when last_picked is not reported (e.g. L1Sender,
+            // which drains the channel before slow async work). This mirrors the fallback in
+            // pipeline.rs so both the health-monitor and the status endpoint agree.
+            let picked = h
+                .last_picked
+                .as_ref()
+                .or(h.last_processed.as_ref())
+                .map(|c| (c.block_number, c.timestamp))
+                .unwrap_or((0, None));
             processed_map.insert(*id, processed);
             picked_map.insert(*id, picked);
             snapshots.insert(*id, processed);
+        }
+
+        let mut batch_processed_map: std::collections::HashMap<ComponentId, u64> =
+            std::collections::HashMap::new();
+        let mut batch_picked_map: std::collections::HashMap<ComponentId, u64> =
+            std::collections::HashMap::new();
+        // Explicit last_batch_picked (no fallback) — used only for observational metrics
+        // so operators see which components actually call record_batch_picked().
+        let mut last_batch_picked_snapshot: std::collections::HashMap<ComponentId, u64> =
+            std::collections::HashMap::new();
+        // In-flight snapshot: (oldest_batch, newest_batch). Only populated for
+        // FriJobManager and SnarkJobManager which call record_in_flight_range().
+        let mut in_flight_snapshot: std::collections::HashMap<ComponentId, (u64, u64)> =
+            std::collections::HashMap::new();
+
+        for (id, rx) in &self.components {
+            let h = rx.borrow();
+            if let Some(batch_num) = h.batch_number {
+                batch_processed_map.insert(*id, batch_num);
+            }
+            // Fall back to batch_number when last_batch_picked is not set (e.g. L1Sender,
+            // which drains the channel before slow async work). Mirrors the block-level fallback.
+            let batch_picked = h.last_batch_picked.or(h.batch_number);
+            if let Some(bp) = batch_picked {
+                batch_picked_map.insert(*id, bp);
+            }
+            if let Some(bp) = h.last_batch_picked {
+                last_batch_picked_snapshot.insert(*id, bp);
+            }
+            if let (Some(first), Some(last)) = (&h.in_flight_first, &h.in_flight_last) {
+                in_flight_snapshot.insert(*id, (first.batch_number, last.batch_number));
+            }
         }
 
         // Compute adjacent block and time diffs. Using adjacent diff (upstream.last_processed −
@@ -248,7 +319,39 @@ impl PipelineHealthMonitor {
         // independent backpressure sources. This formula gives pure channel occupancy.
         // Note: Prometheus `component_block_lag` and `component_time_lag_seconds` still use
         // head-relative values for operator observability.
-        let adjacent = compute_adjacent_snapshots(&self.adjacency, &processed_map, &picked_map);
+        let adjacent = compute_adjacent_snapshots(
+            &self.adjacency,
+            &processed_map,
+            &picked_map,
+            &batch_processed_map,
+            &batch_picked_map,
+        );
+
+        // Log per-component lag snapshot at debug level so operators can watch
+        // individual component lag values during testing without spamming info.
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            for (id, _) in &self.components {
+                let adj = adjacent.get(id);
+                let block_diff = adj.map(|s| s.block_diff).unwrap_or(0);
+                let time_diff_secs = adj
+                    .and_then(|s| s.time_diff)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                let batch_diff = adj.and_then(|s| s.batch_diff);
+                let cond = self.config.condition_for(*id);
+                let block_threshold = cond.max_block_lag;
+                let batch_threshold = cond.max_batch_lag;
+                tracing::debug!(
+                    "pipeline lag snapshot: component={} block_diff={} block_threshold={:?} time_diff_secs={:.1} batch_diff={:?} batch_threshold={:?}",
+                    id.as_str(),
+                    block_diff,
+                    block_threshold,
+                    time_diff_secs,
+                    batch_diff,
+                    batch_threshold,
+                );
+            }
+        }
 
         let mut active_component_ids: std::collections::HashSet<ComponentId> =
             std::collections::HashSet::new();
@@ -273,7 +376,8 @@ impl PipelineHealthMonitor {
                 // the startup assert to have adjacency.
                 let time_lag = adj.and_then(|s| s.time_diff);
 
-                let causes = self.evaluate(*id, block_lag, time_lag);
+                let batch_lag = adj.and_then(|s| s.batch_diff);
+                let causes = self.evaluate(*id, block_lag, time_lag, batch_lag);
                 if !causes.is_empty() {
                     active_component_ids.insert(*id);
                 }
@@ -303,8 +407,7 @@ impl PipelineHealthMonitor {
                     TransactionAcceptanceState::NotAccepting(reasons),
                 ) => {
                     tracing::warn!(
-                        ?reasons,
-                        "pipeline backpressure: suspending transaction acceptance"
+                        "pipeline backpressure: suspending transaction acceptance. Reasons: {reasons:?}"
                     );
                     MONITOR_METRICS.acceptance_state_changes.inc();
                     MONITOR_METRICS.accepting.set(0);
@@ -325,8 +428,7 @@ impl PipelineHealthMonitor {
                     TransactionAcceptanceState::NotAccepting(reasons),
                 ) => {
                     tracing::debug!(
-                        ?reasons,
-                        "pipeline backpressure cause set changed while already suspended"
+                        "pipeline backpressure cause set changed while already suspended. Reasons: {reasons:?}"
                     );
                 }
                 _ => {}
@@ -355,6 +457,40 @@ impl PipelineHealthMonitor {
             MONITOR_METRICS.component_block_diff_to_upstream[&id].set(snap.block_diff);
             let time_diff_secs = snap.time_diff.map(|d| d.as_secs_f64()).unwrap_or(0.0);
             MONITOR_METRICS.component_time_diff_to_upstream_seconds[&id].set(time_diff_secs);
+            if let Some(batch_diff) = snap.batch_diff {
+                MONITOR_METRICS.component_batch_diff_to_upstream[&id].set(batch_diff);
+            }
+        }
+
+        // Absolute batch position metrics — informational, captured from the same snapshot
+        // built above. Not used in backpressure decisions; divergence from acceptance state
+        // is acceptable here.
+        for (&id, &bn) in &batch_processed_map {
+            MONITOR_METRICS.component_last_processed_batch[&id].set(bn);
+        }
+        for (&id, &bp) in &last_batch_picked_snapshot {
+            MONITOR_METRICS.component_last_picked_batch[&id].set(bp);
+        }
+
+        // In-flight prover metrics — only FriJobManager and SnarkJobManager call
+        // record_in_flight_range(); emitting 0 for both when the queue is empty lets
+        // operators distinguish "idle" from "stale gauge".
+        for (id, _) in &self.components {
+            if !matches!(
+                id,
+                ComponentId::FriJobManager | ComponentId::SnarkJobManager
+            ) {
+                continue;
+            }
+            let (first, last, count) =
+                if let Some(&(first_bn, last_bn)) = in_flight_snapshot.get(id) {
+                    (first_bn, last_bn, last_bn.saturating_sub(first_bn) + 1)
+                } else {
+                    (0, 0, 0)
+                };
+            MONITOR_METRICS.in_flight_first_batch[id].set(first);
+            MONITOR_METRICS.in_flight_last_batch[id].set(last);
+            MONITOR_METRICS.in_flight_batch_count[id].set(count);
         }
     }
 
@@ -371,6 +507,7 @@ impl PipelineHealthMonitor {
         id: ComponentId,
         block_lag: u64,
         time_lag: Option<Duration>,
+        batch_lag: Option<u64>,
     ) -> Vec<BackpressureCause> {
         let condition = self.config.condition_for(id);
         let mut causes = Vec::new();
@@ -401,6 +538,18 @@ impl PipelineHealthMonitor {
                     },
                 });
             }
+        }
+
+        if let (Some(max_batch), Some(actual)) = (condition.max_batch_lag, batch_lag)
+            && actual > max_batch
+        {
+            causes.push(BackpressureCause {
+                component: id.as_str(),
+                trigger: BackpressureTrigger::BatchLagTooHigh {
+                    threshold: max_batch,
+                    actual,
+                },
+            });
         }
 
         causes
@@ -447,6 +596,7 @@ mod tests {
             batch_pipeline: crate::config::BatchPipelineCondition {
                 max_block_lag: Some(max_lag),
                 max_time_lag: None,
+                max_batch_lag: None,
             },
             ..PipelineHealthConfig::default()
         }
@@ -457,7 +607,7 @@ mod tests {
         let config = block_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head=100, applier=95, lag=5 < 10
-        let result = monitor.evaluate(ComponentId::BlockApplier, 5, None);
+        let result = monitor.evaluate(ComponentId::BlockApplier, 5, None, None);
         assert!(result.is_empty());
     }
 
@@ -466,7 +616,7 @@ mod tests {
         let config = block_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head=100, applier=85, lag=15 > 10
-        let result = monitor.evaluate(ComponentId::BlockApplier, 15, None);
+        let result = monitor.evaluate(ComponentId::BlockApplier, 15, None, None);
         assert!(matches!(
             result.into_iter().next().map(|c| c.trigger),
             Some(BackpressureTrigger::BlockLagTooHigh {
@@ -481,7 +631,7 @@ mod tests {
         let config = block_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // lag == threshold: should NOT trigger (strictly greater than)
-        let result = monitor.evaluate(ComponentId::BlockApplier, 10, None);
+        let result = monitor.evaluate(ComponentId::BlockApplier, 10, None, None);
         assert!(result.is_empty());
     }
 
@@ -490,7 +640,12 @@ mod tests {
         let config = block_config_with_time_lag(Duration::from_secs(30));
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // adjacent time lag = 40s > threshold 30s; block_lag irrelevant (no max_block_lag)
-        let result = monitor.evaluate(ComponentId::BlockApplier, 0, Some(Duration::from_secs(40)));
+        let result = monitor.evaluate(
+            ComponentId::BlockApplier,
+            0,
+            Some(Duration::from_secs(40)),
+            None,
+        );
         assert!(matches!(
             result.into_iter().next().map(|c| c.trigger),
             Some(BackpressureTrigger::TimeLagTooHigh { .. })
@@ -502,7 +657,7 @@ mod tests {
         let config = block_config_with_time_lag(Duration::from_secs(1));
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // time_lag = None (timestamps unavailable) → must not trigger
-        let result = monitor.evaluate(ComponentId::BlockApplier, 0, None);
+        let result = monitor.evaluate(ComponentId::BlockApplier, 0, None, None);
         assert!(result.is_empty());
     }
 
@@ -511,7 +666,7 @@ mod tests {
         let config = block_config_with_time_lag(Duration::from_secs(1));
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head timestamp = None → unavailable, must not trigger
-        let result = monitor.evaluate(ComponentId::BlockApplier, 0, None);
+        let result = monitor.evaluate(ComponentId::BlockApplier, 0, None, None);
         assert!(result.is_empty());
     }
 
@@ -523,6 +678,7 @@ mod tests {
             ComponentId::BlockApplier,
             10_000,
             Some(Duration::from_secs(999_999)),
+            None,
         );
         assert!(result.is_empty());
     }
@@ -591,7 +747,12 @@ mod tests {
         };
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // block_lag=15 (pre-computed), time_lag=40s — both should be returned
-        let causes = monitor.evaluate(ComponentId::BlockApplier, 15, Some(Duration::from_secs(40)));
+        let causes = monitor.evaluate(
+            ComponentId::BlockApplier,
+            15,
+            Some(Duration::from_secs(40)),
+            None,
+        );
         assert_eq!(causes.len(), 2);
     }
 
@@ -676,7 +837,13 @@ mod tests {
         snapshots.insert(ComponentId::BlockApplier, (90u64, None));
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockApplier)];
 
-        let result = compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
+        let result = compute_adjacent_snapshots(
+            &adjacency,
+            &snapshots,
+            &snapshots,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert_eq!(result[&ComponentId::BlockApplier].block_diff, 10);
     }
 
@@ -685,7 +852,7 @@ mod tests {
         let config = batch_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // head=100, batcher=85, lag=15 > threshold=10 → must trigger
-        let causes = monitor.evaluate(ComponentId::Batcher, 15, None);
+        let causes = monitor.evaluate(ComponentId::Batcher, 15, None, None);
         assert!(
             matches!(
                 causes.into_iter().next().map(|c| c.trigger),
@@ -702,7 +869,7 @@ mod tests {
     fn batch_block_lag_no_trigger_below_threshold() {
         let config = batch_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
-        let causes = monitor.evaluate(ComponentId::Batcher, 5, None);
+        let causes = monitor.evaluate(ComponentId::Batcher, 5, None, None);
         assert!(causes.is_empty());
     }
 
@@ -711,7 +878,7 @@ mod tests {
         let config = batch_config_with_block_lag(10);
         let monitor = PipelineHealthMonitor::make_test_monitor(config);
         // lag==threshold: strictly greater-than required — must NOT trigger
-        let causes = monitor.evaluate(ComponentId::Batcher, 10, None);
+        let causes = monitor.evaluate(ComponentId::Batcher, 10, None, None);
         assert!(causes.is_empty());
     }
 
@@ -886,7 +1053,13 @@ mod tests {
         snapshots.insert(ComponentId::BlockExecutor, (100u64, None));
         // BlockCanonizer intentionally absent from snapshots — pair is silently skipped.
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
-        let result = compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
+        let result = compute_adjacent_snapshots(
+            &adjacency,
+            &snapshots,
+            &snapshots,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(result.is_empty());
     }
 

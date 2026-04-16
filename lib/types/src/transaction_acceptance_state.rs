@@ -36,6 +36,8 @@ pub enum BackpressureTrigger {
         threshold: Duration,
         actual: Duration,
     },
+    /// The number of unprocessed batches exceeds the threshold
+    BatchLagTooHigh { threshold: u64, actual: u64 },
 }
 
 #[cfg(test)]

@@ -10,4 +10,11 @@ pub trait HasBlockRangeEnd: Send + 'static {
     fn block_timestamp(&self) -> Option<u64> {
         None
     }
+    /// Batch number of the last batch represented by this message, if applicable.
+    /// Returns `None` for block-level messages and batch-level messages that do not
+    /// carry a batch number (e.g. `ReplayRecord`). Used by `send_and_record` to
+    /// call `record_batch_number` automatically alongside `record_processed`.
+    fn batch_number(&self) -> Option<u64> {
+        None
+    }
 }

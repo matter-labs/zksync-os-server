@@ -66,18 +66,40 @@ impl SnarkJobManager {
         // Capture coordinates before moving into jobs
         let last_block = batch_envelope.batch.last_block_number;
         let timestamp = Some(batch_envelope.batch.batch_info.last_block_timestamp);
+        let batch_number = batch_envelope.batch_number();
 
+        tracing::info!(
+            batch_number,
+            "SnarkJobManager: queuing SNARK job for batch {batch_number}, last_block={last_block}"
+        );
         self.jobs.add_job(batch_envelope).await;
+        tracing::debug!(
+            batch_number,
+            "SnarkJobManager: SNARK job {batch_number} accepted into queue, last_block={last_block}"
+        );
 
         self.health_reporter.record_picked(last_block, timestamp);
+        self.health_reporter.record_batch_picked(batch_number);
         self.update_in_flight_health().await;
     }
 
     async fn update_in_flight_health(&self) {
         let range = self.jobs.in_flight_range().await;
         let (first, last) = match range {
-            Some((f, l)) => (Some(f), Some(l)),
-            None => (None, None),
+            Some((f, l)) => {
+                tracing::debug!(
+                    "SnarkJobManager: in-flight range updated: batches {}-{}, blocks {}-{}",
+                    f.batch_number,
+                    l.batch_number,
+                    f.last_block_number,
+                    l.last_block_number,
+                );
+                (Some(f), Some(l))
+            }
+            None => {
+                tracing::debug!("SnarkJobManager: in-flight range cleared (queue empty)");
+                (None, None)
+            }
         };
         self.health_reporter.record_in_flight_range(first, last);
     }
@@ -98,7 +120,7 @@ impl SnarkJobManager {
             .await;
 
         if batches_with_real_proofs.is_empty() {
-            tracing::trace!(prover_id, "no SNARK prove jobs are available for pick up",);
+            tracing::trace!("no SNARK prove jobs are available for pick up, prover={prover_id}");
             return Ok(None);
         }
 
@@ -229,6 +251,11 @@ impl SnarkJobManager {
         let seq = last.batch.last_block_number;
         let last_block_timestamp = last.batch.batch_info.last_block_timestamp;
         let batch_number = last.batch_number();
+        let batch_count = proof_command.as_ref().len();
+        tracing::info!(
+            batch_number,
+            "SnarkJobManager: sending SNARK proof downstream for batch {batch_number}, batch_count={batch_count}, last_block={seq}"
+        );
         self.prove_batches_sender.send(proof_command).await?;
         self.health_reporter
             .record_processed(seq, Some(last_block_timestamp));

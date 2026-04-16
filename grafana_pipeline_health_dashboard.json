@@ -1348,6 +1348,308 @@
       ],
       "title": "L1 Sender Operator Balance",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 107 },
+      "id": 150,
+      "panels": [],
+      "title": "Batch Pipeline — Batch Numbers & Adjacent Lag",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Batches queued between each batch-pipeline component and its upstream neighbour (upstream.batch_number − downstream.last_batch_picked). A rising value means the downstream component is not keeping pace with the upstream batch producer — sustained growth above max_batch_lag triggers backpressure. Complementary to the block-level adjacent diff: this view operates at batch granularity and is not distorted by within-batch block oscillation.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 108 },
+      "id": 151,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "pipeline_component_batch_diff_to_upstream",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Adjacent Batch Diff to Upstream By Component",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Absolute batch number last fully completed by each batch-pipeline component. All lines should advance together; a line that stalls while others advance reveals the bottleneck stage in the settlement pipeline. The gap between adjacent lines equals the adjacent batch diff shown in the chart above.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 116 },
+      "id": 152,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "pipeline_component_last_processed_batch",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Last Processed Batch By Component",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Absolute batch number last dequeued from the input channel by each batch-pipeline component that reports record_batch_picked (FriJobManager, SnarkJobManager, GaplessCommitter, GaplessL1ProofSender). Compare with Last Processed Batch: the gap (picked > processed) shows how many batches are currently being worked on. A widening gap that never closes indicates a component is accepting work faster than it can complete it.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 116 },
+      "id": 153,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "pipeline_component_last_picked_batch",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Last Picked Batch By Component",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 125 },
+      "id": 160,
+      "panels": [],
+      "title": "Prover In-Flight",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "fri count" },
+            "properties": [
+              { "id": "custom.fillOpacity", "value": 0 },
+              { "id": "custom.lineWidth", "value": 2 },
+              { "id": "custom.lineStyle", "value": { "dash": [8, 4], "fill": "dash" } }
+            ]
+          }
+        ]
+      },
+      "description": "FRI prover in-flight batch range. The shaded area between 'oldest' and 'newest' represents batches currently assigned to FRI provers — i.e. work in progress that has not yet returned a proof. The dashed 'count' line shows how many batches are in-flight simultaneously. When count is 0 the FRI prover queue is idle. A steadily growing range without increasing count suggests long individual proof times.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 126 },
+      "id": 161,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_first_batch{component=\"fri_job_manager\"}",
+          "legendFormat": "fri oldest",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_last_batch{component=\"fri_job_manager\"}",
+          "legendFormat": "fri newest",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_batch_count{component=\"fri_job_manager\"}",
+          "legendFormat": "fri count",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "FRI Prover In-Flight Batch Range",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "snark count" },
+            "properties": [
+              { "id": "custom.fillOpacity", "value": 0 },
+              { "id": "custom.lineWidth", "value": 2 },
+              { "id": "custom.lineStyle", "value": { "dash": [8, 4], "fill": "dash" } }
+            ]
+          }
+        ]
+      },
+      "description": "SNARK prover in-flight batch range (same semantics as the FRI panel on the left). SNARK jobs run after FRI completes; in a healthy pipeline the SNARK in-flight window lags the FRI window by one batch or less. A large gap between FRI newest and SNARK newest means FRI results are piling up waiting for SNARK capacity.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 126 },
+      "id": 162,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_first_batch{component=\"snark_job_manager\"}",
+          "legendFormat": "snark oldest",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_last_batch{component=\"snark_job_manager\"}",
+          "legendFormat": "snark newest",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_batch_count{component=\"snark_job_manager\"}",
+          "legendFormat": "snark count",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "SNARK Prover In-Flight Batch Range",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Total number of batches tracked in the FRI and SNARK job maps (pending + assigned). Unlike in_flight_batch_count (which counts active assignments), this includes batches that are queued but not yet picked up by a prover. A growing value means the prover map is accumulating work faster than provers are completing it. prover_job_map_max_batch_number − prover_job_map_min_batch_number is the batch span — it can exceed batch_count when there are gaps in the range.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 135 },
+      "id": 163,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "prover_batch_count",
+          "legendFormat": "{{stage}} batch count",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "beztrbkshi96ob" },
+          "editorMode": "code",
+          "expr": "prover_prover_job_map_max_batch_number - prover_prover_job_map_min_batch_number",
+          "legendFormat": "{{stage}} batch span (max−min)",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Prover Job Map — Batch Count & Span",
+      "type": "timeseries"
     }
   ],
   "preload": false,
@@ -1360,5 +1662,5 @@
   "timezone": "browser",
   "title": "zksync-os-pipeline-health",
   "uid": "cepipelinehealth01",
-  "version": 1
+  "version": 2
 }

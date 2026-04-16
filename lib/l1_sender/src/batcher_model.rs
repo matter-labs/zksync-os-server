@@ -321,6 +321,9 @@ impl<E: Send + 'static, S: Send + 'static> HasBlockRangeEnd for BatchEnvelope<E,
     fn block_timestamp(&self) -> Option<u64> {
         Some(self.batch.batch_info.last_block_timestamp)
     }
+    fn batch_number(&self) -> Option<u64> {
+        Some(self.batch.batch_info.batch_number)
+    }
 }
 
 #[cfg(test)]

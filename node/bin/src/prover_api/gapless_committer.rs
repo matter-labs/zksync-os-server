@@ -51,13 +51,24 @@ impl PipelineComponent for GaplessCommitter {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
+            let arrived_batch_number = batch.batch_number();
+            let arrived_last_block = batch.batch.last_block_number;
             self.health_reporter.record_picked(
-                batch.batch.last_block_number,
+                arrived_last_block,
                 Some(batch.batch.batch_info.last_block_timestamp),
             );
             self.health_reporter
+                .record_batch_picked(arrived_batch_number);
+            self.health_reporter
                 .enter_state(GenericComponentState::Active);
-            buffer.insert(batch.batch_number(), batch);
+            buffer.insert(arrived_batch_number, batch);
+
+            if arrived_batch_number != next_expected_batch_number {
+                let buffer_size = buffer.len();
+                tracing::debug!(
+                    "GaplessCommitter: out-of-order batch {arrived_batch_number} buffered (last_block={arrived_last_block}), waiting for batch {next_expected_batch_number}, buffer_size={buffer_size}"
+                );
+            }
 
             // Flush ready batches in order.
             let mut ready: Vec<SignedBatchEnvelope<FriProof>> = Vec::new();
@@ -68,11 +79,11 @@ impl PipelineComponent for GaplessCommitter {
 
             if !ready.is_empty() {
                 tracing::info!(
-                    buffer_size = buffer.len(),
-                    "Saving {} (batches {}-{}) to proof_storage",
+                    "GaplessCommitter: saving {} batches {}-{} to proof_storage, buffer_size={}",
                     ready.len(),
                     ready[0].batch_number(),
-                    ready.last().unwrap().batch_number()
+                    ready.last().unwrap().batch_number(),
+                    buffer.len(),
                 );
                 for batch in ready {
                     let batch = batch.with_stage(BatchExecutionStage::FriProofStored);

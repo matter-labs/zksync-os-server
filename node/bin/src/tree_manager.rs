@@ -92,10 +92,8 @@ impl PipelineComponent for TreeManager {
                 .latest_version()?
                 .expect("uninitialized tree after applying a block");
             assert_eq!(last_processed_block, block_number);
-            self.health_reporter.record_processed(
-                block_number,
-                Some(replay_record.block_context.timestamp),
-            );
+            self.health_reporter
+                .record_processed(block_number, Some(replay_record.block_context.timestamp));
 
             tracing::debug!(
                 block_number = block_number,

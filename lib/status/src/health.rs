@@ -71,6 +71,14 @@ pub(crate) async fn health(State(state): State<AppState>) -> (StatusCode, Json<H
                             threshold_blocks: Some(*threshold),
                             actual_blocks: Some(*actual),
                         },
+                        BackpressureTrigger::BatchLagTooHigh { threshold, actual } => CauseJson {
+                            component: Some(c.component),
+                            trigger: "batch_lag_too_high",
+                            threshold_secs: None,
+                            actual_secs: None,
+                            threshold_blocks: Some(*threshold),
+                            actual_blocks: Some(*actual),
+                        },
                     })
                     .collect(),
             })

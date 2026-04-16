@@ -26,6 +26,13 @@ impl<C: SendToL1> L1SenderCommand<C> {
         }
     }
 
+    pub fn last_batch_number(&self) -> u64 {
+        match self {
+            Self::SendToL1(cmd) => cmd.as_ref().last().unwrap().batch_number(),
+            Self::Passthrough(envelope) => envelope.batch_number(),
+        }
+    }
+
     pub fn batch_count(&self) -> usize {
         match self {
             Self::SendToL1(cmd) => cmd.as_ref().len(),
@@ -54,6 +61,9 @@ impl<C: SendToL1 + Send + 'static> HasBlockRangeEnd for L1SenderCommand<C> {
     }
     fn block_timestamp(&self) -> Option<u64> {
         self.last_block().block_timestamp()
+    }
+    fn batch_number(&self) -> Option<u64> {
+        Some(self.last_batch_number())
     }
 }
 

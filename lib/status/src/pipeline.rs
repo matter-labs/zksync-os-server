@@ -51,6 +51,8 @@ pub struct ComponentSnapshot {
     pub head_time_lag_secs: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adjacent_time_lag_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjacent_batch_lag: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -67,6 +69,8 @@ pub struct ThresholdsJson {
     pub max_block_lag: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_time_lag_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_batch_lag: Option<u64>,
 }
 
 pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResponse> {
@@ -77,7 +81,10 @@ pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResp
         .map(|(_, rx)| {
             let h = rx.borrow();
             (
-                h.last_processed.as_ref().map(|c| c.block_number).unwrap_or(0),
+                h.last_processed
+                    .as_ref()
+                    .map(|c| c.block_number)
+                    .unwrap_or(0),
                 h.last_processed.as_ref().and_then(|c| c.timestamp),
             )
         })
@@ -86,7 +93,13 @@ pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResp
     // Snapshot processed and picked coordinates for each component once.
     // processed_map: last block fully handled/forwarded (upstream side of the diff).
     // picked_map: last block dequeued from input channel (downstream side of the diff).
-    // Block diff = upstream.last_processed − downstream.last_picked (pure channel occupancy).
+    //   Falls back to last_processed when last_picked is None. This is intentional for
+    //   components like L1Sender that drain the channel quickly before slow async work
+    //   (waiting for L1 confirmation): leaving last_picked=None makes the adjacent lag
+    //   measure processing progress rather than channel occupancy, which is the correct
+    //   signal for backpressure detection in that case.
+    // Block diff = upstream.last_processed − downstream.picked (channel occupancy when
+    //   last_picked is set; processing lag when last_picked falls back to last_processed).
     let mut processed_map: std::collections::HashMap<ComponentId, (u64, Option<u64>)> =
         std::collections::HashMap::new();
     let mut picked_map: std::collections::HashMap<ComponentId, (u64, Option<u64>)> =
@@ -95,22 +108,50 @@ pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResp
     for (id, rx) in state.component_health.iter() {
         let h = rx.borrow();
         let processed = (
-            h.last_processed.as_ref().map(|c| c.block_number).unwrap_or(0),
+            h.last_processed
+                .as_ref()
+                .map(|c| c.block_number)
+                .unwrap_or(0),
             h.last_processed.as_ref().and_then(|c| c.timestamp),
         );
-        let picked = (
-            h.last_picked.as_ref().map(|c| c.block_number).unwrap_or(0),
-            h.last_picked.as_ref().and_then(|c| c.timestamp),
-        );
+        // Fall back to last_processed when last_picked is not reported.
+        let picked = h
+            .last_picked
+            .as_ref()
+            .or(h.last_processed.as_ref())
+            .map(|c| (c.block_number, c.timestamp))
+            .unwrap_or((0, None));
         processed_map.insert(*id, processed);
         picked_map.insert(*id, picked);
+    }
+
+    let mut batch_processed_map: std::collections::HashMap<ComponentId, u64> =
+        std::collections::HashMap::new();
+    let mut batch_picked_map: std::collections::HashMap<ComponentId, u64> =
+        std::collections::HashMap::new();
+
+    for (id, rx) in state.component_health.iter() {
+        let h = rx.borrow();
+        if let Some(batch_num) = h.batch_number {
+            batch_processed_map.insert(*id, batch_num);
+        }
+        let batch_picked = h.last_batch_picked.or(h.batch_number);
+        if let Some(bp) = batch_picked {
+            batch_picked_map.insert(*id, bp);
+        }
     }
 
     // adjacent_snapshot[downstream].block_diff = upstream.last_processed − downstream.last_picked
     // adjacent_snapshot[downstream].time_diff  = upstream_ts − downstream_ts (when both available)
     // Fan-in freedom is asserted by PipelineHealthMonitor::run() at startup; compute_adjacent_snapshots
     // will not panic here under correct wiring.
-    let adjacent = compute_adjacent_snapshots(&state.adjacency, &processed_map, &picked_map);
+    let adjacent = compute_adjacent_snapshots(
+        &state.adjacency,
+        &processed_map,
+        &picked_map,
+        &batch_processed_map,
+        &batch_picked_map,
+    );
 
     let now = tokio::time::Instant::now();
     let components = state
@@ -119,7 +160,11 @@ pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResp
         .map(|(id, rx)| {
             let h = rx.borrow();
             let elapsed = now.duration_since(h.state_entered_at).as_secs_f64();
-            let comp_processed_seq = h.last_processed.as_ref().map(|c| c.block_number).unwrap_or(0);
+            let comp_processed_seq = h
+                .last_processed
+                .as_ref()
+                .map(|c| c.block_number)
+                .unwrap_or(0);
             let comp_processed_ts = h.last_processed.as_ref().and_then(|c| c.timestamp);
             let head_block_lag = head_block.saturating_sub(comp_processed_seq);
             let head_time_lag_secs = match (comp_processed_ts, head_ts) {
@@ -154,10 +199,12 @@ pub(crate) async fn pipeline(State(state): State<AppState>) -> Json<PipelineResp
                         .get(id)
                         .and_then(|s| s.time_diff)
                         .map(|d| d.as_secs_f64()),
+                    adjacent_batch_lag: adjacent.get(id).and_then(|s| s.batch_diff),
                 },
                 thresholds: ThresholdsJson {
                     max_block_lag: cond.max_block_lag,
                     max_time_lag_secs: cond.max_time_lag.map(|d| d.as_secs_f64()),
+                    max_batch_lag: cond.max_batch_lag,
                 },
             }
         })
@@ -317,7 +364,10 @@ mod tests {
                 (ComponentId::BlockApplier, applier_rx),
             ]),
             pipeline_health_config: PipelineHealthConfig::default(),
-            adjacency: Arc::new(vec![(ComponentId::BlockExecutor, ComponentId::BlockApplier)]),
+            adjacency: Arc::new(vec![(
+                ComponentId::BlockExecutor,
+                ComponentId::BlockApplier,
+            )]),
         };
 
         let Json(body) = pipeline(State(state)).await;

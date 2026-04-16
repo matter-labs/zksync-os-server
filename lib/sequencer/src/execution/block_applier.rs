@@ -86,16 +86,15 @@ where
                 .await?;
 
             self.applied_block_number_sender.send_replace(block_number);
-            self.health_reporter.record_processed(
-                block_number,
-                Some(executed_replay.block_context.timestamp),
-            );
 
             if output
-                .send(AppliedBlock {
-                    output: block_output,
-                    record: executed_replay,
-                })
+                .send_and_record(
+                    AppliedBlock {
+                        output: block_output,
+                        record: executed_replay,
+                    },
+                    &self.health_reporter,
+                )
                 .is_err()
             {
                 tracing::info!("outbound channel closed");

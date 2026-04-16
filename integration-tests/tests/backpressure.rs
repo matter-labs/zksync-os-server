@@ -1,6 +1,7 @@
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
+use alloy::providers::ext::AnvilApi;
 use alloy::rpc::types::TransactionRequest;
 use std::time::Duration;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TesterBuilder, test_multisetup};
@@ -19,7 +20,7 @@ async fn health_endpoint_returns_pipeline_snapshot() {
         .expect("failed to start node");
 
     // Wait for a few blocks to be produced so the pipeline has data
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let health = node.get_health().await;
 
@@ -49,50 +50,49 @@ async fn health_endpoint_returns_pipeline_snapshot() {
     );
 }
 
-/// Verifies that the backpressure mechanism actually fires and clears under real operation.
+/// Verifies that the backpressure mechanism fires and clears when L1 block production is stalled.
 ///
 /// # Main-node only
 ///
 /// This test uses `CURRENT_TO_L1` which brings up the full main-node pipeline including the
-/// Batcher. The backpressure condition is tied to Batcher time lag, so this test would be
-/// meaningless in External Node mode.
+/// L1Sender components. Backpressure is tied to `l1_sender_commit` block lag, so this test
+/// would be meaningless in External Node mode.
 ///
 /// # How the trigger works
 ///
-/// The Batcher calls
-/// `record_processed(last_block_number, Some(last_block_timestamp))` once per batch.
-/// The monitor tracks:
+/// Anvil's automine is disabled after node startup. The `L1SenderCommit` submits its first
+/// commit transaction successfully (Anvil accepts it into the mempool) but no block is ever
+/// mined, so `get_receipt()` never resolves and `record_processed` is never called.
 ///
-///   `time_lag = BlockExecutor.last_timestamp - Batcher.last_timestamp`
+/// Meanwhile the Batcher keeps sealing batches (one per second, with the 1 s `batch_timeout`
+/// from the test chain config) and `UpgradeGatekeeper` records each one immediately via
+/// `send_and_record` at send time.  The adjacent block lag for `l1_sender_commit`:
 ///
-/// Block timestamps are stored as whole Unix seconds. The monitor computes lag as
-/// `Duration::from_secs(head_secs - component_secs)`, so the minimum observable
-/// non-zero lag is exactly 1 second. Any `max_time_lag` below 1 s (including 500 ms)
-/// triggers as soon as the head timestamp is 1 full second ahead of the Batcher's
-/// last sealed timestamp. The trigger fires during normal batch accumulation (~1 s
-/// batch_timeout) and clears immediately when the next batch seals.
+///   `lag = UpgradeGatekeeper.last_processed − L1SenderCommit.last_processed`
 ///
-/// # Thresholds chosen
+/// grows by roughly one batch worth of blocks (~4 blocks at `block_time=250ms`) each second
+/// until it crosses the `max_block_lag = 10` threshold.
 ///
-/// * `batch_pipeline.max_time_lag = 500ms`: any sub-1-second value suffices; we choose
-///   500 ms to make the intent clear. The trigger fires once head_ts > batcher_ts by
-///   ≥ 1 s (the first integer-second boundary), within the first ~1 s batch cycle.
-/// * Trigger poll timeout: 30 s.
-/// * Clear poll timeout: 180 s — generous headroom for CI resource contention; clearing
-///   happens as soon as the batcher seals the next batch (~1 s after trigger).
+/// Re-enabling Anvil automine causes it to mine all pending transactions.  `L1SenderCommit`
+/// receives its receipt, calls `record_processed`, and drains the queued batches.  The lag
+/// drops and backpressure clears.
 #[test_multisetup([CURRENT_TO_L1])]
-async fn backpressure_triggers_and_clears_under_batcher_lag(
+async fn backpressure_triggers_and_clears_under_l1_stall(
     builder: TesterBuilder,
 ) -> anyhow::Result<()> {
-    // Configure a tight time-lag threshold on the batch pipeline.
-    // Block timestamps are whole Unix seconds. The monitor computes
-    // `lag = Duration::from_secs(head_ts - batcher_ts)`, so the minimum non-zero lag is
-    // exactly 1 s. Any max_time_lag below 1 s (we use 500 ms) triggers as soon as the head
-    // timestamp advances 1 full second past the Batcher's last sealed timestamp (~1 batch cycle).
+    // Tight block-lag override on l1_sender_commit only.
+    // With batch_timeout=1s and block_time=250ms each batch carries ~4 blocks.
+    // UpgradeGatekeeper records at send time; L1SenderCommit records only after mining.
+    // The gap crosses 10 within ~3 s of Anvil being disabled.
     let health_config = PipelineHealthConfig {
-        batch_pipeline: BatchPipelineCondition {
-            max_block_lag: None,
-            max_time_lag: Some(Duration::from_millis(500)),
+        component_overrides: ComponentOverrides {
+            l1_sender_commit: Some(ComponentConditionOverride {
+                enabled: true,
+                max_block_lag: Some(10),
+                max_time_lag: None,
+                max_batch_lag: None,
+            }),
+            ..ComponentOverrides::default()
         },
         ..PipelineHealthConfig::default()
     };
@@ -103,42 +103,21 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
         .build()
         .await?;
 
-    let tx_load = {
-        let provider = node.l2_provider.clone();
-        tokio::spawn(async move {
-            let gas_price = provider
-                .get_gas_price()
-                .await
-                .expect("failed to fetch gas price for backpressure test load");
-            loop {
-                let tx = TransactionRequest::default()
-                    .to(Address::random())
-                    .value(U256::from(1u64))
-                    .with_gas_price(gas_price * 10);
-                let _ = provider.send_transaction(tx).await;
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        })
-    };
+    // Disable L1 block production. Anvil accepts transactions into the mempool but
+    // does not mine them until automine is re-enabled.
+    node.l1_provider()
+        .anvil_set_auto_mine(false)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to disable Anvil automine: {e}"))?;
 
-    // --- Phase 1: confirm the health endpoint is reachable and log initial state ---
-    //
-    // At startup every component has last_processed_block_number = 0, so the initial lag is 0 and
-    // accepting_transactions should be true. However, the node may have produced a handful
-    // of blocks during the startup/wait sequence, so we do not make a hard assertion here
-    // (the backpressure threshold may already have been reached by the time build() returns).
-    let initial_health = node.get_health().await;
-    tracing::info!(
-        "Initial health after node start:\n{}",
-        serde_json::to_string_pretty(&initial_health).unwrap()
-    );
+    tracing::info!("Anvil automine disabled — waiting for backpressure to fire");
 
-    // --- Phase 2: poll until backpressure fires (max 30 s) ---
+    // --- Phase 1: poll until backpressure fires (max 15 s) ---
     //
-    // The batcher seals a batch ~every 1 s. Once head_ts advances 1 full second past the
-    // Batcher's last sealed timestamp, time_lag (integer seconds) ≥ 1 s > 500 ms threshold,
-    // so the monitor sets accepting_transactions=false.
-    let trigger_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    // L1SenderCommit will be stuck waiting for a receipt; UpgradeGatekeeper keeps advancing.
+    // The adjacent lag for l1_sender_commit grows ~4 blocks/s and crosses 10 within ~3 s.
+    let trigger_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut diag_tick = tokio::time::Instant::now();
     let backpressure_health = loop {
         let health = node.get_health().await;
         let accepting = health["accepting_transactions"]
@@ -148,38 +127,53 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
             break health;
         }
         if tokio::time::Instant::now() >= trigger_deadline {
-            anyhow::bail!("backpressure did not trigger within 30 s; last health: {health}");
+            let pipeline = node.get_pipeline().await;
+            anyhow::bail!(
+                "backpressure did not trigger within 15 s after disabling Anvil; \
+                 last health: {health}; pipeline: {pipeline}"
+            );
+        }
+        // Print pipeline state every 3 seconds for diagnosis
+        if tokio::time::Instant::now() >= diag_tick {
+            let pipeline = node.get_pipeline().await;
+            let l1_commit = pipeline["components"]
+                .as_array()
+                .and_then(|cs| cs.iter().find(|c| c["name"] == "l1_sender_commit"));
+            let upgrade_gk = pipeline["components"]
+                .as_array()
+                .and_then(|cs| cs.iter().find(|c| c["name"] == "upgrade_gatekeeper"));
+            tracing::info!(
+                l1_sender_commit_adjacent_lag = ?l1_commit.and_then(|c| c["adjacent_block_lag"].as_u64()),
+                l1_sender_commit_last_processed = ?l1_commit.and_then(|c| c["last_processed_block"].as_u64()),
+                upgrade_gatekeeper_last_processed = ?upgrade_gk.and_then(|c| c["last_processed_block"].as_u64()),
+                "DIAG: pipeline state during backpressure wait"
+            );
+            diag_tick = tokio::time::Instant::now() + Duration::from_secs(3);
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
-    tx_load.abort();
 
-    // The response must carry at least one backpressure cause.
     let causes = backpressure_health
         .get("causes")
         .and_then(|v| v.as_array())
         .expect("'causes' must be a JSON array when not accepting");
     assert!(
         !causes.is_empty(),
-        "Expected at least one backpressure cause but got none; health: {backpressure_health}"
+        "Expected at least one backpressure cause; health: {backpressure_health}"
     );
-
-    // The Batcher calls record_processed(last_block_number, Some(last_block_timestamp))
-    // so the monitor can compute a real time lag and fire backpressure.
-    // Other batch-pipeline components may also appear in causes — find the batcher entry.
-    let batcher_cause = causes
+    let commit_cause = causes
         .iter()
-        .find(|c| c["component"].as_str() == Some("batcher"))
+        .find(|c| c["component"].as_str() == Some("l1_sender_commit"))
         .unwrap_or_else(|| {
             panic!(
-                "Expected a backpressure cause from 'batcher' but got: {causes:?}; \
+                "Expected a backpressure cause from 'l1_sender_commit'; got: {causes:?}; \
                  full health: {backpressure_health}"
             )
         });
     assert_eq!(
-        batcher_cause["trigger"].as_str(),
-        Some("time_lag_too_high"),
-        "Expected batcher backpressure trigger to be 'time_lag_too_high'; cause: {batcher_cause}"
+        commit_cause["trigger"].as_str(),
+        Some("block_lag_too_high"),
+        "Expected l1_sender_commit trigger to be 'block_lag_too_high'; cause: {commit_cause}"
     );
 
     tracing::info!(
@@ -187,9 +181,33 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
         serde_json::to_string_pretty(&backpressure_health).unwrap()
     );
 
-    // --- Phase 2b: verify HTTP 503 and RPC rejection while backpressure is active ---
+    // --- Phase 1b: FriJobManager in-flight assertion ---
     //
-    // The health endpoint must return 503 Service Unavailable when not accepting transactions.
+    // When the L1 is stalled and backpressure has fired, FriJobManager may have batches
+    // in-flight (proofs being computed). If so, its adjacent_block_lag must be 0: the
+    // channel upstream of FriJobManager is empty because it has already picked everything
+    // that was sent to it — the stall is downstream (L1SenderCommit), not in the proving
+    // channel. A non-zero adjacent lag here would indicate we are misattributing backpressure
+    // to FriJobManager instead of the actual bottleneck.
+    {
+        let pipeline = node.get_pipeline().await;
+        if let Some(fri) = pipeline["components"]
+            .as_array()
+            .and_then(|cs| cs.iter().find(|c| c["name"] == "fri_job_manager"))
+        {
+            if fri["in_flight_first"].is_object() {
+                let adjacent_lag = fri["adjacent_block_lag"].as_u64().unwrap_or(0);
+                assert_eq!(
+                    adjacent_lag, 0,
+                    "FriJobManager adjacent_block_lag should be 0 when batches are in-flight \
+                     (channel ahead is empty — bottleneck is downstream at L1SenderCommit); \
+                     pipeline: {pipeline}"
+                );
+            }
+        }
+    }
+
+    // --- Phase 1c: verify HTTP 503 and RPC rejection while backpressure is active ---
     let raw_response = reqwest::Client::new()
         .get(format!("{}/status/health", node.status_url()))
         .send()
@@ -201,8 +219,6 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
         "expected HTTP 503 while backpressure is active"
     );
 
-    // eth_sendRawTransaction must be rejected with a backpressure error.
-    // Build and sign a real transaction following the pattern in tests/rpc/api.rs.
     let fees = node.l2_provider.estimate_eip1559_fees().await?;
     let tx = TransactionRequest::default()
         .to(Address::random())
@@ -217,20 +233,24 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
         .send_raw_transaction(&encoded)
         .await
         .expect_err("transaction should be rejected while backpressure is active");
-    // NotAcceptingReason::PipelineBackpressure formats as:
-    // "Node is not currently accepting transactions: pipeline backpressure (N component(s) reporting)."
     assert!(
         err.to_string().contains("pipeline backpressure"),
         "unexpected rejection error: {err}"
     );
 
-    // --- Phase 3: wait for backpressure to clear naturally (max 180 s) ---
+    // --- Phase 2: re-enable Anvil and wait for backpressure to clear (max 30 s) ---
     //
-    // Once the next batch seals (~1 s after trigger), Batcher calls record_processed and the
-    // lag drops below the threshold. Clearing does not wait for the ProverInputGenerator to
-    // finish — it happens at batch seal time. The 180 s deadline is generous headroom for CI
-    // resource contention.
-    let clear_deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+    // Re-enabling automine causes Anvil to mine all pending transactions immediately.
+    // L1SenderCommit gets its receipt, records progress, and drains the queued batches.
+    // The lag drops below the threshold and backpressure clears.
+    node.l1_provider()
+        .anvil_set_auto_mine(true)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to re-enable Anvil automine: {e}"))?;
+
+    tracing::info!("Anvil automine re-enabled — waiting for backpressure to clear");
+
+    let clear_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let cleared_health = loop {
         let health = node.get_health().await;
         let accepting = health["accepting_transactions"]
@@ -240,9 +260,12 @@ async fn backpressure_triggers_and_clears_under_batcher_lag(
             break health;
         }
         if tokio::time::Instant::now() >= clear_deadline {
-            anyhow::bail!("backpressure did not clear within 180 s; last health: {health}");
+            anyhow::bail!(
+                "backpressure did not clear within 30 s after re-enabling Anvil; \
+                 last health: {health}"
+            );
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
     };
 
     assert!(
@@ -278,6 +301,7 @@ async fn pipeline_endpoint_reflects_configured_thresholds() {
         batch_pipeline: BatchPipelineCondition {
             max_block_lag: None,
             max_time_lag: Some(Duration::from_secs(300)),
+            max_batch_lag: None,
         },
         ..PipelineHealthConfig::default()
     };
@@ -346,12 +370,14 @@ async fn component_override_disables_backpressure_for_batcher(
         batch_pipeline: BatchPipelineCondition {
             max_block_lag: None,
             max_time_lag: Some(Duration::from_millis(500)),
+            max_batch_lag: None,
         },
         component_overrides: ComponentOverrides {
             batcher: Some(ComponentConditionOverride {
                 enabled: false,
                 max_block_lag: None,
                 max_time_lag: None,
+                max_batch_lag: None,
             }),
             ..ComponentOverrides::default()
         },
@@ -369,7 +395,7 @@ async fn component_override_disables_backpressure_for_batcher(
     // backpressure cannot fire regardless of the override — making the absence assertion
     // meaningless. Polling here ensures the batcher actually ran before we assert it did
     // not appear in causes.
-    let batcher_ran_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let batcher_ran_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let pipeline = node.get_pipeline().await;
         let batcher_block = pipeline["components"]
@@ -382,14 +408,14 @@ async fn component_override_disables_backpressure_for_batcher(
         }
         if tokio::time::Instant::now() >= batcher_ran_deadline {
             anyhow::bail!(
-                "batcher did not process any blocks within 30 s; pipeline is not running"
+                "batcher did not process any blocks within 15 s; pipeline is not running"
             );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
     // Wait a bit more so the batcher time-lag would normally exceed the 500ms threshold.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     let health = node.get_health().await;
 
@@ -422,6 +448,7 @@ async fn batch_block_lag_threshold_surfaced_by_pipeline_endpoint() {
         batch_pipeline: BatchPipelineCondition {
             max_block_lag: Some(500),
             max_time_lag: None,
+            max_batch_lag: None,
         },
         ..PipelineHealthConfig::default()
     };
