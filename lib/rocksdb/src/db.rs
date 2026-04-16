@@ -5,7 +5,7 @@ use std::{
     fmt, iter,
     marker::PhantomData,
     num::NonZeroU32,
-    ops,
+    ops::{Range, RangeFrom, RangeToInclusive},
     path::Path,
     sync::{
         Arc, Condvar, Mutex, Weak,
@@ -84,7 +84,7 @@ impl<CF: NamedColumnFamily> WriteBatch<'_, CF> {
         self.inner.delete_cf(cf, key);
     }
 
-    pub fn delete_range_cf(&mut self, cf: CF, keys: ops::Range<&[u8]>) {
+    pub fn delete_range_cf(&mut self, cf: CF, keys: Range<&[u8]>) {
         let cf = self.db.column_family(cf);
         self.inner.delete_range_cf(cf, keys.start, keys.end);
     }
@@ -657,7 +657,7 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
     pub fn from_iterator_cf(
         &self,
         cf: CF,
-        keys: ops::RangeFrom<&[u8]>,
+        keys: RangeFrom<&[u8]>,
     ) -> impl Iterator<Item = (Box<[u8]>, Box<[u8]>)> + '_ {
         let cf = self.column_family(cf);
         self.inner
@@ -675,12 +675,11 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
     pub fn range_iterator_cf<'a>(
         &'a self,
         cf: CF,
-        from: &'a [u8],
-        to: Vec<u8>,
+        range: Range<&'a [u8]>,
     ) -> impl Iterator<Item = (Box<[u8]>, Box<[u8]>)> + 'a {
         let cf_handle = self.column_family(cf);
         let mut options = ReadOptions::default();
-        options.set_iterate_upper_bound(to);
+        options.set_iterate_upper_bound(range.end.to_vec());
         // When the CF has a prefix extractor configured, this tells RocksDB to use
         // prefix bloom filters for the initial seek — checking each SST file only if
         // it contains keys with the same prefix as the seek key.
@@ -690,7 +689,7 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
             .iterator_cf_opt(
                 cf_handle,
                 options,
-                IteratorMode::From(from, Direction::Forward),
+                IteratorMode::From(range.start, Direction::Forward),
             )
             .map(Result::unwrap)
             .fuse()
@@ -702,7 +701,7 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
     pub fn to_iterator_cf(
         &self,
         cf: CF,
-        keys: ops::RangeToInclusive<&[u8]>,
+        keys: RangeToInclusive<&[u8]>,
     ) -> impl Iterator<Item = (Box<[u8]>, Box<[u8]>)> + '_ {
         let cf = self.column_family(cf);
         self.inner

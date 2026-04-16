@@ -241,7 +241,7 @@ fn read_range(
     to_key.extend_from_slice(&to_chunk_exclusive.to_be_bytes());
 
     let mut result = RoaringBitmap::new();
-    for (key, value) in db.range_iterator_cf(cf, &from_key, to_key) {
+    for (key, value) in db.range_iterator_cf(cf, from_key.as_slice()..to_key.as_slice()) {
         // Bitmaps store offsets relative to chunk_start; we need to recover the chunk base
         // from the key suffix to shift offsets back to absolute block numbers.
         let chunk_bytes: [u8; 8] = key[key_prefix.len()..]
