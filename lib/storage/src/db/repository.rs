@@ -6,9 +6,7 @@ use alloy::{
     primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce},
     rlp::{Decodable, Encodable},
 };
-use log_index::{
-    BitmapCache, chunk_start, deindex_logs, index_logs, rollback_coverage, update_coverage,
-};
+use log_index::{BitmapCache, deindex_logs, index_logs, rollback_coverage, update_coverage};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -157,8 +155,6 @@ impl RepositoryDb {
         let block_hash = block.hash();
         let block_number_bytes = block_number.to_be_bytes();
         let block_hash_bytes = block_hash.to_vec();
-        let chunk = chunk_start(block_number);
-        let block_offset = (block_number - chunk) as u32;
 
         let mut batch = db.new_write_batch();
         batch.put_cf(
@@ -173,7 +169,7 @@ impl RepositoryDb {
 
         let mut bitmap_cache = BitmapCache::default();
         for tx in txs {
-            Self::add_tx_to_write_batch(db, &mut batch, &mut bitmap_cache, tx, block_offset, chunk)
+            Self::add_tx_to_write_batch(db, &mut batch, &mut bitmap_cache, tx, block_number)
                 .expect("write batch failed");
         }
         bitmap_cache.flush(&mut batch);
@@ -201,8 +197,7 @@ impl RepositoryDb {
         batch: &mut WriteBatch<RepositoryCF>,
         bitmap_cache: &mut BitmapCache,
         tx: &StoredTxData,
-        block_offset: u32,
-        chunk: u64,
+        block_number: u64,
     ) -> RepositoryResult<()> {
         let tx_hash = tx.tx.hash();
         let mut tx_bytes = Vec::new();
@@ -228,7 +223,7 @@ impl RepositoryDb {
             tx_hash.as_slice(),
         );
 
-        index_logs(db, bitmap_cache, block_offset, chunk, tx.receipt.logs())?;
+        index_logs(db, bitmap_cache, block_number, tx.receipt.logs())?;
 
         Ok(())
     }
@@ -268,9 +263,6 @@ impl RepositoryDb {
                 batch.delete_cf(RepositoryCF::BlockNumberToHash, &block_number_bytes);
                 batch.delete_cf(RepositoryCF::BlockData, &old_repo_block.hash().0);
 
-                let chunk = chunk_start(block_number);
-                let block_offset = (block_number - chunk) as u32;
-
                 for tx_hash in &old_repo_block.body.transactions {
                     batch.delete_cf(RepositoryCF::Tx, &tx_hash.0);
                     batch.delete_cf(RepositoryCF::TxMeta, &tx_hash.0);
@@ -291,8 +283,7 @@ impl RepositoryDb {
                     deindex_logs(
                         &self.db,
                         &mut bitmap_cache,
-                        block_offset,
-                        chunk,
+                        block_number,
                         stored_tx.receipt.logs(),
                     )?;
                     batch.delete_cf(RepositoryCF::TxReceipt, &tx_hash.0);
