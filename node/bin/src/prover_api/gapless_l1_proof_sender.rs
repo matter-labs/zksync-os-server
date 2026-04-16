@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{
+    HasBlockRangeEnd, PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender,
+};
 
 /// Receives L1SenderCommands with ProofCommand - potentially out of order.
 /// Fixes the order and sends downstream.
@@ -42,6 +44,10 @@ impl PipelineComponent for GaplessL1ProofSender {
                 .enter_state(GenericComponentState::Idle);
             match input.recv().await {
                 Some(command) => {
+                    self.health_reporter.record_picked(
+                        command.last_block_number(),
+                        command.block_timestamp(),
+                    );
                     self.health_reporter
                         .enter_state(GenericComponentState::Active);
 
@@ -56,6 +62,8 @@ impl PipelineComponent for GaplessL1ProofSender {
                         {
                             anyhow::bail!("Outbound channel closed");
                         }
+                        self.health_reporter
+                            .record_batch_number(next_expected_batch_number - 1);
                         self.health_reporter
                             .enter_state(GenericComponentState::Active);
                     }

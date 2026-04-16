@@ -113,7 +113,23 @@ impl FriJobManager {
     /// Adds a pending job to the queue.
     /// Awaits if the queue is full (ProverJobMap.max_assigned_batch_range).
     pub async fn add_job(&self, batch_envelope: SignedBatchEnvelope<ProverInput>) {
-        self.jobs.add_job(batch_envelope).await
+        // Capture coordinates before moving into jobs
+        let last_block = batch_envelope.batch.last_block_number;
+        let timestamp = Some(batch_envelope.batch.batch_info.last_block_timestamp);
+
+        self.jobs.add_job(batch_envelope).await;
+
+        self.health_reporter.record_picked(last_block, timestamp);
+        self.update_in_flight_health().await;
+    }
+
+    async fn update_in_flight_health(&self) {
+        let range = self.jobs.in_flight_range().await;
+        let (first, last) = match range {
+            Some((f, l)) => (Some(f), Some(l)),
+            None => (None, None),
+        };
+        self.health_reporter.record_in_flight_range(first, last);
     }
 
     /// Peek batch data for a given batch number
@@ -213,6 +229,8 @@ impl FriJobManager {
         permit.send(envelope);
         self.health_reporter
             .record_processed(last_block, Some(last_block_timestamp));
+        self.health_reporter.record_batch_number(batch_number);
+        self.update_in_flight_health().await;
 
         Ok(())
     }
@@ -337,6 +355,8 @@ impl FriJobManager {
         permit.send(envelope);
         self.health_reporter
             .record_processed(last_block, Some(last_block_timestamp));
+        self.health_reporter.record_batch_number(batch_number);
+        self.update_in_flight_health().await;
         Ok(())
     }
 

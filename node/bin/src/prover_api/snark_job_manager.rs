@@ -63,7 +63,23 @@ impl SnarkJobManager {
     /// Adds a pending job to the queue.
     /// Awaits if queue is full (ProverJobMap.max_assigned_batch_range).
     pub async fn add_job(&self, batch_envelope: SignedBatchEnvelope<FriProof>) {
-        self.jobs.add_job(batch_envelope).await
+        // Capture coordinates before moving into jobs
+        let last_block = batch_envelope.batch.last_block_number;
+        let timestamp = Some(batch_envelope.batch.batch_info.last_block_timestamp);
+
+        self.jobs.add_job(batch_envelope).await;
+
+        self.health_reporter.record_picked(last_block, timestamp);
+        self.update_in_flight_health().await;
+    }
+
+    async fn update_in_flight_health(&self) {
+        let range = self.jobs.in_flight_range().await;
+        let (first, last) = match range {
+            Some((f, l)) => (Some(f), Some(l)),
+            None => (None, None),
+        };
+        self.health_reporter.record_in_flight_range(first, last);
     }
 
     // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `verification_key_hash`, `real_fri_proof`)
@@ -212,11 +228,14 @@ impl SnarkJobManager {
         let last = proof_command.as_ref().last().unwrap();
         let seq = last.batch.last_block_number;
         let last_block_timestamp = last.batch.batch_info.last_block_timestamp;
+        let batch_number = last.batch_number();
         self.prove_batches_sender.send(proof_command).await?;
         self.health_reporter
             .record_processed(seq, Some(last_block_timestamp));
+        self.health_reporter.record_batch_number(batch_number);
         self.health_reporter
             .enter_state(GenericComponentState::Active);
+        self.update_in_flight_health().await;
         Ok(())
     }
 }

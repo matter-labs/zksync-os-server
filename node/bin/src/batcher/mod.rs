@@ -196,12 +196,14 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             }
             let last_block_number = batch_envelope.batch.last_block_number;
             let last_block_timestamp = batch_envelope.batch.batch_info.last_block_timestamp;
+            let batch_number = batch_envelope.batch_number();
             if output.send(batch_envelope).is_err() {
                 tracing::info!("outbound channel closed");
                 return Ok(());
             }
             self.health_reporter
                 .record_processed(last_block_number, Some(last_block_timestamp));
+            self.health_reporter.record_batch_number(batch_number);
         }
     }
 }
@@ -263,6 +265,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                             };
 
                             let block_number = replay_record.block_context.block_number;
+
+                            if blocks.is_empty() {
+                                self.health_reporter.record_picked(
+                                    block_number,
+                                    Some(replay_record.block_context.timestamp),
+                                );
+                            }
 
                             tracing::debug!(
                                 batch_number,
@@ -388,6 +397,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 block_number = replay_record.block_context.block_number,
                 "Adding block to recreated batch"
             );
+
+            if blocks.is_empty() {
+                self.health_reporter.record_picked(
+                    replay_record.block_context.block_number,
+                    Some(replay_record.block_context.timestamp),
+                );
+            }
 
             blocks.push((block_output, replay_record, tree_output, prover_input));
         }

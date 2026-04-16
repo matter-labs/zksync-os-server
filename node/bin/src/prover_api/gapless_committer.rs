@@ -44,13 +44,17 @@ impl PipelineComponent for GaplessCommitter {
         loop {
             self.health_reporter
                 .enter_state(GenericComponentState::Idle);
-            // Plain recv: do NOT record health on arrival. A batch sitting in the
-            // reorder buffer has not been committed; recording it here would report
-            // a position ahead of what has actually been processed.
+            // Plain recv: record_picked on arrival (tracks channel dequeue time), but
+            // do NOT call record_processed here. A batch sitting in the reorder buffer
+            // has not been committed; record_processed fires only after send_and_record.
             let Some(batch) = input.recv().await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
+            self.health_reporter.record_picked(
+                batch.batch.last_block_number,
+                Some(batch.batch.batch_info.last_block_timestamp),
+            );
             self.health_reporter
                 .enter_state(GenericComponentState::Active);
             buffer.insert(batch.batch_number(), batch);
@@ -76,8 +80,8 @@ impl PipelineComponent for GaplessCommitter {
                     self.proof_storage
                         .save_batch_with_proof(&stored_batch)
                         .await?;
-                    let result = if stored_batch.batch_number() <= self.last_committed_batch_number
-                    {
+                    let batch_num = stored_batch.batch_number();
+                    let result = if batch_num <= self.last_committed_batch_number {
                         L1SenderCommand::Passthrough(Box::new(stored_batch.batch_envelope()))
                     } else {
                         CommitCommand::try_new(
@@ -94,6 +98,7 @@ impl PipelineComponent for GaplessCommitter {
                     {
                         anyhow::bail!("Outbound channel closed");
                     }
+                    self.health_reporter.record_batch_number(batch_num);
                 }
             }
         }

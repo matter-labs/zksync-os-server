@@ -123,13 +123,33 @@ pub async fn run_l1_sender<Input: SendToL1>(
         // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
         // emptied in every iteration, its size never exceeds `self.command_limit`.
         //
-        // Intentionally using bare `recv_many` (not `recv_many_and_record`): health progress is
-        // reported only after the L1 transactions are mined (see `record_processed` calls below),
-        // not at receive time.  Recording at receive would overstate progress — the batch has been
-        // accepted from the channel but not yet committed on L1.
+        // Intentionally using bare `recv_many` (not `recv_many_and_record`): record_processed is
+        // called only after the L1 transactions are mined (see `record_processed` calls below).
+        // record_picked is called immediately after receive to track channel-dequeue time.
         let received = inbound
             .recv_many(&mut cmd_buffer, config.command_limit)
             .await;
+        // This method only returns `0` if the channel has been closed and there are no more items
+        // in the queue.
+        if received == 0 {
+            tracing::info!("inbound channel closed");
+            return Ok(());
+        }
+        // Record pick coordinates for the last (highest) command in the batch.
+        // Must be done before drain() below empties cmd_buffer.
+        if let Some(last_cmd) = cmd_buffer.last() {
+            let last_block = last_cmd.last_block_number();
+            let last_timestamp = match last_cmd {
+                L1SenderCommand::SendToL1(cmd) => cmd
+                    .as_ref()
+                    .last()
+                    .map(|e| e.batch.batch_info.last_block_timestamp),
+                L1SenderCommand::Passthrough(batch) => {
+                    Some(batch.batch.batch_info.last_block_timestamp)
+                }
+            };
+            health_reporter.record_picked(last_block, last_timestamp);
+        }
         let mut commands = cmd_buffer
             .drain(..)
             .map(|cmd| -> anyhow::Result<Input> {
@@ -143,12 +163,6 @@ pub async fn run_l1_sender<Input: SendToL1>(
                 }
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        // This method only returns `0` if the channel has been closed and there are no more items
-        // in the queue.
-        if received == 0 {
-            tracing::info!("inbound channel closed");
-            return Ok(());
-        }
         health_reporter.enter_state(L1SenderState::SendingToL1);
         let range = Input::display_range(&commands); // Only for logging
         tracing::info!(command_name, range, "sending L1 transactions");

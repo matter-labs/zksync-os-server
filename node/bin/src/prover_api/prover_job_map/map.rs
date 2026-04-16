@@ -243,6 +243,34 @@ impl<T: Clone> ProverJobMap<T> {
             .map(|entry| entry.batch_envelope.batch.clone())
     }
 
+    /// Returns the current in-flight range as (first, last) BatchTrackingCoordinates,
+    /// or None if the queue is empty.
+    /// First = oldest batch (lowest batch_number), Last = newest batch (highest batch_number).
+    pub async fn in_flight_range(
+        &self,
+    ) -> Option<(
+        zksync_os_observability::BatchTrackingCoordinates,
+        zksync_os_observability::BatchTrackingCoordinates,
+    )> {
+        let jobs = self.jobs.lock().await;
+        if jobs.is_empty() {
+            return None;
+        }
+        // BTreeMap is ordered by key (batch_number), so first/last give min/max.
+        let (_, first_entry) = jobs.iter().next().unwrap();
+        let (_, last_entry) = jobs.iter().next_back().unwrap();
+
+        let make_coord = |entry: &JobEntry<T>| {
+            zksync_os_observability::BatchTrackingCoordinates::new(
+                entry.batch_envelope.batch_number(),
+                entry.batch_envelope.batch.last_block_number,
+                Some(entry.batch_envelope.batch.batch_info.last_block_timestamp),
+            )
+        };
+
+        Some((make_coord(first_entry), make_coord(last_entry)))
+    }
+
     /// If a job is present for given batch_number, returns (vk, prover_input)
     pub async fn get_prover_input(&self, batch_number: u64) -> Option<(&'static str, T)> {
         let jobs = self.lock_with_tracking(JobMapMethod::GetProverInput).await;
