@@ -371,7 +371,7 @@ pub struct GeneralConfig {
     /// Poll interval used by the L1/Gateway alloy provider when waiting for transaction receipts.
     /// Alloy's default is 7 seconds for HTTP transports, using the same criteria here.
     #[config(default_t = 7 * TimeUnit::Seconds)]
-    pub l1_provider_poll_interval: Duration,
+    pub l1_rpc_poll_interval: Duration,
 
     /// Gateway's JSON RPC API.
     /// Must be present if the chain is currently settling to Gateway.
