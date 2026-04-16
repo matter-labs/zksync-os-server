@@ -6,7 +6,7 @@ use std::io::Cursor;
 use std::ops::Range;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::WriteBatch;
-use zksync_os_storage_api::{LogIndex, RepositoryError, RepositoryResult};
+use zksync_os_storage_api::{LogIndex, RepositoryResult};
 
 /// Chunk size for log index bitmaps. Equals 2^16 = 65536, which aligns with roaring32's
 /// internal container boundary: all block numbers within a chunk share the same high 16 bits,
@@ -41,9 +41,8 @@ fn serialize_bitmap(bitmap: &RoaringBitmap) -> Vec<u8> {
     buf
 }
 
-fn deserialize_bitmap(bytes: &[u8]) -> Result<RoaringBitmap, RepositoryError> {
-    RoaringBitmap::deserialize_from(Cursor::new(bytes))
-        .map_err(|e| RepositoryError::BitmapDeserialize(e.to_string()))
+fn deserialize_bitmap(bytes: &[u8]) -> RoaringBitmap {
+    RoaringBitmap::deserialize_from(Cursor::new(bytes)).expect("log index bitmap is corrupted")
 }
 
 /// In-memory cache of pending bitmap mutations for a single write batch.
@@ -92,7 +91,7 @@ fn with_chunk(
         bm
     } else {
         let bm = match db.get_cf(cf, key)? {
-            Some(bytes) => deserialize_bitmap(&bytes)?,
+            Some(bytes) => deserialize_bitmap(&bytes),
             None => RoaringBitmap::new(),
         };
         bitmaps.entry(key.to_vec()).or_insert(bm)
@@ -206,9 +205,9 @@ pub(super) fn deindex_logs<'a>(
 }
 
 fn read_u64_meta(db: &RocksDB<RepositoryCF>, key: &[u8]) -> RepositoryResult<Option<u64>> {
-    Ok(db
-        .get_cf(RepositoryCF::Meta, key)?
-        .map(|v: Vec<u8>| u64::from_be_bytes(v.as_slice().try_into().unwrap())))
+    Ok(db.get_cf(RepositoryCF::Meta, key)?.map(|v: Vec<u8>| {
+        u64::from_be_bytes(v.as_slice().try_into().expect("metadata must be 8 bytes"))
+    }))
 }
 
 /// Returns the index coverage as a half-open range, or `None` if the index is empty.
@@ -250,7 +249,7 @@ fn read_range(
             .try_into()
             .expect("chunk key suffix must be 8 bytes");
         let chunk_base = u64::from_be_bytes(chunk_bytes) as u32;
-        result |= deserialize_bitmap(&value)?
+        result |= deserialize_bitmap(&value)
             .into_iter()
             .map(|offset| chunk_base + offset)
             .collect::<RoaringBitmap>();
