@@ -44,15 +44,11 @@ where
     ) -> anyhow::Result<()> {
         loop {
             self.health_reporter.enter_state(BlockApplierState::Idle);
-            // `recv_and_record` marks this block as processed at receive time —
-            // before storage writes or repo population are complete.
-            // This is intentional: the pipeline health monitor uses this for
-            // backpressure signals, not durability guarantees.
             let Some(BlockPayload {
                 output: block_output,
                 record: executed_replay,
                 command_type: cmd_type,
-            }) = input.recv_and_record(&self.health_reporter).await
+            }) = input.recv_and_record_picked(&self.health_reporter).await
             else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
@@ -90,6 +86,10 @@ where
                 .await?;
 
             self.applied_block_number_sender.send_replace(block_number);
+            self.health_reporter.record_processed(
+                block_number,
+                Some(executed_replay.block_context.timestamp),
+            );
 
             if output
                 .send(AppliedBlock {

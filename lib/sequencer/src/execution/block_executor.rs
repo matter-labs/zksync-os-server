@@ -104,6 +104,10 @@ where
             let prepared_command = self.block_context_provider.prepare_command(cmd).await?;
 
             let block_number = prepared_command.block_context.block_number;
+            self.health_reporter.record_picked(
+                block_number,
+                Some(prepared_command.block_context.timestamp),
+            );
             tracing::info!(
                 block_number,
                 "Prepared context for block {block_number}. expected_block_output_hash: {:?}, starting_l1_priority_id: {}, timestamp: {}, execution_version: {}. Executing..",

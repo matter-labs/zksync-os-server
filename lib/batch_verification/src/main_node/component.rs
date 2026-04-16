@@ -101,7 +101,7 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
             "starting batch verification pipeline step"
         );
         if !self.config.server_enabled {
-            while let Some(batch) = input.recv_and_record(&self.health_reporter).await {
+            while let Some(batch) = input.recv_and_record_picked(&self.health_reporter).await {
                 output
                     .send(batch.with_signatures(BatchSignatureData::NotNeeded))
                     .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
@@ -176,7 +176,7 @@ impl BatchVerificationRunner {
                 .enter_state(GenericComponentState::Idle);
             // We process the batches one by one. Consider adding concurrency here when we need it.
             let Some(batch_envelope) = batch_for_signing_receiver
-                .recv_and_record(&self.health_reporter)
+                .recv_and_record_picked(&self.health_reporter)
                 .await
             else {
                 // Channel closed, exit the loop

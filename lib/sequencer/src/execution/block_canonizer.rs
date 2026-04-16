@@ -158,6 +158,10 @@ where
                         tracing::info!("inbound channel closed");
                         return Ok(());
                     };
+                    self.health_reporter.record_picked(
+                        replay_record.block_context.block_number,
+                        Some(replay_record.block_context.timestamp),
+                    );
                     match cmd_type {
                         BlockCommandType::Replay => {
                         tracing::info!(

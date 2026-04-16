@@ -191,8 +191,8 @@ impl PipelineHealthMonitor {
             Some((_, rx)) => {
                 let h = rx.borrow();
                 (
-                    h.last_processed_block_number.unwrap_or(0),
-                    h.last_processed_block_timestamp,
+                    h.last_processed.as_ref().map(|c| c.block_number).unwrap_or(0),
+                    h.last_processed.as_ref().and_then(|c| c.timestamp),
                 )
             }
             None => {
@@ -211,30 +211,44 @@ impl PipelineHealthMonitor {
     }
 
     pub(crate) fn evaluate_and_update_with_head(&self, head_seq: u64, head_ts: Option<u64>) {
-        // Snapshot seq and timestamp for all components once.
+        // Snapshot processed and picked coordinates for all components once.
         // This avoids repeated borrow() calls and provides the pure input for compute_adjacent_snapshots.
-        let snapshots: std::collections::HashMap<ComponentId, (u64, Option<u64>)> = self
-            .components
-            .iter()
-            .map(|(id, rx)| {
-                let h = rx.borrow();
-                (
-                    *id,
-                    (
-                        h.last_processed_block_number.unwrap_or(0),
-                        h.last_processed_block_timestamp,
-                    ),
-                )
-            })
-            .collect();
+        //
+        // processed_map: upstream.last_processed — the last block fully handled/forwarded.
+        // picked_map: downstream.last_picked — the last block dequeued from the input channel.
+        //
+        // Block diff = upstream.last_processed − downstream.last_picked (pure channel occupancy).
+        let mut processed_map: std::collections::HashMap<ComponentId, (u64, Option<u64>)> =
+            std::collections::HashMap::new();
+        let mut picked_map: std::collections::HashMap<ComponentId, (u64, Option<u64>)> =
+            std::collections::HashMap::new();
+        // snapshots holds last_processed values for backward-compatible Prometheus metrics
+        // (head-relative block lag and time lag).
+        let mut snapshots: std::collections::HashMap<ComponentId, (u64, Option<u64>)> =
+            std::collections::HashMap::new();
 
-        // Compute adjacent block and time diffs. Using adjacent diff (upstream − downstream)
-        // instead of head-relative lag prevents cascade false-positives: a mid-pipeline bottleneck
-        // should not cause all downstream components to appear as independent backpressure sources.
-        // Both block_diff and time_diff are now adjacent-aware.
+        for (id, rx) in &self.components {
+            let h = rx.borrow();
+            let processed = (
+                h.last_processed.as_ref().map(|c| c.block_number).unwrap_or(0),
+                h.last_processed.as_ref().and_then(|c| c.timestamp),
+            );
+            let picked = (
+                h.last_picked.as_ref().map(|c| c.block_number).unwrap_or(0),
+                h.last_picked.as_ref().and_then(|c| c.timestamp),
+            );
+            processed_map.insert(*id, processed);
+            picked_map.insert(*id, picked);
+            snapshots.insert(*id, processed);
+        }
+
+        // Compute adjacent block and time diffs. Using adjacent diff (upstream.last_processed −
+        // downstream.last_picked) instead of head-relative lag prevents cascade false-positives:
+        // a mid-pipeline bottleneck should not cause all downstream components to appear as
+        // independent backpressure sources. This formula gives pure channel occupancy.
         // Note: Prometheus `component_block_lag` and `component_time_lag_seconds` still use
         // head-relative values for operator observability.
-        let adjacent = compute_adjacent_snapshots(&self.adjacency, &snapshots);
+        let adjacent = compute_adjacent_snapshots(&self.adjacency, &processed_map, &picked_map);
 
         let mut active_component_ids: std::collections::HashSet<ComponentId> =
             std::collections::HashSet::new();
@@ -536,7 +550,9 @@ mod tests {
         monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::BlockApplier);
 
         // Transition 1: Accepting → NotAccepting
+        // block diff = exec.last_processed(100) − applier.last_picked(85) = 15 > 10 → triggers
         reporter.record_processed(85, None);
+        reporter.record_picked(85, None);
         monitor.evaluate_and_update_with_head(100, None);
         assert!(matches!(
             *monitor.acceptance_tx.borrow(),
@@ -544,7 +560,9 @@ mod tests {
         ));
 
         // Transition 2: Still NotAccepting (deeper lag)
+        // block diff = exec.last_processed(100) − applier.last_picked(80) = 20 > 10 → triggers
         reporter.record_processed(80, None);
+        reporter.record_picked(80, None);
         monitor.evaluate_and_update_with_head(100, None);
         assert!(matches!(
             *monitor.acceptance_tx.borrow(),
@@ -552,7 +570,9 @@ mod tests {
         ));
 
         // Transition 3: NotAccepting → Accepting
+        // block diff = exec.last_processed(100) − applier.last_picked(100) = 0 → clears
         reporter.record_processed(100, None);
+        reporter.record_picked(100, None);
         monitor.evaluate_and_update_with_head(100, None);
         assert_eq!(
             *monitor.acceptance_tx.borrow(),
@@ -596,8 +616,12 @@ mod tests {
         let (canon_reporter, canon_rx) = ComponentHealthReporter::new("block_canonizer");
         let (apply_reporter, apply_rx) = ComponentHealthReporter::new("block_applier");
         exec_reporter.record_processed(200, None);
+        // Canonizer: processed 195, picked 195 → diff from Executor = 200 − 195 = 5 (within threshold=10)
         canon_reporter.record_processed(195, None);
+        canon_reporter.record_picked(195, None);
+        // Applier: processed 193, picked 193 → diff from Canonizer = 195 − 193 = 2 (within threshold=10)
         apply_reporter.record_processed(193, None);
+        apply_reporter.record_picked(193, None);
 
         monitor.register(ComponentId::BlockExecutor, exec_rx);
         monitor.register(ComponentId::BlockCanonizer, canon_rx);
@@ -615,7 +639,7 @@ mod tests {
 
     #[test]
     fn adjacent_lag_triggers_when_exceeds_threshold() {
-        // BlockCanonizer=200, BlockApplier=185 → adjacent lag=15 > threshold=10 → triggers
+        // Canonizer.last_processed=200, Applier.last_picked=185 → diff=15 > threshold=10 → triggers
         let config = PipelineHealthConfig {
             block_pipeline: crate::config::BlockPipelineCondition {
                 max_block_lag: Some(10),
@@ -629,6 +653,7 @@ mod tests {
         let (apply_reporter, apply_rx) = ComponentHealthReporter::new("block_applier");
         canon_reporter.record_processed(200, None);
         apply_reporter.record_processed(185, None);
+        apply_reporter.record_picked(185, None);
 
         monitor.register(ComponentId::BlockCanonizer, canon_rx);
         monitor.register(ComponentId::BlockApplier, apply_rx);
@@ -651,7 +676,7 @@ mod tests {
         snapshots.insert(ComponentId::BlockApplier, (90u64, None));
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockApplier)];
 
-        let result = compute_adjacent_snapshots(&adjacency, &snapshots);
+        let result = compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
         assert_eq!(result[&ComponentId::BlockApplier].block_diff, 10);
     }
 
@@ -697,7 +722,9 @@ mod tests {
         let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
         let (reporter, rx) = ComponentHealthReporter::new("batcher");
         exec_reporter.record_processed(100, None);
+        // block diff = exec.last_processed(100) − batcher.last_picked(85) = 15 > 10 → triggers
         reporter.record_processed(85, None);
+        reporter.record_picked(85, None);
         monitor.register(ComponentId::BlockExecutor, exec_rx);
         monitor.register(ComponentId::Batcher, rx);
         monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::Batcher);
@@ -727,12 +754,14 @@ mod tests {
         monitor.register(ComponentId::FriJobManager, rx);
         monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::FriJobManager);
 
-        // Batch 2 finishes first (higher block number).
+        // Batch 2 finishes first (higher block number) — also picks up through block 200.
         reporter.record_processed(200, None);
+        reporter.record_picked(200, None);
         // Batch 1 finishes late (lower block number) — must be ignored by high-watermark.
         reporter.record_processed(100, None);
+        // record_picked(100) would be rejected by watermark guard (100 < 200) — no call needed.
 
-        // head=210, watermark=200, adjacent lag=10 < threshold=50 → must NOT trigger.
+        // head=210, watermark=200, block diff = exec.last_processed(210) − fri.last_picked(200) = 10 < 50
         monitor.evaluate_and_update_with_head(210, None);
         assert_eq!(
             *monitor.acceptance_tx.borrow(),
@@ -752,7 +781,9 @@ mod tests {
         monitor.register(ComponentId::FriJobManager, rx);
         monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::FriJobManager);
 
+        // block diff = exec.last_processed(100) − fri.last_picked(85) = 15 > 10 → triggers
         reporter.record_processed(85, None);
+        reporter.record_picked(85, None);
         monitor.evaluate_and_update_with_head(100, None);
         assert!(
             matches!(
@@ -762,8 +793,9 @@ mod tests {
             "FriJobManager lag=15 must trigger backpressure with threshold=10"
         );
 
-        // FriJobManager catches up — backpressure must clear.
+        // FriJobManager catches up — block diff = 100 − 100 = 0 → clears backpressure.
         reporter.record_processed(100, None);
+        reporter.record_picked(100, None);
         monitor.evaluate_and_update_with_head(100, None);
         assert_eq!(
             *monitor.acceptance_tx.borrow(),
@@ -777,7 +809,7 @@ mod tests {
         // Two concurrent FRI provers: A finishes batch at block 200 first,
         // B finishes batch at block 190 second. Head is 210, threshold 50.
         // With high-watermark: B's report (190 < 200) is discarded;
-        // stored block stays 200, lag=10 < 50 → must NOT trigger.
+        // stored block stays 200, block diff = 210 − 200 = 10 < 50 → must NOT trigger.
         let config = batch_config_with_block_lag(50);
         let mut monitor = PipelineHealthMonitor::make_test_monitor(config);
         let (exec_reporter, exec_rx) = ComponentHealthReporter::new("block_executor");
@@ -787,7 +819,10 @@ mod tests {
         monitor.register(ComponentId::FriJobManager, rx);
         monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::FriJobManager);
 
+        // Prover A finishes first at block 200.
         reporter.record_processed(200, None);
+        reporter.record_picked(200, None);
+        // Prover B's stale report (190 < 200) is discarded by high-watermark guard.
         reporter.record_processed(190, None); // stale — must be ignored
 
         monitor.evaluate_and_update_with_head(210, None);
@@ -851,7 +886,7 @@ mod tests {
         snapshots.insert(ComponentId::BlockExecutor, (100u64, None));
         // BlockCanonizer intentionally absent from snapshots — pair is silently skipped.
         let adjacency = vec![(ComponentId::BlockExecutor, ComponentId::BlockCanonizer)];
-        let result = compute_adjacent_snapshots(&adjacency, &snapshots);
+        let result = compute_adjacent_snapshots(&adjacency, &snapshots, &snapshots);
         assert!(result.is_empty());
     }
 
@@ -866,7 +901,7 @@ mod tests {
         }
 
         assert_eq!(
-            rx.borrow().last_processed_block_number,
+            rx.borrow().last_processed.as_ref().map(|c| c.block_number),
             Some(200),
             "high watermark must be the maximum of all reported block numbers"
         );
@@ -883,7 +918,9 @@ mod tests {
         monitor.register(ComponentId::FriJobManager, rx);
         monitor.register_adjacency(ComponentId::BlockExecutor, ComponentId::FriJobManager);
 
+        // block diff = exec.last_processed(100) − fri.last_picked(85) = 15 > 10 → triggers
         reporter.record_processed(85, None);
+        reporter.record_picked(85, None);
         monitor.evaluate_and_update_with_head(100, None);
 
         if let TransactionAcceptanceState::NotAccepting(reasons) = &*monitor.acceptance_tx.borrow()
@@ -909,8 +946,12 @@ mod tests {
 
     #[test]
     fn mid_pipeline_time_lag_does_not_cascade_to_downstream() {
-        // BlockExecutor ts=2000, BlockCanonizer ts=1950 (adjacent diff=50s > threshold=30s → triggers),
-        // BlockApplier ts=1940 (adjacent diff from Canonizer=10s ≤ threshold=30s → must NOT trigger).
+        // Formula: time_diff = upstream.last_processed_ts − downstream.last_picked_ts
+        //
+        // BlockExecutor processed ts=2000.
+        // BlockCanonizer picked ts=1950 → diff from Executor = 2000 − 1950 = 50s > threshold=30s → triggers.
+        // BlockApplier picked ts=1940 → diff from Canonizer.last_processed_ts(1950) = 10s ≤ 30s → no trigger.
+        //
         // Without adjacent fix, BlockApplier head-relative lag = 2000−1940 = 60s > 30s → false positive.
         // With adjacent fix, BlockApplier sees lag = 1950−1940 = 10s ≤ 30s → no trigger.
         let config = PipelineHealthConfig {
@@ -926,8 +967,12 @@ mod tests {
         let (canon_reporter, canon_rx) = ComponentHealthReporter::new("block_canonizer");
         let (apply_reporter, apply_rx) = ComponentHealthReporter::new("block_applier");
         exec_reporter.record_processed(200, Some(2000));
+        // Canonizer picked ts=1950 → upstream diff = 2000 − 1950 = 50s → triggers
         canon_reporter.record_processed(195, Some(1950));
+        canon_reporter.record_picked(195, Some(1950));
+        // Applier picked ts=1940 → adjacent diff from Canonizer.processed(1950) = 10s → no trigger
         apply_reporter.record_processed(193, Some(1940));
+        apply_reporter.record_picked(193, Some(1940));
 
         monitor.register(ComponentId::BlockExecutor, exec_rx);
         monitor.register(ComponentId::BlockCanonizer, canon_rx);
