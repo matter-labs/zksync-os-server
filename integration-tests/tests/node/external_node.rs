@@ -119,6 +119,7 @@ async fn batch_verification_with_2_ens(builder: TesterBuilder) -> anyhow::Result
 }
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_builder(|builder| builder.enable_p2p())]
 async fn transaction_replay(main_node: Tester) -> anyhow::Result<()> {
     let en1 = main_node.launch_external_node().await?;
 
@@ -155,6 +156,7 @@ async fn transaction_replay(main_node: Tester) -> anyhow::Result<()> {
 /// It is easy to write to a channel that the EN doesn't need
 /// which leads to the EN getting stuck when the channel is full.
 #[test_multisetup([CURRENT_TO_L1])]
+#[test_builder(|builder| builder.enable_p2p())]
 #[test_runtime(flavor = "multi_thread")]
 async fn does_not_get_stuck(main_node: Tester) -> anyhow::Result<()> {
     let en1 = main_node.launch_external_node().await?;
@@ -213,6 +215,7 @@ async fn check_contract_present(en: &Tester, contract_address: Address) -> anyho
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
+#[test_builder(|builder| builder.enable_p2p())]
 async fn forward_transactions(main_node: Tester) -> anyhow::Result<()> {
     let en = main_node.launch_external_node().await?;
     let alice = en.l2_wallet.default_signer().address();

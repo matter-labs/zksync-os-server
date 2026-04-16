@@ -141,13 +141,13 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                         .send(BlockCommand::Replay(Box::new(record)))
                         .is_err()
                     {
-                        tracing::warn!("Command output channel closed, stopping source");
+                        tracing::info!("Command output channel closed, stopping source");
                         break;
                     }
                 }
                 _ = produce_tick.tick(), if role == ConsensusRole::Leader => {
                     if output.send(BlockCommand::Produce(ProduceCommand)).is_err() {
-                        tracing::warn!("Command output channel closed, stopping source");
+                        tracing::info!("Command output channel closed, stopping source");
                         break;
                     }
                 }
@@ -185,7 +185,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                 reset_timestamp: rebuild_options.reset_timestamps,
             }));
             if output.send(command).is_err() {
-                tracing::warn!("Command output channel closed, stopping source");
+                tracing::info!("Command output channel closed, stopping source");
                 break;
             }
         }
@@ -222,7 +222,7 @@ impl PipelineComponent for ExternalNodeCommandSource {
             }
 
             if output.send(command).is_err() {
-                tracing::warn!("Command output channel closed, stopping source");
+                tracing::info!("Command output channel closed, stopping source");
                 break;
             }
         }

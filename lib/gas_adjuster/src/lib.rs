@@ -209,10 +209,7 @@ impl GasAdjuster {
                         anyhow::bail!("Failed to decode blobs from sidecar");
                     }
                 }
-                Err(TryRecvError::Empty) => break Ok(()),
-                Err(TryRecvError::Disconnected) => {
-                    anyhow::bail!("Blob sidecar receiver disconnected")
-                }
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break Ok(()),
             }
         }
     }

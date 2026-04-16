@@ -132,7 +132,7 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
     .collect();
 
     // Test that we can deposit L2 funds from a rich L1 account
-    let tester = Tester::setup().await?;
+    let tester = Tester::builder().enable_p2p().build().await?;
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
     // Publish the bytecodes for upgrade beforehand via L2 deploy
@@ -219,6 +219,7 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
     let gateway_tester = GatewayTester::builder()
         .protocol_version(NEXT_PROTOCOL_VERSION)
         .num_chains(1)
+        .enable_chain_p2p()
         .build()
         .await?;
     let tester = gateway_tester.into_primary_chain();
