@@ -255,6 +255,7 @@ impl Tester {
             l1,
             false,
             prover_input_generation_enabled(),
+            false,
             Some(config_overrides),
             chain_layout,
         )
