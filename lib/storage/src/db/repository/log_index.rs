@@ -256,6 +256,10 @@ fn read_range(
             .collect::<RoaringBitmap>();
     }
 
+    // Trim block numbers outside the requested range that leaked in from
+    // partially-overlapping boundary chunks. `remove_range` runs in
+    // O(containers removed) time rather than O(bits), so this is efficient
+    // even when the trimmed region is large.
     result.remove_range(..range.start as u32);
     result.remove_range(range.end as u32..);
     Ok(result)
