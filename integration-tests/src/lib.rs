@@ -394,6 +394,8 @@ impl Tester {
         let general_config = GeneralConfig {
             rocks_db_path: rocks_db_path.clone(),
             l1_rpc_url: l1.address.clone(),
+            l1_rpc_poll_interval: Duration::from_millis(100),
+            gateway_rpc_poll_interval: Duration::from_millis(100),
             ..default_config.general_config
         };
         let sequencer_config = SequencerConfig {
