@@ -196,7 +196,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     .await;
     let gateway_provider = match &config.general_config.gateway_rpc_url {
         Some(url) => {
-            Some(build_node_provider(url, config.general_config.l1_rpc_poll_interval).await)
+            Some(build_node_provider(url, config.general_config.gateway_rpc_poll_interval).await)
         }
         None => None,
     };
