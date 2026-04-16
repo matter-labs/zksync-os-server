@@ -374,19 +374,21 @@ async fn pipeline_endpoint_reflects_configured_thresholds() {
 /// Verifies that a component_override with enabled=false silences backpressure for that
 /// component, even when the group condition would trigger.
 ///
-/// The test uses the same tight batch_pipeline.max_time_lag=500ms that normally fires within
-/// ~1 s, but disables it specifically for the batcher. We wait long enough that the batcher
-/// lag would normally exceed the threshold, then assert the node remains accepting.
-///
-/// Note: other batch-pipeline components (e.g. batch_verification) are not disabled here.
-/// The test relies on those components not reporting a non-zero timestamp within the short
-/// wait window. The goal is to confirm that the batcher specifically does not appear in
-/// backpressure_causes when its override is set to enabled=false.
+/// The test uses a tight batch_pipeline.max_time_lag=500ms, disables the batcher specifically,
+/// and also disables all other batch-pipeline components so the test is deterministic: no
+/// other component can fire on the group threshold and interfere with the assertion.
 #[test_multisetup([CURRENT_TO_L1])]
 async fn component_override_disables_backpressure_for_batcher(
     builder: TesterBuilder,
 ) -> anyhow::Result<()> {
-    // Tight threshold on the batch pipeline, but batcher is explicitly silenced.
+    let disabled = || ComponentConditionOverride {
+        enabled: false,
+        max_block_lag: None,
+        max_time_lag: None,
+        max_batch_lag: None,
+    };
+    // Tight threshold on the batch pipeline, but batcher and all other batch components
+    // are explicitly silenced so only the batcher override behaviour is tested.
     let health_config = PipelineHealthConfig {
         batch_pipeline: BatchPipelineCondition {
             max_block_lag: None,
@@ -394,12 +396,15 @@ async fn component_override_disables_backpressure_for_batcher(
             max_batch_lag: None,
         },
         component_overrides: ComponentOverrides {
-            batcher: Some(ComponentConditionOverride {
-                enabled: false,
-                max_block_lag: None,
-                max_time_lag: None,
-                max_batch_lag: None,
-            }),
+            batcher: Some(disabled()),
+            batch_verification: Some(disabled()),
+            fri_job_manager: Some(disabled()),
+            gapless_committer: Some(disabled()),
+            upgrade_gatekeeper: Some(disabled()),
+            l1_sender_commit: Some(disabled()),
+            snark_job_manager: Some(disabled()),
+            gapless_l1_proof_sender: Some(disabled()),
+            l1_sender_prove: Some(disabled()),
             ..ComponentOverrides::default()
         },
         ..PipelineHealthConfig::default()

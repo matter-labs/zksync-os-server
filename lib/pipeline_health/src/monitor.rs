@@ -1,4 +1,4 @@
-use crate::adjacent::compute_adjacent_snapshots;
+use crate::adjacent::{PipelineMaps, compute_adjacent_snapshots};
 use crate::config::{ComponentId, PipelineHealthConfig};
 use crate::metrics::MONITOR_METRICS;
 use futures::stream::{StreamExt, select_all};
@@ -242,64 +242,18 @@ impl PipelineHealthMonitor {
     }
 
     pub(crate) fn evaluate_and_update_with_head(&self, head_seq: u64, head_ts: Option<u64>) {
-        // Snapshot processed and picked coordinates for all components once.
-        // This avoids repeated borrow() calls and provides the pure input for compute_adjacent_snapshots.
-        //
-        // processed_map: upstream.last_processed — the last block fully handled/forwarded.
-        // picked_map: downstream.last_picked — the last block dequeued from the input channel.
-        //
-        // Block diff = upstream.last_processed − downstream.last_picked (pure channel occupancy).
-        let mut processed_map: std::collections::HashMap<ComponentId, (u64, Option<u64>)> =
-            std::collections::HashMap::new();
-        let mut picked_map: std::collections::HashMap<ComponentId, (u64, Option<u64>)> =
-            std::collections::HashMap::new();
+        // Snapshot processed/picked coordinates via PipelineMaps (shared with pipeline.rs).
+        let maps = PipelineMaps::snapshot(&self.components);
 
-        for (id, rx) in &self.components {
-            let h = rx.borrow();
-            let processed = (
-                h.last_processed
-                    .as_ref()
-                    .map(|c| c.block_number)
-                    .unwrap_or(0),
-                h.last_processed.as_ref().and_then(|c| c.timestamp),
-            );
-            // Fall back to last_processed when last_picked is not reported (e.g. L1Sender,
-            // which drains the channel before slow async work). This mirrors the fallback in
-            // pipeline.rs so both the health-monitor and the status endpoint agree.
-            let picked = h
-                .last_picked
-                .as_ref()
-                .or(h.last_processed.as_ref())
-                .map(|c| (c.block_number, c.timestamp))
-                .unwrap_or((0, None));
-            processed_map.insert(*id, processed);
-            picked_map.insert(*id, picked);
-        }
-
-        let mut batch_processed_map: std::collections::HashMap<ComponentId, u64> =
-            std::collections::HashMap::new();
-        let mut batch_picked_map: std::collections::HashMap<ComponentId, u64> =
-            std::collections::HashMap::new();
-        // Explicit last_batch_picked (no fallback) — used only for observational metrics
-        // so operators see which components actually call record_batch_picked().
+        // Monitor-specific snapshots: explicit last_batch_picked (no fallback) for observational
+        // metrics, and in-flight ranges for FriJobManager/SnarkJobManager.
         let mut last_batch_picked_snapshot: std::collections::HashMap<ComponentId, u64> =
             std::collections::HashMap::new();
-        // In-flight snapshot: (oldest_batch, newest_batch). Only populated for
-        // FriJobManager and SnarkJobManager which call record_in_flight_range().
         let mut in_flight_snapshot: std::collections::HashMap<ComponentId, (u64, u64)> =
             std::collections::HashMap::new();
 
         for (id, rx) in &self.components {
             let h = rx.borrow();
-            if let Some(batch_num) = h.batch_number {
-                batch_processed_map.insert(*id, batch_num);
-            }
-            // Fall back to batch_number when last_batch_picked is not set (e.g. L1Sender,
-            // which drains the channel before slow async work). Mirrors the block-level fallback.
-            let batch_picked = h.last_batch_picked.or(h.batch_number);
-            if let Some(bp) = batch_picked {
-                batch_picked_map.insert(*id, bp);
-            }
             if let Some(bp) = h.last_batch_picked {
                 last_batch_picked_snapshot.insert(*id, bp);
             }
@@ -316,10 +270,10 @@ impl PipelineHealthMonitor {
         // head-relative values for operator observability.
         let adjacent = compute_adjacent_snapshots(
             &self.adjacency,
-            &processed_map,
-            &picked_map,
-            &batch_processed_map,
-            &batch_picked_map,
+            &maps.processed,
+            &maps.picked,
+            &maps.batch_processed,
+            &maps.batch_picked,
         );
 
         // Log per-component lag snapshot at debug level so operators can watch
@@ -435,7 +389,10 @@ impl PipelineHealthMonitor {
         // between the acceptance commit and this loop, causing metric values to contradict
         // the acceptance state that was just published.
         for (id, _rx) in &self.components {
-            let &(comp_seq, comp_ts) = processed_map.get(id).expect("id came from self.components");
+            let &(comp_seq, comp_ts) = maps
+                .processed
+                .get(id)
+                .expect("id came from self.components");
             MONITOR_METRICS.backpressure_active[id].set(active_component_ids.contains(id) as u64);
             MONITOR_METRICS.component_last_processed_block[id].set(comp_seq);
             MONITOR_METRICS.component_block_lag[id].set(head_seq.saturating_sub(comp_seq));
@@ -458,7 +415,7 @@ impl PipelineHealthMonitor {
         // Absolute batch position metrics — informational, captured from the same snapshot
         // built above. Not used in backpressure decisions; divergence from acceptance state
         // is acceptable here.
-        for (&id, &bn) in &batch_processed_map {
+        for (&id, &bn) in &maps.batch_processed {
             MONITOR_METRICS.component_last_processed_batch[&id].set(bn);
         }
         for (&id, &bp) in &last_batch_picked_snapshot {

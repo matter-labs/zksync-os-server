@@ -75,8 +75,7 @@ impl PipelineComponent for GaplessL1ProofSender {
                         {
                             anyhow::bail!("Outbound channel closed");
                         }
-                        self.health_reporter
-                            .record_batch_number(next_expected_batch_number - 1);
+                        self.health_reporter.record_batch_number(flushing_batch);
                         self.health_reporter
                             .enter_state(GenericComponentState::Active);
                     }

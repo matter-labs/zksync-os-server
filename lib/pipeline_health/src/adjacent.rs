@@ -1,6 +1,70 @@
 use crate::config::ComponentId;
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio::sync::watch;
+use zksync_os_observability::ComponentHealth;
+
+/// Pre-computed coordinate maps extracted from component health receivers.
+///
+/// Both the pipeline health monitor and the `/status/pipeline` HTTP handler need
+/// identical snapshot logic (processed/picked fallbacks, batch fallbacks). Extracting
+/// this into a shared struct ensures the two code paths cannot diverge.
+pub struct PipelineMaps {
+    pub processed: HashMap<ComponentId, (u64, Option<u64>)>,
+    pub picked: HashMap<ComponentId, (u64, Option<u64>)>,
+    pub batch_processed: HashMap<ComponentId, u64>,
+    pub batch_picked: HashMap<ComponentId, u64>,
+}
+
+impl PipelineMaps {
+    /// Snapshot the current coordinates from all registered component health receivers.
+    ///
+    /// Fallback policy (defined once, used everywhere):
+    /// - `picked` falls back to `last_processed` when `last_picked` is `None`.
+    ///   This is intentional for components like L1Sender that drain the channel before
+    ///   slow async work; adjacent lag measures processing progress, not channel occupancy.
+    /// - `batch_picked` falls back to `batch_number` when `last_batch_picked` is `None`.
+    pub fn snapshot(components: &[(ComponentId, watch::Receiver<ComponentHealth>)]) -> Self {
+        let mut processed = HashMap::new();
+        let mut picked = HashMap::new();
+        let mut batch_processed = HashMap::new();
+        let mut batch_picked = HashMap::new();
+
+        for (id, rx) in components {
+            let h = rx.borrow();
+            let proc = (
+                h.last_processed
+                    .as_ref()
+                    .map(|c| c.block_number)
+                    .unwrap_or(0),
+                h.last_processed.as_ref().and_then(|c| c.timestamp),
+            );
+            let pick = h
+                .last_picked
+                .as_ref()
+                .or(h.last_processed.as_ref())
+                .map(|c| (c.block_number, c.timestamp))
+                .unwrap_or((0, None));
+            processed.insert(*id, proc);
+            picked.insert(*id, pick);
+
+            if let Some(batch_num) = h.batch_number {
+                batch_processed.insert(*id, batch_num);
+            }
+            let bp = h.last_batch_picked.or(h.batch_number);
+            if let Some(bp) = bp {
+                batch_picked.insert(*id, bp);
+            }
+        }
+
+        Self {
+            processed,
+            picked,
+            batch_processed,
+            batch_picked,
+        }
+    }
+}
 
 pub struct AdjacentSnapshot {
     /// upstream_seq − downstream_seq (saturating)

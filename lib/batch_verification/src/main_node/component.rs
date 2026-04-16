@@ -103,7 +103,10 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
         if !self.config.server_enabled {
             while let Some(batch) = input.recv_and_record_picked(&self.health_reporter).await {
                 output
-                    .send(batch.with_signatures(BatchSignatureData::NotNeeded))
+                    .send_and_record(
+                        batch.with_signatures(BatchSignatureData::NotNeeded),
+                        &self.health_reporter,
+                    )
                     .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
             }
             return Ok(());
@@ -194,10 +197,11 @@ impl BatchVerificationRunner {
                     batch_envelope.batch_number()
                 );
                 signed_batch_sender
-                    .send(
+                    .send_and_record(
                         batch_envelope
                             .with_stage(BatchExecutionStage::BatchSigned)
                             .with_signatures(BatchSignatureData::AlreadyCommitted),
+                        &self.health_reporter,
                     )
                     .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
                 continue;
@@ -243,10 +247,11 @@ impl BatchVerificationRunner {
             metrics.total_latency.observe(start_time.elapsed());
 
             signed_batch_sender
-                .send(
+                .send_and_record(
                     batch_envelope
                         .with_signatures(BatchSignatureData::Signed { signatures })
                         .with_stage(BatchExecutionStage::BatchSigned),
+                    &self.health_reporter,
                 )
                 .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
         }

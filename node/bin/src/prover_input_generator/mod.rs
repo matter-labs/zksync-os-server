@@ -58,6 +58,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 "ProverInputGenerator is disabled — passing through blocks with ProverInput::Fake"
             );
             while let Some((block_output, replay_record, tree)) = input.recv().await {
+                self.health_reporter.record_picked(
+                    block_output.header.number,
+                    Some(replay_record.block_context.timestamp),
+                );
                 output
                     .send((block_output, replay_record, ProverInput::Fake, tree))
                     .ok()
@@ -74,6 +78,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             Some(item) => item,
             None => return Ok(()),
         };
+        health_reporter.record_picked(
+            first_item.0.header.number,
+            Some(first_item.1.block_context.timestamp),
+        );
         let result = self.spawn_computation(first_item).await?;
         let first_block_number = result.0.header.number;
         let first_block_ts = result.1.block_context.timestamp;
@@ -105,7 +113,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     if !input_done && pending.len() < self.maximum_in_flight_blocks =>
                 {
                     match maybe_item {
-                        Some(item) => pending.push_back(self.spawn_computation(item)),
+                        Some(item) => {
+                            health_reporter.record_picked(item.0.header.number, Some(item.1.block_context.timestamp));
+                            pending.push_back(self.spawn_computation(item));
+                        }
                         None => input_done = true,
                     }
                 }

@@ -44,21 +44,16 @@ impl PipelineComponent for GaplessCommitter {
         loop {
             self.health_reporter
                 .enter_state(GenericComponentState::Idle);
-            // Plain recv: record_picked on arrival (tracks channel dequeue time), but
-            // do NOT call record_processed here. A batch sitting in the reorder buffer
-            // has not been committed; record_processed fires only after send_and_record.
+            // record_picked is deferred to flush time (not called here on arrival)
+            // so the high-watermark tracks in-order commit progress rather than
+            // arbitrary arrival order. This preserves monotonic semantics in the
+            // presence of out-of-order arrivals.
             let Some(batch) = input.recv().await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
             let arrived_batch_number = batch.batch_number();
             let arrived_last_block = batch.batch.last_block_number;
-            self.health_reporter.record_picked(
-                arrived_last_block,
-                Some(batch.batch.batch_info.last_block_timestamp),
-            );
-            self.health_reporter
-                .record_batch_picked(arrived_batch_number);
             self.health_reporter
                 .enter_state(GenericComponentState::Active);
             buffer.insert(arrived_batch_number, batch);
@@ -86,6 +81,16 @@ impl PipelineComponent for GaplessCommitter {
                     buffer.len(),
                 );
                 for batch in ready {
+                    // Record picked at flush time (not at arrival) so the high-watermark
+                    // tracks in-order commit progress rather than arbitrary arrival order.
+                    // This preserves monotonic semantics: last_picked never regresses and
+                    // accurately reflects the batch that is about to be committed.
+                    self.health_reporter.record_picked(
+                        batch.batch.last_block_number,
+                        Some(batch.batch.batch_info.last_block_timestamp),
+                    );
+                    self.health_reporter
+                        .record_batch_picked(batch.batch_number());
                     let batch = batch.with_stage(BatchExecutionStage::FriProofStored);
                     let stored_batch = StoredBatch::V1(batch);
                     self.proof_storage

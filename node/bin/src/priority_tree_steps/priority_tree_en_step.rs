@@ -53,6 +53,9 @@ where
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "priority tree caching",
             |shutdown| async move {
+                // EN PriorityTree runs outside the monitored pipeline, so nobody reads
+                // this health receiver. The reporter is required by prepare_execute_commands
+                // but its updates are intentionally discarded.
                 let (health_reporter, _rx) = ComponentHealthReporter::new("priority_tree_en");
                 tokio::select! {
                     result = priority_tree_manager_for_caching.keep_caching(priority_txs_internal_receiver) => {
