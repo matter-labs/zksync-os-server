@@ -45,8 +45,8 @@ LIVE_UPDATE_POD=sequencer-c-0 \
 LIVE_UPDATE_L1_RPC_URL=https://sepolia.infura.io/v3/<key> \
 cargo nextest run -p zksync_os_integration_tests \
   --features live-update \
-  node::live_update \
-  --include-ignored
+  --run-ignored only \
+  node::live_update
 ```
 
 On the first run this downloads the DB snapshot, genesis.json, config.yaml, and old server
@@ -100,7 +100,9 @@ LIVE_UPDATE_NAMESPACE=testnet-alpha \
 LIVE_UPDATE_POD=sequencer-c-0 \
 LIVE_UPDATE_L1_RPC_URL=https://... \
 cargo nextest run -p zksync_os_integration_tests \
-  --features live-update node::live_update --include-ignored
+  --features live-update \
+  --run-ignored only \
+  node::live_update
 ```
 
 The DB snapshot, genesis, and config are still cached normally.

@@ -8,7 +8,9 @@
 //! LIVE_UPDATE_POD=sequencer-c-0 \
 //! LIVE_UPDATE_L1_RPC_URL=https://sepolia.infura.io/v3/<key> \
 //! cargo nextest run -p zksync_os_integration_tests \
-//!   --features live-update node::live_update --include-ignored
+//!   --features live-update \
+//!   --run-ignored only \
+//!   node::live_update
 //! ```
 //!
 //! All artifacts (DB snapshot, genesis.json, config.yaml, old binary) are cached at
@@ -104,9 +106,13 @@ async fn live_update() -> anyhow::Result<()> {
 
     // ── 6. Start forked Anvil L1 ─────────────────────────────────────────────
     tracing::info!("=== Step 6/6: Starting forked Anvil L1 ===");
-    let anvil = ForkedAnvilL1::start(&config.l1_rpc_url, &run_dir.log_path("anvil"))
-        .await
-        .context("failed to start forked Anvil")?;
+    let anvil = ForkedAnvilL1::start(
+        &config.l1_rpc_url,
+        artifacts.l1_fork_block,
+        &run_dir.log_path("anvil"),
+    )
+    .await
+    .context("failed to start forked Anvil")?;
 
     // ── Phase 1: old binary ──────────────────────────────────────────────────
     tracing::info!(
@@ -190,7 +196,7 @@ async fn live_update() -> anyhow::Result<()> {
 
 struct NewInProcessServer {
     runtime: Runtime,
-    task_manager_handle: JoinHandle<Result<(), PanickedTaskError>>,
+    task_manager_handle: Option<JoinHandle<Result<(), PanickedTaskError>>>,
     pub rpc_ws_url: String,
     _port: LockedPort,
 }
@@ -236,14 +242,17 @@ impl NewInProcessServer {
 
         // Override all runtime-specific settings — log each one for easy debugging.
         config.general_config.l1_rpc_url = anvil_url.to_string();
-        config.general_config.rocks_db_path = db_path.to_path_buf();
+        // The snapshot layout is <run_dir>/db/node1/{tree,repository,...} so
+        // rocks_db_path must point to the node1 subdirectory, not the DB root.
+        config.general_config.rocks_db_path = db_path.join("node1");
 
         // Replicate what production main() does: read internal_config.json from the DB
         // root and merge signer blacklist + optional failing-block rebuild config.
-        let internal_config = InternalConfigManager::new(db_path.join(INTERNAL_CONFIG_FILE_NAME))
-            .context("failed to create InternalConfigManager")?
-            .read_config()
-            .context("failed to read internal config")?;
+        let internal_config =
+            InternalConfigManager::new(db_path.join("node1").join(INTERNAL_CONFIG_FILE_NAME))
+                .context("failed to create InternalConfigManager")?
+                .read_config()
+                .context("failed to read internal config")?;
         tracing::info!(?internal_config, "Loaded internal config from DB snapshot");
         config
             .rpc_config
@@ -348,13 +357,13 @@ impl NewInProcessServer {
 
         Ok(Self {
             runtime,
-            task_manager_handle,
+            task_manager_handle: Some(task_manager_handle),
             rpc_ws_url,
             _port: locked_port,
         })
     }
 
-    async fn stop(self) -> anyhow::Result<()> {
+    async fn stop(mut self) -> anyhow::Result<()> {
         tracing::info!("Shutting down new server (timeout: {NODE_SHUTDOWN_TIMEOUT:?})...");
         let start = Instant::now();
         if !self
@@ -364,7 +373,11 @@ impl NewInProcessServer {
             anyhow::bail!("new server failed to shut down within {NODE_SHUTDOWN_TIMEOUT:?}");
         }
         // Surface any critical task crash that occurred during the test run.
-        match self.task_manager_handle.await {
+        let handle = self
+            .task_manager_handle
+            .take()
+            .expect("task_manager_handle already consumed");
+        match handle.await {
             Ok(Err(e)) => anyhow::bail!("new server critical task crashed: {e}"),
             Ok(Ok(())) => {}
             Err(e) => anyhow::bail!("task manager join failed: {e}"),
@@ -396,28 +409,29 @@ impl Drop for NewInProcessServer {
 async fn wait_for_new_l2_blocks(ws_url: &str, n: u64, max_wait: Duration) -> anyhow::Result<()> {
     tokio::time::timeout(max_wait, async {
         // Retry connecting until the server is reachable.
+        // No inner retry cap: the outer tokio::time::timeout(max_wait) is the sole bound.
+        // A fixed with_max_times (e.g. 50 × 500 ms = 25 s) could exhaust before max_wait
+        // and produce a misleading error when the server would have connected at second 30.
         let provider = (|| ProviderBuilder::new().connect(ws_url))
             .retry(
                 ConstantBuilder::default()
                     .with_delay(Duration::from_millis(500))
-                    .with_max_times(50),
+                    .with_max_times(usize::MAX),
             )
-            .notify(|err: &anyhow::Error, _| {
+            .notify(|err, _| {
                 tracing::debug!(%err, ws_url, "Retrying L2 provider connection...");
             })
             .await
             .with_context(|| format!("failed to connect to L2 at {ws_url}"))?;
 
         // Retry the baseline call until the RPC is fully initialised.
-        // `wait_for_tcp` succeeds as soon as the socket is bound, but the DB may
-        // still be warming up; retrying here prevents a false-negative error.
         let start_block = (|| async { provider.get_block_number().await })
             .retry(
                 ConstantBuilder::default()
                     .with_delay(Duration::from_millis(500))
-                    .with_max_times(50),
+                    .with_max_times(usize::MAX),
             )
-            .notify(|err: &anyhow::Error, _| {
+            .notify(|err, _| {
                 tracing::debug!(%err, "Retrying get_block_number (RPC not yet initialised)...");
             })
             .await
@@ -429,13 +443,17 @@ async fn wait_for_new_l2_blocks(ws_url: &str, n: u64, max_wait: Duration) -> any
         let poll_start = Instant::now();
         let mut last_progress_log = Instant::now();
         let progress_interval = Duration::from_secs(30);
+        let mut last_known_block = start_block;
 
         loop {
             let current = match provider.get_block_number().await {
-                Ok(b) => b,
+                Ok(b) => {
+                    last_known_block = b;
+                    b
+                }
                 Err(e) => {
                     tracing::debug!(err = %e, "get_block_number failed, will retry");
-                    start_block
+                    last_known_block
                 }
             };
 

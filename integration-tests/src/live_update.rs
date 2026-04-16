@@ -178,6 +178,9 @@ pub struct LiveUpdateArtifacts {
     pub old_bin: PathBuf,
     /// Container image tag at snapshot time.
     pub image_tag: String,
+    /// L1 block number recorded when the DB snapshot was taken.
+    /// Anvil must fork at this block so the L1 state matches the snapshot.
+    pub l1_fork_block: u64,
 }
 
 impl LiveUpdateArtifacts {
@@ -188,6 +191,7 @@ impl LiveUpdateArtifacts {
         let image_tag = get_pod_image_tag(kube, &config.namespace, &config.pod).await?;
 
         let tag_file = dir.join("image-tag");
+        let fork_block_file = dir.join("l1-fork-block");
         let cached_tag = fs::read_to_string(&tag_file).ok();
 
         let pristine_db = dir.join("db");
@@ -198,6 +202,7 @@ impl LiveUpdateArtifacts {
         let files_present = pristine_db.exists()
             && genesis_json.exists()
             && config_yaml.exists()
+            && fork_block_file.exists()
             && (old_bin.exists() || config.old_bin_override.is_some());
         let tag_matches = cached_tag.as_deref() == Some(image_tag.as_str());
 
@@ -226,8 +231,52 @@ impl LiveUpdateArtifacts {
             }
             fs::create_dir_all(dir).context("failed to create artifacts dir")?;
 
+            // Record the L1 block number before taking the snapshot so every
+            // subsequent run forks Anvil at exactly the same point.
+            tracing::info!("Querying L1 for fork block number...");
+            let real_l1 = ProviderBuilder::new()
+                .connect(&config.l1_rpc_url)
+                .await
+                .context("failed to connect to real L1 to determine fork block")?;
+            let l1_fork_block = real_l1
+                .get_block_number()
+                .await
+                .context("failed to get current L1 block number")?;
+            tracing::info!(l1_fork_block, "L1 fork block recorded for this snapshot");
+
             tracing::info!("Step 1/4: Downloading DB snapshot from pod...");
-            download_db_snapshot(kube, &config.namespace, &config.pod, &pristine_db).await?;
+            const MAX_SNAPSHOT_ATTEMPTS: u32 = 3;
+            let mut snapshot_err = None;
+            for attempt in 1..=MAX_SNAPSHOT_ATTEMPTS {
+                if attempt > 1 {
+                    // Do NOT wipe already-downloaded items — download_db_snapshot
+                    // skips items that are already present on disk, so only the
+                    // failed item will be re-transferred.
+                    tracing::warn!(
+                        attempt,
+                        max = MAX_SNAPSHOT_ATTEMPTS,
+                        prev_err = ?snapshot_err,
+                        "Retrying DB snapshot download after failure (waiting 5 s)..."
+                    );
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+                match download_db_snapshot(kube, &config.namespace, &config.pod, &pristine_db).await
+                {
+                    Ok(()) => {
+                        snapshot_err = None;
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(attempt, max = MAX_SNAPSHOT_ATTEMPTS, err = ?e, "DB snapshot download attempt failed");
+                        snapshot_err = Some(e);
+                    }
+                }
+            }
+            if let Some(e) = snapshot_err {
+                return Err(e.context(format!(
+                    "DB snapshot download failed after {MAX_SNAPSHOT_ATTEMPTS} attempts"
+                )));
+            }
 
             tracing::info!("Step 2/4: Downloading genesis config...");
             download_configmap_key(
@@ -259,20 +308,30 @@ impl LiveUpdateArtifacts {
                 );
             }
 
+            fs::write(&fork_block_file, l1_fork_block.to_string())
+                .context("failed to write l1-fork-block file")?;
             fs::write(&tag_file, &image_tag).context("failed to write image-tag file")?;
             tracing::info!(
                 dir = %dir.display(),
                 image_tag,
+                l1_fork_block,
                 "All artifacts downloaded and cached successfully"
             );
         }
 
+        let l1_fork_block: u64 = fs::read_to_string(&fork_block_file)
+            .context("failed to read l1-fork-block file")?
+            .trim()
+            .parse()
+            .context("l1-fork-block file contains invalid number")?;
+
         let resolved_bin = config.old_bin_override.clone().unwrap_or(old_bin);
         tracing::info!(
-            db       = %pristine_db.display(),
-            genesis  = %genesis_json.display(),
-            config   = %config_yaml.display(),
-            old_bin  = %resolved_bin.display(),
+            db           = %pristine_db.display(),
+            genesis      = %genesis_json.display(),
+            config       = %config_yaml.display(),
+            old_bin      = %resolved_bin.display(),
+            l1_fork_block,
             "Artifact paths resolved"
         );
 
@@ -283,6 +342,7 @@ impl LiveUpdateArtifacts {
             config_yaml,
             old_bin: resolved_bin,
             image_tag,
+            l1_fork_block,
         })
     }
 }
@@ -382,18 +442,12 @@ pub struct ForkedAnvilL1 {
 }
 
 impl ForkedAnvilL1 {
-    pub async fn start(l1_rpc_url: &str, log_path: &Path) -> anyhow::Result<Self> {
-        // Query the current L1 block to fork at.
+    pub async fn start(l1_rpc_url: &str, fork_block: u64, log_path: &Path) -> anyhow::Result<Self> {
         tracing::info!(
+            fork_block,
             l1_rpc_url,
-            "Connecting to real L1 to determine fork block..."
+            "Forking L1 at recorded snapshot block"
         );
-        let real_l1 = ProviderBuilder::new()
-            .connect(l1_rpc_url)
-            .await
-            .context("failed to connect to real L1 RPC")?;
-        let fork_block = real_l1.get_block_number().await?;
-        tracing::info!(fork_block, l1_rpc_url, "Forking L1 at current tip");
 
         let locked_port = LockedPort::acquire_unused().await?;
         let port = locked_port.port;
@@ -528,12 +582,14 @@ impl ExternalServer {
         tracing::debug!(
             "Old server env overrides: \
              general_l1_rpc_url={anvil_url}, \
-             general_rocks_db_path={}, \
+             general_rocks_db_path={}/node1, \
+             prover_api_proof_storage_path={}/fri_proofs, \
              rpc_address=0.0.0.0:{port}, \
              network_enabled=false, \
              fake_fri_provers=true, \
              fake_snark_provers=true, \
              fusaka_upgrade_timestamp=MAX",
+            db_path.display(),
             db_path.display(),
         );
 
@@ -544,7 +600,9 @@ impl ExternalServer {
             .envs(env_vars)
             // Override runtime-specific settings
             .env("general_l1_rpc_url", anvil_url)
-            .env("general_rocks_db_path", db_path)
+            // The snapshot layout is <run_dir>/db/node1/{tree,repository,...} so
+            // rocks_db_path must point to the node1 subdirectory, not the DB root.
+            .env("general_rocks_db_path", db_path.join("node1"))
             .env("genesis_genesis_input_path", genesis_json)
             .env("rpc_address", format!("0.0.0.0:{port}"))
             .env("network_enabled", "false")
@@ -558,6 +616,9 @@ impl ExternalServer {
             .env("prover_api_fake_fri_provers_min_age", "0ms")
             .env("prover_api_fake_snark_provers_enabled", "true")
             .env("prover_api_fake_snark_provers_max_batch_age", "0ms")
+            // fri_proofs is at the DB root (not inside node1), consistent with the
+            // snapshot layout and the path used by the new server in Phase 2.
+            .env("prover_api_proof_storage_path", db_path.join("fri_proofs"))
             .stdout(Stdio::from(log_file))
             .stderr(Stdio::from(log_file2))
             .spawn()
@@ -576,12 +637,33 @@ impl ExternalServer {
             pid,
             port,
             rpc_ws_url,
-            "Old server process started, waiting for TCP..."
+            "Old server process started, waiting for WebSocket readiness..."
         );
         let start = Instant::now();
-        wait_for_tcp(port)
+        // A TCP-only check is not enough: the WebSocket handshake may fail while the
+        // server is still initialising (DB loading, L1 scanning, etc.).
+        // The old server scans ~800k historic L1 blocks through Anvil on first start,
+        // which can take several minutes. Budget 10 minutes (1200 × 500 ms).
+        let tmp_provider = (|| async {
+            ProviderBuilder::new()
+                .connect(&rpc_ws_url)
+                .await
+                .context("failed to connect to old server")
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_millis(500))
+                .with_max_times(1200),
+        )
+        .notify(|err: &anyhow::Error, dur: Duration| {
+            tracing::debug!(%err, ?dur, "retrying connection to old server");
+        })
+        .await
+        .context("old server did not start in time")?;
+        tmp_provider
+            .get_block_number()
             .await
-            .context("old server did not start in time")?;
+            .context("old server did not respond to get_block_number")?;
         tracing::info!(
             pid,
             port,
@@ -667,11 +749,13 @@ pub async fn copy_db_for_run(pristine: &Path, dest: &Path) -> anyhow::Result<()>
         "Pristine DB copied to run directory"
     );
 
-    // Remove the batch dir — required before starting a server on a snapshot
-    let batch_dir = dest.join("batch");
-    if batch_dir.exists() {
-        fs::remove_dir_all(&batch_dir).context("failed to remove batch dir")?;
-        tracing::info!("Removed 'batch' subdir from run DB (required for snapshot start)");
+    // Remove the batch dir — required before starting a server on a snapshot.
+    // The snapshot layout places batch under node1/, not at the DB root.
+    for batch_dir in [dest.join("node1").join("batch"), dest.join("batch")] {
+        if batch_dir.exists() {
+            fs::remove_dir_all(&batch_dir).context("failed to remove batch dir")?;
+            tracing::info!(path = %batch_dir.display(), "Removed 'batch' subdir from run DB (required for snapshot start)");
+        }
     }
 
     Ok(())
@@ -736,6 +820,12 @@ async fn get_pod_image_tag(kube: &Client, namespace: &str, pod: &str) -> anyhow:
         .to_string();
 
     anyhow::ensure!(!tag.is_empty(), "empty image tag");
+    anyhow::ensure!(
+        tag != "latest" && !tag.starts_with("sha256:"),
+        "image tag '{tag}' is a mutable reference (found 'latest' or a digest) — \
+         cache invalidation requires a versioned tag (e.g. 'v0.19.0'); \
+         use LIVE_UPDATE_OLD_BIN to specify the binary manually if needed"
+    );
     tracing::info!(
         image,
         tag,
@@ -803,89 +893,60 @@ async fn download_db_snapshot(
         "DB snapshot script complete inside pod, streaming archive to local disk..."
     );
 
-    // ── Step 2: stream `tar cf - /tmp/db-snapshot` to a local temp file ──────
-    // Streaming avoids buffering the entire archive in RAM (production DBs can
-    // be tens of GiB). Stderr is captured concurrently so tar warnings are logged
-    // rather than silently discarded, and to prevent the DuplexStream buffer from
-    // filling and deadlocking the background I/O task.
-    let stream_start = Instant::now();
-    let mut tar_exec = pods
-        .exec(
-            pod,
-            ["tar", "cf", "-", "-C", REMOTE_SNAPSHOT_DIR, "."],
-            &AttachParams::default().stdin(false).stderr(true),
-        )
-        .await
-        .context("failed to exec tar stream in pod")?;
+    // ── Step 2: copy top-level items via `kubectl cp` ────────────────────────
+    // The snapshot root has only a handful of top-level items (node1/, fri_proofs/,
+    // and any small files from /db/). Each item is transferred in one `kubectl cp`
+    // call — fewer sessions than per-file cat, shorter-lived than one big tar.
+    let transfer_start = Instant::now();
 
-    let mut stdout = tar_exec.stdout().context("tar exec has no stdout")?;
-    let mut stderr = tar_exec.stderr().context("tar exec has no stderr")?;
-    let status_fut = tar_exec
-        .take_status()
-        .expect("exec always has a status stream");
+    let top_items = list_snapshot_top_items(&pods, pod).await?;
+    tracing::info!(items = ?top_items, "Top-level snapshot items to transfer");
 
-    // Write stdout directly to a temp file.
-    let tmp_archive = tempfile::NamedTempFile::new().context("failed to create temp archive")?;
-    let mut async_out = tokio::fs::File::from_std(
-        tmp_archive
-            .as_file()
-            .try_clone()
-            .context("failed to clone temp archive fd")?,
-    );
+    fs::create_dir_all(dest).context("failed to create dest dir")?;
 
-    let (copy_result, stderr_result, status) = tokio::join!(
-        tokio::io::copy(&mut stdout, &mut async_out),
-        async {
-            let mut buf = String::new();
-            stderr.read_to_string(&mut buf).await.map(|_| buf)
-        },
-        status_fut,
-    );
+    for item in &top_items {
+        // copy_snapshot_item_from_pod is resumable at the file level: it skips files
+        // already fully present on disk. Retries here just re-enter it; no wipe needed.
+        const ITEM_RETRIES: u32 = 20;
+        let mut last_err = None;
+        for attempt in 1..=ITEM_RETRIES {
+            if attempt > 1 {
+                tracing::warn!(
+                    item,
+                    attempt,
+                    err = ?last_err,
+                    "Retrying after transfer failure (waiting 2 s)..."
+                );
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            match copy_snapshot_item_from_pod(&pods, pod, item, dest).await {
+                Ok(()) => {
+                    last_err = None;
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                }
+            }
+        }
+        if let Some(e) = last_err {
+            return Err(e.context(format!(
+                "failed to copy '{item}' after {ITEM_RETRIES} attempts"
+            )));
+        }
 
-    let bytes_streamed = copy_result.context("failed to stream tar from pod")?;
-    drop(async_out); // flush before reading back
-
-    if let Ok(s) = &stderr_result
-        && !s.is_empty()
-    {
-        tracing::debug!(tar_stderr = s.as_str(), "tar exec produced stderr output");
+        tracing::info!(item, "Item copied");
     }
-
-    let status = status.context("tar exec returned no status")?;
-    anyhow::ensure!(
-        status.status.as_deref() == Some("Success"),
-        "tar exec failed (status={:?})",
-        status.status,
-    );
-
-    tracing::info!(
-        archive_bytes = bytes_streamed,
-        archive_mb = bytes_streamed / 1_048_576,
-        elapsed_secs = stream_start.elapsed().as_secs_f32(),
-        "Tar archive streamed from pod, extracting to local disk..."
-    );
-
-    // ── Step 3: extract from temp file ───────────────────────────────────────
-    // `reopen()` gives a fresh OS file handle positioned at byte 0.
-    let extract_start = Instant::now();
-    fs::create_dir_all(dest).context("failed to create DB dest dir")?;
-    let reader = tmp_archive
-        .reopen()
-        .context("failed to reopen temp archive")?;
-    let mut archive = tar::Archive::new(reader);
-    archive
-        .unpack(dest)
-        .context("failed to unpack DB snapshot")?;
 
     tracing::info!(
         dest = %dest.display(),
-        elapsed_secs = extract_start.elapsed().as_secs_f32(),
-        "Archive extracted, verifying RocksDB dirs..."
+        elapsed_secs = transfer_start.elapsed().as_secs_f32(),
+        "All items copied, verifying RocksDB dirs..."
     );
 
-    // Verify expected RocksDB dirs are present (fri_proofs is alongside node1/)
+    // Verify the node1/ RocksDB dirs are present and contain SST files.
+    // fri_proofs/ is not verified here — it holds JSON proof data, not RocksDB files.
     for rel in &[
-        "fri_proofs",
         "node1/block_replay_wal",
         "node1/tree",
         "node1/repository",
@@ -1065,27 +1126,351 @@ async fn download_old_binary(image_tag: &str, dest: &Path) -> anyhow::Result<()>
 }
 
 // ---------------------------------------------------------------------------
-// Helpers: networking
+// Helpers: pod snapshot listing and kubectl cp transfer
 // ---------------------------------------------------------------------------
 
-/// Polls a TCP port until it accepts connections (up to ~30 s).
-async fn wait_for_tcp(port: u16) -> anyhow::Result<()> {
-    (|| async {
-        tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
-            .await
-            .map(|_| ())
-            .context("port not ready")
-    })
-    .retry(
-        ConstantBuilder::default()
-            .with_delay(Duration::from_millis(300))
-            .with_max_times(100),
-    )
-    .notify(|_: &anyhow::Error, _| {
-        tracing::debug!(port, "Waiting for TCP port...");
-    })
-    .await
-    .with_context(|| format!("port {port} did not become ready"))
+/// Returns transfer items for the snapshot: depth-2 directories where they exist
+/// (e.g. `node1/tree`, `node1/repository`), falling back to depth-1 for directories
+/// that have no subdirectories (e.g. `fri_proofs`). This keeps each tar session
+/// scoped to one RocksDB directory rather than an entire parent directory.
+async fn list_snapshot_top_items(pods: &Api<Pod>, pod: &str) -> anyhow::Result<Vec<String>> {
+    // List all directories at depth 1 and 2 in one find call.
+    let cmd = [
+        "find",
+        REMOTE_SNAPSHOT_DIR,
+        "-mindepth",
+        "1",
+        "-maxdepth",
+        "2",
+        "-type",
+        "d",
+        "-printf",
+        "%P\n",
+    ];
+
+    let mut exec = pods
+        .exec(pod, cmd, &AttachParams::default().stdin(false).stderr(true))
+        .await
+        .context("failed to exec find in pod")?;
+
+    let mut stdout = exec.stdout().context("find exec has no stdout")?;
+    let mut stderr = exec.stderr().context("find exec has no stderr")?;
+    let status_fut = exec.take_status().expect("exec always has a status stream");
+
+    let mut out = String::new();
+    let (read_result, stderr_result, status) = tokio::join!(
+        stdout.read_to_string(&mut out),
+        async {
+            let mut buf = String::new();
+            stderr.read_to_string(&mut buf).await.map(|_| buf)
+        },
+        status_fut,
+    );
+    read_result.context("failed to read find output from pod")?;
+
+    if let Ok(s) = &stderr_result
+        && !s.is_empty()
+    {
+        tracing::debug!(find_stderr = s.as_str(), "pod find stderr");
+    }
+
+    let status = status.context("find exec returned no status")?;
+    anyhow::ensure!(
+        status.status.as_deref() == Some("Success"),
+        "find in pod failed (status={:?})",
+        status.status,
+    );
+
+    let all: Vec<String> = out
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect();
+
+    // Depth-2 entries (contain exactly one '/') are the preferred transfer unit.
+    // Depth-1 entries whose name appears as a parent of any depth-2 entry are skipped
+    // (they would be redundant); depth-1 entries with no depth-2 children are kept.
+    use std::collections::HashSet;
+    let depth2_parents: HashSet<String> = all
+        .iter()
+        .filter(|p| p.contains('/'))
+        .filter_map(|p| p.split_once('/').map(|(parent, _)| parent.to_owned()))
+        .collect();
+
+    let mut items: Vec<String> = all
+        .into_iter()
+        .filter(|p| p.contains('/') || !depth2_parents.contains(p.as_str()))
+        .collect();
+    items.sort();
+    Ok(items)
+}
+
+/// Maximum bytes to pack into one tar session.
+/// At the ~5–7 MB/s kubectl-exec throughput we observe, 200 MB completes in ~30–40 s,
+/// well inside the ~75–90 s WebSocket idle-timeout that causes truncated archives.
+const MAX_CHUNK_BYTES: u64 = 200 * 1_048_576;
+
+/// Copies one snapshot item (a directory relative to [`REMOTE_SNAPSHOT_DIR`]) to
+/// `local_snapshot_root/<item_name>` in size-bounded chunks.
+///
+/// The directory's files are listed first (one `find` exec), then grouped into
+/// ≤ [`MAX_CHUNK_BYTES`] batches. Each batch is a separate `tar` session, so no
+/// single WebSocket connection runs long enough to hit the server-side timeout.
+async fn copy_snapshot_item_from_pod(
+    pods: &Api<Pod>,
+    pod: &str,
+    item_name: &str,
+    local_snapshot_root: &Path,
+) -> anyhow::Result<()> {
+    let remote_item_dir = format!("{REMOTE_SNAPSHOT_DIR}/{item_name}");
+    let local_item_dir = local_snapshot_root.join(item_name);
+
+    fs::create_dir_all(&local_item_dir)
+        .with_context(|| format!("failed to create '{}'", local_item_dir.display()))?;
+
+    // List all regular files recursively with their sizes (one short exec).
+    let files = list_dir_files(pods, pod, &remote_item_dir)
+        .await
+        .with_context(|| format!("failed to list files in '{remote_item_dir}'"))?;
+
+    if files.is_empty() {
+        tracing::debug!(
+            item = item_name,
+            "Empty directory — created locally, nothing to transfer"
+        );
+        return Ok(());
+    }
+
+    // Resume: skip files already fully on disk; remove partial files so they get re-downloaded.
+    let files: Vec<(String, u64)> = files
+        .into_iter()
+        .filter(|(rel_path, expected_size)| {
+            let local_path = local_item_dir.join(rel_path);
+            match fs::metadata(&local_path) {
+                Ok(meta) if meta.len() == *expected_size => false, // complete, skip
+                Ok(_) => {
+                    // Wrong size — partial write; remove so the chunk re-transfers it.
+                    let _ = fs::remove_file(&local_path);
+                    true
+                }
+                Err(_) => true, // missing
+            }
+        })
+        .collect();
+
+    if files.is_empty() {
+        tracing::debug!(
+            item = item_name,
+            "All files already present — nothing to transfer"
+        );
+        return Ok(());
+    }
+
+    let total_mb: u64 = files.iter().map(|(_, s)| s).sum::<u64>() / 1_048_576;
+    let chunks = split_into_chunks(&files, MAX_CHUNK_BYTES);
+
+    tracing::info!(
+        item = item_name,
+        files = files.len(),
+        chunks = chunks.len(),
+        total_mb,
+        "Transferring in {} chunk(s) of ≤{}MB",
+        chunks.len(),
+        MAX_CHUNK_BYTES / 1_048_576,
+    );
+
+    for (i, chunk) in chunks.iter().enumerate() {
+        // tar cf - -C <remote_item_dir> <rel_path1> <rel_path2> ...
+        // Paths in the archive are relative to remote_item_dir, so they extract
+        // directly into local_item_dir.
+        let mut tar_args: Vec<String> = vec![
+            "tar".into(),
+            "cf".into(),
+            "-".into(),
+            "-C".into(),
+            remote_item_dir.clone(),
+        ];
+        tar_args.extend(chunk.iter().map(|(name, _)| name.clone()));
+
+        let chunk_mb: u64 = chunk.iter().map(|(_, s)| s).sum::<u64>() / 1_048_576;
+        tracing::debug!(
+            item = item_name,
+            chunk = i + 1,
+            total_chunks = chunks.len(),
+            chunk_mb,
+            "Transferring chunk"
+        );
+
+        if let Err(e) = tar_chunk_from_pod(pods, pod, &tar_args, &local_item_dir).await {
+            // BSD tar zero-pads a partially-received file to its declared size, so the
+            // file passes the size check on the next attempt despite being corrupted.
+            // Remove every file in this chunk so they are all cleanly re-downloaded.
+            for (rel_path, _) in chunk.iter() {
+                let _ = fs::remove_file(local_item_dir.join(rel_path));
+            }
+            return Err(e)
+                .with_context(|| format!("chunk {}/{} of '{item_name}'", i + 1, chunks.len()));
+        }
+    }
+
+    Ok(())
+}
+
+/// Lists all regular files under `remote_dir` (recursively) with their sizes.
+/// Returns `(relative_path, size_bytes)` pairs — paths are relative to `remote_dir`.
+async fn list_dir_files(
+    pods: &Api<Pod>,
+    pod: &str,
+    remote_dir: &str,
+) -> anyhow::Result<Vec<(String, u64)>> {
+    // %s = size in bytes, %P = path relative to the starting point
+    let cmd = ["find", remote_dir, "-type", "f", "-printf", "%s\t%P\n"];
+
+    let mut exec = pods
+        .exec(pod, cmd, &AttachParams::default().stdin(false).stderr(true))
+        .await
+        .with_context(|| format!("failed to exec find in pod for '{remote_dir}'"))?;
+
+    let mut stdout = exec.stdout().context("find exec has no stdout")?;
+    let mut stderr = exec.stderr().context("find exec has no stderr")?;
+    let status_fut = exec.take_status().expect("exec always has a status stream");
+
+    let mut out = String::new();
+    let (read_result, stderr_result, status) = tokio::join!(
+        stdout.read_to_string(&mut out),
+        async {
+            let mut buf = String::new();
+            stderr.read_to_string(&mut buf).await.map(|_| buf)
+        },
+        status_fut,
+    );
+    read_result.context("failed to read find output from pod")?;
+
+    if let Ok(s) = &stderr_result
+        && !s.is_empty()
+    {
+        tracing::debug!(
+            find_stderr = s.as_str(),
+            dir = remote_dir,
+            "pod find stderr"
+        );
+    }
+
+    let status = status.context("find exec returned no status")?;
+    anyhow::ensure!(
+        status.status.as_deref() == Some("Success"),
+        "find in pod failed for '{remote_dir}' (status={:?})",
+        status.status,
+    );
+
+    let mut files = Vec::new();
+    for line in out.lines() {
+        let Some((size_str, rel_path)) = line.split_once('\t') else {
+            continue;
+        };
+        let size: u64 = size_str
+            .parse()
+            .with_context(|| format!("cannot parse size '{size_str}' for '{rel_path}'"))?;
+        files.push((rel_path.to_owned(), size));
+    }
+    Ok(files)
+}
+
+/// Groups `files` into chunks where each chunk's total size ≤ `max_bytes`.
+/// A single file larger than `max_bytes` forms its own chunk.
+fn split_into_chunks(files: &[(String, u64)], max_bytes: u64) -> Vec<Vec<&(String, u64)>> {
+    let mut chunks: Vec<Vec<&(String, u64)>> = Vec::new();
+    let mut current: Vec<&(String, u64)> = Vec::new();
+    let mut current_size = 0u64;
+
+    for file in files {
+        if !current.is_empty() && current_size + file.1 > max_bytes {
+            chunks.push(std::mem::take(&mut current));
+            current_size = 0;
+        }
+        current_size += file.1;
+        current.push(file);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// Runs `tar_args` (must produce a tar archive on stdout) inside the pod and
+/// extracts the result into `local_dest` using a local `tar xf -` process.
+async fn tar_chunk_from_pod(
+    pods: &Api<Pod>,
+    pod: &str,
+    tar_args: &[String],
+    local_dest: &Path,
+) -> anyhow::Result<()> {
+    let mut exec = pods
+        .exec(
+            pod,
+            tar_args.iter().map(String::as_str),
+            &AttachParams::default().stdin(false).stderr(true),
+        )
+        .await
+        .context("failed to exec tar chunk in pod")?;
+
+    let mut pod_stdout = exec.stdout().context("tar exec has no stdout")?;
+    let mut pod_stderr = exec.stderr().context("tar exec has no stderr")?;
+    let status_fut = exec.take_status().expect("exec always has a status stream");
+
+    let mut local_tar = Command::new("tar")
+        .args(["xf", "-", "-C", &local_dest.to_string_lossy()])
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn local tar")?;
+    let mut tar_stdin = local_tar.stdin.take().context("local tar has no stdin")?;
+
+    let (copy_result, pod_stderr_result, pod_status) = tokio::join!(
+        tokio::io::copy(&mut pod_stdout, &mut tar_stdin),
+        async {
+            let mut buf = String::new();
+            pod_stderr.read_to_string(&mut buf).await.map(|_| buf)
+        },
+        status_fut,
+    );
+
+    drop(tar_stdin); // EOF → local tar can flush and exit
+
+    let bytes = copy_result.context("I/O error streaming tar chunk from pod")?;
+
+    if let Ok(s) = &pod_stderr_result
+        && !s.is_empty()
+    {
+        tracing::debug!(pod_tar_stderr = s.as_str(), "pod tar stderr");
+    }
+
+    let pod_status = pod_status.context("pod tar exec returned no status")?;
+    anyhow::ensure!(
+        pod_status.status.as_deref() == Some("Success"),
+        "pod tar failed (status={:?})",
+        pod_status.status,
+    );
+
+    let local_output = local_tar
+        .wait_with_output()
+        .await
+        .context("failed to wait for local tar")?;
+    if !local_output.stderr.is_empty() {
+        tracing::debug!(
+            local_tar_stderr = %String::from_utf8_lossy(&local_output.stderr),
+            "local tar stderr"
+        );
+    }
+    anyhow::ensure!(
+        local_output.status.success(),
+        "local tar extraction failed ({}): {}",
+        local_output.status,
+        String::from_utf8_lossy(&local_output.stderr).trim(),
+    );
+
+    tracing::debug!(bytes, "tar chunk complete");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
