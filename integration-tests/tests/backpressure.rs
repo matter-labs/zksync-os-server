@@ -194,16 +194,15 @@ async fn backpressure_triggers_and_clears_under_l1_stall(
         if let Some(fri) = pipeline["components"]
             .as_array()
             .and_then(|cs| cs.iter().find(|c| c["name"] == "fri_job_manager"))
+            && fri["in_flight_first"].is_object()
         {
-            if fri["in_flight_first"].is_object() {
-                let adjacent_lag = fri["adjacent_block_lag"].as_u64().unwrap_or(0);
-                assert_eq!(
-                    adjacent_lag, 0,
-                    "FriJobManager adjacent_block_lag should be 0 when batches are in-flight \
-                     (channel ahead is empty — bottleneck is downstream at L1SenderCommit); \
-                     pipeline: {pipeline}"
-                );
-            }
+            let adjacent_lag = fri["adjacent_block_lag"].as_u64().unwrap_or(0);
+            assert_eq!(
+                adjacent_lag, 0,
+                "FriJobManager adjacent_block_lag should be 0 when batches are in-flight \
+                 (channel ahead is empty — bottleneck is downstream at L1SenderCommit); \
+                 pipeline: {pipeline}"
+            );
         }
     }
 
