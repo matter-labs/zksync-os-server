@@ -5,7 +5,7 @@ use std::{
     fmt, iter,
     marker::PhantomData,
     num::NonZeroU32,
-    ops,
+    ops::{Range, RangeFrom, RangeToInclusive},
     path::Path,
     sync::{
         Arc, Condvar, Mutex, Weak,
@@ -17,7 +17,8 @@ use std::{
 
 use rocksdb::{
     BlockBasedOptions, Cache, ColumnFamily, ColumnFamilyDescriptor, DB, DBPinnableSlice, Direction,
-    IteratorMode, Options, PrefixRange, ReadOptions, WriteOptions, perf, properties,
+    IteratorMode, Options, PrefixRange, ReadOptions, SliceTransform, WriteOptions, perf,
+    properties,
 };
 use thread_local::ThreadLocal;
 use vise::MetricsFamily;
@@ -44,6 +45,15 @@ pub trait NamedColumnFamily: 'static + Copy {
     /// of compaction / memtables.
     fn requires_tuning(&self) -> bool {
         false
+    }
+
+    /// Returns the byte length of the fixed-length key prefix to use as a RocksDB prefix extractor
+    /// for this CF, or `None` if no prefix extractor should be configured.
+    ///
+    /// When set, RocksDB builds per-prefix bloom filters that allow `range_iterator_cf` to skip
+    /// SST files that contain no keys with the requested prefix.
+    fn prefix_extractor_len(&self) -> Option<usize> {
+        None
     }
 }
 
@@ -74,7 +84,7 @@ impl<CF: NamedColumnFamily> WriteBatch<'_, CF> {
         self.inner.delete_cf(cf, key);
     }
 
-    pub fn delete_range_cf(&mut self, cf: CF, keys: ops::Range<&[u8]>) {
+    pub fn delete_range_cf(&mut self, cf: CF, keys: Range<&[u8]>) {
         let cf = self.db.column_family(cf);
         self.inner.delete_range_cf(cf, keys.start, keys.end);
     }
@@ -397,7 +407,7 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
 
         let cfs_and_options: HashMap<_, _> = CF::ALL
             .iter()
-            .map(|cf| (cf.name(), cf.requires_tuning()))
+            .map(|cf| (cf.name(), (cf.requires_tuning(), cf.prefix_extractor_len())))
             .collect();
         let obsolete_cfs: Vec<_> = existing_cfs
             .iter()
@@ -423,8 +433,8 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
         let cf_names = cfs_and_options.keys().copied().collect();
         let all_cfs_and_options = cfs_and_options
             .into_iter()
-            .chain(obsolete_cfs.into_iter().map(|name| (name, false)));
-        let cfs = all_cfs_and_options.map(|(cf_name, requires_tuning)| {
+            .chain(obsolete_cfs.into_iter().map(|name| (name, (false, None))));
+        let cfs = all_cfs_and_options.map(|(cf_name, (requires_tuning, prefix_extractor_len))| {
             let mut block_based_options = BlockBasedOptions::default();
             block_based_options.set_bloom_filter(10.0, false);
             if let Some(cache) = &caches.shared {
@@ -436,7 +446,11 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
             }
 
             let memtable_capacity = options.large_memtable_capacity.filter(|_| requires_tuning);
-            let cf_options = Self::rocksdb_options(memtable_capacity, Some(block_based_options));
+            let mut cf_options =
+                Self::rocksdb_options(memtable_capacity, Some(block_based_options));
+            if let Some(len) = prefix_extractor_len {
+                cf_options.set_prefix_extractor(SliceTransform::create_fixed_prefix(len));
+            }
             ColumnFamilyDescriptor::new(cf_name, cf_options)
         });
 
@@ -643,7 +657,7 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
     pub fn from_iterator_cf(
         &self,
         cf: CF,
-        keys: ops::RangeFrom<&[u8]>,
+        keys: RangeFrom<&[u8]>,
     ) -> impl Iterator<Item = (Box<[u8]>, Box<[u8]>)> + '_ {
         let cf = self.column_family(cf);
         self.inner
@@ -654,12 +668,40 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
         // ^ unwrap() is safe for the same reasons as in `prefix_iterator_cf()`.
     }
 
+    /// Iterates over key-value pairs in `cf` in lexical order over `range` (start inclusive,
+    /// end exclusive).  When the column family has a prefix extractor configured and both bounds
+    /// share the same extracted prefix, RocksDB uses prefix bloom filters to skip SST files
+    /// that contain no keys with that prefix.
+    pub fn range_iterator_cf<'a>(
+        &'a self,
+        cf: CF,
+        range: Range<&'a [u8]>,
+    ) -> impl Iterator<Item = (Box<[u8]>, Box<[u8]>)> + 'a {
+        let cf_handle = self.column_family(cf);
+        let mut options = ReadOptions::default();
+        options.set_iterate_upper_bound(range.end.to_vec());
+        // When the CF has a prefix extractor configured, this tells RocksDB to use
+        // prefix bloom filters for the initial seek — checking each SST file only if
+        // it contains keys with the same prefix as the seek key.
+        options.set_prefix_same_as_start(true);
+        self.inner
+            .db
+            .iterator_cf_opt(
+                cf_handle,
+                options,
+                IteratorMode::From(range.start, Direction::Forward),
+            )
+            .map(Result::unwrap)
+            .fuse()
+        // ^ unwrap() is safe for the same reasons as in `prefix_iterator_cf()`.
+    }
+
     /// Iterates over key-value pairs in the specified column family `cf` in the reverse lexical
     /// key order starting from the given `key_from`.
     pub fn to_iterator_cf(
         &self,
         cf: CF,
-        keys: ops::RangeToInclusive<&[u8]>,
+        keys: RangeToInclusive<&[u8]>,
     ) -> impl Iterator<Item = (Box<[u8]>, Box<[u8]>)> + '_ {
         let cf = self.column_family(cf);
         self.inner

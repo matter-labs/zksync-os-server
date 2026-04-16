@@ -14835,6 +14835,7 @@ dependencies = [
  "dashmap",
  "roaring",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "vise",
