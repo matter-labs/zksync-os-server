@@ -104,6 +104,10 @@ fn with_chunk(
 /// Updates the log index coverage metadata in `batch`.
 /// Writes `log_index_first_block` if it is not already present in the DB
 /// (it is only ever set once); always updates `log_index_last_block`.
+///
+/// Must be called at most once per `batch`: the first-block check reads from
+/// the DB, not the batch, so a second call within the same batch would
+/// overwrite the first-block key even though it was already set by the batch.
 pub(super) fn update_coverage(
     db: &RocksDB<RepositoryCF>,
     batch: &mut WriteBatch<RepositoryCF>,
