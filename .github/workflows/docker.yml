@@ -10,6 +10,7 @@ on:
   push:
     branches:
       - main
+      - gateway-live-migration-fixes
     tags:
       - v**
 
@@ -61,9 +62,10 @@ jobs:
           tags: |
             type=raw,value=${{ inputs.tag_name }},enable=${{ inputs.tag_name != '' }}
             type=ref,event=tag
+            type=ref,event=branch,enable=${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
             type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-            type=sha,format=short,prefix=,suffix=-{{date 'x'}},enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-            type=sha,format=long,prefix=,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+            type=sha,format=short,prefix=,suffix=-{{date 'x'}},enable=${{ github.event_name == 'push' }}
+            type=sha,format=long,prefix=,enable=${{ github.event_name == 'push' }}
             type=ref,event=pr
 
       - name: Define whether to save cache
