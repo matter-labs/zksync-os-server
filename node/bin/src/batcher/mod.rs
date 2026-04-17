@@ -54,6 +54,11 @@ pub struct Batcher<ReadState> {
     pub sidecar_sender: mpsc::Sender<BlobTransactionSidecar>,
     pub committed_batch_provider: CommittedBatchProvider,
     pub read_state: ReadState,
+    /// L1's view of this chain's migration number at batcher startup. Any
+    /// `SetSLChainId(n)` tx with `n <= current_migration_number_on_startup`
+    /// is a replay of an already-finalized migration (the chain is catching
+    /// up on an empty RocksDB) and must NOT trigger quiesce.
+    pub current_migration_number_on_startup: u64,
 }
 
 #[async_trait]
@@ -126,7 +131,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             latency_tracker.enter_state(GenericComponentState::Processing);
 
             let recreated;
-            let batch_envelope =
+            let (batch_envelope, migration_number) =
                 if prev_batch_info.batch_number < self.startup_config.last_committed_batch {
                     let committed_batch = self
                         .committed_batch_provider
@@ -152,16 +157,17 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                         return Ok(());
                     };
                     recreated = true;
-                    batch_envelope
+                    // Recreated batches already happened — no need to stop.
+                    (batch_envelope, None)
                 } else {
-                    let Some(batch_envelope) = self
+                    let Some((batch_envelope, migration_number)) = self
                         .create_batch(&mut input, &latency_tracker, &prev_batch_info)
                         .await?
                     else {
                         return Ok(());
                     };
                     recreated = false;
-                    batch_envelope
+                    (batch_envelope, migration_number)
                 };
 
             let time_since_last_batch =
@@ -211,6 +217,32 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 tracing::info!("outbound channel closed");
                 return Ok(());
             }
+
+            // Quiesce only when this batch represents a newly-produced migration,
+            // not a replay of an already-finalized one. The `SetSLChainId(n)`
+            // value carries the monotonic migration number; L1 reports the
+            // chain's current migration number at startup. A chain that boots
+            // with an empty RocksDB re-executes historical SetSLChainId txs,
+            // which must not trigger quiesce.
+            if let Some(n) = migration_number
+                && n > self.current_migration_number_on_startup
+            {
+                tracing::info!(
+                    migration_number = n,
+                    l1_current_migration_number_at_startup = self.current_migration_number_on_startup,
+                    "Migration batch sealed and sent. \
+                     Entering drain-only mode — no new batches will be created. \
+                     The upstream pipeline stays alive so RPC (e.g. \
+                     `zks_lastSettlementChangeBlock`) remains available; the \
+                     operator is expected to observe L1 finality of the migration \
+                     batch and restart the server with the new settlement layer."
+                );
+                // Keep draining input so upstream segments don't hit a closed
+                // downstream channel (which would panic via `?` on `output.send`).
+                // The server itself stays up; only batch production stops.
+                while input.recv().await.is_some() {}
+                return Ok(());
+            }
         }
     }
 }
@@ -226,7 +258,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         )>,
         latency_tracker: &ComponentStateHandle<GenericComponentState>,
         prev_batch_info: &StoredBatchInfo,
-    ) -> anyhow::Result<Option<BatchForSigning<ProverInput>>> {
+    ) -> anyhow::Result<Option<(BatchForSigning<ProverInput>, Option<u64>)>> {
         // Armed once we reach `last_persisted_block`, using the first block's timestamp.
         let mut deadline: Option<Pin<Box<Sleep>>> = None;
         // Captured from the very first block added to the batch, even during catch-up replay.
@@ -347,7 +379,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
             self.sl_chain_id,
             &self.read_state,
         )?;
-        Ok(Some(batch_envelope))
+        Ok(Some((batch_envelope, accumulator.migration_number)))
     }
 
     async fn recreate_existing_batch(

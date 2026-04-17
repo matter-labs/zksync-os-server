@@ -39,6 +39,13 @@ pub struct L1State {
     pub da_input_mode: BatchDaInputMode,
     pub l1_chain_id: u64,
     pub sl_chain_id: u64,
+    /// The authoritative migration number for this chain, as reported by L1's
+    /// `IChainAssetHandler.migrationNumber(chainId)`. Used by the batcher to
+    /// distinguish a newly-produced `SetSLChainId(n)` tx (when `n` exceeds this
+    /// value — a real gateway migration) from a replay of a historical one
+    /// (when `n <= current_migration_number` — the chain is re-executing past
+    /// blocks on a fresh RocksDB).
+    pub current_migration_number: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,6 +145,13 @@ impl L1State {
             None => BatchVerificationSL::Disabled,
         };
 
+        let current_migration_number: u64 = bridgehub_l1
+            .migration_number(l2_chain_id)
+            .await
+            .context("failed to fetch current migration number from L1 chain asset handler")?
+            .try_into()
+            .context("current migration number overflows u64")?;
+
         Ok(Self {
             bridgehub_l1,
             bridgehub_sl,
@@ -152,6 +166,7 @@ impl L1State {
             da_input_mode,
             l1_chain_id,
             sl_chain_id,
+            current_migration_number,
         })
     }
 
@@ -218,6 +233,7 @@ impl L1State {
             da_input_mode: this.da_input_mode,
             l1_chain_id: this.l1_chain_id,
             sl_chain_id: this.sl_chain_id,
+            current_migration_number: this.current_migration_number,
         })
     }
 

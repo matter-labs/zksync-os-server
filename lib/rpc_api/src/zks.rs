@@ -42,4 +42,19 @@ pub trait ZksApi {
         keys: Vec<B256>,
         batch_number: u64,
     ) -> RpcResult<Option<BatchStorageProof>>;
+
+    /// Returns the number of the latest block that contained a real
+    /// `SetSLChainId` system transaction — i.e. the last block at which this
+    /// chain's settlement layer changed. The `u64::MAX` sentinel emitted by
+    /// the v31 protocol upgrade is excluded.
+    ///
+    /// Returns `None` if no settlement-layer change has ever happened on this
+    /// chain (i.e. since genesis).
+    ///
+    /// Operators driving a gateway migration can use this to find the block at
+    /// which the batcher quiesced, wait for that block's batch to reach L1
+    /// finality, and then restart the server with the new settlement-layer
+    /// configuration.
+    #[method(name = "lastSettlementChangeBlock")]
+    async fn last_settlement_change_block(&self) -> RpcResult<Option<u64>>;
 }
