@@ -880,13 +880,14 @@ impl<P: Provider> ZkChain<P> {
             .enrich("baseTokenGasPriceMultiplierDenominator", None)
     }
 
-    /// Returns the address of the current settlement layer as stored in `ZKChainStorage`.
-    pub async fn get_settlement_layer(&self) -> Result<Address> {
+    /// Returns the address of the settlement layer as stored in `ZKChainStorage` at `block_id`.
+    pub async fn get_settlement_layer(&self, block_id: BlockId) -> Result<Address> {
         self.instance
             .getSettlementLayer()
+            .block(block_id)
             .call()
             .await
-            .enrich("getSettlementLayer", None)
+            .enrich("getSettlementLayer", Some(block_id))
     }
 
     pub async fn get_server_notifier_address(&self) -> Result<Address> {

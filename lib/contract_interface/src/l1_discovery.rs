@@ -68,7 +68,9 @@ impl L1State {
         // Call ZKChainStorage::getSettlementLayer() on the L1 diamond proxy to determine whether
         // this chain is currently settling on L1 or on the Gateway.
         // Returns address(0) when settling on L1, or the Gateway diamond proxy address after migration.
-        let settlement_layer_address = diamond_proxy_l1.get_settlement_layer().await?;
+        let settlement_layer_address = diamond_proxy_l1
+            .get_settlement_layer(BlockId::latest())
+            .await?;
 
         let (sl_chain_id, bridgehub_sl) = if settlement_layer_address.is_zero() {
             // Settling on L1: the settlement layer is L1 itself.
