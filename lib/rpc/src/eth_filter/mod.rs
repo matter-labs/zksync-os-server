@@ -127,6 +127,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         from: u64,
         to: u64,
     ) -> EthFilterResult<Vec<Log>> {
+        // return empty vector if the range is invalid.
+        if from > to {
+            return Ok(Vec::new());
+        }
         if let Some(max_blocks_per_filter) = self
             .query_limits
             .max_blocks_per_filter
