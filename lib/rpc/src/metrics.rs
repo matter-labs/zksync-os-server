@@ -7,8 +7,13 @@ const BYTES_BUCKETS: Buckets = Buckets::exponential(1.0..=10485760.0, 2.0); // 1
 
 #[derive(Debug, Metrics)]
 pub struct ApiMetrics {
-    #[metrics(labels = ["method"], buckets = BLOCK_COUNTS)]
+    /// Block disposition per `eth_getLogs` call, broken down by outcome kind.
+    #[metrics(labels = ["kind"], buckets = BLOCK_COUNTS)]
     pub get_logs_scanned_blocks: LabeledFamily<&'static str, Histogram<u64>>,
+    /// Number of `eth_getLogs` calls with no address or topic constraints (full block scan).
+    pub get_logs_unconstrained: Counter,
+    /// Number of `eth_getLogs` calls truncated due to exceeding `max_logs`.
+    pub get_logs_truncated: Counter,
     #[metrics(unit = Unit::Seconds, labels = ["method"], buckets = LATENCIES_FAST)]
     pub response_time: LabeledFamily<String, Histogram<Duration>>,
     #[metrics(unit = Unit::Bytes, labels = ["method"], buckets = BYTES_BUCKETS)]
