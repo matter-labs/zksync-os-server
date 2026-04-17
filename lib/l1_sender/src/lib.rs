@@ -25,10 +25,10 @@ use anyhow::Context;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Instant;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState, StateLabel};
 use zksync_os_operator_signer::SignerConfig;
-use zksync_os_pipeline::{TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, SendAndRecordExt};
 
 /// Component-specific state for the L1 sender.
 pub enum L1SenderState {
@@ -80,8 +80,8 @@ type TransactionReceiptFuture =
 #[allow(clippy::too_many_arguments)]
 pub async fn run_l1_sender<Input: SendToL1>(
     // == plumbing ==
-    mut inbound: TrackedUnboundedReceiver<L1SenderCommand<Input>>,
-    outbound: TrackedUnboundedSender<SignedBatchEnvelope<FriProof>>,
+    mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
+    outbound: mpsc::UnboundedSender<SignedBatchEnvelope<FriProof>>,
 
     // == command-specific settings ==
     to_address: Address,
@@ -123,15 +123,15 @@ pub async fn run_l1_sender<Input: SendToL1>(
         // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
         // emptied in every iteration, its size never exceeds `self.command_limit`.
         //
-        // Intentionally using bare `recv_many` (not `recv_many_and_record`): record_processed is
-        // called only after the L1 transactions are mined (see `record_processed` calls below).
-        //
-        // NOTE: record_picked is intentionally NOT called here. L1Sender drains the input channel
-        // quickly (before waiting for L1 confirmation), so if we reported last_picked at dequeue
-        // time the adjacent-lag formula (upstream.last_processed − downstream.last_picked) would
-        // always be near zero even when L1 mining is stalled. By leaving last_picked = None the
-        // monitor falls back to using last_processed for the downstream side, which correctly
-        // captures the gap between what UpgradeGatekeeper sent and what L1Sender confirmed.
+        // NOTE: record_picked is intentionally NOT called here (nor via any recv helper).
+        // L1Sender drains the input channel quickly — before waiting for L1 confirmation —
+        // so if we reported last_picked at dequeue time the adjacent-lag formula
+        // (upstream.last_processed − downstream.last_picked) would always be near zero even
+        // when L1 mining is stalled. By leaving last_picked = None the monitor falls back to
+        // using last_processed for the downstream side, which correctly captures the gap
+        // between what UpgradeGatekeeper sent and what L1Sender confirmed.
+        // record_processed is called only after the L1 transactions are mined
+        // (see `record_processed` calls below).
         let received = inbound
             .recv_many(&mut cmd_buffer, config.command_limit)
             .await;
@@ -312,8 +312,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
 }
 
 async fn process_prepending_passthrough_commands<Input: SendToL1>(
-    inbound: &mut TrackedUnboundedReceiver<L1SenderCommand<Input>>,
-    outbound: &TrackedUnboundedSender<SignedBatchEnvelope<FriProof>>,
+    inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
+    outbound: &mpsc::UnboundedSender<SignedBatchEnvelope<FriProof>>,
     health_reporter: &ComponentHealthReporter,
     command_name: &str,
 ) -> anyhow::Result<Option<()>> {

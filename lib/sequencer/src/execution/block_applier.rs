@@ -3,9 +3,9 @@ use crate::execution::metrics::BlockApplierState;
 use crate::model::blocks::{AppliedBlock, BlockCommandType, BlockPayload};
 use alloy::consensus::Sealed;
 use async_trait::async_trait;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use zksync_os_observability::ComponentHealthReporter;
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{WriteReplay, WriteRepository, WriteState};
 
 /// Persists blocks in various local storages.
@@ -39,8 +39,8 @@ where
 
     async fn run(
         mut self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         loop {
             self.health_reporter.enter_state(BlockApplierState::Idle);

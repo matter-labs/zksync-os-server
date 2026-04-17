@@ -5,7 +5,7 @@ use futures::stream::FuturesOrdered;
 use reth_tasks::Runtime;
 use std::collections::VecDeque;
 use std::time::Duration;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_contract_interface::models::DACommitmentScheme;
@@ -14,7 +14,7 @@ use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
 
@@ -50,8 +50,8 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     /// [graceful_shutdown_with_timeout] returns.
     async fn run(
         self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> Result<()> {
         if self.disabled {
             tracing::info!(

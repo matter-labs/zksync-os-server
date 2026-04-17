@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_raft::{ConsensusRole, LeadershipSignal};
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand, RebuildCommand};
@@ -52,8 +52,8 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 
     async fn run(
         mut self,
-        _input: TrackedUnboundedReceiver<()>,
-        output: TrackedUnboundedSender<BlockCommand>,
+        _input: PeekableReceiver<()>,
+        output: mpsc::UnboundedSender<BlockCommand>,
     ) -> anyhow::Result<()> {
         let last_block_in_wal = self.block_replay_storage.latest_record();
 
@@ -105,10 +105,7 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
     /// This method kicks in after all local canonized Replayed Records (WAL) are replayed.
     /// Produces `Produce` commands only when the node is the leader.
-    async fn run_loop(
-        mut self,
-        output: TrackedUnboundedSender<BlockCommand>,
-    ) -> anyhow::Result<()> {
+    async fn run_loop(mut self, output: mpsc::UnboundedSender<BlockCommand>) -> anyhow::Result<()> {
         let mut leadership = self.leadership.clone();
         let mut role = leadership.current_role();
         let mut produce_tick = tokio::time::interval(self.produce_interval);
@@ -161,7 +158,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
         &self,
         rebuild_options: &RebuildOptions,
         last_block_in_wal: u64,
-        output: &TrackedUnboundedSender<BlockCommand>,
+        output: &mpsc::UnboundedSender<BlockCommand>,
     ) -> anyhow::Result<()> {
         tracing::warn!(
             "Starting block rebuilds! {rebuild_options:?}, last_block_in_wal: {last_block_in_wal}"
@@ -203,8 +200,8 @@ impl PipelineComponent for ExternalNodeCommandSource {
 
     async fn run(
         mut self,
-        _input: TrackedUnboundedReceiver<()>,
-        output: TrackedUnboundedSender<BlockCommand>,
+        _input: PeekableReceiver<()>,
+        output: mpsc::UnboundedSender<BlockCommand>,
     ) -> anyhow::Result<()> {
         while let Some(record) = self.replays_for_sequencer.recv().await {
             let block_number = record.block_context.block_number;
@@ -272,8 +269,7 @@ mod tests {
             leadership: LeadershipSignal::AlwaysLeader,
             produce_interval: Duration::from_secs(1),
         };
-        let (output, mut receiver) =
-            zksync_os_pipeline::tracked_unbounded_channel::<BlockCommand>();
+        let (output, mut receiver) = mpsc::unbounded_channel::<BlockCommand>();
 
         let task = tokio::spawn(source.run_loop(output));
 

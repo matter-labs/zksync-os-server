@@ -1,7 +1,8 @@
 use crate::component_id::ComponentId;
-use crate::tracked_channel::{TrackedUnboundedReceiver, TrackedUnboundedSender};
+use crate::peekable_receiver::PeekableReceiver;
 use anyhow::Result;
 use async_trait::async_trait;
+use tokio::sync::mpsc;
 
 /// A component that transforms messages in the pipeline.
 /// Examples: ProverInputGenerator, Batcher, L1 senders
@@ -23,7 +24,7 @@ pub trait PipelineComponent: Send + 'static {
     /// `output.send()` is synchronous and never blocks — the channel is unbounded.
     async fn run(
         self,
-        input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> Result<()>;
 }

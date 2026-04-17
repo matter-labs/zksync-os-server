@@ -2,13 +2,14 @@ use crate::prover_api::proof_storage::{ProofStorage, StoredBatch};
 use anyhow::Context;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
+use tokio::sync::mpsc;
 use zksync_os_contract_interface::l1_discovery::BatchVerificationSL;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 
 /// Receives Batches with proofs - potentially out of order;
 /// * Fixes the order (by filling in the `buffer` field);
@@ -35,8 +36,8 @@ impl PipelineComponent for GaplessCommitter {
 
     async fn run(
         self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         let mut buffer: BTreeMap<u64, SignedBatchEnvelope<FriProof>> = BTreeMap::new();
         let mut next_expected_batch_number = self.next_expected_batch_number;
@@ -96,8 +97,8 @@ impl PipelineComponent for GaplessCommitter {
                     self.proof_storage
                         .save_batch_with_proof(&stored_batch)
                         .await?;
-                    let batch_num = stored_batch.batch_number();
-                    let result = if batch_num <= self.last_committed_batch_number {
+                    let result = if stored_batch.batch_number() <= self.last_committed_batch_number
+                    {
                         L1SenderCommand::Passthrough(Box::new(stored_batch.batch_envelope()))
                     } else {
                         CommitCommand::try_new(
@@ -114,7 +115,6 @@ impl PipelineComponent for GaplessCommitter {
                     {
                         anyhow::bail!("Outbound channel closed");
                     }
-                    self.health_reporter.record_batch_number(batch_num);
                 }
             }
         }

@@ -3,9 +3,10 @@ use alloy::{eips::BlockId, providers::DynProvider};
 use anyhow::Context as _;
 use async_trait::async_trait;
 use std::cmp::Ordering;
+use tokio::sync::mpsc;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_types::ProtocolSemanticVersion;
 
 /// Receives Batches with proofs - potentially with incompatible protocol version.
@@ -93,8 +94,8 @@ impl PipelineComponent for UpgradeGatekeeper {
 
     async fn run(
         self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         loop {
             self.health_reporter

@@ -15,7 +15,7 @@ use zksync_os_l1_sender::batcher_model::{
 };
 use zksync_os_network::{PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome};
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 
 pub struct BatchVerificationPipelineStep<E> {
     config: BatchVerificationConfig,
@@ -92,8 +92,8 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
 
     async fn run(
         self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         tracing::info!(
             enabled = self.config.server_enabled,
@@ -169,8 +169,8 @@ impl BatchVerificationRunner {
 
     async fn run<E: Send + Sync + 'static>(
         mut self,
-        mut batch_for_signing_receiver: TrackedUnboundedReceiver<BatchForSigning<E>>,
-        signed_batch_sender: TrackedUnboundedSender<SignedBatchEnvelope<E>>,
+        mut batch_for_signing_receiver: PeekableReceiver<BatchForSigning<E>>,
+        signed_batch_sender: mpsc::UnboundedSender<SignedBatchEnvelope<E>>,
     ) -> anyhow::Result<()> {
         let metrics = &*BATCH_VERIFICATION_SEQUENCER_METRICS;
 
@@ -581,10 +581,9 @@ mod tests {
     async fn run_skips_already_committed_batches_and_forwards_them() {
         let (verifier, _verify_request_rx, _verify_result_tx) = make_verifier(Vec::new(), 10);
 
-        let (input_tx, input_rx) =
-            zksync_os_pipeline::tracked_unbounded_channel::<BatchForSigning<()>>();
-        let (output_tx, mut output_rx) =
-            zksync_os_pipeline::tracked_unbounded_channel::<SignedBatchEnvelope<()>>();
+        let (input_tx, input_rx) = mpsc::unbounded_channel::<BatchForSigning<()>>();
+        let input_rx = PeekableReceiver::new(input_rx);
+        let (output_tx, mut output_rx) = mpsc::unbounded_channel::<SignedBatchEnvelope<()>>();
 
         let batch = dummy_batch_envelope(5, 30, 35);
         input_tx.send(batch).expect("failed to send batch");
@@ -632,10 +631,9 @@ mod tests {
                 .expect("failed to send verification response");
         });
 
-        let (input_tx, input_rx) =
-            zksync_os_pipeline::tracked_unbounded_channel::<BatchForSigning<()>>();
-        let (output_tx, mut output_rx) =
-            zksync_os_pipeline::tracked_unbounded_channel::<SignedBatchEnvelope<()>>();
+        let (input_tx, input_rx) = mpsc::unbounded_channel::<BatchForSigning<()>>();
+        let input_rx = PeekableReceiver::new(input_rx);
+        let (output_tx, mut output_rx) = mpsc::unbounded_channel::<SignedBatchEnvelope<()>>();
 
         input_tx.send(batch).expect("failed to send batch");
         drop(input_tx);

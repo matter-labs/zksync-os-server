@@ -1,11 +1,12 @@
 use async_trait::async_trait;
 use std::path::Path;
+use tokio::sync::mpsc;
 use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_observability::ComponentHealthReporter;
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_storage_api::{ReadFinality, ReadReplay};
 
@@ -66,8 +67,8 @@ where
 
     async fn run(
         self,
-        input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         self.priority_tree_manager
             .run(Some((input, output)), self.health_reporter)

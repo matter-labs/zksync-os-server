@@ -7,7 +7,7 @@ use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_observability::ComponentHealthReporter;
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
 /// Pipeline step that waits for batches to be SNARK proved.
 ///
@@ -64,8 +64,8 @@ impl PipelineComponent for SnarkProvingPipelineStep {
 
     async fn run(
         mut self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         // Health reporting is intentionally delegated to SnarkJobManager rather than
         // using recv_and_record / send_and_record here. SNARK proving is asynchronous:

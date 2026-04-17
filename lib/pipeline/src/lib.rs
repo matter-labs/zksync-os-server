@@ -13,13 +13,13 @@
 pub mod builder;
 pub mod component_id;
 pub mod has_block_range_end;
-pub mod tracked_channel;
+pub mod peekable_receiver;
+pub mod send_and_record;
 pub mod traits;
 
 pub use builder::Pipeline;
 pub use component_id::ComponentId;
 pub use has_block_range_end::HasBlockRangeEnd;
-pub use tracked_channel::{
-    TrackedUnboundedReceiver, TrackedUnboundedSender, tracked_unbounded_channel,
-};
+pub use peekable_receiver::PeekableReceiver;
+pub use send_and_record::SendAndRecordExt;
 pub use traits::PipelineComponent;

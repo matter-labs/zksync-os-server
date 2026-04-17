@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use std::collections::VecDeque;
 use tokio::sync::mpsc;
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::ReplayRecord;
 
 /// Pipeline component that ensures that only canonized blocks are sent downstream,
@@ -83,8 +83,8 @@ where
 
     async fn run(
         mut self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         /// Maximum number of blocks that can be waiting for canonization.
         /// When this limit is reached, backpressure is applied to the upstream BlockExecutor.

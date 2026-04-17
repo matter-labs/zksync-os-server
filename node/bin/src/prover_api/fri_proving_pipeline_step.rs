@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_l1_sender::batcher_model::{FriProof, ProverInput, SignedBatchEnvelope};
 use zksync_os_observability::ComponentHealthReporter;
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
 /// Pipeline step that waits for batches to be FRI proved.
 ///
@@ -66,8 +66,8 @@ impl PipelineComponent for FriProvingPipelineStep {
 
     async fn run(
         mut self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         // Health reporting is intentionally delegated to FriJobManager rather than
         // using recv_and_record / send_and_record here. FRI proving is asynchronous:

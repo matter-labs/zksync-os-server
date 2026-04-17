@@ -14,12 +14,12 @@ use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_storage_api::{ReadFinality, ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
 
-type InputChannel = TrackedUnboundedReceiver<SignedBatchEnvelope<FriProof>>;
-type OutputChannel = TrackedUnboundedSender<L1SenderCommand<ExecuteCommand>>;
+type InputChannel = PeekableReceiver<SignedBatchEnvelope<FriProof>>;
+type OutputChannel = mpsc::UnboundedSender<L1SenderCommand<ExecuteCommand>>;
 
 mod db;
 
@@ -145,7 +145,7 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
         let mut last_processed_batch = self.last_executed_batch_on_init;
 
         async fn take_n<T: Send + 'static>(
-            receiver: &mut TrackedUnboundedReceiver<T>,
+            receiver: &mut PeekableReceiver<T>,
             n: usize,
         ) -> anyhow::Result<Option<Vec<T>>> {
             let mut out = Vec::default();

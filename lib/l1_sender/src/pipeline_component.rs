@@ -7,9 +7,9 @@ use alloy::primitives::Address;
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, WalletProvider};
 use async_trait::async_trait;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use zksync_os_observability::ComponentHealthReporter;
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
 /// Generic L1 Sender pipeline component
 /// Can be used for commit, prove, or execute operations
@@ -36,8 +36,8 @@ where
 
     async fn run(
         self,
-        input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         run_l1_sender(
             input,

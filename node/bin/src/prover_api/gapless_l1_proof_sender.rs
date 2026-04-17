@@ -1,11 +1,10 @@
 use async_trait::async_trait;
 use std::collections::BTreeMap;
+use tokio::sync::mpsc;
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{
-    HasBlockRangeEnd, PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender,
-};
+use zksync_os_pipeline::{HasBlockRangeEnd, PeekableReceiver, PipelineComponent, SendAndRecordExt};
 
 /// Receives L1SenderCommands with ProofCommand - potentially out of order.
 /// Fixes the order and sends downstream.
@@ -33,8 +32,8 @@ impl PipelineComponent for GaplessL1ProofSender {
 
     async fn run(
         self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         let mut buffer: BTreeMap<u64, L1SenderCommand<ProofCommand>> = BTreeMap::new();
         let mut next_expected_batch_number = self.next_expected_batch_number;
@@ -75,7 +74,6 @@ impl PipelineComponent for GaplessL1ProofSender {
                         {
                             anyhow::bail!("Outbound channel closed");
                         }
-                        self.health_reporter.record_batch_number(flushing_batch);
                         self.health_reporter
                             .enter_state(GenericComponentState::Active);
                     }

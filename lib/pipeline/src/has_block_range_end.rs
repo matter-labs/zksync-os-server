@@ -1,6 +1,7 @@
-/// Pipeline message types implement this so `TrackedUnboundedReceiver`
-/// can automatically call `health_reporter.record_processed` on receive,
-/// eliminating the boilerplate `last_block` local variable in every component.
+/// Pipeline message types implement this so `PeekableReceiver::recv_and_record_picked`
+/// and `SendAndRecordExt::send_and_record` can pull block/batch coordinates off the
+/// message and drive `ComponentHealthReporter` automatically, eliminating the
+/// boilerplate `last_block` local variable in every component.
 pub trait HasBlockRangeEnd: Send + 'static {
     /// Block number of the last block represented by this message.
     /// For block-level messages this is the block's number.

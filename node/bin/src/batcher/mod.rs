@@ -18,7 +18,7 @@ use zksync_os_l1_sender::batcher_model::{
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::PubdataMode;
 
@@ -66,8 +66,8 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 
     async fn run(
         mut self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         // We use last executed batch as the starting point. Next immediate batch we process will be
         // `last_executed_batch + 1`.
@@ -211,7 +211,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
     async fn create_batch(
         &mut self,
-        block_receiver: &mut TrackedUnboundedReceiver<(
+        block_receiver: &mut PeekableReceiver<(
             BlockOutput,
             ReplayRecord,
             ProverInput,
@@ -352,7 +352,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
 
     async fn recreate_existing_batch(
         &mut self,
-        block_receiver: &mut TrackedUnboundedReceiver<(
+        block_receiver: &mut PeekableReceiver<(
             BlockOutput,
             ReplayRecord,
             ProverInput,

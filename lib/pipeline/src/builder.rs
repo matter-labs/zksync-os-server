@@ -1,13 +1,13 @@
 use crate::ComponentId;
 use crate::PipelineComponent;
-use crate::tracked_channel::{TrackedUnboundedReceiver, tracked_unbounded_channel};
+use crate::peekable_receiver::PeekableReceiver;
 use reth_tasks::Runtime;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
 
 /// Pipeline with an active output stream that can be piped to more components
 pub struct Pipeline<Output: Send + 'static> {
-    receiver: TrackedUnboundedReceiver<Output>,
+    receiver: PeekableReceiver<Output>,
     runtime: Runtime,
     spawned_tasks: HashSet<&'static str>,
     shutdown_sender: mpsc::Sender<&'static str>,
@@ -20,7 +20,8 @@ pub struct Pipeline<Output: Send + 'static> {
 
 impl Pipeline<()> {
     pub fn new(runtime: Runtime) -> Self {
-        let (_sender, receiver) = tracked_unbounded_channel::<()>();
+        let (_sender, receiver) = mpsc::unbounded_channel::<()>();
+        let receiver = PeekableReceiver::new(receiver);
         let (shutdown_sender, shutdown_receiver) = mpsc::channel(16);
         Self {
             receiver,
@@ -78,7 +79,8 @@ impl<Output: Send + 'static> Pipeline<Output> {
         C: PipelineComponent<Input = Output>,
     {
         let name = C::COMPONENT_ID.as_str();
-        let (output_sender, output_receiver) = tracked_unbounded_channel::<C::Output>();
+        let (output_sender, output_receiver) = mpsc::unbounded_channel::<C::Output>();
+        let output_receiver = PeekableReceiver::new(output_receiver);
         let input_receiver = self.receiver;
 
         let shutdown_sender = self.shutdown_sender.clone();

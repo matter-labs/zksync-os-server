@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use std::ops::Div;
 use std::path::Path;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
@@ -12,7 +13,7 @@ use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeVersion, RocksDBWrapper, TreeEntry,
 };
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
 use zksync_os_sequencer::model::blocks::AppliedBlock;
 
@@ -34,8 +35,8 @@ impl PipelineComponent for TreeManager {
 
     async fn run(
         self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         // only used to skip blocks that were already processed by the tree -
         // will be removed once idempotency is handled on the framework level
@@ -92,8 +93,6 @@ impl PipelineComponent for TreeManager {
                 .latest_version()?
                 .expect("uninitialized tree after applying a block");
             assert_eq!(last_processed_block, block_number);
-            self.health_reporter
-                .record_processed(block_number, Some(replay_record.block_context.timestamp));
 
             tracing::debug!(
                 block_number = block_number,
@@ -121,12 +120,15 @@ impl PipelineComponent for TreeManager {
                     block: block_number,
                 },
             };
+            let block_timestamp = replay_record.block_context.timestamp;
             if output
                 .send((block_output, replay_record, tree_block))
                 .is_err()
             {
                 anyhow::bail!("Outbound channel closed");
             }
+            self.health_reporter
+                .record_processed(block_number, Some(block_timestamp));
         }
     }
 }

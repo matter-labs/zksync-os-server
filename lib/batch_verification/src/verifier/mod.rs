@@ -16,7 +16,7 @@ use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
 };
 use zksync_os_observability::{ComponentHealthReporter, GenericComponentState};
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
 use zksync_os_storage_api::{ReplayRecord, StateError, read_multichain_root};
 
@@ -207,8 +207,8 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
 
     async fn run(
         mut self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        _output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        _output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         tracing::info!("starting batch verification responder");
         loop {

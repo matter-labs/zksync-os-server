@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
-use zksync_os_pipeline::{PipelineComponent, TrackedUnboundedReceiver, TrackedUnboundedSender};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::ReadFinality;
 
 /// Final destination for all processed batches
@@ -29,8 +30,8 @@ impl PipelineComponent for BatchSink {
 
     async fn run(
         self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        _output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        _output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         let mut internal_config = self.internal_config_manager.read_config()?;
         loop {
@@ -89,8 +90,8 @@ impl<T: Send + 'static> PipelineComponent for NoOpSink<T> {
 
     async fn run(
         self,
-        mut input: TrackedUnboundedReceiver<Self::Input>,
-        _output: TrackedUnboundedSender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        _output: mpsc::UnboundedSender<Self::Output>,
     ) -> anyhow::Result<()> {
         while input.recv().await.is_some() {
             // No-op: just receive and discard
