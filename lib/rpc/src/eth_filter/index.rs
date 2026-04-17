@@ -126,3 +126,130 @@ impl From<(RoaringBitmap, Range<u64>)> for Candidates {
 fn intersect(a: Range<u64>, b: Range<u64>) -> Range<u64> {
     a.start.max(b.start)..a.end.min(b.end)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::{Address, B256};
+    use std::collections::HashMap;
+    use zksync_os_storage_api::RepositoryResult;
+
+    #[derive(Debug, Default)]
+    struct MockIndex {
+        addresses: HashMap<Address, (RoaringBitmap, Range<u64>)>,
+        topics: HashMap<B256, (RoaringBitmap, Range<u64>)>,
+    }
+
+    impl MockIndex {
+        fn with_address(mut self, addr: Address, blocks: &[u64], covered: Range<u64>) -> Self {
+            self.addresses
+                .insert(addr, (blocks.iter().map(|&b| b as u32).collect(), covered));
+            self
+        }
+
+        fn with_topic(mut self, topic: B256, blocks: &[u64], covered: Range<u64>) -> Self {
+            self.topics
+                .insert(topic, (blocks.iter().map(|&b| b as u32).collect(), covered));
+            self
+        }
+    }
+
+    impl LogIndex for MockIndex {
+        fn blocks_for_address(
+            &self,
+            address: Address,
+            _range: Range<u64>,
+        ) -> RepositoryResult<(RoaringBitmap, Range<u64>)> {
+            Ok(self.addresses.get(&address).cloned().unwrap_or_default())
+        }
+
+        fn blocks_for_topic(
+            &self,
+            topic: B256,
+            _range: Range<u64>,
+        ) -> RepositoryResult<(RoaringBitmap, Range<u64>)> {
+            Ok(self.topics.get(&topic).cloned().unwrap_or_default())
+        }
+    }
+
+    fn blocks(c: &Candidates) -> Vec<u32> {
+        c.bitmap.iter().collect()
+    }
+
+    #[test]
+    fn unconstrained_filter_returns_empty_candidates() {
+        let index = MockIndex::default();
+        let filter = Filter::new();
+        let c = candidates(&index, &filter, 0..100).unwrap();
+        assert!(c.bitmap.is_empty());
+        assert_eq!(c.covered, 0..0);
+    }
+
+    #[test]
+    fn single_address_uses_address_index() {
+        let addr = Address::repeat_byte(0x01);
+        let index = MockIndex::default().with_address(addr, &[2, 4, 6], 0..10);
+        let filter = Filter::new().address(addr);
+        let c = candidates(&index, &filter, 0..10).unwrap();
+        assert_eq!(blocks(&c), vec![2, 4, 6]);
+        assert_eq!(c.covered, 0..10);
+    }
+
+    #[test]
+    fn multiple_addresses_are_ored() {
+        let a = Address::repeat_byte(0x01);
+        let b = Address::repeat_byte(0x02);
+        let index = MockIndex::default()
+            .with_address(a, &[1, 3], 0..10)
+            .with_address(b, &[3, 5], 0..10);
+        let filter = Filter::new().address(vec![a, b]);
+        let c = candidates(&index, &filter, 0..10).unwrap();
+        assert_eq!(blocks(&c), vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn address_and_topic_are_anded() {
+        let addr = Address::repeat_byte(0x01);
+        let topic = B256::repeat_byte(0x42);
+        let index = MockIndex::default()
+            .with_address(addr, &[1, 2, 3], 0..10)
+            .with_topic(topic, &[2, 3, 4], 0..10);
+        let filter = Filter::new().address(addr).event_signature(topic);
+        let c = candidates(&index, &filter, 0..10).unwrap();
+        assert_eq!(blocks(&c), vec![2, 3]);
+    }
+
+    #[test]
+    fn multiple_topics_at_same_position_are_ored() {
+        let t1 = B256::repeat_byte(0x01);
+        let t2 = B256::repeat_byte(0x02);
+        let index = MockIndex::default()
+            .with_topic(t1, &[1, 3], 0..10)
+            .with_topic(t2, &[3, 5], 0..10);
+        let filter = Filter::new().event_signature(vec![t1, t2]);
+        let c = candidates(&index, &filter, 0..10).unwrap();
+        assert_eq!(blocks(&c), vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn coverage_is_intersected_across_groups() {
+        let addr = Address::repeat_byte(0x01);
+        let topic = B256::repeat_byte(0x42);
+        let index = MockIndex::default()
+            .with_address(addr, &[5], 0..10)
+            .with_topic(topic, &[5], 4..12);
+        let filter = Filter::new().address(addr).event_signature(topic);
+        let c = candidates(&index, &filter, 0..12).unwrap();
+        assert_eq!(c.covered, 4..10);
+    }
+
+    #[test]
+    fn no_index_coverage_returns_empty_covered() {
+        let addr = Address::repeat_byte(0x01);
+        let index = MockIndex::default(); // no index entries → default (empty, 0..0)
+        let filter = Filter::new().address(addr);
+        let c = candidates(&index, &filter, 0..10).unwrap();
+        assert!(c.bitmap.is_empty());
+        assert_eq!(c.covered, 0..0);
+    }
+}
