@@ -5,6 +5,7 @@ use alloy::primitives::Address;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Log, Topic, ValueOrArray};
 use alloy::sol_types::SolEvent;
+use anyhow::Context;
 use std::collections::HashMap;
 use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
@@ -52,7 +53,13 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             last_persisted_batch,
             config.max_blocks_to_process,
         )
-        .await?;
+        .await?
+        .with_context(|| {
+            format!(
+                "could not find L1 commit block for batch {last_persisted_batch} on zk_chain {}",
+                zk_chain.address()
+            )
+        })?;
         tracing::info!(last_l1_block, "resolved on L1");
 
         let this = Self {

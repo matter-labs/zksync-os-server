@@ -145,12 +145,27 @@ impl L1State {
             None => BatchVerificationSL::Disabled,
         };
 
-        let current_migration_number: u64 = bridgehub_l1
-            .migration_number(l2_chain_id)
-            .await
-            .context("failed to fetch current migration number from L1 chain asset handler")?
-            .try_into()
-            .context("current migration number overflows u64")?;
+        // `Bridgehub.chainAssetHandler()` + `IChainAssetHandler.migrationNumber()`
+        // are v31+ additions. Pre-v31 bridgehubs don't expose them, so the
+        // call reverts (alloy surfaces that as a TransportError with a
+        // JSON-RPC error response). Treat any failure here as "chain never
+        // migrated" (current_migration_number = 0) so the server can start
+        // against a v30 fixture and ride through the v30→v31 upgrade without
+        // restarting. If the call keeps failing after the upgrade we'll see
+        // it when other L1 lookups break downstream.
+        let current_migration_number: u64 = match bridgehub_l1.migration_number(l2_chain_id).await
+        {
+            Ok(n) => n
+                .try_into()
+                .context("current migration number overflows u64")?,
+            Err(e) => {
+                tracing::info!(
+                    error = %e,
+                    "migrationNumber() not available on L1 bridgehub (pre-v31?); assuming current_migration_number = 0"
+                );
+                0
+            }
+        };
 
         Ok(Self {
             bridgehub_l1,

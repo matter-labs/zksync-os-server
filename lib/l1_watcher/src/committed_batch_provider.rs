@@ -77,6 +77,7 @@ impl CommittedBatchProvider {
         provider
             .load_batch_numbers(
                 l1_state.diamond_proxy_sl.clone(),
+                l1_state.diamond_proxy_l1.clone(),
                 max_l1_blocks_to_scan,
                 prioritized_batch_numbers,
             )
@@ -94,6 +95,7 @@ impl CommittedBatchProvider {
         );
         self.load_batch_numbers(
             l1_state.diamond_proxy_sl.clone(),
+            l1_state.diamond_proxy_l1.clone(),
             max_l1_blocks_to_scan,
             remaining_batch_numbers,
         )
@@ -140,6 +142,7 @@ impl CommittedBatchProvider {
     async fn load_batch_numbers(
         &self,
         diamond_proxy_sl: ZkChain<DynProvider>,
+        diamond_proxy_l1: ZkChain<DynProvider>,
         max_l1_blocks_to_scan: u64,
         batch_numbers: Vec<u64>,
     ) -> anyhow::Result<()> {
@@ -147,9 +150,15 @@ impl CommittedBatchProvider {
             .map(|batch_number| {
                 let provider = self.clone();
                 let diamond_proxy_sl = diamond_proxy_sl.clone();
+                let diamond_proxy_l1 = diamond_proxy_l1.clone();
                 async move {
-                    let discovered_batch =
-                        fetch_batch(diamond_proxy_sl, batch_number, max_l1_blocks_to_scan).await?;
+                    let discovered_batch = fetch_batch(
+                        diamond_proxy_sl,
+                        diamond_proxy_l1,
+                        batch_number,
+                        max_l1_blocks_to_scan,
+                    )
+                    .await?;
                     tracing::info!(
                         "discovered committed batch {} on startup",
                         discovered_batch.number()
@@ -192,22 +201,49 @@ fn startup_batch_numbers(
     (prioritized_in_range, remaining_batch_numbers)
 }
 
-/// Resolves a committed batch from L1 by first finding the block that committed it and then
-/// decoding the corresponding stored batch data.
+/// Resolves a committed batch by trying the current settlement layer's diamond proxy first,
+/// then falling back to the chain's L1 diamond proxy.
+///
+/// After a live migration to a gateway, `diamond_proxy_sl` is the proxy on the new SL (which
+/// does not re-emit the `ReportCommittedBatchRangeZKsyncOS` events for pre-migration batches
+/// even though `get_total_batches_committed` reflects them via state migration). The commit
+/// events for those batches still live on `diamond_proxy_l1`, so we consult it as a fallback.
+///
+/// For a chain that never migrated, `diamond_proxy_sl` and `diamond_proxy_l1` point at the
+/// same address on the same provider, and the fallback is a redundant no-op.
 async fn fetch_batch(
     diamond_proxy_sl: ZkChain<DynProvider>,
+    diamond_proxy_l1: ZkChain<DynProvider>,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<DiscoveredCommittedBatch> {
-    let sl_block_with_commit = util::find_l1_commit_block_by_batch_number(
-        diamond_proxy_sl.clone(),
+    if let Some(batch) =
+        try_fetch_batch_on_proxy(&diamond_proxy_sl, batch_number, max_l1_blocks_to_scan).await?
+    {
+        return Ok(batch);
+    }
+    try_fetch_batch_on_proxy(&diamond_proxy_l1, batch_number, max_l1_blocks_to_scan)
+        .await?
+        .with_context(|| {
+            format!("failed to find committed batch {batch_number} on either L1 or current SL")
+        })
+}
+
+async fn try_fetch_batch_on_proxy(
+    zk_chain: &ZkChain<DynProvider>,
+    batch_number: u64,
+    max_l1_blocks_to_scan: u64,
+) -> anyhow::Result<Option<DiscoveredCommittedBatch>> {
+    let Some(block_with_commit) = util::find_l1_commit_block_by_batch_number(
+        zk_chain.clone(),
         batch_number,
         max_l1_blocks_to_scan,
     )
-    .await?;
-    util::fetch_stored_batch_data(&diamond_proxy_sl, sl_block_with_commit, batch_number)
-        .await?
-        .with_context(|| format!("failed to find committed batch {batch_number} on L1"))
+    .await?
+    else {
+        return Ok(None);
+    };
+    util::fetch_stored_batch_data(zk_chain, block_with_commit, batch_number).await
 }
 
 #[cfg(test)]

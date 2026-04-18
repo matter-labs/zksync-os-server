@@ -172,14 +172,14 @@ pub async fn find_l1_commit_block_by_batch_number(
     zk_chain: ZkChain<DynProvider>,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
-) -> anyhow::Result<BlockNumber> {
+) -> anyhow::Result<Option<BlockNumber>> {
     if zk_chain.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
         // Binary search may error on Anvil with `--load-state` - as it doesn't support `eth_call`
         // for historical blocks. We run linear search as a fallback.
         if batch_number == 0 {
             // For genesis we must return L1 block where `zk_chain` got deployed. For Anvil it's okay
             // to return 0 here as the chain should not be long anyway.
-            return Ok(0);
+            return Ok(Some(0));
         }
         return find_last_matching_event::<ReportCommittedBatchRangeZKsyncOS>(
             *zk_chain.address(),
@@ -188,10 +188,7 @@ pub async fn find_l1_commit_block_by_batch_number(
             max_l1_blocks_to_scan,
             |e| e.batchNumber == batch_number,
         )
-        .await?
-        .with_context(|| {
-            format!("linear search failed to find where batch {batch_number} was committed")
-        });
+        .await;
     }
 
     let is_batch_committed = move |zk: Arc<ZkChain<DynProvider>>, block: BlockNumber| async move {
@@ -246,7 +243,7 @@ pub async fn find_l1_commit_block_by_batch_number(
                 l1_block_with_commit,
                 "found non-reverted batch commitment on L1"
             );
-            Ok(l1_block_with_commit)
+            Ok(Some(l1_block_with_commit))
         }
         None => {
             tracing::info!(
@@ -254,7 +251,7 @@ pub async fn find_l1_commit_block_by_batch_number(
                 l1_block_with_commit,
                 "no batch reverts found on L1"
             );
-            Ok(l1_block_with_commit)
+            Ok(Some(l1_block_with_commit))
         }
     }
 }
