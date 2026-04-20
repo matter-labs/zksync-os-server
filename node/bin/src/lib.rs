@@ -108,8 +108,8 @@ use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
-    FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
-    ReplayRecord, WriteReplay, WriteRepository, WriteState,
+    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord,
+    WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
     BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, PubdataMode,
@@ -308,13 +308,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let tree_db = tree_at_genesis.tree;
     let tree_for_rpc = Arc::new(tree_db.clone());
 
-    // Open the local executed-batch storage early so we can seed the
-    // `CommittedBatchProvider` from locally-persisted batches. This matters
-    // after a settlement-layer migration: the new SL's diamond has no commit
-    // event for the already-executed historical batches (the commits happened
-    // on the old SL), so startup batch discovery on the new SL can't find
-    // them. Reading them out of local RocksDB — where they were written by
-    // the previous run's `L1PersistBatchWatcher` — sidesteps that.
+    // Open the local executed-batch storage early. The `CommittedBatchProvider`
+    // consults it as a lazy third fallback (after the SL diamond and the L1
+    // diamond) when resolving a batch whose commit event the current node
+    // can't find on-chain. This only happens after a settlement-layer
+    // migration: e.g. after migrating a chain back from a gateway, the commits
+    // for pre-migration batches live on the former-gateway L2 diamond — which
+    // this node can't (and shouldn't have to) query — and the previous run's
+    // `L1PersistBatchWatcher` will have written them to local RocksDB.
+    //
+    // `ExecutedBatchStorage` is `Clone` (RocksDB wraps its handle in an Arc
+    // internally), so we pass plain clones to the downstream consumers and
+    // wrap a clone in `Arc<dyn ReadBatch>` only for the provider, whose API
+    // is trait-object to stay decoupled from the storage crate.
     let persistent_batch_storage =
         ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
 
@@ -327,33 +333,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .await
                 .unwrap()
         },
+        Arc::new(persistent_batch_storage.clone()),
     )
     .await
     .expect("failed to init CommittedBatchProvider");
-
-    // Post-migration seeding. `CommittedBatchProvider::new` only discovers
-    // batches it can find commit events for on the current SL. For a chain
-    // that just migrated to a new SL, `last_executed_batch` (= the migrated
-    // bookkeeping tip) has no commit event on the new SL — it was committed
-    // on the OLD one. The Batcher's `wait_for_batch(last_executed)` would
-    // block forever. Seed it from local batch storage if the previous run
-    // persisted it.
-    if l1_state.last_executed_batch > 0
-        && committed_batch_provider
-            .get(l1_state.last_executed_batch)
-            .is_none()
-    {
-        if let Ok(Some(local_batch)) =
-            persistent_batch_storage.get_batch_by_number(l1_state.last_executed_batch)
-        {
-            tracing::info!(
-                batch_number = l1_state.last_executed_batch,
-                "seeded CommittedBatchProvider with last_executed batch from local storage \
-                 (not present on current SL — likely a post-migration restart)",
-            );
-            committed_batch_provider.insert(local_batch.committed_batch);
-        }
-    }
 
     let committed_batch_provider_for_init = committed_batch_provider.clone();
     let l1_state_for_init = l1_state.clone();
