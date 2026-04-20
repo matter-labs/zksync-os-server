@@ -59,13 +59,25 @@ pub async fn find_settlement_layer_intervals(
     chain_id: u64,
 ) -> anyhow::Result<Vec<SettlementLayerInterval>> {
     let cah = IChainAssetHandler::new(chain_asset_handler, provider);
-    let total_migrations: u64 = cah
-        .migrationNumber(U256::from(chain_id))
-        .call()
-        .await
-        .context("failed to fetch migrationNumber")?
-        .try_into()
-        .map_err(|e| anyhow::anyhow!("migrationNumber overflow: {e}"))?;
+    let total_migrations: u64 = match cah.migrationNumber(U256::from(chain_id)).call().await {
+        Ok(n) => n
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("migrationNumber overflow: {e}"))?,
+        // Pre-V31 `ChainAssetHandler` does not expose `migrationNumber`. In that era Gateway
+        // migrations are not possible, so the chain has always committed to L1.
+        Err(e) if is_method_missing(&e) => {
+            tracing::debug!(
+                "ChainAssetHandler does not expose migrationNumber; assuming pre-V31 protocol \
+                 with no Gateway migrations: {e}"
+            );
+            return Ok(vec![SettlementLayerInterval {
+                settlement_layer: IntervalSettlementLayer::L1,
+                first_batch: 1,
+                last_batch: None,
+            }]);
+        }
+        Err(e) => return Err(anyhow::Error::new(e).context("failed to fetch migrationNumber")),
+    };
 
     let raw = futures::future::try_join_all((1..=total_migrations).map(|i| {
         let cah = &cah;
@@ -140,6 +152,17 @@ pub async fn find_settlement_layer_intervals(
         });
     }
     Ok(intervals)
+}
+
+/// Returns `true` if the error came from the contract itself (empty return data or a revert),
+/// which is how an EVM reports a call to a function selector that the deployed code does not
+/// implement. Network / transport failures return `false` so they can be propagated.
+fn is_method_missing(err: &alloy::contract::Error) -> bool {
+    match err {
+        alloy::contract::Error::ZeroData(..) => true,
+        alloy::contract::Error::TransportError(te) => te.as_error_resp().is_some(),
+        _ => false,
+    }
 }
 
 /// Finds the first block where `IChainAssetHandler::migrationNumber(chain_id) >= migration_number`
