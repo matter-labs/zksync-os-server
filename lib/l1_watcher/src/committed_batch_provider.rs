@@ -1,6 +1,6 @@
 use crate::util;
 use crate::util::{IntervalSettlementLayer, SettlementLayerInterval};
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::BlockNumber;
 use alloy::providers::DynProvider;
 use anyhow::Context;
 use futures::stream::{self, StreamExt};
@@ -36,14 +36,14 @@ const WAIT_FOR_BATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 #[derive(Debug, Clone)]
 pub struct CommittedBatchProvider {
     inner: Arc<RwLock<Inner>>,
-    /// Settlement layer intervals discovered at startup, in ascending order of `from_block`.
+    /// Settlement layer intervals discovered at startup, in ascending order.
     /// Used to route batch lookups to the diamond proxy of the SL the batch was committed to.
     intervals: Arc<Vec<SettlementLayerInterval>>,
     diamond_proxy_l1: ZkChain<DynProvider>,
-    /// Diamond proxy of the chain's current settlement layer, paired with that SL's address as
-    /// stored on L1. `None` means the chain currently settles on L1, in which case lookups for
-    /// historical Gateway intervals are unsupported (no Gateway provider is configured).
-    diamond_proxy_gw: Option<(Address, ZkChain<DynProvider>)>,
+    /// Diamond proxy of the chain's current settlement layer, paired with that SL's chain ID.
+    /// `None` means the chain currently settles on L1, in which case lookups for historical
+    /// Gateway intervals are unsupported (no Gateway provider is configured).
+    diamond_proxy_gw: Option<(u64, ZkChain<DynProvider>)>,
 }
 
 #[derive(Debug, Default)]
@@ -64,21 +64,18 @@ impl CommittedBatchProvider {
     ) -> anyhow::Result<Self> {
         let chain_asset_handler = l1_state.bridgehub_l1.chain_asset_handler_address().await?;
         let intervals = util::find_settlement_layer_intervals(
-            l1_state.diamond_proxy_l1.clone(),
             chain_asset_handler,
+            l1_state.diamond_proxy_l1.provider().clone(),
             l2_chain_id,
         )
         .await
         .context("failed to discover settlement layer intervals")?;
         tracing::info!("discovered {} settlement layer intervals", intervals.len());
 
-        let diamond_proxy_gw = if l1_state.settlement_layer_address.is_zero() {
+        let diamond_proxy_gw = if l1_state.sl_chain_id == l1_state.l1_chain_id {
             None
         } else {
-            Some((
-                l1_state.settlement_layer_address,
-                l1_state.diamond_proxy_sl.clone(),
-            ))
+            Some((l1_state.sl_chain_id, l1_state.diamond_proxy_sl.clone()))
         };
 
         let provider = Self {
@@ -149,44 +146,31 @@ impl CommittedBatchProvider {
     /// Returns the diamond proxy that should be used to fetch data about `batch_number` based on
     /// which settlement layer interval it falls into.
     fn resolve_proxy(&self, batch_number: u64) -> anyhow::Result<&ZkChain<DynProvider>> {
-        let interval = self.find_interval(batch_number);
-        match &interval.settlement_layer {
+        let interval = self.find_interval(batch_number).with_context(|| {
+            format!("batch {batch_number} does not belong to any known settlement layer interval")
+        })?;
+        match interval.settlement_layer {
             IntervalSettlementLayer::L1 => Ok(&self.diamond_proxy_l1),
-            IntervalSettlementLayer::Gateway(addr) => match &self.diamond_proxy_gw {
-                Some((gw_addr, gw)) if gw_addr == addr => Ok(gw),
-                Some((gw_addr, _)) => anyhow::bail!(
-                    "batch {batch_number} was committed on Gateway {addr} but the chain's current \
-                     Gateway is {gw_addr}; no provider is available for the historical Gateway"
+            IntervalSettlementLayer::Gateway(chain_id) => match &self.diamond_proxy_gw {
+                Some((gw_chain_id, gw)) if *gw_chain_id == chain_id => Ok(gw),
+                Some((gw_chain_id, _)) => anyhow::bail!(
+                    "batch {batch_number} was committed on Gateway with chain ID {chain_id} but \
+                     the chain's current Gateway is {gw_chain_id}; no provider is available for \
+                     the historical Gateway"
                 ),
                 None => anyhow::bail!(
-                    "batch {batch_number} was committed on Gateway {addr} but the chain currently \
-                     settles on L1; no Gateway provider is configured"
+                    "batch {batch_number} was committed on Gateway with chain ID {chain_id} but \
+                     the chain currently settles on L1; no Gateway provider is configured"
                 ),
             },
         }
     }
 
-    /// Finds the settlement layer interval that owns `batch_number`. A batch belongs to interval
-    /// `i` if `intervals[i].initial_batch < batch_number <= intervals[i+1].initial_batch` (or to
-    /// the last interval if it exceeds the last `initial_batch`).
-    fn find_interval(&self, batch_number: u64) -> &SettlementLayerInterval {
-        let intervals = &*self.intervals;
-        // Check last first as it's most likely to be the case.
-        if let Some(last) = intervals
-            .last()
-            .filter(|last| batch_number > last.initial_batch)
-        {
-            return last;
-        }
-        // Check all other intervals
-        for window in intervals.windows(2) {
-            let curr = &window[0];
-            let next = &window[1];
-            if curr.initial_batch < batch_number && batch_number <= next.initial_batch {
-                return curr;
-            }
-        }
-        unreachable!("batch number does not belong to any settlement layer interval")
+    /// Finds the settlement layer interval that contains `batch_number`.
+    fn find_interval(&self, batch_number: u64) -> Option<&SettlementLayerInterval> {
+        self.intervals.iter().find(|i| {
+            batch_number >= i.first_batch && i.last_batch.is_none_or(|last| batch_number <= last)
+        })
     }
 
     pub(crate) fn insert(&self, batch: DiscoveredCommittedBatch) {

@@ -172,7 +172,20 @@ alloy::sol! {
 
     #[sol(rpc)]
     interface IChainAssetHandler {
+        struct MigrationInterval {
+            uint256 migrateToGWBatchNumber;
+            uint256 migrateFromGWBatchNumber;
+            uint256 settlementLayerBatchLowerBound;
+            uint256 settlementLayerBatchUpperBound;
+            uint256 settlementLayerChainId;
+            bool isActive;
+        }
+
         function migrationNumber(uint256 _chainId) external view returns (uint256);
+        function migrationInterval(
+            uint256 _chainId,
+            uint256 _migrationNumber
+        ) external view returns (MigrationInterval memory interval);
     }
 
     // `IChainTypeManager.sol`

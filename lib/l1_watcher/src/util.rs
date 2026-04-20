@@ -1,7 +1,7 @@
 use crate::watcher::L1WatcherError;
 use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
-use alloy::primitives::{Address, B256, BlockNumber, TxHash};
+use alloy::primitives::{Address, B256, BlockNumber, TxHash, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
@@ -14,112 +14,132 @@ use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
 use zksync_os_contract_interface::models::CommitBatchInfo;
-use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
+use zksync_os_contract_interface::{
+    Bridgehub, IChainAssetHandler, IExecutor, MessageRoot, ZkChain,
+};
 use zksync_os_types::ProtocolSemanticVersion;
 
 pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
 
-/// Settlement layer that a chain was committing to during a given range of L1 blocks.
+/// Settlement layer that a chain was committing to during a given batch range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntervalSettlementLayer {
-    /// Settling on L1 directly (`getSettlementLayer()` returned `address(0)`).
+    /// Settling on L1 directly.
     L1,
-    /// Settling on a Gateway, identified by its settlement layer address as specified on L1.
-    Gateway(Address),
+    /// Settling on a Gateway, identified by its chain ID.
+    Gateway(u64),
 }
 
-/// Inclusive L1-block range during which the chain's settlement layer did not change.
+/// Inclusive batch-number range during which the chain committed to a single settlement layer.
+///
+/// `last_batch` is `None` for the currently-active (open-ended) interval.
 #[derive(Debug, Clone)]
 pub struct SettlementLayerInterval {
-    pub from_block: BlockNumber,
-    pub to_block: BlockNumber,
     pub settlement_layer: IntervalSettlementLayer,
-    /// Latest batch number that was already committed (as reflected in L1 state) when this
-    /// interval started, i.e. `getTotalBatchesCommitted()` at `from_block`. For an `L1 → GW`
-    /// boundary this equals the count at end of the previous L1 interval; for a `GW → L1`
-    /// boundary it includes the catch-up that `Migrator.forwardedBridgeMint` applies at the
-    /// start of the new L1 interval.
-    pub initial_batch: u64,
+    pub first_batch: u64,
+    pub last_batch: Option<u64>,
 }
 
-/// Returns all L1-block intervals `[from_block, to_block]` during which the chain was
-/// committing to a single settlement layer. The returned intervals cover `[0, latest]`
-/// contiguously and in ascending order.
+/// Returns all batch-number intervals during which the chain committed to a single settlement
+/// layer, in ascending order and covering all batches from `1` upwards.
 ///
-/// Transitions are detected through `IChainAssetHandler::migrationNumber(chainId)`:
-/// each increment of that counter corresponds to a settlement layer change. The transition
-/// blocks are located via parallel binary searches over `[0, latest]`, and the settlement
-/// layer of each resulting interval is classified by calling `getSettlementLayer()` at the
-/// interval's end block (all classification calls also issued in parallel).
+/// The intervals are reconstructed from `IL1ChainAssetHandler.migrationInterval(chainId, i)`
+/// for each known migration slot (`i ∈ [1, migrationNumber(chainId)]`):
+///
+/// - Each populated slot describes one L1 → Gateway → L1 round-trip, giving us the chain's own
+///   batch number at which the migration to the Gateway happened (`migrateToGWBatchNumber`) and
+///   the one at which it returned (`migrateFromGWBatchNumber`, or `isActive = true` if the
+///   chain has not returned yet).
+/// - Slot `0` is reserved for the legacy Gateway and is intentionally skipped — legacy-GW chains
+///   are not supported here.
+/// - `MAX_ALLOWED_NUMBER_OF_MIGRATIONS = 2` on-chain, so at most two cycles are supported.
 pub async fn find_settlement_layer_intervals(
-    zk_chain: ZkChain<DynProvider>,
     chain_asset_handler: Address,
+    provider: DynProvider,
     chain_id: u64,
 ) -> anyhow::Result<Vec<SettlementLayerInterval>> {
-    let provider = zk_chain.provider().clone();
-    let latest = provider.get_block_number().await?;
-
     let cah = IChainAssetHandler::new(chain_asset_handler, provider);
     let total_migrations: u64 = cah
         .migrationNumber(U256::from(chain_id))
-        .block(latest.into())
         .call()
         .await
-        .context("failed to fetch migrationNumber at latest L1 block")?
+        .context("failed to fetch migrationNumber")?
         .try_into()
         .map_err(|e| anyhow::anyhow!("migrationNumber overflow: {e}"))?;
 
-    // todo: this can be done with less calls if we used divide and conquer here instead
-    let transitions: Vec<BlockNumber> =
-        futures::future::try_join_all((1..=total_migrations).map(|m| {
-            find_block_by_migration_number(zk_chain.clone(), chain_asset_handler, chain_id, m)
-        }))
-        .await?;
-
-    let mut ranges: Vec<(BlockNumber, BlockNumber)> = Vec::with_capacity(transitions.len() + 1);
-    let mut start = 0u64;
-    for &t in &transitions {
-        if t > start {
-            ranges.push((start, t - 1));
-        }
-        start = t;
-    }
-    ranges.push((start, latest));
-
-    futures::future::try_join_all(ranges.into_iter().map(|(from, to)| {
-        let zk_chain = zk_chain.clone();
+    let raw = futures::future::try_join_all((1..=total_migrations).map(|i| {
+        let cah = &cah;
         async move {
-            let sl_fut = async {
-                let addr = zk_chain.get_settlement_layer(to.into()).await?;
-                anyhow::Ok(if addr == Address::ZERO {
-                    IntervalSettlementLayer::L1
-                } else {
-                    IntervalSettlementLayer::Gateway(addr)
-                })
-            };
-            let initial_fut = total_batches_committed_or_zero(&zk_chain, from);
-            let (settlement_layer, initial_batch) = tokio::try_join!(sl_fut, initial_fut)?;
-            anyhow::Ok(SettlementLayerInterval {
-                from_block: from,
-                to_block: to,
-                settlement_layer,
-                initial_batch,
-            })
+            let interval = cah
+                .migrationInterval(U256::from(chain_id), U256::from(i))
+                .call()
+                .await
+                .with_context(|| format!("failed to fetch migrationInterval({chain_id}, {i})"))?;
+            anyhow::Ok(interval)
         }
     }))
-    .await
-}
+    .await?;
 
-/// Returns `getTotalBatchesCommitted()` at `block`, or `0` if the ZK chain contract is not yet
-/// deployed at that block.
-async fn total_batches_committed_or_zero(
-    zk_chain: &ZkChain<DynProvider>,
-    block: BlockNumber,
-) -> anyhow::Result<u64> {
-    if !zk_chain.code_exists_at_block(block.into()).await? {
-        return Ok(0);
+    let mut intervals = Vec::new();
+    let mut cursor: u64 = 1;
+    let mut on_active_gw = false;
+    for raw in raw {
+        // Uninitialized slots have all fields zero; skip them.
+        if raw.settlementLayerChainId.is_zero() {
+            continue;
+        }
+        let sl_chain_id: u64 = raw
+            .settlementLayerChainId
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("settlementLayerChainId overflow: {e}"))?;
+        let to_batch: u64 = raw
+            .migrateToGWBatchNumber
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("migrateToGWBatchNumber overflow: {e}"))?;
+
+        // L1 interval leading up to this migration (if the chain committed any batches to L1
+        // before it).
+        anyhow::ensure!(
+            to_batch + 1 >= cursor,
+            "settlement layer interval is not in order: {} < {}",
+            to_batch + 1,
+            cursor
+        );
+        intervals.push(SettlementLayerInterval {
+            settlement_layer: IntervalSettlementLayer::L1,
+            first_batch: cursor,
+            last_batch: Some(to_batch),
+        });
+        cursor = to_batch + 1;
+
+        if raw.isActive {
+            intervals.push(SettlementLayerInterval {
+                settlement_layer: IntervalSettlementLayer::Gateway(sl_chain_id),
+                first_batch: cursor,
+                last_batch: None,
+            });
+            on_active_gw = true;
+            break;
+        }
+        let from_batch: u64 = raw
+            .migrateFromGWBatchNumber
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("migrateFromGWBatchNumber overflow: {e}"))?;
+        intervals.push(SettlementLayerInterval {
+            settlement_layer: IntervalSettlementLayer::Gateway(sl_chain_id),
+            first_batch: cursor,
+            last_batch: Some(from_batch),
+        });
+        cursor = from_batch + 1;
     }
-    Ok(zk_chain.get_total_batches_committed(block.into()).await?)
+    if !on_active_gw {
+        intervals.push(SettlementLayerInterval {
+            settlement_layer: IntervalSettlementLayer::L1,
+            first_batch: cursor,
+            last_batch: None,
+        });
+    }
+    Ok(intervals)
 }
 
 /// Finds the first block where `IChainAssetHandler::migrationNumber(chain_id) >= migration_number`
