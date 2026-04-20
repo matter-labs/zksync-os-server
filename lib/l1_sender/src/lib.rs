@@ -11,9 +11,12 @@ use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use alloy::consensus::BlobTransactionValidationError;
+use alloy::consensus::Transaction as ConsensusTransaction;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, Encodable2718};
-use alloy::network::{Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844};
+use alloy::network::{
+    Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844, TransactionResponse,
+};
 use alloy::primitives::Address;
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::providers::ext::DebugApi;
@@ -374,10 +377,7 @@ where
     // Probe whether the provider supports `eth_getTransactionBySenderAndNonce` before
     // iterating over all pending nonces.
     if let Err(TransportError::ErrorResp(ref e)) = provider
-        .raw_request::<_, Option<TxLookup>>(
-            "eth_getTransactionBySenderAndNonce".into(),
-            (operator_address, latest_nonce),
-        )
+        .get_transaction_by_sender_nonce(operator_address, latest_nonce)
         .await
     {
         if e.code == METHOD_NOT_FOUND_CODE {
@@ -397,10 +397,7 @@ where
     let mut paired = Vec::with_capacity(in_flight_count);
     for nonce in latest_nonce..pending_nonce {
         let tx = match provider
-            .raw_request::<_, Option<TxLookup>>(
-                "eth_getTransactionBySenderAndNonce".into(),
-                (operator_address, nonce),
-            )
+            .get_transaction_by_sender_nonce(operator_address, nonce)
             .await
         {
             Err(err) => {
@@ -427,7 +424,7 @@ where
                 let L1SenderCommand::SendToL1(cmd) = raw_cmd else {
                     return false;
                 };
-                cmd.solidity_call(gateway, &operator_address) == tx.input
+                cmd.solidity_call(gateway, &operator_address) == *tx.input()
             })
             .await;
 
@@ -446,7 +443,7 @@ where
                 let Some(L1SenderCommand::SendToL1(cmd)) = inbound.recv().await else {
                     unreachable!("peek succeeded, recv must return the same item");
                 };
-                paired.push((tx.hash, cmd));
+                paired.push((tx.tx_hash(), cmd));
             }
         }
     }
@@ -459,14 +456,6 @@ where
     );
 
     Ok(paired)
-}
-
-/// Transaction fields returned by `eth_getTransactionBySenderAndNonce`, used for
-/// in-flight recovery matching.
-#[derive(Debug, serde::Deserialize)]
-struct TxLookup {
-    hash: alloy::primitives::B256,
-    input: alloy::primitives::Bytes,
 }
 
 async fn process_prepending_passthrough_commands<Input: SendToL1>(
