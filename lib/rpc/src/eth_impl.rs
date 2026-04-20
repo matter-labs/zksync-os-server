@@ -220,14 +220,13 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         // Check the mempool first so that pending transactions (not yet included in a block)
         // are visible. This is essential for callers like the operator's in-flight tx recovery
         // path that use this method to inspect transactions that are still pending on Gateway.
-        if let Some(pool_tx) =
-            self.mempool
-                .get_transaction_by_sender_and_nonce(sender, nonce.saturating_to())
+        if let Some(pool_tx) = self
+            .mempool
+            .get_transaction_by_sender_and_nonce(sender, nonce.saturating_to())
         {
             let envelope = L2Envelope::from(pool_tx.transaction.transaction.inner().clone());
             return Ok(Some(build_api_tx(
-                Recovered::new_unchecked(envelope, pool_tx.transaction.transaction.signer())
-                    .into(),
+                Recovered::new_unchecked(envelope, pool_tx.transaction.transaction.signer()).into(),
                 None,
             )));
         }
