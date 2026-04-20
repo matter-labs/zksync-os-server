@@ -77,6 +77,11 @@ pub async fn run_l1_sender<Input: SendToL1>(
     config: L1SenderConfig<Input>,
     gateway: bool,
     commit_submitted_tx: Option<watch::Sender<u64>>,
+    // The SL block number at which `getTotalBatches*` was called on startup. Pinning the
+    // confirmed-nonce baseline to this block ensures it is consistent with where the
+    // inbound command queue begins — avoiding a crash caused by txs that are mined between
+    // the `getTotalBatches` call and the nonce check.
+    sl_block_number: u64,
 ) -> anyhow::Result<()> {
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
@@ -107,6 +112,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
         gateway,
         &mut inbound,
         command_name,
+        sl_block_number,
     )
     .await
     {
@@ -314,30 +320,37 @@ pub async fn run_l1_sender<Input: SendToL1>(
 /// Detects in-flight L1 transactions from a previous session, pairs each one with the
 /// corresponding queued command, and returns them ready to hand to the main loop.
 ///
-/// For each in-flight tx, the next command is peeked and its calldata
-/// is compared against the on-chain input. On a match the command is consumed and paired.
-/// On the first mismatch the loop stops and whatever has been paired so far is returned —
-/// the unmatched command remains in `inbound` for the normal send path.
+/// For each in-flight tx, the next command is peeked and its calldata is compared against
+/// the on-chain input. On a match the command is consumed and paired. On the first mismatch
+/// the loop stops and whatever has been paired so far is returned — the unmatched command
+/// remains in `inbound` for the normal send path.
+///
+/// `sl_block_number` must be the same L1 block at which `getTotalBatches*` was called when
+/// constructing the inbound command queue. Pinning the confirmed-nonce baseline to that block
+/// prevents the race where txs mined between the `getTotalBatches` call and this nonce check
+/// cause us to mis-count in-flight txs and crash on calldata mismatch.
 async fn recover_in_flight_txs<F, P, Input>(
     provider: &FillProvider<F, P>,
     operator_address: Address,
     gateway: bool,
     inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
     command_name: &str,
+    sl_block_number: u64,
 ) -> anyhow::Result<Vec<(alloy::primitives::B256, Input)>>
 where
     F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
     P: Provider<Ethereum>,
     Input: SendToL1,
 {
-    // Compare the confirmed nonce ("latest") with the mempool nonce ("pending").
-    // A gap between them means there are transactions submitted in a previous session
-    // that have not yet been mined.
+    // Pin the confirmed-nonce to `sl_block_number` so it matches the snapshot at which
+    // `getTotalBatches*` was evaluated and the inbound queue was initialised. Using the
+    // "latest" block tag here would race with newly-mined blocks and produce a stale
+    // baseline that is inconsistent with the queue's starting batch number.
     let latest_nonce = provider
         .get_transaction_count(operator_address)
-        .latest()
+        .block_id(BlockId::number(sl_block_number))
         .await
-        .context("get latest transaction count")?;
+        .context("get confirmed transaction count")?;
     let pending_nonce = provider
         .get_transaction_count(operator_address)
         .pending()
@@ -351,22 +364,17 @@ where
     let in_flight_count = (pending_nonce - latest_nonce) as usize;
     tracing::info!(
         command_name,
+        sl_block_number,
         latest_nonce,
         pending_nonce,
         in_flight_count,
         "Detected in-flight L1 transactions on startup, attempting recovery",
     );
 
-    #[derive(Debug, serde::Deserialize)]
-    struct TxResponse {
-        hash: alloy::primitives::B256,
-        input: alloy::primitives::Bytes,
-    }
-
     // Probe whether the provider supports `eth_getTransactionBySenderAndNonce` before
     // iterating over all pending nonces.
     if let Err(TransportError::ErrorResp(ref e)) = provider
-        .raw_request::<_, Option<TxResponse>>(
+        .raw_request::<_, Option<TxLookup>>(
             "eth_getTransactionBySenderAndNonce".into(),
             (operator_address, latest_nonce),
         )
@@ -389,7 +397,7 @@ where
     let mut paired = Vec::with_capacity(in_flight_count);
     for nonce in latest_nonce..pending_nonce {
         let tx = match provider
-            .raw_request::<_, Option<TxResponse>>(
+            .raw_request::<_, Option<TxLookup>>(
                 "eth_getTransactionBySenderAndNonce".into(),
                 (operator_address, nonce),
             )
@@ -398,7 +406,11 @@ where
             Err(err) => {
                 anyhow::bail!("Failed to fetch in-flight transaction at nonce {nonce}: {err}");
             }
+            Ok(Some(tx)) => tx,
             Ok(None) => {
+                // The tx was dropped from the mempool. Providers that support
+                // `eth_getTransactionBySenderAndNonce` return the tx whether it is pending or
+                // already mined, so `None` unambiguously means it no longer exists.
                 tracing::warn!(
                     command_name,
                     nonce,
@@ -406,7 +418,6 @@ where
                 );
                 return Ok(paired);
             }
-            Ok(Some(tx)) => tx,
         };
 
         // Peek at the next command without consuming it so that a mismatch leaves
@@ -448,6 +459,14 @@ where
     );
 
     Ok(paired)
+}
+
+/// Transaction fields returned by `eth_getTransactionBySenderAndNonce`, used for
+/// in-flight recovery matching.
+#[derive(Debug, serde::Deserialize)]
+struct TxLookup {
+    hash: alloy::primitives::B256,
+    input: alloy::primitives::Bytes,
 }
 
 async fn process_prepending_passthrough_commands<Input: SendToL1>(
