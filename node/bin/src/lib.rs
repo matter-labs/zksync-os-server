@@ -311,7 +311,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let committed_batch_provider = CommittedBatchProvider::new(
         runtime,
         &l1_state,
-        chain_id,
         config.l1_watcher_config.max_blocks_to_process,
         || async {
             let genesis_state = genesis.state().await;

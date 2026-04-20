@@ -14020,6 +14020,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "backon",
+ "futures",
  "serde",
  "structdiff",
  "thiserror 2.0.17",
