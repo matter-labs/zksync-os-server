@@ -1,8 +1,8 @@
 use super::EthFilterError;
-use zksync_os_storage::log_index_filter::candidates;
 use crate::eth_impl::build_api_log;
 use crate::metrics::{API_METRICS, FilterCategory, GetLogsStat};
 use alloy::rpc::types::{Filter, Log};
+use zksync_os_storage::log_index_filter::candidates;
 use zksync_os_storage_api::{ReadRepository, RepositoryBlock, StoredTxData};
 
 type EthFilterResult<T> = Result<T, EthFilterError>;
