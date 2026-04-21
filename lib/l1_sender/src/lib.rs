@@ -9,7 +9,9 @@ pub mod upgrade_gatekeeper;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
-use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
+use crate::metrics::{
+    L1_SENDER_METRICS, L1SenderState, PriorityFeeEstimatePercentile, PriorityFeeEstimateWindow,
+};
 use alloy::consensus::BlobTransactionValidationError;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
@@ -312,18 +314,25 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
     }
 }
 
-/// Estimates EIP-1559 fees using the 30th percentile of priority fees over the last 3 blocks.
+const ESTIMATION_PERCENTILE_P20: f64 = 20.0;
+const ESTIMATION_PERCENTILE_P30: f64 = 30.0;
+const ESTIMATION_PERCENTILE_P50: f64 = 50.0;
+
+/// Estimates EIP-1559 fees using the provided percentile of priority fees over the specified
+/// fee-history window.
 ///
 /// `estimate_eip1559_fees_with` in alloy hardcodes the block count and percentile, so we call
 /// `get_fee_history` directly and delegate the rest to alloy's default estimator.
-async fn estimate_eip1559_fees(provider: &dyn Provider) -> anyhow::Result<Eip1559Estimation> {
+async fn estimate_eip1559_fees(
+    provider: &dyn Provider,
+    blocks_behind: u64,
+    percentile: f64,
+) -> anyhow::Result<Eip1559Estimation> {
     let fee_history = provider
-        .get_fee_history(3, BlockNumberOrTag::Latest, &[30.0])
+        .get_fee_history(blocks_behind, BlockNumberOrTag::Latest, &[percentile])
         .await
         .context("fetching fee history")?;
-    let base_fee_per_gas: u128 = fee_history
-        .latest_block_base_fee()
-        .unwrap_or_default();
+    let base_fee_per_gas: u128 = fee_history.latest_block_base_fee().unwrap_or_default();
     let rewards = fee_history.reward.unwrap_or_default();
     Ok(alloy::providers::utils::eip1559_default_estimator(
         base_fee_per_gas,
@@ -337,8 +346,17 @@ async fn tx_request_with_gas_fields(
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
 ) -> anyhow::Result<TransactionRequest> {
-    let eip1559_est = estimate_eip1559_fees(provider).await?;
-    L1_SENDER_METRICS.report_l1_eip_1559_estimation(eip1559_est)?;
+    // Use alloy's built-in EIP-1559 estimator (20 blocks, 50th percentile by default) for
+    // the actual transaction gas fields.
+    let eip1559_est = provider
+        .estimate_eip1559_fees()
+        .await
+        .context("estimating eip1559 fees")?;
+
+    // Our custom estimations across multiple fee-history windows are emitted as metrics so we can
+    // compare them against alloy's built-in estimator without affecting transaction submission.
+    report_custom_priority_fee_metrics(provider).await?;
+
     tracing::debug!(
         max_priority_fee_per_gas_gwei = ?format_units(eip1559_est.max_priority_fee_per_gas, "gwei"),
         max_fee_per_gas_gwei = ?format_units(eip1559_est.max_fee_per_gas, "gwei"),
@@ -377,6 +395,38 @@ async fn tx_request_with_gas_fields(
         // Default value for `max_aggregated_tx_gas` from zksync-era, should always be enough
         .with_gas_limit(15000000);
     Ok(tx)
+}
+
+async fn report_custom_priority_fee_metrics(provider: &dyn Provider) -> anyhow::Result<()> {
+    for (window, blocks_behind) in [
+        (PriorityFeeEstimateWindow::Blocks3, 3),
+        (PriorityFeeEstimateWindow::Blocks5, 5),
+        (PriorityFeeEstimateWindow::Blocks10, 10),
+    ] {
+        for (percentile_label, percentile) in [
+            (
+                PriorityFeeEstimatePercentile::P20,
+                ESTIMATION_PERCENTILE_P20,
+            ),
+            (
+                PriorityFeeEstimatePercentile::P30,
+                ESTIMATION_PERCENTILE_P30,
+            ),
+            (
+                PriorityFeeEstimatePercentile::P50,
+                ESTIMATION_PERCENTILE_P50,
+            ),
+        ] {
+            let our_eip1559_est =
+                estimate_eip1559_fees(provider, blocks_behind, percentile).await?;
+            L1_SENDER_METRICS.report_estimated_max_priority_fee_per_gas(
+                window,
+                percentile_label,
+                our_eip1559_est.max_priority_fee_per_gas,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 async fn register_operator<
