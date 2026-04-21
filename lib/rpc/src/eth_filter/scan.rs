@@ -28,8 +28,7 @@ pub(crate) fn scan_logs(
     let mut logs = Vec::new();
 
     for number in from..=to {
-        // Within the covered range, skip blocks the index says have no matching logs.
-        if candidates.covered.contains(&number) && !candidates.bitmap.contains(number as u32) {
+        if !candidates.may_contain(number) {
             stats.skipped_by_index += 1;
             continue;
         }

@@ -84,8 +84,16 @@ fn topic_candidates(
 /// A set of candidate blocks from the log index, together with the range of blocks the index covers.
 /// Blocks outside `covered` must be checked via bloom filter regardless of `bitmap`.
 pub struct Candidates {
-    pub bitmap: RoaringBitmap,
-    pub covered: Range<u64>,
+    bitmap: RoaringBitmap,
+    covered: Range<u64>,
+}
+
+impl Candidates {
+    /// Returns `true` if the block at `number` may contain matching logs.
+    /// Blocks outside the covered range always return `true` (must fall back to bloom).
+    pub fn may_contain(&self, block_number: u64) -> bool {
+        !self.covered.contains(&block_number) || self.bitmap.contains(block_number as u32)
+    }
 }
 
 impl BitOr for Candidates {
