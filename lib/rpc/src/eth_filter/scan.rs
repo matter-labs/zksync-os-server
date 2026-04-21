@@ -1,7 +1,7 @@
 use super::EthFilterError;
 use zksync_os_storage::log_index_filter::candidates;
 use crate::eth_impl::build_api_log;
-use crate::metrics::API_METRICS;
+use crate::metrics::{API_METRICS, GetLogsStat};
 use alloy::rpc::types::{Filter, Log};
 use zksync_os_storage_api::{ReadRepository, RepositoryBlock, StoredTxData};
 
@@ -138,14 +138,17 @@ impl BlockScanStats {
 
 impl Drop for BlockScanStats {
     fn drop(&mut self) {
-        API_METRICS.get_logs_scanned_blocks[&"total"].observe(self.total);
-        API_METRICS.get_logs_scanned_blocks[&"skipped_by_index"].observe(self.skipped_by_index);
-        API_METRICS.get_logs_scanned_blocks[&"bloom_true_positive"]
+        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::Total].observe(self.total);
+        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::SkippedByIndex]
+            .observe(self.skipped_by_index);
+        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::BloomTruePositive]
             .observe(self.bloom_true_positive);
-        API_METRICS.get_logs_scanned_blocks[&"bloom_false_positive"]
+        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::BloomFalsePositive]
             .observe(self.bloom_false_positive);
-        API_METRICS.get_logs_scanned_blocks[&"bloom_negative"].observe(self.bloom_negative);
-        API_METRICS.get_logs_scanned_blocks[&"logs_returned"].observe(self.logs_returned);
+        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::BloomNegative]
+            .observe(self.bloom_negative);
+        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::LogsReturned]
+            .observe(self.logs_returned);
         if self.unconstrained {
             API_METRICS.get_logs_unconstrained.inc();
         }

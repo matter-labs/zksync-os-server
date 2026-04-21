@@ -1,15 +1,27 @@
 use std::time::Duration;
-use vise::{Buckets, Counter, Histogram, LabeledFamily, Metrics, Unit};
+use vise::{Buckets, Counter, EncodeLabelValue, Histogram, LabeledFamily, Metrics, Unit};
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.000001..=32.0, 2.0);
 const BLOCK_COUNTS: Buckets = Buckets::exponential(1.0..=100000.0, 10.0);
 const BYTES_BUCKETS: Buckets = Buckets::exponential(1.0..=10485760.0, 2.0); // 1B .. 10MB
 
+/// Dimension for per-call `eth_getLogs` scan statistics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
+#[metrics(label = "kind", rename_all = "snake_case")]
+pub enum GetLogsStat {
+    Total,
+    SkippedByIndex,
+    BloomTruePositive,
+    BloomFalsePositive,
+    BloomNegative,
+    LogsReturned,
+}
+
 #[derive(Debug, Metrics)]
 pub struct ApiMetrics {
     /// Block disposition per `eth_getLogs` call, broken down by outcome kind.
     #[metrics(labels = ["kind"], buckets = BLOCK_COUNTS)]
-    pub get_logs_scanned_blocks: LabeledFamily<&'static str, Histogram<u64>>,
+    pub get_logs_scanned_blocks: LabeledFamily<GetLogsStat, Histogram<u64>>,
     /// Number of `eth_getLogs` calls with no address or topic constraints (full block scan).
     pub get_logs_unconstrained: Counter,
     /// Number of `eth_getLogs` calls truncated due to exceeding `max_logs`.
