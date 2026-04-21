@@ -64,6 +64,7 @@ type TransactionReceiptFuture =
 ///
 /// Note: we pass `to_address` - L1 contract address to send transactions to.
 /// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
+#[allow(clippy::too_many_arguments)]
 pub async fn run_l1_sender<Input: SendToL1>(
     // == plumbing ==
     mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
