@@ -1,7 +1,9 @@
+use crate::component_id::ComponentId;
 use crate::peekable_receiver::PeekableReceiver;
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
+use zksync_os_observability::ComponentStateReporter;
 
 /// A component that transforms messages in the pipeline.
 /// Examples: ProverInputGenerator, Batcher, L1 senders
@@ -15,21 +17,23 @@ pub trait PipelineComponent: Send + 'static {
     /// The type of messages this component produces
     type Output: Send + 'static;
 
-    /// Human-readable name for logging and metrics
-    const NAME: &'static str;
+    /// Identity of this pipeline component.
+    /// Used as the task name for logging, shutdown tracking, and state-monitor adjacency.
+    const COMPONENT_ID: ComponentId;
 
-    /// Buffer size for the output channel.
-    /// If set to `0`, this component won't start the next item
-    /// until the previous item is picked up by the next component.
-    /// Higher values allow this component to process items ahead of the downstream components.
-    /// Todo: it'd be cleaner to define the **Inbound** buffer size instead
-    /// Todo: this will be replaced by a more general backpressure mechanism
-    const OUTPUT_BUFFER_SIZE: usize;
+    /// Whether `Pipeline::pipe()` should register this component with the state monitor.
+    /// Sources/sinks that never call `record_*` (e.g. `NoOpSink`, command sources) opt out
+    /// by setting this to `false`; doing so also keeps `prev_id` anchored to the previous
+    /// monitored component, so the next `.pipe()` edge skips over this one.
+    const REGISTER_WITH_MONITOR: bool = true;
 
-    /// Run the component, receiving from input and sending to output.
+    /// Run the component, receiving from input and sending to output. `state_reporter` is the
+    /// reporter `pipe()` created for this component; unmonitored components (those with
+    /// `REGISTER_WITH_MONITOR = false`) receive a detached reporter that is never watched.
     async fn run(
         self,
         input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        output: mpsc::UnboundedSender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> Result<()>;
 }
