@@ -186,7 +186,6 @@ pub async fn run_l1_sender<Input: SendToL1>(
         let range = Input::display_range(&commands); // Only for logging
         tracing::info!(command_name, range, "sending L1 transactions");
         L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
-
         // It's important to preserve the order of commands -
         // so that we send them downstream also in order.
         // This holds true because l1 transactions are included in the order of sender nonce.
