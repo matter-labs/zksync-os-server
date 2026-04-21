@@ -20,9 +20,9 @@ use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::utils::Eip1559Estimation;
 use alloy::providers::{PendingTransactionError, Provider, WalletProvider};
-use anyhow::Context as _;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
+use anyhow::Context as _;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Instant;
@@ -313,7 +313,7 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
 }
 
 /// Estimates EIP-1559 fees using the 30th percentile of priority fees over the last 3 blocks.
-/// 
+///
 /// `estimate_eip1559_fees_with` in alloy hardcodes the block count and percentile, so we call
 /// `get_fee_history` directly and delegate the rest to alloy's default estimator.
 async fn estimate_eip1559_fees(provider: &dyn Provider) -> anyhow::Result<Eip1559Estimation> {
