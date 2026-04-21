@@ -346,15 +346,8 @@ async fn tx_request_with_gas_fields(
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
 ) -> anyhow::Result<TransactionRequest> {
-    // Use alloy's built-in EIP-1559 estimator (20 blocks, 50th percentile by default) for
-    // the actual transaction gas fields.
-    let eip1559_est = provider
-        .estimate_eip1559_fees()
-        .await
-        .context("estimating eip1559 fees")?;
-
-    // Our custom estimations across multiple fee-history windows are emitted as metrics so we can
-    // compare them against alloy's built-in estimator without affecting transaction submission.
+    let eip1559_est = provider.estimate_eip1559_fees().await?;
+    L1_SENDER_METRICS.report_l1_eip_1559_estimation(eip1559_est)?;
     report_custom_priority_fee_metrics(provider).await?;
 
     tracing::debug!(
@@ -419,7 +412,7 @@ async fn report_custom_priority_fee_metrics(provider: &dyn Provider) -> anyhow::
         ] {
             let our_eip1559_est =
                 estimate_eip1559_fees(provider, blocks_behind, percentile).await?;
-            L1_SENDER_METRICS.report_estimated_max_priority_fee_per_gas(
+            L1_SENDER_METRICS.report_custom_estimated_max_priority_fee_per_gas(
                 window,
                 percentile_label,
                 our_eip1559_est.max_priority_fee_per_gas,
