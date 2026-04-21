@@ -20,6 +20,10 @@ impl ExecuteCommand {
         priority_ops: Vec<PriorityOpsBatchInfo>,
         interop_roots: Vec<Vec<InteropRoot>>,
     ) -> Self {
+        assert!(
+            !batches.is_empty(),
+            "ExecuteCommand must contain at least one batch"
+        );
         assert_eq!(batches.len(), priority_ops.len());
         Self {
             batches,
@@ -30,7 +34,8 @@ impl ExecuteCommand {
 }
 
 impl SendToL1 for ExecuteCommand {
-    const NAME: &'static str = "execute";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::L1SenderExecute;
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxMined;
 

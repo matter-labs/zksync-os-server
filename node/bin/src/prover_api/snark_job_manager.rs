@@ -1,17 +1,16 @@
 use crate::prover_api::fri_job_manager::FriJob;
 use crate::prover_api::metrics::{ProverStage, ProverType};
+use crate::prover_api::prover_job_manager_state::ProverJobManagerState;
 use crate::prover_api::prover_job_map::ProverJobMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 use zksync_os_batch_types::batcher_model::{
     FriProof, RealSnarkProof, SignedBatchEnvelope, SnarkProof,
 };
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_observability::{
-    ComponentStateHandle, ComponentStateReporter, GenericComponentState,
-};
+use zksync_os_observability::ComponentStateReporter;
 use zksync_os_types::ProvingVersion;
 
 /// Job manager for SNARK proving.
@@ -26,23 +25,24 @@ use zksync_os_types::ProvingVersion;
 ///     but if jobs are not picked within a timeout (`max_batch_age`), it releases it to a fake prover
 ///
 ///
-/// `ComponentStateLatencyTracker`: Only tracks `Processing` / `WaitingSend` states
+/// State model: see `ProverJobManagerState`. `Idle` when queue is empty,
+/// `WaitingForProver` while jobs are out with external provers (the steady
+/// state under normal load), `ProcessingSubmission` during brief
+/// add_job/submit/send windows.
 pub struct SnarkJobManager {
     // == state ==
     jobs: ProverJobMap<FriProof>,
     // outbound
-    prove_batches_sender: Sender<ProofCommand>,
+    prove_batches_sender: UnboundedSender<ProofCommand>,
     // config
     max_fris_per_snark: usize,
     // metrics
-    latency_tracker: ComponentStateHandle<GenericComponentState>,
+    state_reporter: OnceLock<ComponentStateReporter>,
 }
 
 impl SnarkJobManager {
     pub fn new(
-        // outbound
-        prove_batches_sender: Sender<ProofCommand>,
-        // config
+        prove_batches_sender: UnboundedSender<ProofCommand>,
         max_fris_per_snark: usize,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
@@ -52,22 +52,77 @@ impl SnarkJobManager {
             max_assigned_batch_range,
             ProverStage::Snark,
         );
-        let latency_tracker = ComponentStateReporter::global().handle_for(
-            "snark_job_manager",
-            GenericComponentState::ProcessingOrWaitingRecv,
-        );
         Self {
             jobs,
             prove_batches_sender,
             max_fris_per_snark,
-            latency_tracker,
+            state_reporter: OnceLock::new(),
         }
+    }
+
+    /// Late-install the reporter. Called once from `SnarkProvingPipelineStep::run()` after
+    /// `Pipeline::pipe()` has auto-registered the component with the monitor.
+    pub fn set_reporter(&self, reporter: ComponentStateReporter) {
+        reporter.enter_state(ProverJobManagerState::Idle);
+        self.state_reporter
+            .set(reporter)
+            .expect("SnarkJobManager::set_reporter called more than once");
+    }
+
+    pub(crate) fn reporter(&self) -> &ComponentStateReporter {
+        self.state_reporter.get().expect(
+            "SnarkJobManager reporter not initialized — set_reporter must be called \
+             from SnarkProvingPipelineStep::run() before any record_* path",
+        )
     }
 
     /// Adds a pending job to the queue.
     /// Awaits if queue is full (ProverJobMap.max_assigned_batch_range).
     pub async fn add_job(&self, batch_envelope: SignedBatchEnvelope<FriProof>) {
-        self.jobs.add_job(batch_envelope).await
+        // Capture coordinates before moving into jobs
+        let last_block = batch_envelope.batch.last_block_number;
+        let timestamp = Some(batch_envelope.batch.batch_info.last_block_timestamp);
+        let batch_number = batch_envelope.batch_number();
+
+        self.reporter()
+            .enter_state(ProverJobManagerState::ProcessingSubmission);
+        tracing::debug!(
+            batch_number,
+            "SnarkJobManager: queuing SNARK job for batch {batch_number}, last_block={last_block}"
+        );
+        self.jobs.add_job(batch_envelope).await;
+        tracing::debug!(
+            batch_number,
+            "SnarkJobManager: SNARK job {batch_number} accepted into queue, last_block={last_block}"
+        );
+
+        self.reporter()
+            .record_picked(last_block, timestamp, Some(batch_number));
+        self.update_in_flight_state().await;
+    }
+
+    async fn update_in_flight_state(&self) {
+        let range = self.jobs.in_flight_range().await;
+        let (first, last) = match range {
+            Some((f, l)) => {
+                tracing::debug!(
+                    "SnarkJobManager: in-flight range updated: batches {}-{}, blocks {}-{}",
+                    f.batch_number,
+                    l.batch_number,
+                    f.last_block_number,
+                    l.last_block_number,
+                );
+                self.reporter()
+                    .enter_state(ProverJobManagerState::WaitingForProver);
+                (Some(f), Some(l))
+            }
+            None => {
+                tracing::debug!("SnarkJobManager: in-flight range cleared (queue empty)");
+                self.reporter().enter_state(ProverJobManagerState::Idle);
+                (None, None)
+            }
+        };
+        self.reporter().record_in_flight_range(first, last);
     }
 
     // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `verification_key_hash`, `real_fri_proof`)
@@ -86,7 +141,7 @@ impl SnarkJobManager {
             .await;
 
         if batches_with_real_proofs.is_empty() {
-            tracing::trace!(prover_id, "no SNARK prove jobs are available for pick up",);
+            tracing::trace!("no SNARK prove jobs are available for pick up, prover={prover_id}");
             return Ok(None);
         }
 
@@ -178,7 +233,7 @@ impl SnarkJobManager {
                 .iter()
                 .filter(|(_, proof)| !proof.is_fake())
                 .count();
-            tracing::info!(
+            tracing::debug!(
                 "consuming fake proofs for SNARKing for batches {}-{} ({} real proofs; {} fake proofs)",
                 assigned.first().unwrap().0.batch_number,
                 assigned.last().unwrap().0.batch_number,
@@ -212,11 +267,22 @@ impl SnarkJobManager {
     }
 
     async fn send_downstream(&self, proof_command: ProofCommand) -> anyhow::Result<()> {
-        self.latency_tracker
-            .enter_state(GenericComponentState::WaitingSend);
-        self.prove_batches_sender.send(proof_command).await?;
-        self.latency_tracker
-            .enter_state(GenericComponentState::ProcessingOrWaitingRecv);
+        // Use last_block_number (not batch_number): the monitor lag computation is block-based.
+        let last = proof_command.as_ref().last().unwrap();
+        let seq = last.batch.last_block_number;
+        let last_block_timestamp = last.batch.batch_info.last_block_timestamp;
+        let batch_number = last.batch_number();
+        let batch_count = proof_command.as_ref().len();
+        self.reporter()
+            .enter_state(ProverJobManagerState::ProcessingSubmission);
+        tracing::debug!(
+            batch_number,
+            "SnarkJobManager: sending SNARK proof downstream for batch {batch_number}, batch_count={batch_count}, last_block={seq}"
+        );
+        self.prove_batches_sender.send(proof_command)?;
+        self.reporter()
+            .record_processed(seq, Some(last_block_timestamp), Some(batch_number));
+        self.update_in_flight_state().await;
         Ok(())
     }
 }

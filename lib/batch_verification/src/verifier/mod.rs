@@ -15,6 +15,7 @@ use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
 };
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
 use zksync_os_storage_api::{ReplayRecord, StateError, read_multichain_root};
@@ -198,24 +199,33 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
     type Input = VerificationInput;
     type Output = ();
 
-    const NAME: &'static str = "batch_verification_responder";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::BatchVerificationResponder;
 
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
-        _output: mpsc::Sender<Self::Output>,
+        _output: mpsc::UnboundedSender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         tracing::info!("starting batch verification responder");
         loop {
+            state_reporter.enter_state(GenericComponentState::Idle);
             tokio::select! {
                 block = input.recv() => {
                     match block {
                         Some((block_output, replay_record, tree_data)) => {
+                            state_reporter.enter_state(GenericComponentState::Active);
+                            let block_number = replay_record.block_context.block_number;
+                            let block_timestamp = replay_record.block_context.timestamp;
                             self.block_cache.insert(
-                                replay_record.block_context.block_number,
+                                block_number,
                                 (block_output, replay_record, tree_data),
                             )?;
+                            // No record_picked: recv → insert is synchronous, so last_picked
+                            // would equal last_processed. The adjacent-lag fallback to
+                            // last_processed gives the correct measurement.
+                            state_reporter.record_processed(block_number, Some(block_timestamp), None);
                         }
                         None => return Ok(()),
                     }
@@ -224,6 +234,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
                     let Some(request) = request else {
                         return Ok(());
                     };
+                    state_reporter.enter_state(GenericComponentState::Active);
                     let peer_id = request.peer_id;
                     let request_id = request.message.request_id;
                     let batch_number = request.message.batch_number;

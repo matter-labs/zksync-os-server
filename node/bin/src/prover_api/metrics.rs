@@ -97,6 +97,7 @@ pub enum JobMapMethod {
     CompleteManyJobs,
     GetJobBatchMetadata,
     GetProverInput,
+    InFlightRange,
     Status,
 }
 

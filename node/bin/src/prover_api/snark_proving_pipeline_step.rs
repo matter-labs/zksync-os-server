@@ -6,7 +6,8 @@ use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::ComponentStateReporter;
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 
 /// Pipeline step that waits for batches to be SNARK proved.
 ///
@@ -22,7 +23,7 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 pub struct SnarkProvingPipelineStep {
     last_proved_batch_number: u64,
     snark_job_manager: Arc<SnarkJobManager>,
-    proof_commands_receiver: mpsc::Receiver<ProofCommand>,
+    proof_commands_receiver: mpsc::UnboundedReceiver<ProofCommand>,
 }
 
 impl SnarkProvingPipelineStep {
@@ -32,7 +33,11 @@ impl SnarkProvingPipelineStep {
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> (Self, Arc<SnarkJobManager>) {
-        let (proof_commands_sender, proof_commands_receiver) = mpsc::channel::<ProofCommand>(1);
+        // Internal channel from SnarkJobManager submissions to the forwarding select-arm below.
+        // Unbounded: the sole in-flight bound for this stage is ProverJobMap::max_assigned_batch_range,
+        // which blocks add_job. A bounded buffer here would only stall HTTP handlers on submit.
+        let (proof_commands_sender, proof_commands_receiver) =
+            mpsc::unbounded_channel::<ProofCommand>();
 
         let snark_job_manager = Arc::new(SnarkJobManager::new(
             proof_commands_sender,
@@ -56,23 +61,36 @@ impl PipelineComponent for SnarkProvingPipelineStep {
     type Input = SignedBatchEnvelope<FriProof>;
     type Output = L1SenderCommand<ProofCommand>;
 
-    const NAME: &'static str = "snark_proving";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::SnarkJobManager;
 
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::Sender<Self::Output>,
+        output: mpsc::UnboundedSender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        // Forward batches: pipeline input → SnarkJobManager → pipeline output
-        // Two concurrent tasks handle the bidirectional flow
+        // Hand the reporter to SnarkJobManager — driven by HTTP handlers and add_job —
+        // before any record_* path fires. The manager's reporter() panics if unset.
+        self.snark_job_manager.set_reporter(state_reporter);
+
+        // State reporting for queued jobs is delegated to SnarkJobManager: SNARK proving
+        // is asynchronous (input → add_job → later proof on proof_commands_receiver), so
+        // the manager calls record_processed when a proof is submitted. The passthrough
+        // branch below records directly since those batches are already proved upstream.
         tokio::select! {
             _ = async {
                 while let Some(batch) = input.recv().await {
                     if batch.batch_number() > self.last_proved_batch_number {
-                        let _ = self.snark_job_manager.add_job(batch).await;
+                        self.snark_job_manager.add_job(batch).await;
                     } else {
-                        let _ = output.send(L1SenderCommand::Passthrough(Box::new(batch))).await;
+                        let passthrough = L1SenderCommand::Passthrough(Box::new(batch));
+                        if output
+                            .send_and_record(passthrough, self.snark_job_manager.reporter())
+                            .is_err()
+                        {
+                            return;
+                        }
                     }
                 }
             } => {
@@ -81,7 +99,7 @@ impl PipelineComponent for SnarkProvingPipelineStep {
             },
             _ = async {
                 while let Some(proof_command) = self.proof_commands_receiver.recv().await {
-                    let _ = output.send(L1SenderCommand::SendToL1(proof_command)).await;
+                    let _ = output.send(L1SenderCommand::SendToL1(proof_command));
                 }
             } => {
                 tracing::info!("outbound channel closed");

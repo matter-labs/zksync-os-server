@@ -25,15 +25,16 @@ impl PipelineComponent for BatchSink {
     type Input = SignedBatchEnvelope<FriProof>;
     type Output = ();
 
-    const NAME: &'static str = "batch_sink";
-    const OUTPUT_BUFFER_SIZE: usize = 1; // No output
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::BatchSink;
+    const REGISTER_WITH_MONITOR: bool = false;
 
     async fn run(
         self,
-        input: PeekableReceiver<Self::Input>,
-        _output: mpsc::Sender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        _output: mpsc::UnboundedSender<Self::Output>,
+        _state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        let mut input = input.into_inner();
         let mut internal_config = self.internal_config_manager.read_config()?;
         loop {
             let Some(envelope) = input.recv().await else {
@@ -87,15 +88,15 @@ impl<T: Send + 'static> PipelineComponent for NoOpSink<T> {
     type Input = T;
     type Output = ();
 
-    const NAME: &'static str = "noop_sink";
-    const OUTPUT_BUFFER_SIZE: usize = 1; // No output
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId = zksync_os_pipeline::ComponentId::NoopSink;
+    const REGISTER_WITH_MONITOR: bool = false;
 
     async fn run(
         self,
-        input: PeekableReceiver<Self::Input>,
-        _output: mpsc::Sender<Self::Output>,
+        mut input: PeekableReceiver<Self::Input>,
+        _output: mpsc::UnboundedSender<Self::Output>,
+        _state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        let mut input = input.into_inner();
         while input.recv().await.is_some() {
             // No-op: just receive and discard
         }
