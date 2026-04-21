@@ -39,9 +39,6 @@ use zksync_os_pipeline::PeekableReceiver;
 
 /// A code for "method not found" error response as declared in JSON-RPC 2.0 spec.
 const METHOD_NOT_FOUND_CODE: i64 = -32601;
-/// Estimated max amount of gas consumed by transaction sent by L1 sender is ~500k.
-/// We set the limit higher to be safe.
-const MAX_TX_GAS_USED: u64 = 2_000_000;
 /// Number of L1 confirmations required before a transaction is considered final.
 const REQUIRED_CONFIRMATIONS: u64 = 1;
 
@@ -198,6 +195,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         operator_address,
                         config.max_fee_per_gas_wei,
                         config.max_priority_fee_per_gas_wei,
+                        config.gas_limit,
                     )
                     .await?
                     .with_to(to_address)
@@ -531,6 +529,7 @@ async fn tx_request_with_gas_fields(
     operator_address: Address,
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
+    gas_limit: u64,
 ) -> anyhow::Result<TransactionRequest> {
     let eip1559_est = provider.estimate_eip1559_fees().await?;
     L1_SENDER_METRICS.report_l1_eip_1559_estimation(eip1559_est)?;
@@ -569,7 +568,7 @@ async fn tx_request_with_gas_fields(
         .with_from(operator_address)
         .with_max_fee_per_gas(capped_max_fee_per_gas)
         .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas)
-        .with_gas_limit(MAX_TX_GAS_USED);
+        .with_gas_limit(gas_limit);
     Ok(tx)
 }
 
