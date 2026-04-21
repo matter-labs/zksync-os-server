@@ -1,7 +1,7 @@
 # zksync_os_observability
 
 Utilities for wiring the zkSync OS observability stack together: structured logging, traces, metrics, Sentry alerts,
-and helpers for measuring component health. The crate exposes a single entry
+and helpers for measuring component state. The crate exposes a single entry
 point (`ObservabilityBuilder`) plus opt-in modules you can mix and match inside binaries across the workspace.
 
 ## Highlights
@@ -126,17 +126,25 @@ impl StateLabel for MyState {
     }
 }
 
-let handle = ComponentStateReporter::global().handle_for("my_worker", MyState::Idle);
-handle.enter_state(MyState::Working);
+let (reporter, rx) = ComponentStateReporter::new("my_worker");
+reporter.enter_state(MyState::Working);
+// Hand `rx` to a monitor (e.g. BackpressureMonitor) to observe state transitions.
 ```
 
-The background task updates `GENERAL_METRICS.component_time_spent_in_state[component, generic_state, specific_state]` every two seconds.
+`enter_state` credits the time spent in the *previous* state to the
+`GENERAL_METRICS.component_time_spent_in_state` counter, so the counter is
+transition-accurate: a component that never leaves a state does not contribute
+to its own counter rate. For current-state visibility,
+`GENERAL_METRICS.component_state_age_seconds` is a gauge of `now −
+state_entered_at` emitted on every monitor tick — useful for detecting
+components stuck in a state.
 
 ## Built-in Metrics
 
 metrics::GENERAL_METRICS exposes:
 
-- component_time_spent_in_state (counter in seconds by component / generic state / specific state),
+- component_time_spent_in_state (counter in seconds by component / generic state / specific state; credited on transition),
+- component_state_age_seconds (gauge in seconds for the current state; updated by the pipeline monitor on every tick),
 - process_started_at (timestamp gauge with version + role),
 - startup_time (startup stage durations),
 - fee_collector_address and chain_id.
