@@ -1,12 +1,15 @@
 use crate::metrics::API_METRICS;
+use crate::result::internal_rpc_err;
+use futures::FutureExt as _;
 use jsonrpsee::core::middleware::{Batch, BatchEntry, Notification};
 use jsonrpsee::server::middleware::rpc::{RpcService, RpcServiceT};
 use jsonrpsee::types::Request;
 use jsonrpsee::{BatchResponseBuilder, MethodResponse};
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum CallKind {
     Call,
     Notification,
@@ -29,20 +32,24 @@ impl Monitoring {
 
 /// Ensures latency is recorded even if the future is dropped mid-flight (client disconnected).
 struct CallGuard {
+    kind: CallKind,
     method: String,
     started: Instant,
     request_size: usize,
     /// `Some((output_size, error_code))` once the future has resolved.
     completed: Option<(usize, Option<i32>)>,
+    panicked: bool,
 }
 
 impl CallGuard {
-    fn new(method: String, request_size: usize) -> Self {
+    fn new(kind: CallKind, method: String, request_size: usize) -> Self {
         Self {
+            kind,
             method,
             started: Instant::now(),
             request_size,
             completed: None,
+            panicked: false,
         }
     }
 }
@@ -97,8 +104,11 @@ impl Drop for CallGuard {
         if cancelled {
             API_METRICS.cancelled[&self.method].inc();
         }
+        if self.panicked {
+            API_METRICS.panicked[&self.method].inc();
+        }
         log_and_report(
-            CallKind::Call,
+            self.kind,
             &self.method,
             elapsed,
             self.request_size,
@@ -120,11 +130,19 @@ impl RpcServiceT for Monitoring {
     ) -> impl Future<Output = Self::MethodResponse> + Send + 'a {
         let method = request.method_name().to_owned();
         let request_size = request.params.as_ref().map_or(0, |p| p.get().len());
-        let fut = self.inner.call(request);
+        let inner = self.inner.clone();
 
         async move {
-            let mut guard = CallGuard::new(method, request_size);
-            let out = fut.await;
+            let id = request.id.clone().into_owned();
+            let mut guard = CallGuard::new(CallKind::Call, method.clone(), request_size);
+            let result = AssertUnwindSafe(async move { inner.call(request).await })
+                .catch_unwind()
+                .await;
+            guard.panicked = result.is_err();
+            let out = result.unwrap_or_else(|_| {
+                tracing::error!(method = %method, "RPC handler panicked");
+                MethodResponse::error(id, internal_rpc_err("Internal error"))
+            });
             guard.completed = Some((out.as_json().get().len(), out.as_error_code()));
             out
         }
@@ -203,22 +221,19 @@ impl RpcServiceT for Monitoring {
     ) -> impl Future<Output = Self::NotificationResponse> + Send + 'a {
         let request_size = n.params.as_ref().map_or(0, |p| p.get().len());
         let method = n.method_name().to_owned();
-        let fut = self.inner.notification(n);
+        let inner = self.inner.clone();
 
         async move {
-            let started = Instant::now();
-            let out = fut.await;
-            let output_size = out.as_json().get().len();
-
-            log_and_report(
-                CallKind::Notification,
-                &method,
-                started.elapsed(),
-                request_size,
-                output_size,
-                out.as_error_code(),
-                false,
-            );
+            let mut guard = CallGuard::new(CallKind::Notification, method.clone(), request_size);
+            let result = AssertUnwindSafe(async move { inner.notification(n).await })
+                .catch_unwind()
+                .await;
+            guard.panicked = result.is_err();
+            let out = result.unwrap_or_else(|_| {
+                tracing::error!(method = %method, "Notification handler panicked");
+                MethodResponse::notification()
+            });
+            guard.completed = Some((out.as_json().get().len(), out.as_error_code()));
             out
         }
     }

@@ -21,6 +21,8 @@ pub struct ApiMetrics {
     pub errors: LabeledFamily<(String, i32), Counter, 2>,
     #[metrics(labels = ["method"])]
     pub cancelled: LabeledFamily<String, Counter>,
+    #[metrics(labels = ["method"])]
+    pub panicked: LabeledFamily<String, Counter>,
 }
 
 #[vise::register]
