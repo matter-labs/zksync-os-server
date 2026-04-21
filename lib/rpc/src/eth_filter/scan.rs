@@ -1,7 +1,7 @@
 use super::EthFilterError;
 use zksync_os_storage::log_index_filter::candidates;
 use crate::eth_impl::build_api_log;
-use crate::metrics::{API_METRICS, GetLogsStat};
+use crate::metrics::{API_METRICS, FilterCategory, GetLogsStat};
 use alloy::rpc::types::{Filter, Log};
 use zksync_os_storage_api::{ReadRepository, RepositoryBlock, StoredTxData};
 
@@ -21,10 +21,7 @@ pub(crate) fn scan_logs(
     let candidates = candidates(repo, filter, from..to + 1)?;
 
     let is_multi_block_range = from != to;
-    let mut stats = BlockScanStats::new(
-        to - from + 1,
-        filter.address.is_empty() && !filter.has_topics(),
-    );
+    let mut stats = BlockScanStats::new(to - from + 1, filter, candidates.covered_len());
     let mut logs = Vec::new();
 
     for number in from..=to {
@@ -111,25 +108,27 @@ fn collect_matching_logs(filter: &Filter, stored_txs: Vec<StoredTxData>, out: &m
 /// Observes Prometheus metrics when dropped, ensuring they are recorded on all exit paths.
 struct BlockScanStats {
     total: u64,
+    covered_len: u64,
     skipped_by_index: u64,
     bloom_true_positive: u64,
     bloom_false_positive: u64,
     bloom_negative: u64,
     logs_returned: u64,
-    unconstrained: bool,
+    category: FilterCategory,
     truncated: bool,
 }
 
 impl BlockScanStats {
-    fn new(total: u64, unconstrained: bool) -> Self {
+    fn new(total: u64, filter: &Filter, covered_len: u64) -> Self {
         Self {
             total,
+            covered_len,
             skipped_by_index: 0,
             bloom_true_positive: 0,
             bloom_false_positive: 0,
             bloom_negative: 0,
             logs_returned: 0,
-            unconstrained,
+            category: FilterCategory::from(filter),
             truncated: false,
         }
     }
@@ -137,19 +136,28 @@ impl BlockScanStats {
 
 impl Drop for BlockScanStats {
     fn drop(&mut self) {
-        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::Total].observe(self.total);
-        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::SkippedByIndex]
+        let cat = self.category;
+        API_METRICS.get_logs_scanned_blocks[&(GetLogsStat::Total, cat)].observe(self.total);
+        API_METRICS.get_logs_scanned_blocks[&(GetLogsStat::SkippedByIndex, cat)]
             .observe(self.skipped_by_index);
-        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::BloomTruePositive]
+        API_METRICS.get_logs_scanned_blocks[&(GetLogsStat::BloomTruePositive, cat)]
             .observe(self.bloom_true_positive);
-        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::BloomFalsePositive]
+        API_METRICS.get_logs_scanned_blocks[&(GetLogsStat::BloomFalsePositive, cat)]
             .observe(self.bloom_false_positive);
-        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::BloomNegative]
+        API_METRICS.get_logs_scanned_blocks[&(GetLogsStat::BloomNegative, cat)]
             .observe(self.bloom_negative);
-        API_METRICS.get_logs_scanned_blocks[&GetLogsStat::LogsReturned]
+        API_METRICS.get_logs_scanned_blocks[&(GetLogsStat::LogsReturned, cat)]
             .observe(self.logs_returned);
-        if self.unconstrained {
-            API_METRICS.get_logs_unconstrained.inc();
+        if self.total > 0 {
+            API_METRICS.get_logs_index_skip_ratio[&cat]
+                .observe(self.skipped_by_index as f64 / self.total as f64);
+            API_METRICS.get_logs_index_coverage[&cat]
+                .observe(self.covered_len as f64 / self.total as f64);
+        }
+        let bloom_checked = self.bloom_true_positive + self.bloom_false_positive;
+        if bloom_checked > 0 {
+            API_METRICS.get_logs_bloom_fp_rate[&cat]
+                .observe(self.bloom_false_positive as f64 / bloom_checked as f64);
         }
         if self.truncated {
             API_METRICS.get_logs_truncated.inc();

@@ -94,6 +94,11 @@ impl Candidates {
     pub fn may_contain(&self, block_number: u64) -> bool {
         !self.covered.contains(&block_number) || self.bitmap.contains(block_number as u32)
     }
+
+    /// Returns the number of blocks the index covers.
+    pub fn covered_len(&self) -> u64 {
+        self.covered.end.saturating_sub(self.covered.start)
+    }
 }
 
 impl BitOr for Candidates {
