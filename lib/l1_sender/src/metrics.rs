@@ -175,7 +175,6 @@ impl L1SenderMetrics {
         }
         Ok(())
     }
-
     pub fn report_l1_eip_1559_estimation(
         &self,
         eip1559_est: Eip1559Estimation,

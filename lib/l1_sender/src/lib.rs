@@ -314,32 +314,6 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
     }
 }
 
-const ESTIMATION_PERCENTILE_P20: f64 = 20.0;
-const ESTIMATION_PERCENTILE_P30: f64 = 30.0;
-const ESTIMATION_PERCENTILE_P50: f64 = 50.0;
-
-/// Estimates EIP-1559 fees using the provided percentile of priority fees over the specified
-/// fee-history window.
-///
-/// `estimate_eip1559_fees_with` in alloy hardcodes the block count and percentile, so we call
-/// `get_fee_history` directly and delegate the rest to alloy's default estimator.
-async fn estimate_eip1559_fees(
-    provider: &dyn Provider,
-    blocks_behind: u64,
-    percentile: f64,
-) -> anyhow::Result<Eip1559Estimation> {
-    let fee_history = provider
-        .get_fee_history(blocks_behind, BlockNumberOrTag::Latest, &[percentile])
-        .await
-        .context("fetching fee history")?;
-    let base_fee_per_gas: u128 = fee_history.latest_block_base_fee().unwrap_or_default();
-    let rewards = fee_history.reward.unwrap_or_default();
-    Ok(alloy::providers::utils::eip1559_default_estimator(
-        base_fee_per_gas,
-        &rewards,
-    ))
-}
-
 async fn tx_request_with_gas_fields(
     provider: &dyn Provider,
     operator_address: Address,
@@ -397,18 +371,9 @@ async fn report_custom_priority_fee_metrics(provider: &dyn Provider) -> anyhow::
         (PriorityFeeEstimateWindow::Blocks10, 10),
     ] {
         for (percentile_label, percentile) in [
-            (
-                PriorityFeeEstimatePercentile::P20,
-                ESTIMATION_PERCENTILE_P20,
-            ),
-            (
-                PriorityFeeEstimatePercentile::P30,
-                ESTIMATION_PERCENTILE_P30,
-            ),
-            (
-                PriorityFeeEstimatePercentile::P50,
-                ESTIMATION_PERCENTILE_P50,
-            ),
+            (PriorityFeeEstimatePercentile::P20, 20.0),
+            (PriorityFeeEstimatePercentile::P30, 30.0),
+            (PriorityFeeEstimatePercentile::P50, 50.0),
         ] {
             let our_eip1559_est =
                 estimate_eip1559_fees(provider, blocks_behind, percentile).await?;
@@ -420,6 +385,28 @@ async fn report_custom_priority_fee_metrics(provider: &dyn Provider) -> anyhow::
         }
     }
     Ok(())
+}
+
+/// Estimates EIP-1559 fees using the provided percentile of priority fees over the specified
+/// fee-history window.
+///
+/// `estimate_eip1559_fees_with` in alloy hardcodes the block count and percentile, so we call
+/// `get_fee_history` directly and delegate the rest to alloy's default estimator.
+async fn estimate_eip1559_fees(
+    provider: &dyn Provider,
+    blocks_behind: u64,
+    percentile: f64,
+) -> anyhow::Result<Eip1559Estimation> {
+    let fee_history = provider
+        .get_fee_history(blocks_behind, BlockNumberOrTag::Latest, &[percentile])
+        .await
+        .context("fetching fee history")?;
+    let base_fee_per_gas: u128 = fee_history.latest_block_base_fee().unwrap_or_default();
+    let rewards = fee_history.reward.unwrap_or_default();
+    Ok(alloy::providers::utils::eip1559_default_estimator(
+        base_fee_per_gas,
+        &rewards,
+    ))
 }
 
 async fn register_operator<
