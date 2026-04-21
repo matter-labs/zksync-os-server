@@ -1,6 +1,7 @@
 #![feature(allocator_api)]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
+mod acceptance;
 mod batch_sink;
 pub mod batcher;
 mod command_source;
@@ -52,6 +53,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
+use zksync_os_backpressure::{BackpressureMonitor, ComponentId, PipelineStatus};
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{
     BatchVerificationConfig as BatchVerificationPolicyConfig, BatchVerificationPipelineStep,
@@ -90,7 +92,7 @@ use zksync_os_network::protocol::{
 };
 use zksync_os_network::service::{NetworkService, PeerVerifyBatch, PeerVerifyBatchResult};
 use zksync_os_observability::GENERAL_METRICS;
-use zksync_os_pipeline::Pipeline;
+use zksync_os_pipeline::{Pipeline, PipelineMonitor};
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, loopback_consensus,
@@ -103,7 +105,7 @@ use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider
 use zksync_os_sequencer::execution::{
     BlockApplier, BlockCanonizer, BlockExecutor, FeeParams, FeeProvider,
 };
-use zksync_os_status_server::run_status_server;
+use zksync_os_status_server::{StatusServerState, run_status_server};
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
@@ -629,6 +631,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (tx_acceptance_state_sender, tx_acceptance_state_receiver) =
         watch::channel(TransactionAcceptanceState::Accepting);
 
+    let (stop_sender, stop_receiver) = watch::channel(false);
+    let stop_sender_for_shutdown = stop_sender.clone();
+    runtime.spawn_with_graceful_shutdown_signal(|shutdown| async move {
+        let _guard = shutdown.await;
+        let _ = stop_sender_for_shutdown.send(true);
+    });
+
     let main_node_provider = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
         Some(
             ProviderBuilder::new()
@@ -649,7 +658,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (pubdata_price_sender, pubdata_price_receiver) = watch::channel(None);
     let (blob_fill_ratio_sender, blob_fill_ratio_receiver) = watch::channel(None);
     // Channel for Batcher->GasAdjuster communication. Batcher send sidecar to gas adjuster to estimate blob fill ratio.
-    let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::channel(10);
+    // Unbounded to match the pipeline-wide channel convention (see lib/pipeline/src/builder.rs):
+    // a bounded channel here would silently stall the Batcher if the GasAdjuster hangs, with no
+    // distinct state exposed to the backpressure monitor. Staying unbounded keeps the failure mode
+    // visible (growing sidecar queue → memory) rather than masquerading as a stuck Batcher.
+    let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::unbounded_channel();
     if node_role.is_main() {
         let pubdata_mode = config
             .l1_sender_config
@@ -865,7 +878,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    if node_role.is_main() {
+    let pipeline_status = if node_role.is_main() {
         run_main_node_pipeline(
             &config,
             sl_provider.clone(),
@@ -884,11 +897,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_batch_provider.clone(),
             canonization_engine,
             leadership,
+            stop_receiver.clone(),
             commit_submitted_tx,
             verify_request_tx,
             verify_result_rx,
         )
-        .await;
+        .await
     } else {
         run_en_pipeline(
             &config,
@@ -903,12 +917,23 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             tree_db,
             repositories.clone(),
             finality_storage.clone(),
+            stop_receiver.clone(),
             tx_acceptance_state_sender,
             chain_id,
             verify_batch_rx,
             outgoing_verify_results.clone(),
         )
-        .await;
+        .await
+    };
+
+    // Aggregate all "not accepting" signals into a single combined receiver for the RPC server.
+    // Register additional sources here as needed — no other logic changes required.
+    let combined_acceptance_rx = {
+        let (mut gate, rx) = acceptance::TxAcceptanceGate::new();
+        gate.register(tx_acceptance_state_receiver); // BlockProductionDisabled
+        gate.register(pipeline_status.acceptance_rx); // PipelineBackpressure
+        runtime.spawn_critical_task("tx acceptance gate", gate.run(stop_receiver.clone()));
+        rx
     };
 
     // ======== Start Status Server ========
@@ -918,8 +943,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .address
             .parse()
             .expect("malformed `status_server.address`");
+        let status_state = StatusServerState {
+            stop_receiver: stop_receiver.clone(),
+            acceptance_state: combined_acceptance_rx.clone(),
+            component_states: pipeline_status.component_states.clone(),
+            edges: pipeline_status.edges.clone(),
+            backpressure_config: config.backpressure_config.clone(),
+        };
         runtime.spawn_critical_with_graceful_shutdown_signal("status server", |shutdown| {
-            run_status_server(addr, shutdown)
+            run_status_server(addr, shutdown, status_state)
         });
     }
 
@@ -939,7 +971,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         rpc_storage,
         l2_subpool,
         genesis_input_source,
-        tx_acceptance_state_receiver,
+        combined_acceptance_rx,
         last_constructed_block_ctx_receiver,
         main_node_provider,
         gateway_provider.map(|p| p.erased()),
@@ -971,14 +1003,15 @@ async fn run_main_node_pipeline(
     finality: impl ReadFinality + Clone,
     chain_id: u64,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
-    sidecar_sender: tokio::sync::mpsc::Sender<BlobTransactionSidecar>,
+    sidecar_sender: tokio::sync::mpsc::UnboundedSender<BlobTransactionSidecar>,
     committed_batch_provider: CommittedBatchProvider,
     canonization_engine: BlockCanonizationEngine,
     leadership: LeadershipSignal,
+    stop_receiver: watch::Receiver<bool>,
     commit_submitted_tx: watch::Sender<u64>,
     verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
-) {
+) -> PipelineStatus {
     let pubdata_mode = config
         .l1_sender_config
         .pubdata_mode
@@ -994,11 +1027,13 @@ async fn run_main_node_pipeline(
             .join(INTERNAL_CONFIG_FILE_NAME),
     );
 
+    let monitor = BackpressureMonitor::new(config.backpressure_config.clone(), stop_receiver);
+
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::channel(8);
     let (applied_block_number_sender, applied_block_number_receiver) =
         watch::channel(starting_block - 1);
 
-    let pipeline = Pipeline::new(runtime.clone())
+    let pipeline = Pipeline::new(runtime.clone(), monitor.registrar())
         .pipe(ConsensusNodeCommandSource {
             block_replay_storage: block_replay_storage.clone(),
             starting_block,
@@ -1009,6 +1044,7 @@ async fn run_main_node_pipeline(
                 .map(Into::into),
             replays_to_execute,
             leadership,
+            produce_interval: config.sequencer_config.block_time,
         })
         .pipe(BlockExecutor {
             block_context_provider,
@@ -1049,7 +1085,7 @@ async fn run_main_node_pipeline(
             "Batcher subsystem disabled — skipping prover input generation, L1 settlement, and downstream components"
         );
         pipeline.pipe(NoOpSink::new()).spawn();
-        return;
+        return monitor.spawn(runtime);
     }
 
     tracing::info!("Initializing ProofStorage");
@@ -1186,6 +1222,7 @@ async fn run_main_node_pipeline(
 
     tracing::info!("Launching pipeline");
     pipeline.spawn();
+    monitor.spawn(runtime)
 }
 
 /// Only for EN - we still populate channels destined for the batcher subsystem -
@@ -1204,11 +1241,12 @@ async fn run_en_pipeline(
     tree: MerkleTree<RocksDBWrapper>,
     repositories: impl WriteRepository + Clone,
     finality: impl ReadFinality + Clone,
+    stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
-) {
+) -> PipelineStatus {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
             .general_config
@@ -1218,7 +1256,10 @@ async fn run_en_pipeline(
     let (applied_block_number_sender, applied_block_number_receiver) =
         watch::channel(starting_block - 1);
 
-    Pipeline::new(runtime.clone())
+    let monitor =
+        BackpressureMonitor::new(config.backpressure_config.clone(), stop_receiver.clone());
+
+    let pipeline = Pipeline::new(runtime.clone(), monitor.registrar())
         .pipe(ExternalNodeCommandSource {
             replays_for_sequencer,
             up_to_block: config.sequencer_config.en_sync_up_to_block,
@@ -1265,10 +1306,22 @@ async fn run_en_pipeline(
                 outgoing_verify_results,
             ),
             NoOpSink::new(),
-        )
-        .spawn();
+        );
 
-    // Run Priority Tree tasks for EN - not part of the pipeline.
+    // PriorityTree on EN runs outside the pipe chain — it's a standalone task driven by
+    // finality polling, not a pipeline channel consumer — so register it ad-hoc before
+    // the monitor spawns. Deliberately registered with no upstream: EN's PriorityTree is
+    // pure observational caching (no downstream consumer; `execute_batches_sender = None`
+    // in `PriorityTreeManager::run`), so adjacent-lag backpressure has no causal meaning
+    // here. Registering with `upstream = None` keeps Prometheus gauges and
+    // /status/pipeline visibility while ensuring no threshold can ever trigger.
+    let priority_tree_reporter = config
+        .general_config
+        .run_priority_tree
+        .then(|| monitor.handle().register(ComponentId::PriorityTree, None));
+
+    pipeline.spawn();
+
     if config.general_config.run_priority_tree {
         let priority_tree_manager = PriorityTreeManager::new(
             block_replay_storage,
@@ -1286,12 +1339,10 @@ async fn run_en_pipeline(
             "priority tree caching",
             |shutdown| async move {
                 tokio::select! {
-                    result = priority_tree_manager.run(None) => {
+                    result = priority_tree_manager.run(None, priority_tree_reporter.expect("reporter created when priority tree is enabled")) => {
                         result.expect("PriorityTreeManager run failed");
                     }
                     _guard = shutdown => {
-                        // Ensures both futures are dropped before we shutdown gracefully. Otherwise
-                        // priority tree manager might keep holding DB.
                     }
                 }
             },
@@ -1301,6 +1352,7 @@ async fn run_en_pipeline(
         "clear failing block config",
         clear_failing_block_config_task(finality, internal_config_manager),
     );
+    monitor.spawn(runtime)
 }
 
 fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashes {
