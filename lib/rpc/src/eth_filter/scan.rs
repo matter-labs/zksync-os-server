@@ -1,5 +1,5 @@
 use super::EthFilterError;
-use super::index::candidates;
+use zksync_os_storage::log_index_filter::candidates;
 use crate::eth_impl::build_api_log;
 use crate::metrics::API_METRICS;
 use alloy::rpc::types::{Filter, Log};

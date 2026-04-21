@@ -2,7 +2,6 @@ use crate::config::RpcConfig;
 use crate::result::ToRpcResult;
 use crate::rpc_storage::ReadRpcStorage;
 use crate::types::QueryLimits;
-mod index;
 mod pending;
 use pending::{FullTransactionsReceiver, PendingTransactionKind, PendingTransactionsReceiver};
 mod registry;

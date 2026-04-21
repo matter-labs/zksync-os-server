@@ -31,7 +31,7 @@ impl<I: Iterator> IteratorExt for I {}
 /// Returns the candidates for the filter over `range`.
 /// Blocks outside `covered` must be checked via bloom filter.
 /// Returns empty candidates if the filter has no address or topic constraints.
-pub(crate) fn candidates(
+pub fn candidates(
     repo: &dyn LogIndex,
     filter: &Filter,
     range: Range<u64>,
@@ -131,6 +131,7 @@ fn intersect(a: Range<u64>, b: Range<u64>) -> Range<u64> {
 mod tests {
     use super::*;
     use alloy::primitives::{Address, B256};
+    use alloy::rpc::types::Filter;
     use std::collections::HashMap;
     use zksync_os_storage_api::RepositoryResult;
 
