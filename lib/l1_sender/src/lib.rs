@@ -156,15 +156,13 @@ pub async fn run_l1_sender<Input: SendToL1>(
     // Only actual SendToL1 commands are expected from here on.
     loop {
         latency_tracker.enter_state(L1SenderState::WaitingRecv);
+        // This sleeps until **at least one** command is received from the channel. Additionally,
+        // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
+        // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
+        // emptied in every iteration, its size never exceeds `self.command_limit`.
         let received = inbound
             .recv_many(&mut cmd_buffer, config.command_limit)
             .await;
-
-        if received == 0 {
-            tracing::info!("inbound channel closed");
-            return Ok(());
-        }
-
         let mut commands = cmd_buffer
             .drain(..)
             .map(|cmd| -> anyhow::Result<Input> {
@@ -178,16 +176,21 @@ pub async fn run_l1_sender<Input: SendToL1>(
                 }
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-
+        // This method only returns `0` if the channel has been closed and there are no more items
+        // in the queue.
+        if received == 0 {
+            tracing::info!("inbound channel closed");
+            return Ok(());
+        }
         latency_tracker.enter_state(L1SenderState::SendingToL1);
         let range = Input::display_range(&commands); // Only for logging
         tracing::info!(command_name, range, "sending L1 transactions");
         L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
 
-        // It's important to preserve the order of commands so that we send them downstream
-        // also in order. This holds because L1 transactions are included in sender-nonce
-        // order. Keep this in mind if changing the sending logic (e.g., if adding a buffer
-        // we'd need to set nonces manually).
+        // It's important to preserve the order of commands -
+        // so that we send them downstream also in order.
+        // This holds true because l1 transactions are included in the order of sender nonce.
+        // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
         let pending_txs: Vec<(TransactionReceiptFuture, Input, Instant)> =
             futures::stream::iter(commands.drain(..))
                 .then(|mut cmd| async {
@@ -376,10 +379,6 @@ where
     P: Provider<Ethereum>,
     Input: SendToL1,
 {
-    // Pin the confirmed-nonce to `sl_block_number` so it matches the snapshot at which
-    // `getTotalBatches*` was evaluated and the inbound queue was initialised. Using the
-    // "latest" block tag here would race with newly-mined blocks and produce a stale
-    // baseline that is inconsistent with the queue's starting batch number.
     let latest_nonce = provider
         .get_transaction_count(operator_address)
         .block_id(BlockId::number(sl_block_number))
@@ -436,9 +435,6 @@ where
             }
             Ok(Some(tx)) => tx,
             Ok(None) => {
-                // The tx was dropped from the mempool. Providers that support
-                // `eth_getTransactionBySenderAndNonce` return the tx whether it is pending or
-                // already mined, so `None` unambiguously means it no longer exists.
                 tracing::warn!(
                     command_name,
                     nonce,
