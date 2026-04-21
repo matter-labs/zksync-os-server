@@ -12,13 +12,15 @@ use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use alloy::consensus::BlobTransactionValidationError;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
-use alloy::eips::{BlockId, Encodable2718};
+use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
 use alloy::network::{Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844};
 use alloy::primitives::Address;
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
+use alloy::providers::utils::Eip1559Estimation;
 use alloy::providers::{PendingTransactionError, Provider, WalletProvider};
+use anyhow::Context as _;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use futures::future::BoxFuture;
@@ -310,13 +312,33 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
     }
 }
 
+/// Estimates EIP-1559 fees using the 30th percentile of priority fees over the last 3 blocks.
+/// 
+/// `estimate_eip1559_fees_with` in alloy hardcodes the block count and percentile, so we call
+/// `get_fee_history` directly and delegate the rest to alloy's default estimator.
+async fn estimate_eip1559_fees(provider: &dyn Provider) -> anyhow::Result<Eip1559Estimation> {
+    let fee_history = provider
+        .get_fee_history(3, BlockNumberOrTag::Latest, &[30.0])
+        .await
+        .context("fetching fee history")?;
+    let base_fee_per_gas: u128 = fee_history
+        .latest_block_base_fee()
+        .unwrap_or_default()
+        .into();
+    let rewards = fee_history.reward.unwrap_or_default();
+    Ok(alloy::providers::utils::eip1559_default_estimator(
+        base_fee_per_gas,
+        &rewards,
+    ))
+}
+
 async fn tx_request_with_gas_fields(
     provider: &dyn Provider,
     operator_address: Address,
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
 ) -> anyhow::Result<TransactionRequest> {
-    let eip1559_est = provider.estimate_eip1559_fees().await?;
+    let eip1559_est = estimate_eip1559_fees(provider).await?;
     L1_SENDER_METRICS.report_l1_eip_1559_estimation(eip1559_est)?;
     tracing::debug!(
         max_priority_fee_per_gas_gwei = ?format_units(eip1559_est.max_priority_fee_per_gas, "gwei"),
