@@ -773,7 +773,7 @@ pub struct L1SenderConfig {
     pub transaction_timeout: Duration,
 
     /// Gas limit for L1 transactions (commit/prove/execute).
-    #[config(default_t = 3_000_000u64)]
+    #[config(default_t = 4_000_000u64)]
     pub gas_limit: u64,
 
     /// Use Fusaka blob transaction format if the timestamp has passed.
