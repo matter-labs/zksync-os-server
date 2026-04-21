@@ -1,11 +1,14 @@
 use async_trait::async_trait;
 use std::collections::HashSet;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::MissedTickBehavior;
+use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_raft::{ConsensusRole, LeadershipSignal};
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand, RebuildCommand};
-use zksync_os_storage_api::{ReadReplay, ReadReplayExt, ReplayRecord};
+use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 
 /// Command source for consensus-enabled main node.
 /// Replays local WAL starting from `starting_block` and then produces new blocks when leader.
@@ -22,6 +25,8 @@ pub struct ConsensusNodeCommandSource<Replay> {
     pub replays_to_execute: mpsc::Receiver<ReplayRecord>,
     /// Current leadership status from consensus.
     pub leadership: LeadershipSignal,
+    /// How frequently to emit produce commands while leading.
+    pub produce_interval: Duration,
 }
 
 #[derive(Debug)]
@@ -43,13 +48,15 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
     type Input = ();
     type Output = BlockCommand;
 
-    const NAME: &'static str = "consensus_node_command_source";
-    const OUTPUT_BUFFER_SIZE: usize = 1;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::ConsensusNodeCommandSource;
+    const REGISTER_WITH_MONITOR: bool = false;
 
     async fn run(
         mut self,
         _input: PeekableReceiver<()>,
-        output: mpsc::Sender<BlockCommand>,
+        output: mpsc::UnboundedSender<BlockCommand>,
+        _state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         let last_block_in_wal = self.block_replay_storage.latest_record();
 
@@ -77,14 +84,15 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
             replay_until
         );
 
-        self.block_replay_storage
-            .forward_range_with(
-                self.starting_block,
-                replay_until,
-                output.clone(),
-                |record| BlockCommand::Replay(Box::new(record)),
-            )
-            .await?;
+        for block_number in self.starting_block..=replay_until {
+            let Some(record) = self.block_replay_storage.get_replay_record(block_number) else {
+                anyhow::bail!("Missing replay record for block {block_number}");
+            };
+            if output.send(BlockCommand::Replay(Box::new(record))).is_err() {
+                tracing::warn!("Command output channel closed, stopping replay forwarder");
+                return Ok(());
+            }
+        }
 
         if let Some(rebuild_options) = &self.rebuild_options {
             self.send_block_rebuilds(rebuild_options, last_block_in_wal, &output)
@@ -100,9 +108,11 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
     /// This method kicks in after all local canonized Replayed Records (WAL) are replayed.
     /// Produces `Produce` commands only when the node is the leader.
-    async fn run_loop(mut self, output: mpsc::Sender<BlockCommand>) -> anyhow::Result<()> {
+    async fn run_loop(mut self, output: mpsc::UnboundedSender<BlockCommand>) -> anyhow::Result<()> {
         let mut leadership = self.leadership.clone();
         let mut role = leadership.current_role();
+        let mut produce_tick = tokio::time::interval(self.produce_interval);
+        produce_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         tracing::info!(?role, "Consensus role initialized");
 
         loop {
@@ -129,15 +139,14 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                     );
                     if output
                         .send(BlockCommand::Replay(Box::new(record)))
-                        .await
                         .is_err()
                     {
                         tracing::info!("Command output channel closed, stopping source");
                         break;
                     }
                 }
-                send_res = output.send(BlockCommand::Produce(ProduceCommand)), if role == ConsensusRole::Leader => {
-                    if send_res.is_err() {
+                _ = produce_tick.tick(), if role == ConsensusRole::Leader => {
+                    if output.send(BlockCommand::Produce(ProduceCommand)).is_err() {
                         tracing::info!("Command output channel closed, stopping source");
                         break;
                     }
@@ -152,7 +161,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
         &self,
         rebuild_options: &RebuildOptions,
         last_block_in_wal: u64,
-        output: &mpsc::Sender<BlockCommand>,
+        output: &mpsc::UnboundedSender<BlockCommand>,
     ) -> anyhow::Result<()> {
         tracing::warn!(
             "Starting block rebuilds! {rebuild_options:?}, last_block_in_wal: {last_block_in_wal}"
@@ -175,7 +184,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                 make_empty,
                 reset_timestamp: rebuild_options.reset_timestamps,
             }));
-            if output.send(command).await.is_err() {
+            if output.send(command).is_err() {
                 tracing::info!("Command output channel closed, stopping source");
                 break;
             }
@@ -189,13 +198,15 @@ impl PipelineComponent for ExternalNodeCommandSource {
     type Input = ();
     type Output = BlockCommand;
 
-    const NAME: &'static str = "external_node_command_source";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::ExternalNodeCommandSource;
+    const REGISTER_WITH_MONITOR: bool = false;
 
     async fn run(
         mut self,
         _input: PeekableReceiver<()>,
-        output: mpsc::Sender<BlockCommand>,
+        output: mpsc::UnboundedSender<BlockCommand>,
+        _state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         while let Some(record) = self.replays_for_sequencer.recv().await {
             let block_number = record.block_context.block_number;
@@ -212,12 +223,84 @@ impl PipelineComponent for ExternalNodeCommandSource {
                 futures::future::pending::<()>().await;
             }
 
-            if output.send(command).await.is_err() {
+            if output.send(command).is_err() {
                 tracing::info!("Command output channel closed, stopping source");
                 break;
             }
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc as tokio_mpsc;
+    use zksync_os_storage_api::{ReadReplay, ReplayRecord};
+
+    #[derive(Debug)]
+    struct DummyReplay;
+
+    impl ReadReplay for DummyReplay {
+        fn get_context(
+            &self,
+            _block_number: u64,
+        ) -> Option<zksync_os_interface::types::BlockContext> {
+            None
+        }
+
+        fn get_replay_record_by_key(
+            &self,
+            _block_number: u64,
+            _db_key: Option<Vec<u8>>,
+        ) -> Option<ReplayRecord> {
+            None
+        }
+
+        fn latest_record(&self) -> u64 {
+            0
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn leader_production_is_rate_limited() {
+        let (_replays_tx, replays_rx) = tokio_mpsc::channel(1);
+        let source = ConsensusNodeCommandSource {
+            block_replay_storage: DummyReplay,
+            starting_block: 0,
+            rebuild_options: None,
+            replays_to_execute: replays_rx,
+            leadership: LeadershipSignal::AlwaysLeader,
+            produce_interval: Duration::from_secs(1),
+        };
+        let (output, mut receiver) = mpsc::unbounded_channel::<BlockCommand>();
+
+        let task = tokio::spawn(source.run_loop(output));
+
+        tokio::task::yield_now().await;
+        // First tick should enqueue exactly one produce command.
+        assert!(
+            receiver.try_recv().is_ok(),
+            "first tick should enqueue exactly one produce command",
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "source must not flood produce commands between ticks",
+        );
+
+        tokio::time::advance(Duration::from_millis(100)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            receiver.try_recv().is_err(),
+            "source must not flood produce commands between ticks after advance",
+        );
+
+        drop(receiver);
+        let result = task.await.expect("source task should join");
+        assert!(
+            result.is_ok(),
+            "source should stop cleanly when receiver drops"
+        );
     }
 }

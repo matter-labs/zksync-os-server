@@ -10,7 +10,7 @@ use anyhow::Context;
 use metrics::METRICS;
 use num::rational::Ratio;
 use std::time::Duration;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::watch;
 use zksync_os_rpc_api::types::L2FeeHistory;
@@ -34,7 +34,7 @@ pub struct GasAdjuster {
     sl_provider: DynProvider,
     pubdata_price_sender: watch::Sender<Option<U256>>,
     blob_fill_ratio_sender: watch::Sender<Option<Ratio<u64>>>,
-    sidecar_receiver: Receiver<BlobTransactionSidecar>,
+    sidecar_receiver: UnboundedReceiver<BlobTransactionSidecar>,
 }
 
 #[derive(Debug)]
@@ -54,7 +54,7 @@ impl GasAdjuster {
         config: GasAdjusterConfig,
         pubdata_price_sender: watch::Sender<Option<U256>>,
         blob_fill_ratio_sender: watch::Sender<Option<Ratio<u64>>>,
-        sidecar_receiver: Receiver<BlobTransactionSidecar>,
+        sidecar_receiver: UnboundedReceiver<BlobTransactionSidecar>,
     ) -> anyhow::Result<Self> {
         // Subtracting 1 from the "latest" block number to prevent errors in case
         // the info about the latest block is not yet present on the node.

@@ -4,35 +4,6 @@ use alloy::primitives::utils::{format_ether, format_units};
 use alloy::rpc::types::TransactionReceipt;
 use anyhow::Context;
 use vise::{Buckets, EncodeLabelValue, Gauge, Histogram, LabeledFamily, Metrics};
-use zksync_os_observability::{GenericComponentState, StateLabel};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
-#[metrics(label = "seal_reason", rename_all = "snake_case")]
-pub enum L1SenderState {
-    WaitingRecv,
-    WaitingSend,
-    SendingToL1,
-    WaitingL1Inclusion,
-}
-
-impl StateLabel for L1SenderState {
-    fn generic(&self) -> GenericComponentState {
-        match self {
-            L1SenderState::WaitingRecv => GenericComponentState::WaitingRecv,
-            L1SenderState::WaitingSend => GenericComponentState::WaitingSend,
-            L1SenderState::SendingToL1 => GenericComponentState::Processing,
-            L1SenderState::WaitingL1Inclusion => GenericComponentState::Processing,
-        }
-    }
-    fn specific(&self) -> &'static str {
-        match self {
-            L1SenderState::WaitingRecv => "waiting_recv",
-            L1SenderState::WaitingSend => "waiting_send",
-            L1SenderState::SendingToL1 => "sending_to_l1",
-            L1SenderState::WaitingL1Inclusion => "waiting_l1_inclusion",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "percentile", rename_all = "snake_case")]
@@ -154,20 +125,20 @@ impl L1SenderMetrics {
             l1_transaction_fee_ether_per_l2_tx,
             "succeeded on L1",
         );
-        self.gas_used[&Input::NAME].observe(receipt.gas_used);
+        self.gas_used[&Input::COMPONENT_ID.as_str()].observe(receipt.gas_used);
         if let Some(gas_used_per_l2_tx) = receipt.gas_used.checked_div(l2_txs_count as u64) {
-            self.gas_used_per_l2_tx[&Input::NAME].observe(gas_used_per_l2_tx);
+            self.gas_used_per_l2_tx[&Input::COMPONENT_ID.as_str()].observe(gas_used_per_l2_tx);
         }
         if let Some(blob_gas_used) = receipt.blob_gas_used {
             self.blob_gas_used.observe(blob_gas_used);
         }
-        self.l1_transaction_fee_ether[&Input::NAME]
+        self.l1_transaction_fee_ether[&Input::COMPONENT_ID.as_str()]
             .observe(format_ether(l1_transaction_fee).parse()?);
         if let Some(l1_transaction_fee_per_l2_tx) = l1_transaction_fee_ether_per_l2_tx {
-            self.l1_transaction_fee_per_l2_tx_ether[&Input::NAME]
+            self.l1_transaction_fee_per_l2_tx_ether[&Input::COMPONENT_ID.as_str()]
                 .observe(l1_transaction_fee_per_l2_tx.parse()?);
         }
-        self.effective_gas_price_gwei[&Input::NAME]
+        self.effective_gas_price_gwei[&Input::COMPONENT_ID.as_str()]
             .set(Self::wei_to_gwei(receipt.effective_gas_price)?);
         if let Some(blob_gas_price) = receipt.blob_gas_price {
             self.effective_blob_gas_price_gwei

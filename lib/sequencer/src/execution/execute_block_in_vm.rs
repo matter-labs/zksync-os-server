@@ -1,4 +1,4 @@
-use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
+use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::utils::{BlockDump, hash_block_output};
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
@@ -14,8 +14,7 @@ use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_metadata::NODE_SEMVER_VERSION;
-use zksync_os_observability::ComponentStateHandle;
-use zksync_os_storage_api::{MeteredViewState, OverriddenStateView, ReplayRecord, ViewState};
+use zksync_os_storage_api::{OverriddenStateView, ReplayRecord, ViewState};
 use zksync_os_types::{SystemTxType, ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
@@ -26,7 +25,6 @@ use zksync_os_types::{SystemTxType, ZkTransaction, ZkTxType, ZksyncOsEncode};
 pub async fn execute_block_in_vm<V: ViewState>(
     mut command: PreparedBlockCommand<'_>,
     state_view: V,
-    latency_tracker: &ComponentStateHandle<SequencerState>,
     tracer: impl AnyTracer + Send + 'static,
     validator: impl AnyTxValidator + Send + 'static,
 ) -> Result<
@@ -39,7 +37,6 @@ pub async fn execute_block_in_vm<V: ViewState>(
     BlockDump,
 > {
     tracing::info!(command = ?command, block_number=command.block_context.block_number, "Executing command");
-    latency_tracker.enter_state(SequencerState::InitializingVm);
     let ctx = command.block_context;
 
     /* ---------- VM & state ----------------------------------------- */
@@ -47,11 +44,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     // after the block is executed.
     let state_view_with_force_preimages =
         OverriddenStateView::with_preimages(state_view, &command.force_preimages);
-    let metered_state_view = MeteredViewState {
-        component_state_tracker: latency_tracker.clone(),
-        state_view: state_view_with_force_preimages,
-    };
-    let mut runner = VmWrapper::new(ctx, metered_state_view, tracer, validator);
+    let mut runner = VmWrapper::new(ctx, state_view_with_force_preimages, tracer, validator);
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
     let mut cumulative_gas_used = 0u64;
@@ -71,7 +64,6 @@ pub async fn execute_block_in_vm<V: ViewState>(
     /* ---------- main loop ------------------------------------------ */
     // seal_reason must only be used for observability - handling must remain generic
     let seal_reason = loop {
-        latency_tracker.enter_state(SequencerState::WaitingForTx);
         tokio::select! {
             /* -------- deadline branch ------------------------------ */
             _ = async {
@@ -89,7 +81,6 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
             /* -------- stream branch ------------------------------- */
             maybe_tx = command.tx_source.stream.next() => {
-                latency_tracker.enter_state(SequencerState::Execution);
                 let Some(tx) = maybe_tx else {
                     tracing::info!(
                         block_number = ctx.block_number,
@@ -345,8 +336,6 @@ pub async fn execute_block_in_vm<V: ViewState>(
             }
         }
     }
-
-    latency_tracker.enter_state(SequencerState::Sealing);
 
     /* ---------- seal & return ------------------------------------- */
     let mut output = runner.seal_block().await.map_err(|e| BlockDump {
