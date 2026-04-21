@@ -2,7 +2,9 @@ mod config_format;
 pub use config_format::ConfigFormat;
 
 mod transaction_acceptance_state;
-pub use transaction_acceptance_state::{NotAcceptingReason, TransactionAcceptanceState};
+pub use transaction_acceptance_state::{
+    BackpressureCause, BackpressureTrigger, NotAcceptingReason, TransactionAcceptanceState,
+};
 
 mod block;
 pub use block::BlockExt;

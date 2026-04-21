@@ -13947,6 +13947,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_backpressure"
+version = "0.19.0"
+dependencies = [
+ "futures",
+ "reth-tasks",
+ "smart-config",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "vise",
+ "zksync_os_observability",
+ "zksync_os_pipeline",
+ "zksync_os_types",
+]
+
+[[package]]
 name = "zksync_os_base_token_adjuster"
 version = "0.19.0"
 dependencies = [
@@ -14139,6 +14155,7 @@ dependencies = [
  "tokio",
  "tracing",
  "zksync_os_api",
+ "zksync_os_backpressure",
  "zksync_os_contract_interface",
  "zksync_os_integration_tests_macros",
  "zksync_os_merkle_tree_api",
@@ -14442,6 +14459,8 @@ dependencies = [
  "reth-tasks",
  "tokio",
  "tracing",
+ "vise",
+ "zksync_os_observability",
 ]
 
 [[package]]
@@ -14527,6 +14546,7 @@ dependencies = [
  "zksync_os_multivm",
  "zksync_os_observability",
  "zksync_os_pipeline",
+ "zksync_os_sequencer",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -14740,6 +14760,7 @@ dependencies = [
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "zksync_os_backpressure",
  "zksync_os_base_token_adjuster",
  "zksync_os_batch_types",
  "zksync_os_batch_verification",
@@ -14823,8 +14844,12 @@ dependencies = [
  "axum",
  "reth-tasks",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
+ "zksync_os_backpressure",
+ "zksync_os_observability",
+ "zksync_os_types",
 ]
 
 [[package]]
@@ -14873,6 +14898,7 @@ dependencies = [
  "zksync_os_batch_types",
  "zksync_os_interface",
  "zksync_os_observability",
+ "zksync_os_pipeline",
  "zksync_os_rocksdb",
  "zksync_os_types",
 ]
