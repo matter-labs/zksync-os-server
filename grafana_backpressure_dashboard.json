@@ -1,0 +1,4994 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 376,
+      "type": "row",
+      "title": "Operator At-a-Glance",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 377,
+      "type": "stat",
+      "title": "Accepting Txs?",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max(pipeline_accepting) or vector(0)",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "NO — backpressured",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "YES",
+                  "color": "green"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "description": "YES when the pipeline is currently admitting transactions. NO (red) means a component is backpressured and the sequencer has stopped accepting new txs. Check 'Current Culprit' to see which component is gating."
+    },
+    {
+      "id": 378,
+      "type": "stat",
+      "title": "Pipeline Head Block",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 1,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max(pipeline_component_last_processed_block{component=\"block_executor\"}) or vector(0)",
+          "legendFormat": "",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Latest block number reaching the end of the block pipeline (block_executor last-processed watermark). Freshest block the chain has sealed locally."
+    },
+    {
+      "id": 380,
+      "type": "stat",
+      "title": "Current Culprit",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "topk(1, pipeline_backpressure_active > 0) or on() label_replace(vector(0), \"component\", \"ALL CLEAR\", \"\", \"\")",
+          "legendFormat": "{{component}}",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "name",
+        "wideLayout": true,
+        "orientation": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Component currently triggering backpressure, or 'ALL CLEAR' when no backpressure is active. If multiple components are active, shows one arbitrarily — consult the Backpressure History panel for the full picture."
+    },
+    {
+      "id": 381,
+      "type": "stat",
+      "title": "Acceptance Flaps (10m)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 1,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "(sum(increase(pipeline_acceptance_state_changes[10m])) + sum(increase(pipeline_acceptance_state_clears[10m]))) or vector(0)",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 4
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Count of transitions in and out of tx acceptance in the last 10 minutes. Frequent flapping (≥4) means the pipeline is oscillating around a backpressure threshold — investigate the flapping component and consider tuning the threshold."
+    },
+    {
+      "id": 383,
+      "type": "stat",
+      "title": "Worst Block Time Lag to Head",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 6,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max(pipeline_component_time_diff_to_head_seconds{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}) or vector(0)",
+          "legendFormat": "",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Largest `time_diff_to_head_seconds` across block-pipeline components (block_executor, block_canonizer, block_applier, tree_manager, prover_input_generator). Climbing value means a block-pipeline stage is falling behind real time."
+    },
+    {
+      "id": 384,
+      "type": "stat",
+      "title": "Worst Batch Time Lag to Head",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 6,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max(pipeline_component_time_diff_to_head_seconds{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}) or vector(0)",
+          "legendFormat": "",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 1800
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Largest `time_diff_to_head_seconds` across batch-pipeline components (batcher through l1_sender_execute). Normal operation tolerates several minutes of lag due to L1 confirmation times; steadily rising over tens of minutes indicates a settlement bottleneck."
+    },
+    {
+      "id": 385,
+      "type": "stat",
+      "title": "Worst Block Adjacent Lag",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max(pipeline_component_time_diff_to_upstream_seconds{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}) or vector(0)",
+          "legendFormat": "",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Largest `time_diff_to_upstream_seconds` across block-pipeline components. Rising value means one stage has fallen behind its immediate upstream — early signal before the full pipeline falls behind the chain head."
+    },
+    {
+      "id": 386,
+      "type": "stat",
+      "title": "Worst Batch Adjacent Lag",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 6,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max(pipeline_component_time_diff_to_upstream_seconds{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}) or vector(0)",
+          "legendFormat": "",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Largest `time_diff_to_upstream_seconds` across batch-pipeline components. Normal operation tolerates tens of seconds; steadily climbing over minutes indicates a settlement bottleneck."
+    },
+    {
+      "id": 388,
+      "type": "row",
+      "title": "Component Health Strip",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "panels": []
+    },
+    {
+      "id": 389,
+      "type": "table",
+      "title": "Component Health",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 24,
+        "h": 18
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_backpressure_active)",
+          "legendFormat": "BP",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_last_processed_block)",
+          "legendFormat": "Last Block",
+          "range": false,
+          "instant": true,
+          "refId": "B",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_last_processed_batch)",
+          "legendFormat": "Last Batch",
+          "range": false,
+          "instant": true,
+          "refId": "C",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_block_diff_to_upstream)",
+          "legendFormat": "Blk Diff Upstream",
+          "range": false,
+          "instant": true,
+          "refId": "D",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_block_diff_to_head)",
+          "legendFormat": "Blk Diff Head",
+          "range": false,
+          "instant": true,
+          "refId": "E",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_time_diff_to_head_seconds)",
+          "legendFormat": "Time Diff Head (s)",
+          "range": false,
+          "instant": true,
+          "refId": "F",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "sum by (component) (clamp_min(deriv(pipeline_component_last_processed_block[1m]), 0))",
+          "legendFormat": "Throughput (bps)",
+          "range": false,
+          "instant": true,
+          "refId": "G",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (component_state_age_seconds{generic_state=~\"idle|active\"} and on(component, generic_state, specific_state) (deriv(component_state_age_seconds{generic_state=~\"idle|active\"}[1m]) > 0.5))",
+          "legendFormat": "Current Age (s)",
+          "range": false,
+          "instant": true,
+          "refId": "J",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_order)",
+          "legendFormat": "Order",
+          "range": false,
+          "instant": true,
+          "refId": "K",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "cluster": true,
+              "namespace": true,
+              "pod": true
+            },
+            "indexByName": {
+              "component": 0,
+              "Value #K": 1,
+              "Value #A": 2,
+              "Value #J": 3,
+              "Value #F": 4,
+              "Value #E": 5,
+              "Value #D": 6,
+              "Value #G": 7,
+              "Value #B": 8,
+              "Value #C": 9
+            },
+            "renameByName": {
+              "component": "Component",
+              "Value #K": "Order",
+              "Value #A": "BP",
+              "Value #B": "Last Block",
+              "Value #C": "Last Batch",
+              "Value #D": "Blk Diff Upstream",
+              "Value #E": "Blk Diff Head",
+              "Value #F": "Time Diff Head (s)",
+              "Value #G": "Throughput (bps)",
+              "Value #J": "Current Age (s)"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Order",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "BP"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "OK",
+                        "color": "green"
+                      },
+                      "1": {
+                        "text": "BP",
+                        "color": "red"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time Diff Head (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 60
+                    },
+                    {
+                      "color": "red",
+                      "value": 600
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Blk Diff Upstream"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 10
+                    },
+                    {
+                      "color": "red",
+                      "value": 100
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Blk Diff Head"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 50
+                    },
+                    {
+                      "color": "red",
+                      "value": 500
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Throughput (bps)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "cps"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last Block"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last Batch"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Current Age (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Order"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "Order"
+          }
+        ]
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Per-component at-a-glance. Rows ordered by pipeline position. BP = currently backpressured. Current Age (s) = seconds in the current Idle/Active state (informational, no color — long idle times are normal). Time/Blk Diff = lag vs chain head. Blk Diff Upstream = adjacent lag vs immediately preceding stage."
+    },
+    {
+      "id": 390,
+      "type": "timeseries",
+      "title": "Current State Age by Component (throttled/idle only)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component, generic_state) (component_state_age_seconds{generic_state=~\"throttled|idle\"})",
+          "legendFormat": "{{component}} / {{generic_state}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Age (seconds) of the current state per component, restricted to throttled and idle states. A climbing throttled line is the signature of sustained backpressure; a climbing idle line with upstream work available hints at a stuck consumer."
+    },
+    {
+      "id": 391,
+      "type": "timeseries",
+      "title": "Per-Component Throughput (blocks/s, 1m)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 44,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "sum by (component) (clamp_min(deriv(pipeline_component_last_processed_block[1m]), 0))",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Rate of `last_processed_block` per component over the last minute (derivative of the gauge, clamped at 0 to mask negative spikes across process restarts). Useful for spotting which stage is slowest relative to peers — a single low line next to several high lines points to the bottleneck."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "id": 332,
+      "panels": [],
+      "title": "Pipeline Summary",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Number of pipeline components currently exerting backpressure (i.e. signalling they are not ready to accept more work). Any non-zero value means the pipeline is throttled somewhere. Check the Backpressure History timeline and Current Backpressure Causes table below to identify the source.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 54
+      },
+      "id": 333,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "sum(pipeline_backpressure_active) or vector(0)",
+          "legendFormat": "active causes",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Active Backpressure Causes",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "The highest block diff to upstream across all pipeline components. A growing value means a component is falling behind its upstream producer — sustained growth leads to backpressure. Drill into Block Diff By Component to identify which component.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 54
+      },
+      "id": 334,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max(pipeline_component_block_diff_to_upstream) or vector(0)",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Worst Block Diff to Upstream",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "The largest number of blocks any block-pipeline component (block_executor, block_canonizer, block_applier, tree_manager, prover_input_generator) is behind the pipeline head. Filters out batch components where block diff to head oscillates with batch size and is not a reliable signal — use Worst Batch Time Diff to Head for batch backpressure.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 54
+      },
+      "id": 335,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max(pipeline_component_block_diff_to_head{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}) or vector(0)",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Worst Block Diff to Head (Block Pipeline)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Wall-clock seconds between the pipeline head timestamp and the last batch-pipeline component's processed timestamp. Batch components (batcher, fri_job_manager, gapless_committer, l1_sender_*, etc.) use max_time_diff_to_upstream for backpressure — this is the primary batch backpressure signal. Yellow ≥ 5s, Red ≥ 30s.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 54
+      },
+      "id": 336,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max(pipeline_component_time_diff_to_head_seconds{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}) or vector(0)",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Worst Batch Time Diff to Head",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "description": "Peak block processing rate across all components (blocks per second).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red"
+              },
+              {
+                "color": "yellow",
+                "value": 0.1
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
+            ]
+          },
+          "unit": "cps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 54
+      },
+      "id": 337,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max(clamp_min(deriv(pipeline_component_last_processed_block[1m]), 0)) or vector(0)",
+          "legendFormat": "blocks/sec",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Peak Throughput (blocks/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "description": "Green = no backpressure anywhere. Red = at least one component is under backpressure.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "Nominal"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1,
+                "to": 1000,
+                "result": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "Degraded"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 54
+      },
+      "id": 338,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max(pipeline_backpressure_active) or vector(0)",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Pipeline Backpressure",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "color-background"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "component"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "ACTIVE",
+                        "color": "red",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Components whose backpressure signal is currently active (pipeline_backpressure_active = 1). An empty table means the pipeline is flowing freely. Multiple rows indicate a cascade — the root cause is typically the deepest upstream component in the list, not the last one to appear.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 59
+      },
+      "id": 339,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "enablePagination": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Value"
+          }
+        ]
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active > 0",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{component}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Current Backpressure Causes",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "Count of transitions into backpressure ('opened', from pipeline_acceptance_state_changes) and out of backpressure ('cleared', from pipeline_acceptance_state_clears) per scrape interval. Frequent oscillation (high open+cleared rate) means the pipeline is on the edge of stability — a component is repeatedly hitting its capacity limit. A sustained 'opened' count with no matching 'cleared' means a component is stuck.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 59
+      },
+      "id": 340,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "increase(pipeline_acceptance_state_changes[$__rate_interval]) or vector(0)",
+          "legendFormat": "backpressure opened",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "increase(pipeline_acceptance_state_clears[$__rate_interval]) or vector(0)",
+          "legendFormat": "backpressure cleared",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Acceptance State Transitions",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "fillOpacity": 80,
+            "lineWidth": 0
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "OK"
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "Backpressure"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Swimlane view of backpressure state per component over time. Green = accepting work normally, Red = backpressure active. Use this during incidents to find which component went red first and trace the cascade. The first component to turn red is usually the root cause; others follow downstream.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 66
+      },
+      "id": 341,
+      "options": {
+        "alignValue": "left",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mergeValues": true,
+        "rowHeight": 0.8,
+        "showValue": "auto",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"block_executor\"}",
+          "legendFormat": "block_executor",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"block_canonizer\"}",
+          "legendFormat": "block_canonizer",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"block_applier\"}",
+          "legendFormat": "block_applier",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"tree_manager\"}",
+          "legendFormat": "tree_manager",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"prover_input_generator\"}",
+          "legendFormat": "prover_input_generator",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"batcher\"}",
+          "legendFormat": "batcher",
+          "range": true,
+          "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"batch_verification\"}",
+          "legendFormat": "batch_verification",
+          "range": true,
+          "refId": "G"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"fri_job_manager\"}",
+          "legendFormat": "fri_job_manager",
+          "range": true,
+          "refId": "H"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"gapless_committer\"}",
+          "legendFormat": "gapless_committer",
+          "range": true,
+          "refId": "I"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"upgrade_gatekeeper\"}",
+          "legendFormat": "upgrade_gatekeeper",
+          "range": true,
+          "refId": "J"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"l1_sender_commit\"}",
+          "legendFormat": "l1_sender_commit",
+          "range": true,
+          "refId": "K"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"snark_job_manager\"}",
+          "legendFormat": "snark_job_manager",
+          "range": true,
+          "refId": "L"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"gapless_l1_proof_sender\"}",
+          "legendFormat": "gapless_l1_proof_sender",
+          "range": true,
+          "refId": "M"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"l1_sender_prove\"}",
+          "legendFormat": "l1_sender_prove",
+          "range": true,
+          "refId": "N"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"priority_tree\"}",
+          "legendFormat": "priority_tree",
+          "range": true,
+          "refId": "O"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_backpressure_active{component=\"l1_sender_execute\"}",
+          "legendFormat": "l1_sender_execute",
+          "range": true,
+          "refId": "P"
+        }
+      ],
+      "title": "Backpressure History by Component",
+      "type": "state-timeline"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 74
+      },
+      "id": 342,
+      "panels": [],
+      "title": "Whole Pipeline Flow",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Blocks queued between components (block diff to upstream) for every pipeline component over time. Zero means the component is keeping up with its upstream. A component whose diff grows while others stay near zero is the bottleneck. Spikes that self-resolve indicate burst load; a diff that never drains means the component is saturated.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 75
+      },
+      "id": 343,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_block_diff_to_upstream",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Block Diff to Upstream By Component",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "How many blocks behind the pipeline head each component currently is. All lines should track close together near zero. Diverging lines mean one component has stalled. The component with the highest lag is the current bottleneck.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 75
+      },
+      "id": 344,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_block_diff_to_head",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Block Diff to Head By Component",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Difference in seconds between the wall-clock timestamp of the latest produced block and the timestamp embedded in the last block each component processed. Complements block lag by accounting for variable block times — a component 10 blocks behind during fast block production may only be 2s behind in real time. Returns 0 if the component or pipeline head has no timestamp.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 83
+      },
+      "id": 345,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_time_diff_to_head_seconds",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Time Diff to Head By Component",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "description": "Block processing rate per component. A drop here indicates a stalling component before lag metrics climb.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "cps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 83
+      },
+      "id": 346,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "clamp_min(deriv(pipeline_component_last_processed_block[1m]), 0)",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Processing Throughput By Component (blocks/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Absolute block number of the last block successfully processed by each component. All lines should advance together at roughly the same slope. A flat line for one component means it has stopped making progress. Useful for post-incident analysis: zoom into the window where lines diverged to pinpoint the exact moment a component stalled.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 91
+      },
+      "id": 347,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_last_processed_block",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Last Processed Block By Component",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 99
+      },
+      "id": 348,
+      "panels": [],
+      "title": "Pipeline Group Drilldowns",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Blocks queued between components (block diff to upstream) for the block pipeline: block_executor → block_canonizer → block_applier → tree_manager → prover_input_generator. A growing diff in block_applier or tree_manager typically indicates I/O saturation. A growing diff in prover_input_generator means prover input computation is the bottleneck.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 100
+      },
+      "id": 349,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_block_diff_to_upstream{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Block Pipeline Block Diff to Upstream",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Blocks queued between batch-pipeline components (block diff to upstream) for batcher → batch_verification → fri_job_manager → snark_job_manager → gapless_committer → gapless_l1_proof_sender → l1_sender_* → priority_tree. Some diff here is normal since proving is slower than block production — watch for unbounded monotonic growth which signals the prover is falling permanently behind.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 100
+      },
+      "id": 350,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_block_diff_to_upstream{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Batch Pipeline Block Diff to Upstream",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Block diff to head for block-pipeline components: block_executor, block_canonizer, block_applier, tree_manager, prover_input_generator. All should stay near zero. A spike in tree_manager while block_applier is fine suggests Merkle tree computation is the bottleneck. Batch components are excluded — their block diff to head oscillates with batch size and is not a reliable signal.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 108
+      },
+      "id": 351,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_block_diff_to_head{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Block Pipeline Block Diff to Head",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Wall-clock time lag for all batch-pipeline components: batcher, batch_verification, fri_job_manager, snark_job_manager, gapless_committer, gapless_l1_proof_sender, l1_sender_commit, l1_sender_prove, l1_sender_execute, upgrade_gatekeeper, priority_tree. A stable lag is acceptable — a monotonically growing lag signals the batch pipeline cannot keep up with block production. This is the primary backpressure metric for batch components.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 108
+      },
+      "id": 352,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_time_diff_to_head_seconds{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Batch Pipeline Time Diff to Head",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Wall-clock time lag for block-pipeline components (block_executor, block_canonizer, block_applier, tree_manager, prover_input_generator). Should stay near zero in normal operation. A rising value here directly translates to delayed transaction finality visible to users.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 116
+      },
+      "id": 353,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_time_diff_to_head_seconds{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Block Pipeline Time Diff to Head",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Absolute block number of the last block processed by each batch-pipeline component. All lines should advance together, though batch components naturally advance in steps (one jump per sealed batch). A flat line for one component means it has stalled. Use this alongside Batch Pipeline Time Diff to Head to distinguish stalls from expected batch-size variation.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 116
+      },
+      "id": 354,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_last_processed_block{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Batch Pipeline Last Processed Block",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 140
+      },
+      "id": 362,
+      "panels": [],
+      "title": "Batch Pipeline — Batch Numbers & Adjacent Lag",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Batches queued between each batch-pipeline component and its upstream neighbour (upstream.batch_number − downstream.last_batch_picked). A rising value means the downstream component is not keeping pace with the upstream batch producer — sustained growth above max_batch_diff_to_upstream triggers backpressure. Complementary to the block-level adjacent diff: this view operates at batch granularity and is not distorted by within-batch block oscillation.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 141
+      },
+      "id": 363,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_batch_diff_to_upstream",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Adjacent Batch Diff to Upstream By Component",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Wall-clock seconds between each component and its upstream neighbour (upstream.last_processed_block_timestamp − this.last_picked_block_timestamp). The seconds-unit companion to Adjacent Batch/Block Diff — compares channel occupancy across components with very different batch sizes. Reports 0 when either timestamp is unavailable. A diverging line identifies the specific edge where work is piling up.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 141
+      },
+      "id": 364,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_time_diff_to_upstream_seconds",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Adjacent Time Diff to Upstream By Component",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Absolute batch number last fully completed by each batch-pipeline component. All lines should advance together; a line that stalls while others advance reveals the bottleneck stage in the settlement pipeline. The gap between adjacent lines equals the adjacent batch diff shown in the chart above.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 149
+      },
+      "id": 365,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_last_processed_batch",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Last Processed Batch By Component",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Absolute batch number last dequeued from the input channel by each batch-pipeline component that reports a batch pick (FriJobManager, SnarkJobManager, GaplessCommitter, GaplessL1ProofSender). Compare with Last Processed Batch: the gap (picked > processed) shows how many batches are currently being worked on. A widening gap that never closes indicates a component is accepting work faster than it can complete it.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 149
+      },
+      "id": 366,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_component_last_picked_batch",
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Last Picked Batch By Component",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 158
+      },
+      "id": 367,
+      "panels": [],
+      "title": "Prover In-Flight",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fri count"
+            },
+            "properties": [
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    8,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "FRI prover in-flight batch range. The shaded area between 'oldest' and 'newest' represents batches currently assigned to FRI provers — i.e. work in progress that has not yet returned a proof. The dashed 'count' line shows how many batches are in-flight simultaneously. When count is 0 the FRI prover queue is idle. A steadily growing range without increasing count suggests long individual proof times.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 165
+      },
+      "id": 368,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_first_batch{component=\"fri_job_manager\"} != 0",
+          "legendFormat": "fri oldest",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_last_batch{component=\"fri_job_manager\"} != 0",
+          "legendFormat": "fri newest",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_batch_count{component=\"fri_job_manager\"}",
+          "legendFormat": "fri count",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "FRI Prover In-Flight Batch Range",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "snark count"
+            },
+            "properties": [
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    8,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "SNARK prover in-flight batch range (same semantics as the FRI panel on the left). SNARK jobs run after FRI completes; under nominal operation the SNARK in-flight window lags the FRI window by one batch or less. A large gap between FRI newest and SNARK newest means FRI results are piling up waiting for SNARK capacity.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 165
+      },
+      "id": 369,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_first_batch{component=\"snark_job_manager\"} != 0",
+          "legendFormat": "snark oldest",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_last_batch{component=\"snark_job_manager\"} != 0",
+          "legendFormat": "snark newest",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_batch_count{component=\"snark_job_manager\"}",
+          "legendFormat": "snark count",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "SNARK Prover In-Flight Batch Range",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "description": "Total number of batches tracked in the FRI and SNARK job maps (pending + assigned). Unlike in_flight_batch_count (which counts active assignments), this includes batches that are queued but not yet picked up by a prover. A growing value means the prover map is accumulating work faster than provers are completing it. prover_job_map_max_batch_number − prover_job_map_min_batch_number is the batch span — it can exceed batch_count when there are gaps in the range.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 174
+      },
+      "id": 370,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "prover_batch_count",
+          "legendFormat": "{{stage}} batch count",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "prover_prover_job_map_max_batch_number - prover_prover_job_map_min_batch_number",
+          "legendFormat": "{{stage}} batch span (max−min)",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Prover Job Map — Batch Count & Span",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 182
+      },
+      "id": 371,
+      "panels": [],
+      "title": "L1 Sender In-Flight",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "commit count"
+            },
+            "properties": [
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    8,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "L1 commit sender in-flight batch range. The shaded area between 'oldest' and 'newest' represents batches submitted to L1 but not yet included in a block. The dashed 'count' line shows how many parallel L1 transactions are awaiting inclusion. Receipts are awaited in submission order, so 'newest' stays fixed while 'oldest' advances as each transaction is mined. If 'oldest' is not advancing while count is high, L1 inclusion is stuck on the head of the queue.",
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 190
+      },
+      "id": 372,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_first_batch{component=\"l1_sender_commit\"} != 0",
+          "legendFormat": "commit oldest",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_last_batch{component=\"l1_sender_commit\"} != 0",
+          "legendFormat": "commit newest",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_batch_count{component=\"l1_sender_commit\"}",
+          "legendFormat": "commit count",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "L1 Commit Sender In-Flight Batch Range",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prove count"
+            },
+            "properties": [
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    8,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "L1 prove sender in-flight batch range (same semantics as the commit panel on the left). Prove transactions are submitted once a SNARK proof is available. A persistently high count here with low commit count typically means prove-stage L1 inclusion is the bottleneck rather than upstream proof generation.",
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 190
+      },
+      "id": 373,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_first_batch{component=\"l1_sender_prove\"} != 0",
+          "legendFormat": "prove oldest",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_last_batch{component=\"l1_sender_prove\"} != 0",
+          "legendFormat": "prove newest",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_batch_count{component=\"l1_sender_prove\"}",
+          "legendFormat": "prove count",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "L1 Prove Sender In-Flight Batch Range",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "execute count"
+            },
+            "properties": [
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    8,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "L1 execute sender in-flight batch range (same semantics as the commit panel). Execute transactions finalize batches on L1. Because execute runs after prove and is typically the last L1 stage, a non-empty in-flight range here with an empty prove range is normal; the opposite (empty execute, full prove) usually indicates prove-side delay propagating forward.",
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 190
+      },
+      "id": 374,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_first_batch{component=\"l1_sender_execute\"} != 0",
+          "legendFormat": "execute oldest",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_last_batch{component=\"l1_sender_execute\"} != 0",
+          "legendFormat": "execute newest",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_in_flight_batch_count{component=\"l1_sender_execute\"}",
+          "legendFormat": "execute count",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "L1 Execute Sender In-Flight Batch Range",
+      "type": "timeseries"
+    },
+    {
+      "id": 392,
+      "type": "table",
+      "title": "Block Pipeline Backpressure Headroom (live / threshold / saturation %)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 12,
+        "h": 14
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_block_diff_to_upstream{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_backpressure_threshold_block_diff_to_upstream{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "(max by (component) (pipeline_component_block_diff_to_upstream{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}) / max by (component) (pipeline_backpressure_threshold_block_diff_to_upstream{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}) * 100)",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_time_diff_to_upstream_seconds{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_backpressure_threshold_time_diff_to_upstream_seconds{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "(max by (component) (pipeline_component_time_diff_to_upstream_seconds{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}) / max by (component) (pipeline_backpressure_threshold_time_diff_to_upstream_seconds{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"}) * 100)",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_order{component=~\"block_executor|block_canonizer|block_applier|tree_manager|prover_input_generator\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "J"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "cluster": true,
+              "namespace": true,
+              "pod": true
+            },
+            "indexByName": {
+              "component": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "Value #C": 3,
+              "Value #D": 4,
+              "Value #E": 5,
+              "Value #F": 6,
+              "Value #J": 7
+            },
+            "renameByName": {
+              "component": "Component",
+              "Value #A": "Blk Δ Up",
+              "Value #B": "Blk Δ Thr",
+              "Value #C": "Blk Sat %",
+              "Value #D": "Time Δ Up (s)",
+              "Value #E": "Time Δ Thr (s)",
+              "Value #F": "Time Sat %",
+              "Value #J": "Order"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Order",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Blk Sat %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 70
+                    },
+                    {
+                      "color": "orange",
+                      "value": 90
+                    },
+                    {
+                      "color": "red",
+                      "value": 100
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time Sat %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 70
+                    },
+                    {
+                      "color": "orange",
+                      "value": 90
+                    },
+                    {
+                      "color": "red",
+                      "value": 100
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Blk Δ Up"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Blk Δ Thr"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time Δ Up (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time Δ Thr (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Order"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "Order"
+          }
+        ]
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Live distance to each backpressure threshold per dimension. Saturation % = 100 × live / threshold. Orange ≥ 90%, red ≥ 100% (the component will be backpressured). Use this to see which component is closest to tripping before it trips."
+    },
+    {
+      "id": 600,
+      "type": "table",
+      "title": "Batch Pipeline Backpressure Headroom (live / threshold / saturation %)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 30,
+        "w": 12,
+        "h": 14
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_batch_diff_to_upstream{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_backpressure_threshold_batch_diff_to_upstream{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "(max by (component) (pipeline_component_batch_diff_to_upstream{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}) / max by (component) (pipeline_backpressure_threshold_batch_diff_to_upstream{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}) * 100)",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_time_diff_to_upstream_seconds{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_backpressure_threshold_time_diff_to_upstream_seconds{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "(max by (component) (pipeline_component_time_diff_to_upstream_seconds{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}) / max by (component) (pipeline_backpressure_threshold_time_diff_to_upstream_seconds{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"}) * 100)",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_order{component=~\"batcher|batch_verification|fri_job_manager|gapless_committer|upgrade_gatekeeper|l1_sender_commit|snark_job_manager|gapless_l1_proof_sender|l1_sender_prove|priority_tree|l1_sender_execute\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "J"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "cluster": true,
+              "namespace": true,
+              "pod": true
+            },
+            "indexByName": {
+              "component": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "Value #C": 3,
+              "Value #D": 4,
+              "Value #E": 5,
+              "Value #F": 6,
+              "Value #J": 7
+            },
+            "renameByName": {
+              "component": "Component",
+              "Value #A": "Batch Δ Up",
+              "Value #B": "Batch Δ Thr",
+              "Value #C": "Batch Sat %",
+              "Value #D": "Time Δ Up (s)",
+              "Value #E": "Time Δ Thr (s)",
+              "Value #F": "Time Sat %",
+              "Value #J": "Order"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Order",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Batch Sat %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 70
+                    },
+                    {
+                      "color": "orange",
+                      "value": 90
+                    },
+                    {
+                      "color": "red",
+                      "value": 100
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time Sat %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 70
+                    },
+                    {
+                      "color": "orange",
+                      "value": 90
+                    },
+                    {
+                      "color": "red",
+                      "value": 100
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Batch Δ Up"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Batch Δ Thr"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time Δ Up (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time Δ Thr (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Order"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "Order"
+          }
+        ]
+      },
+      "pluginVersion": "11.0.0",
+      "description": "Live distance to each backpressure threshold per dimension. Saturation % = 100 × live / threshold. Orange ≥ 90%, red ≥ 100% (the component will be backpressured). Use this to see which component is closest to tripping before it trips."
+    },
+    {
+      "id": 500,
+      "type": "table",
+      "title": "Prover In-Flight Summary",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "description": "At-a-glance in-flight range per component: oldest batch still awaiting completion, newest batch submitted, and the number of batches currently in flight. Rows are ordered in pipeline direction.",
+      "gridPos": {
+        "x": 0,
+        "y": 159,
+        "w": 24,
+        "h": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_in_flight_first_batch{component=~\"fri_job_manager|snark_job_manager\"} != 0)",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_in_flight_last_batch{component=~\"fri_job_manager|snark_job_manager\"} != 0)",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_in_flight_batch_count{component=~\"fri_job_manager|snark_job_manager\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_order{component=~\"fri_job_manager|snark_job_manager\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "D"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "cluster": true,
+              "namespace": true,
+              "pod": true
+            },
+            "indexByName": {
+              "component": 0,
+              "Value #D": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4
+            },
+            "renameByName": {
+              "component": "Component",
+              "Value #D": "Order",
+              "Value #A": "Oldest Batch",
+              "Value #B": "Newest Batch",
+              "Value #C": "In-Flight"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Order",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "In-Flight"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 5
+                    },
+                    {
+                      "color": "orange",
+                      "value": 20
+                    },
+                    {
+                      "color": "red",
+                      "value": 50
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Order"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "Order"
+          }
+        ]
+      },
+      "pluginVersion": "11.0.0"
+    },
+    {
+      "id": 501,
+      "type": "table",
+      "title": "L1 Sender In-Flight Summary",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "beztrbkshi96ob"
+      },
+      "description": "At-a-glance in-flight range per component: oldest batch still awaiting completion, newest batch submitted, and the number of batches currently in flight. Rows are ordered in pipeline direction.",
+      "gridPos": {
+        "x": 0,
+        "y": 183,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_in_flight_first_batch{component=~\"l1_sender_commit|l1_sender_prove|l1_sender_execute\"} != 0)",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_in_flight_last_batch{component=~\"l1_sender_commit|l1_sender_prove|l1_sender_execute\"} != 0)",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_in_flight_batch_count{component=~\"l1_sender_commit|l1_sender_prove|l1_sender_execute\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "beztrbkshi96ob"
+          },
+          "editorMode": "code",
+          "expr": "max by (component) (pipeline_component_order{component=~\"l1_sender_commit|l1_sender_prove|l1_sender_execute\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "legendFormat": "",
+          "refId": "D"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "cluster": true,
+              "namespace": true,
+              "pod": true
+            },
+            "indexByName": {
+              "component": 0,
+              "Value #D": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4
+            },
+            "renameByName": {
+              "component": "Component",
+              "Value #D": "Order",
+              "Value #A": "Oldest Batch",
+              "Value #B": "Newest Batch",
+              "Value #C": "In-Flight"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Order",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "In-Flight"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 5
+                    },
+                    {
+                      "color": "orange",
+                      "value": 20
+                    },
+                    {
+                      "color": "red",
+                      "value": 50
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Order"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "Order"
+          }
+        ]
+      },
+      "pluginVersion": "11.0.0"
+    }
+  ],
+  "preload": false,
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": [
+    "pipeline",
+    "backpressure",
+    "observability"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "zksync-os-backpressure",
+  "uid": "cepipelinestate01",
+  "version": 5
+}
