@@ -1,73 +1,110 @@
 use crate::execution::execute_block_in_vm::SealReason;
-use std::time::Duration;
-use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
-use vise::{Counter, EncodeLabelValue};
 use zksync_os_observability::{GenericComponentState, StateLabel};
-use zksync_os_storage_api::StateAccessLabel;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
-#[metrics(label = "state", rename_all = "snake_case")]
+/// Component-specific state for the block executor / sequencer execution loop.
 pub enum SequencerState {
-    ConfiguredBlockLimitReached,
-
+    /// Waiting for the next block command from the command source.
     WaitingForCommand,
-
-    WaitingForTx,
-    Execution,
-    ReadStorage,
-    ReadPreimage,
-    Sealing,
-
-    AddingToState,
-    AddingToRepos,
-    UpdatingMempool,
-    AddingToReplayStorage,
-    WaitingSend,
-    BlockContextTxs,
+    /// Command dequeued, waiting for BlockApplier to finish applying the
+    /// previous block. Throttled because downstream backpressure is the cause.
+    WaitingForApplier,
+    /// Setting up the VM for block execution.
     InitializingVm,
+    /// Running the VM to execute transactions.
+    Execution,
+    /// Updating the mempool after block execution.
+    UpdatingMempool,
 }
+
 impl StateLabel for SequencerState {
     fn generic(&self) -> GenericComponentState {
         match self {
-            Self::WaitingForCommand
-            | Self::WaitingForTx
-            | Self::ConfiguredBlockLimitReached
-            | Self::BlockContextTxs => GenericComponentState::WaitingRecv,
-            Self::WaitingSend => GenericComponentState::WaitingSend,
-            _ => GenericComponentState::Processing,
+            Self::WaitingForCommand => GenericComponentState::Idle,
+            Self::WaitingForApplier => GenericComponentState::Throttled,
+            Self::InitializingVm | Self::Execution | Self::UpdatingMempool => {
+                GenericComponentState::Active
+            }
         }
     }
     fn specific(&self) -> &'static str {
         match self {
-            SequencerState::ConfiguredBlockLimitReached => "configured_limit_reached",
-            SequencerState::WaitingForCommand => "waiting_for_command",
-            SequencerState::WaitingForTx => "waiting_for_tx",
-            SequencerState::Execution => "execution",
-            SequencerState::ReadStorage => "read_storage",
-            SequencerState::ReadPreimage => "read_preimage",
-            SequencerState::Sealing => "sealing",
-            SequencerState::AddingToState => "adding_to_state",
-            SequencerState::AddingToRepos => "adding_to_repos",
-            SequencerState::UpdatingMempool => "updating_mempool",
-            SequencerState::AddingToReplayStorage => "adding_to_replay_storage",
-            SequencerState::WaitingSend => "waiting_send",
-            SequencerState::BlockContextTxs => "block_context_txs",
-            SequencerState::InitializingVm => "initializing_vm",
+            Self::WaitingForCommand => "waiting_for_command",
+            Self::WaitingForApplier => "waiting_for_applier",
+            Self::InitializingVm => "initializing_vm",
+            Self::Execution => "execution",
+            Self::UpdatingMempool => "updating_mempool",
         }
     }
 }
 
-impl StateAccessLabel for SequencerState {
-    fn read_storage_state() -> Self {
-        Self::ReadStorage
+/// Component-specific state for the block canonizer.
+pub enum BlockCanonizerState {
+    /// Waiting in the outer select! — both consensus and executor arms live.
+    Idle,
+    /// `produced_queue` is full, so the executor-input arm is gated off. The
+    /// component is only able to service the consensus arm until consensus
+    /// drains at least one proposed block back to us.
+    ProducedQueueFull,
+    /// Consensus arm fired — processing a canonized block (either matched
+    /// against a locally-produced block or forwarded to execution).
+    HandlingConsensusBlock,
+    /// Executor arm fired — processing a Replay block (forwarded downstream).
+    HandlingExecutorBlock,
+    /// Executor arm fired for a Produce/Rebuild block — awaiting consensus to
+    /// accept the proposal.
+    ProposingToConsensus,
+}
+
+impl StateLabel for BlockCanonizerState {
+    fn generic(&self) -> GenericComponentState {
+        match self {
+            Self::Idle => GenericComponentState::Idle,
+            Self::ProducedQueueFull => GenericComponentState::Throttled,
+            Self::HandlingConsensusBlock
+            | Self::HandlingExecutorBlock
+            | Self::ProposingToConsensus => GenericComponentState::Active,
+        }
     }
-    fn read_preimage_state() -> Self {
-        Self::ReadPreimage
-    }
-    fn default_execution_state() -> Self {
-        Self::Execution
+    fn specific(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::ProducedQueueFull => "produced_queue_full",
+            Self::HandlingConsensusBlock => "handling_consensus_block",
+            Self::HandlingExecutorBlock => "handling_executor_block",
+            Self::ProposingToConsensus => "proposing_to_consensus",
+        }
     }
 }
+
+/// Component-specific state for the block applier.
+pub enum BlockApplierState {
+    /// Waiting for the next block from BlockCanonizer.
+    Idle,
+    /// Persisting replay record and applying storage writes to the state layer.
+    AddingToStorage,
+    /// Populating the repository layer used by the JSON-RPC API.
+    PopulatingRepos,
+}
+
+impl StateLabel for BlockApplierState {
+    fn generic(&self) -> GenericComponentState {
+        match self {
+            Self::Idle => GenericComponentState::Idle,
+            _ => GenericComponentState::Active,
+        }
+    }
+    fn specific(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::AddingToStorage => "adding_to_storage",
+            Self::PopulatingRepos => "populating_repos",
+        }
+    }
+}
+
+use std::time::Duration;
+use vise::Counter;
+use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "execution")]

@@ -9,9 +9,7 @@ pub mod upgrade_gatekeeper;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
-use crate::metrics::{
-    L1_SENDER_METRICS, L1SenderState, PriorityFeeEstimatePercentile, PriorityFeeEstimateWindow,
-};
+use crate::metrics::{L1_SENDER_METRICS, PriorityFeeEstimatePercentile, PriorityFeeEstimateWindow};
 use alloy::consensus::BlobTransactionValidationError;
 use alloy::consensus::Transaction as ConsensusTransaction;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
@@ -34,11 +32,39 @@ use anyhow::Context as _;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Instant;
-use tokio::sync::mpsc::Sender;
-use tokio::sync::watch;
-use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
+use tokio::sync::{mpsc, watch};
+use zksync_os_observability::{
+    BatchTrackingCoordinates, ComponentStateReporter, GenericComponentState, StateLabel,
+};
 use zksync_os_operator_signer::SignerConfig;
-use zksync_os_pipeline::PeekableReceiver;
+use zksync_os_pipeline::{PeekableReceiver, SendAndRecordExt};
+
+/// Component-specific state for the L1 sender.
+pub enum L1SenderState {
+    /// Waiting for the next batch to commit/prove/execute.
+    Idle,
+    /// Submitting a transaction to L1.
+    SendingToL1,
+    /// Transaction submitted; waiting for L1 block inclusion.
+    WaitingL1Inclusion,
+}
+
+impl StateLabel for L1SenderState {
+    fn generic(&self) -> GenericComponentState {
+        match self {
+            Self::Idle => GenericComponentState::Idle,
+            Self::SendingToL1 => GenericComponentState::Active,
+            Self::WaitingL1Inclusion => GenericComponentState::Throttled,
+        }
+    }
+    fn specific(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::SendingToL1 => "sending_to_l1",
+            Self::WaitingL1Inclusion => "waiting_l1_inclusion",
+        }
+    }
+}
 
 /// A code for "method not found" error response as declared in JSON-RPC 2.0 spec.
 const METHOD_NOT_FOUND_CODE: i64 = -32601;
@@ -65,7 +91,7 @@ type TransactionReceiptFuture =
 pub async fn run_l1_sender<Input: SendToL1>(
     // == plumbing ==
     mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
-    outbound: Sender<SignedBatchEnvelope<FriProof>>,
+    outbound: mpsc::UnboundedSender<SignedBatchEnvelope<FriProof>>,
 
     // == command-specific settings ==
     to_address: Address,
@@ -77,6 +103,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
     >,
     config: L1SenderConfig<Input>,
     gateway: bool,
+    state_reporter: ComponentStateReporter,
     commit_submitted_tx: Option<watch::Sender<u64>>,
     // The SL block number at which `getTotalBatches*` was called on startup. Pinning the
     // confirmed-nonce baseline to this block ensures it is consistent with where the
@@ -84,9 +111,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
     // the `getTotalBatches` call and the nonce check.
     sl_block_number: u64,
 ) -> anyhow::Result<()> {
-    let latency_tracker =
-        ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
-    let command_name = Input::NAME;
+    let command_name = Input::COMPONENT_ID.as_str();
 
     let operator_address =
         register_operator::<_, Input>(&mut provider, config.operator_signer).await?;
@@ -95,7 +120,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
     if process_prepending_passthrough_commands(
         &mut inbound,
         &outbound,
-        &latency_tracker,
+        &state_reporter,
         command_name,
     )
     .await?
@@ -143,7 +168,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
             &provider,
             operator_address,
             command_name,
-            &latency_tracker,
+            &state_reporter,
             &outbound,
         )
         .await?;
@@ -152,14 +177,30 @@ pub async fn run_l1_sender<Input: SendToL1>(
     // At this point, all in-flight transactions from the previous session are confirmed.
     // Only actual SendToL1 commands are expected from here on.
     loop {
-        latency_tracker.enter_state(L1SenderState::WaitingRecv);
+        state_reporter.enter_state(L1SenderState::Idle);
         // This sleeps until **at least one** command is received from the channel. Additionally,
         // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
         // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
         // emptied in every iteration, its size never exceeds `self.command_limit`.
+        //
+        // NOTE: record_picked is intentionally NOT called here (nor via any recv helper).
+        // L1Sender drains the input channel quickly — before waiting for L1 confirmation —
+        // so if we reported last_picked at dequeue time the adjacent-lag formula
+        // (upstream.last_processed − downstream.last_picked) would always be near zero even
+        // when L1 mining is stalled. By leaving last_picked = None the monitor falls back to
+        // using last_processed for the downstream side, which correctly captures the gap
+        // between what UpgradeGatekeeper sent and what L1Sender confirmed.
+        // record_processed is called only after the L1 transactions are mined
+        // (see `record_processed` calls below).
         let received = inbound
             .recv_many(&mut cmd_buffer, config.command_limit)
             .await;
+        // This method only returns `0` if the channel has been closed and there are no more items
+        // in the queue.
+        if received == 0 {
+            tracing::info!("inbound channel closed");
+            return Ok(());
+        }
         let mut commands = cmd_buffer
             .drain(..)
             .map(|cmd| -> anyhow::Result<Input> {
@@ -173,13 +214,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                 }
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        // This method only returns `0` if the channel has been closed and there are no more items
-        // in the queue.
-        if received == 0 {
-            tracing::info!("inbound channel closed");
-            return Ok(());
-        }
-        latency_tracker.enter_state(L1SenderState::SendingToL1);
+        state_reporter.enter_state(L1SenderState::SendingToL1);
         let range = Input::display_range(&commands); // Only for logging
         tracing::info!(command_name, range, "sending L1 transactions");
         L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
@@ -292,7 +327,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
             &provider,
             operator_address,
             command_name,
-            &latency_tracker,
+            &state_reporter,
             &outbound,
         )
         .await?;
@@ -306,18 +341,49 @@ async fn wait_for_txs_and_forward<F, P, Input>(
     provider: &FillProvider<F, P>,
     operator_address: Address,
     command_name: &'static str,
-    latency_tracker: &ComponentStateHandle<L1SenderState>,
-    outbound: &Sender<SignedBatchEnvelope<FriProof>>,
+    state_reporter: &ComponentStateReporter,
+    outbound: &mpsc::UnboundedSender<SignedBatchEnvelope<FriProof>>,
 ) -> anyhow::Result<()>
 where
     F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
     P: Provider<Ethereum>,
     Input: SendToL1,
 {
-    latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
+    let envelope_to_coord = |e: &SignedBatchEnvelope<FriProof>| {
+        BatchTrackingCoordinates::new(
+            e.batch_number(),
+            e.batch.last_block_number,
+            Some(e.batch.batch_info.last_block_timestamp),
+        )
+    };
+    let first_batch_coords: Vec<BatchTrackingCoordinates> = pending_txs
+        .iter()
+        .map(|(_, cmd, _)| {
+            envelope_to_coord(
+                cmd.as_ref()
+                    .first()
+                    .expect("command has at least one envelope"),
+            )
+        })
+        .collect();
+    // Last stays fixed throughout the wait loop: receipts are awaited in submission
+    // order, so the newest submitted batch is always the last to leave the in-flight set.
+    let in_flight_last_coord = pending_txs.last().map(|(_, cmd, _)| {
+        envelope_to_coord(
+            cmd.as_ref()
+                .last()
+                .expect("command has at least one envelope"),
+        )
+    });
+    state_reporter.record_in_flight_range(
+        first_batch_coords.first().cloned(),
+        in_flight_last_coord.clone(),
+    );
+
+    state_reporter.enter_state(L1SenderState::WaitingL1Inclusion);
 
     let mut completed_commands = Vec::with_capacity(pending_txs.len());
-    for (receipt_fut, command, submitted_at) in pending_txs {
+    for (idx, (receipt_fut, command, submitted_at)) in pending_txs.into_iter().enumerate() {
         let receipt = receipt_fut.await;
         // Observe latency before propagating errors so timeout cases are recorded.
         L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
@@ -325,6 +391,14 @@ where
         let receipt = receipt?;
         validate_tx_receipt(provider, &command, receipt).await?;
         completed_commands.push(command);
+
+        let next_first = first_batch_coords.get(idx + 1).cloned();
+        let next_last = if next_first.is_some() {
+            in_flight_last_coord.clone()
+        } else {
+            None
+        };
+        state_reporter.record_in_flight_range(next_first, next_last);
     }
 
     let range = Input::display_range(&completed_commands);
@@ -340,11 +414,22 @@ where
     L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
     L1_SENDER_METRICS.nonce[&command_name].set(nonce);
 
-    latency_tracker.enter_state(L1SenderState::WaitingSend);
     for command in completed_commands {
+        let last_block = command.as_ref().last().map(|e| e.batch.last_block_number);
+        let last_block_timestamp = command
+            .as_ref()
+            .last()
+            .map(|e| e.batch.batch_info.last_block_timestamp);
+        // Capture batch number before command.into() moves the command.
+        let last_batch = command.as_ref().last().map(|e| e.batch_number());
         for mut output_envelope in command.into() {
             output_envelope.set_stage(Input::MINED_STAGE);
-            outbound.send(output_envelope).await?;
+            outbound
+                .send(output_envelope)
+                .map_err(|e| anyhow::anyhow!("outbound channel closed: {e}"))?;
+        }
+        if let Some(lb) = last_block {
+            state_reporter.record_processed(lb, last_block_timestamp, last_batch);
         }
     }
     Ok(())
@@ -483,12 +568,12 @@ where
 
 async fn process_prepending_passthrough_commands<Input: SendToL1>(
     inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
-    outbound: &Sender<SignedBatchEnvelope<FriProof>>,
-    latency_tracker: &ComponentStateHandle<L1SenderState>,
+    outbound: &mpsc::UnboundedSender<SignedBatchEnvelope<FriProof>>,
+    state_reporter: &ComponentStateReporter,
     command_name: &str,
 ) -> anyhow::Result<Option<()>> {
     loop {
-        latency_tracker.enter_state(L1SenderState::WaitingRecv);
+        state_reporter.enter_state(L1SenderState::Idle);
         match inbound
             .peek_recv(|command| matches!(command, L1SenderCommand::Passthrough(_)))
             .await
@@ -512,10 +597,12 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
                             batch_number = batch.batch_number(),
                             "Not actually sending to L1, just passing through"
                         );
-                        latency_tracker.enter_state(L1SenderState::WaitingSend);
                         outbound
-                            .send((*batch).with_stage(Input::PASSTHROUGH_STAGE))
-                            .await?;
+                            .send_and_record(
+                                (*batch).with_stage(Input::PASSTHROUGH_STAGE),
+                                state_reporter,
+                            )
+                            .map_err(|e| anyhow::anyhow!("outbound channel closed: {e}"))?;
                     }
                 }
             }
@@ -629,16 +716,16 @@ async fn register_operator<
         .await?;
 
     let balance = provider.get_balance(address).await?;
-    L1_SENDER_METRICS.balance[&Input::NAME].set(format_ether(balance).parse()?);
+    L1_SENDER_METRICS.balance[&Input::COMPONENT_ID.as_str()].set(format_ether(balance).parse()?);
     let address_string: &'static str = address.to_string().leak();
-    L1_SENDER_METRICS.l1_operator_address[&(Input::NAME, address_string)].set(1);
+    L1_SENDER_METRICS.l1_operator_address[&(Input::COMPONENT_ID.as_str(), address_string)].set(1);
 
     if balance.is_zero() {
         anyhow::bail!("L1 sender's address {address} has zero balance");
     }
 
     tracing::info!(
-        command_name = Input::NAME,
+        command_name = Input::COMPONENT_ID.as_str(),
         balance_eth = format_ether(balance),
         %address,
         "initialized L1 sender",

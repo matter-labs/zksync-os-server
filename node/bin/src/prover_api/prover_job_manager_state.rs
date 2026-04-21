@@ -1,0 +1,34 @@
+use zksync_os_observability::{GenericComponentState, StateLabel};
+
+/// Component-specific state shared by `FriJobManager` and `SnarkJobManager`.
+///
+/// These managers have no run loop — they're driven by HTTP handlers, fake
+/// provers, and `add_job`. `WaitingForProver` captures the dominant steady
+/// state: jobs queued, blocked on an external prover submission. The generic
+/// mapping is `Throttled`, consistent with the documented use for "prover job
+/// slots" in `GenericComponentState::Throttled`.
+pub enum ProverJobManagerState {
+    /// Queue empty — no work in flight.
+    Idle,
+    /// Jobs queued, awaiting submission from an external prover.
+    WaitingForProver,
+    /// Handling an incoming add/submit/send path.
+    ProcessingSubmission,
+}
+
+impl StateLabel for ProverJobManagerState {
+    fn generic(&self) -> GenericComponentState {
+        match self {
+            Self::Idle => GenericComponentState::Idle,
+            Self::WaitingForProver => GenericComponentState::Throttled,
+            Self::ProcessingSubmission => GenericComponentState::Active,
+        }
+    }
+    fn specific(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::WaitingForProver => "waiting_for_prover",
+            Self::ProcessingSubmission => "processing_submission",
+        }
+    }
+}
