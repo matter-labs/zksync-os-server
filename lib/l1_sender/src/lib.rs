@@ -34,6 +34,11 @@ use zksync_os_pipeline::PeekableReceiver;
 type TransactionReceiptFuture =
     BoxFuture<'static, Result<TransactionReceipt, PendingTransactionError>>;
 
+const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
+/// In case there's only one chain connected to gateway, it is very likely that there will be not enough block production
+/// to reach 3 confirmations for such transactions
+const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
+
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
 /// Loads up to `command_limit` commands from the channel and sends them to L1 in parallel.
@@ -188,7 +193,11 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         // reorg happens and transaction will not be included in the new fork (very-very
                         // unlikely), L1 sender will crash at some point (because a consequent L1
                         // transactions will fail) and recover from the new L1 state after restart.
-                        .with_required_confirmations(1)
+                        .with_required_confirmations(if gateway {
+                            REQUIRED_CONFIRMATIONS_GATEWAY
+                        } else {
+                            REQUIRED_CONFIRMATIONS_L1
+                        })
                         // Ensure we don't wait indefinitely and crash if the transaction is not
                         // included on L1 in a reasonable time.
                         .with_timeout(Some(config.transaction_timeout));

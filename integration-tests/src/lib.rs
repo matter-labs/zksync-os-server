@@ -1220,6 +1220,7 @@ impl AnvilL1 {
             anvil
                 .port(locked_port.port)
                 .chain_id(L1_CHAIN_ID)
+                .block_time(1)
                 .arg("--load-state")
                 .arg(l1_state_path)
         })?;
