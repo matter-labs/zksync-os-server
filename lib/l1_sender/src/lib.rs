@@ -110,7 +110,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
 
     // On startup, detect any L1 transactions that were submitted in a previous session
     // but not yet mined, and pair them with the corresponding queued commands.
-    let mut recovered = match recover_in_flight_txs(
+    let recovered = match recover_in_flight_txs(
         &provider,
         operator_address,
         gateway,
@@ -127,25 +127,42 @@ pub async fn run_l1_sender<Input: SendToL1>(
         }
     };
 
-    // At this point, only actual SendToL1 commands are expected
+    // Wait for any recovered in-flight transactions to be mined before accepting
+    // new commands. Their nonces precede anything we are about to send, so they
+    // must be confirmed first.
+    if !recovered.is_empty() {
+        let pending_txs: Vec<(TransactionReceiptFuture, Input, Instant)> = recovered
+            .into_iter()
+            .map(|(tx_hash, cmd)| {
+                let fut = PendingTransactionBuilder::new(provider.root().clone(), tx_hash)
+                    .with_required_confirmations(REQUIRED_CONFIRMATIONS)
+                    .get_receipt()
+                    .boxed();
+                (fut, cmd, Instant::now())
+            })
+            .collect();
+        wait_for_txs_and_forward(
+            pending_txs,
+            &provider,
+            operator_address,
+            command_name,
+            &latency_tracker,
+            &outbound,
+        )
+        .await?;
+    }
+
+    // At this point, all in-flight transactions from the previous session are confirmed.
+    // Only actual SendToL1 commands are expected from here on.
     loop {
         latency_tracker.enter_state(L1SenderState::WaitingRecv);
-        // When recovered transactions are present we must not block waiting for new
-        // commands — register their watchers immediately.
-        //
-        // When there are no recovered transactions (every iteration after the first),
-        // `recv_many` sleeps until at least one command arrives as normal.
-        if recovered.is_empty()
-            || (recovered.len() < config.command_limit && inbound.peek_with(|_| ()).is_some())
-        {
-            let received = inbound
-                .recv_many(&mut cmd_buffer, config.command_limit - recovered.len())
-                .await;
+        let received = inbound
+            .recv_many(&mut cmd_buffer, config.command_limit)
+            .await;
 
-            if received == 0 {
-                tracing::info!("inbound channel closed");
-                return Ok(());
-            }
+        if received == 0 {
+            tracing::info!("inbound channel closed");
+            return Ok(());
         }
 
         let mut commands = cmd_buffer
@@ -167,26 +184,11 @@ pub async fn run_l1_sender<Input: SendToL1>(
         tracing::info!(command_name, range, "sending L1 transactions");
         L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
 
-        // On the first iteration, create receipt watchers for any in-flight transactions
-        // recovered on startup and prepend them. Their nonces are lower than the ones we
-        // are about to assign, so they must be first in the ordering. On all subsequent
-        // iterations `recovered` is empty and this produces nothing.
-        let mut pending_txs: Vec<(TransactionReceiptFuture, Input, Instant)> = recovered
-            .drain(..)
-            .map(|(tx_hash, cmd)| {
-                let fut = PendingTransactionBuilder::new(provider.root().clone(), tx_hash)
-                    .with_required_confirmations(REQUIRED_CONFIRMATIONS)
-                    .get_receipt()
-                    .boxed();
-                (fut, cmd, Instant::now())
-            })
-            .collect();
-
-        // It's important to preserve the order of commands -
-        // so that we send them downstream also in order.
-        // This holds true because l1 transactions are included in the order of sender nonce.
-        // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
-        let new_txs: Vec<(TransactionReceiptFuture, Input, Instant)> =
+        // It's important to preserve the order of commands so that we send them downstream
+        // also in order. This holds because L1 transactions are included in sender-nonce
+        // order. Keep this in mind if changing the sending logic (e.g., if adding a buffer
+        // we'd need to set nonces manually).
+        let pending_txs: Vec<(TransactionReceiptFuture, Input, Instant)> =
             futures::stream::iter(commands.drain(..))
                 .then(|mut cmd| async {
                     let mut tx_request = tx_request_with_gas_fields(
@@ -285,40 +287,68 @@ pub async fn run_l1_sender<Input: SendToL1>(
                 // but this is not necessary for now - we wait for them to be included in parallel
                 .try_collect::<Vec<_>>()
                 .await?;
-        pending_txs.extend(new_txs);
         tracing::info!(command_name, range, "sent to L1, waiting for inclusion");
-        latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
-
-        let mut completed_commands = Vec::with_capacity(pending_txs.len());
-        for (receipt_fut, command, submitted_at) in pending_txs {
-            let receipt = receipt_fut.await;
-            // Observe latency before propagating errors so timeout cases are recorded
-            L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
-                .observe(submitted_at.elapsed().as_secs_f64());
-            let receipt = receipt?;
-            validate_tx_receipt(&provider, &command, receipt).await?;
-            completed_commands.push(command);
-        }
-
-        let balance = format_ether(provider.get_balance(operator_address).await?);
-        let nonce = provider.get_transaction_count(operator_address).await?;
-        tracing::info!(
+        wait_for_txs_and_forward(
+            pending_txs,
+            &provider,
+            operator_address,
             command_name,
-            range,
-            balance,
-            nonce,
-            "all transactions included, sending downstream",
-        );
-        L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
-        L1_SENDER_METRICS.nonce[&command_name].set(nonce);
-        latency_tracker.enter_state(L1SenderState::WaitingSend);
-        for command in completed_commands {
-            for mut output_envelope in command.into() {
-                output_envelope.set_stage(Input::MINED_STAGE);
-                outbound.send(output_envelope).await?;
-            }
+            &latency_tracker,
+            &outbound,
+        )
+        .await?;
+    }
+}
+
+/// Waits for all pending L1 transaction receipts, validates them, logs balance/nonce
+/// metrics, and forwards the completed commands downstream.
+async fn wait_for_txs_and_forward<F, P, Input>(
+    pending_txs: Vec<(TransactionReceiptFuture, Input, Instant)>,
+    provider: &FillProvider<F, P>,
+    operator_address: Address,
+    command_name: &'static str,
+    latency_tracker: &ComponentStateHandle<L1SenderState>,
+    outbound: &Sender<SignedBatchEnvelope<FriProof>>,
+) -> anyhow::Result<()>
+where
+    F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
+    P: Provider<Ethereum>,
+    Input: SendToL1,
+{
+    latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
+
+    let mut completed_commands = Vec::with_capacity(pending_txs.len());
+    for (receipt_fut, command, submitted_at) in pending_txs {
+        let receipt = receipt_fut.await;
+        // Observe latency before propagating errors so timeout cases are recorded.
+        L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
+            .observe(submitted_at.elapsed().as_secs_f64());
+        let receipt = receipt?;
+        validate_tx_receipt(provider, &command, receipt).await?;
+        completed_commands.push(command);
+    }
+
+    let range = Input::display_range(&completed_commands);
+    let balance = format_ether(provider.get_balance(operator_address).await?);
+    let nonce = provider.get_transaction_count(operator_address).await?;
+    tracing::info!(
+        command_name,
+        range,
+        balance,
+        nonce,
+        "all transactions included, sending downstream",
+    );
+    L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
+    L1_SENDER_METRICS.nonce[&command_name].set(nonce);
+
+    latency_tracker.enter_state(L1SenderState::WaitingSend);
+    for command in completed_commands {
+        for mut output_envelope in command.into() {
+            output_envelope.set_stage(Input::MINED_STAGE);
+            outbound.send(output_envelope).await?;
         }
     }
+    Ok(())
 }
 
 /// Detects in-flight L1 transactions from a previous session, pairs each one with the
@@ -453,7 +483,7 @@ where
         command_name,
         recovered = paired.len(),
         in_flight_count,
-        "Recovered in-flight transactions; watchers will be registered on the next loop iteration",
+        "Recovered in-flight transactions; will wait for their inclusion before accepting new commands",
     );
 
     Ok(paired)
