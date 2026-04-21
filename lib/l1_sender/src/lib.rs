@@ -323,8 +323,7 @@ async fn estimate_eip1559_fees(provider: &dyn Provider) -> anyhow::Result<Eip155
         .context("fetching fee history")?;
     let base_fee_per_gas: u128 = fee_history
         .latest_block_base_fee()
-        .unwrap_or_default()
-        .into();
+        .unwrap_or_default();
     let rewards = fee_history.reward.unwrap_or_default();
     Ok(alloy::providers::utils::eip1559_default_estimator(
         base_fee_per_gas,
