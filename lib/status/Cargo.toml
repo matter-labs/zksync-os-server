@@ -17,3 +17,9 @@ anyhow.workspace = true
 tracing.workspace = true
 
 reth-tasks.workspace = true
+zksync_os_backpressure.workspace = true
+zksync_os_types = { path = "../types" }
+zksync_os_observability = { path = "../observability" }
+
+[dev-dependencies]
+serde_json.workspace = true
