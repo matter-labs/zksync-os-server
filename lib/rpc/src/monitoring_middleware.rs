@@ -52,6 +52,21 @@ impl CallGuard {
             panicked: false,
         }
     }
+
+    async fn handle_result<F>(
+        mut self,
+        fut: F,
+        on_panic: impl FnOnce() -> MethodResponse + Send,
+    ) -> MethodResponse
+    where
+        F: Future<Output = MethodResponse> + Send,
+    {
+        let result = AssertUnwindSafe(fut).catch_unwind().await;
+        self.panicked = result.is_err();
+        let out = result.unwrap_or_else(|_| on_panic());
+        self.completed = Some((out.as_json().get().len(), out.as_error_code()));
+        out
+    }
 }
 
 /// Ensures batch-level metrics are recorded even if the future is dropped mid-flight (client disconnected).
@@ -155,15 +170,11 @@ impl RpcServiceT for Monitoring {
 
         async move {
             let id = request.id.clone().into_owned();
-            let mut guard = CallGuard::new(CallKind::Call, method, request_size);
-            let result = AssertUnwindSafe(async move { inner.call(request).await })
-                .catch_unwind()
-                .await;
-            guard.panicked = result.is_err();
-            let out = result
-                .unwrap_or_else(|_| MethodResponse::error(id, internal_rpc_err("Internal error")));
-            guard.completed = Some((out.as_json().get().len(), out.as_error_code()));
-            out
+            let handler = async move { inner.call(request).await };
+            let on_panic = || MethodResponse::error(id, internal_rpc_err("Internal error"));
+            CallGuard::new(CallKind::Call, method, request_size)
+                .handle_result(handler, on_panic)
+                .await
         }
     }
 
@@ -243,15 +254,10 @@ impl RpcServiceT for Monitoring {
         let inner = self.inner.clone();
 
         async move {
-            let mut guard = CallGuard::new(CallKind::Notification, method, request_size);
-            let result = AssertUnwindSafe(async move { inner.notification(n).await })
-                .catch_unwind()
-                .await;
-            guard.panicked = result.is_err();
-            let out = result.unwrap_or_else(|_| MethodResponse::notification());
-            guard.completed = Some((out.as_json().get().len(), out.as_error_code()));
-            out
+            let handler = async move { inner.notification(n).await };
+            CallGuard::new(CallKind::Notification, method, request_size)
+                .handle_result(handler, MethodResponse::notification)
+                .await
         }
     }
 }
-
