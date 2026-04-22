@@ -138,21 +138,17 @@ impl Drop for BlockScanStats {
     fn drop(&mut self) {
         let cat = self.category;
         GET_LOGS.scanned_blocks[&(GetLogsStat::Total, cat)].observe(self.total);
-        GET_LOGS.scanned_blocks[&(GetLogsStat::SkippedByIndex, cat)]
-            .observe(self.skipped_by_index);
+        GET_LOGS.scanned_blocks[&(GetLogsStat::SkippedByIndex, cat)].observe(self.skipped_by_index);
         GET_LOGS.scanned_blocks[&(GetLogsStat::BloomTruePositive, cat)]
             .observe(self.bloom_true_positive);
         GET_LOGS.scanned_blocks[&(GetLogsStat::BloomFalsePositive, cat)]
             .observe(self.bloom_false_positive);
-        GET_LOGS.scanned_blocks[&(GetLogsStat::BloomNegative, cat)]
-            .observe(self.bloom_negative);
-        GET_LOGS.scanned_blocks[&(GetLogsStat::LogsReturned, cat)]
-            .observe(self.logs_returned);
+        GET_LOGS.scanned_blocks[&(GetLogsStat::BloomNegative, cat)].observe(self.bloom_negative);
+        GET_LOGS.scanned_blocks[&(GetLogsStat::LogsReturned, cat)].observe(self.logs_returned);
         if self.total > 0 {
             GET_LOGS.index_skip_ratio[&cat]
                 .observe(self.skipped_by_index as f64 / self.total as f64);
-            GET_LOGS.index_coverage[&cat]
-                .observe(self.covered_len as f64 / self.total as f64);
+            GET_LOGS.index_coverage[&cat].observe(self.covered_len as f64 / self.total as f64);
         }
         let bloom_checked = self.bloom_true_positive + self.bloom_false_positive;
         if bloom_checked > 0 {

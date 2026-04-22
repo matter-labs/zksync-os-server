@@ -183,9 +183,7 @@ impl MempoolLatencyGuard {
 
 impl Drop for MempoolLatencyGuard {
     fn drop(&mut self) {
-        TX_SUBMISSION
-            .mempool_latency
-            .observe(self.0.elapsed());
+        TX_SUBMISSION.mempool_latency.observe(self.0.elapsed());
     }
 }
 
@@ -200,8 +198,6 @@ impl ForwardingLatencyGuard {
 
 impl Drop for ForwardingLatencyGuard {
     fn drop(&mut self) {
-        TX_SUBMISSION
-            .forwarding_latency
-            .observe(self.0.elapsed());
+        TX_SUBMISSION.forwarding_latency.observe(self.0.elapsed());
     }
 }
