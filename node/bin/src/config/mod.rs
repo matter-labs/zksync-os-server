@@ -15,6 +15,7 @@ use smart_config::{
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::{path::PathBuf, time::Duration};
+use zksync_os_backpressure::BackpressureConfig;
 use zksync_os_batch_verification;
 use zksync_os_config_validation_macros::ConfigValidate;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
@@ -73,6 +74,7 @@ pub struct Config {
     #[config_validate(required_if = NodeRole::MainNode, skip_nested)]
     pub external_price_api_client_config: Option<ExternalPriceApiClientConfig>,
     pub fee_config: FeeConfig,
+    pub backpressure_config: BackpressureConfig,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -244,6 +246,9 @@ impl Config {
         schema
             .insert(&FeeConfig::DESCRIPTION, "fee")
             .expect("Failed to insert fee config");
+        schema
+            .insert(&BackpressureConfig::DESCRIPTION, "backpressure")
+            .expect("Failed to insert backpressure config");
         schema
     }
 
@@ -949,6 +954,12 @@ pub struct ProverApiConfig {
     /// If the difference is larger than this, provers will not be assigned new jobs - only retries.
     /// We use max range instead of length limit to avoid having one old batch stuck -
     /// otherwise GaplessCommitter's buffer would grow indefinitely.
+    ///
+    /// This is the **sole in-flight capacity** for the FRI and SNARK stages: `ProverJobMap::add_job`
+    /// blocks when the range is full, and the job-manager → pipeline-step channel is unbounded.
+    /// For the pipeline-level backpressure monitor to attribute "prover is the bottleneck" to the
+    /// right component, keep this strictly less than `backpressure.batch_pipeline.max_batch_diff_to_upstream` —
+    /// otherwise the monitor trips on the batcher side before add_job backpressure is visible.
     #[config(default_t = 10)]
     pub max_assigned_batch_range: usize,
 
@@ -1639,6 +1650,7 @@ mod tests {
                 forced: ForcedPriceClientConfig::default(),
             }),
             fee_config: FeeConfig::default(),
+            backpressure_config: BackpressureConfig::default(),
         }
     }
 

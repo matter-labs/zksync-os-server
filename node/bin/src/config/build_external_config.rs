@@ -8,6 +8,7 @@ use crate::config::{
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use std::fs;
 use std::path::{Path, PathBuf};
+use zksync_os_backpressure::BackpressureConfig;
 use zksync_os_types::ConfigFormat;
 
 /// Builds the runtime [`Config`] by parsing all supported sections from the repository
@@ -137,6 +138,12 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse fee config");
 
+    let backpressure_config = repo
+        .single::<BackpressureConfig>()
+        .expect("Failed to load backpressure config")
+        .parse()
+        .expect("Failed to parse backpressure config");
+
     Config {
         general_config,
         network_config,
@@ -158,6 +165,7 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         interop_fee_updater_config,
         external_price_api_client_config,
         fee_config,
+        backpressure_config,
     }
 }
 
