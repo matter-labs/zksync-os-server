@@ -15,5 +15,5 @@ mod metrics;
 pub use reth_transaction_pool::error::{InvalidPoolTransactionError, PoolError, PoolErrorKind};
 pub use reth_transaction_pool::{
     CanonicalStateUpdate, NewSubpoolTransactionStream, NewTransactionEvent, PoolConfig,
-    PoolUpdateKind, SubPoolLimit,
+    PoolUpdateKind, SubPoolLimit, ValidPoolTransaction,
 };
