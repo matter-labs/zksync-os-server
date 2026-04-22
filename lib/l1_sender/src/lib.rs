@@ -52,7 +52,7 @@ const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
 
 /// Base L1 gas for a commit/prove/execute transaction, covering fixed contract execution costs.
-const BASE_L1_GAS: u64 = 1_000_000;
+const BASE_L1_GAS: u64 = 2_000_000;
 /// L1 gas charged per pubdata byte in calldata (non-zero byte cost per EIP-2028).
 /// This is the dominant scaling factor for commit transactions in calldata mode.
 /// Blob-mode commits have no pubdata in their calldata, so pubdata_bytes() returns 0 for them.
