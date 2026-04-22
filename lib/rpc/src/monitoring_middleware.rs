@@ -106,6 +106,12 @@ impl Drop for CallGuard {
         }
         if self.panicked {
             API_METRICS.panicked[&self.method].inc();
+            match self.kind {
+                CallKind::Call => tracing::error!(method = %self.method, "RPC handler panicked"),
+                CallKind::Notification => {
+                    tracing::error!(method = %self.method, "Notification handler panicked")
+                }
+            }
         }
         log_and_report(
             self.kind,
@@ -134,15 +140,13 @@ impl RpcServiceT for Monitoring {
 
         async move {
             let id = request.id.clone().into_owned();
-            let mut guard = CallGuard::new(CallKind::Call, method.clone(), request_size);
+            let mut guard = CallGuard::new(CallKind::Call, method, request_size);
             let result = AssertUnwindSafe(async move { inner.call(request).await })
                 .catch_unwind()
                 .await;
             guard.panicked = result.is_err();
-            let out = result.unwrap_or_else(|_| {
-                tracing::error!(method = %method, "RPC handler panicked");
-                MethodResponse::error(id, internal_rpc_err("Internal error"))
-            });
+            let out = result
+                .unwrap_or_else(|_| MethodResponse::error(id, internal_rpc_err("Internal error")));
             guard.completed = Some((out.as_json().get().len(), out.as_error_code()));
             out
         }
@@ -224,15 +228,12 @@ impl RpcServiceT for Monitoring {
         let inner = self.inner.clone();
 
         async move {
-            let mut guard = CallGuard::new(CallKind::Notification, method.clone(), request_size);
+            let mut guard = CallGuard::new(CallKind::Notification, method, request_size);
             let result = AssertUnwindSafe(async move { inner.notification(n).await })
                 .catch_unwind()
                 .await;
             guard.panicked = result.is_err();
-            let out = result.unwrap_or_else(|_| {
-                tracing::error!(method = %method, "Notification handler panicked");
-                MethodResponse::notification()
-            });
+            let out = result.unwrap_or_else(|_| MethodResponse::notification());
             guard.completed = Some((out.as_json().get().len(), out.as_error_code()));
             out
         }
