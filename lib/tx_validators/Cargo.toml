@@ -27,3 +27,8 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "time", "sync"] }
 url.workspace = true
 vise.workspace = true
+
+[dev-dependencies]
+httpmock.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["full"] }

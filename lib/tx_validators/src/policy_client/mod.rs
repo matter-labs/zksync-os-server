@@ -285,3 +285,6 @@ fn classify_transport_error(err: &TransportError) -> AdmitOutcomeErr {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
