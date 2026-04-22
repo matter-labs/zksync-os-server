@@ -11,6 +11,9 @@ ignore = [
     # `rand` unsoundness with custom logger using `rand::rng()`. Too many
     # transitive deps still pin 0.8.5, so upgrading is not feasible right now.
     "RUSTSEC-2026-0097",
+    # `rustls-webpki` reachable panic in CRL parsing. We don't parse CRLs, so
+    # this is not exploitable. Waiting for transitive deps to pick up >=0.103.13.
+    "RUSTSEC-2026-0104",
 ]
 
 [bans]
