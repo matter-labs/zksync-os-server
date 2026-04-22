@@ -23,6 +23,7 @@ members = [
     "integration-tests",
     "integration-tests-macros",
     "tools/generate-deposit",
+    "tools/repro-alloy-heartbeat",
     "tools/verify-storage-proof",
     "lib/observability",
     "lib/state_full_diffs",

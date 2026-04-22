@@ -1,0 +1,25 @@
+[package]
+name = "zksync_os_repro_alloy_heartbeat"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+alloy = { workspace = true, default-features = false, features = [
+    "provider-anvil-node",
+    "providers",
+    "reqwest-rustls-tls",
+    "signer-local",
+    "rpc-types",
+    "json-rpc",
+] }
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
