@@ -1,8 +1,9 @@
 use crate::config::RpcConfig;
 use crate::eth_call_handler::EthCallHandler;
+use crate::metrics::{TX_SUBMISSION_METRICS, TxRejectionReason};
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
-use crate::tx_handler::TxHandler;
+use crate::tx_handler::{EthSendRawTransactionSyncError, TxHandler};
 use alloy::consensus::TrieAccount;
 use alloy::consensus::transaction::Recovered;
 use alloy::dyn_abi::TypedData;
@@ -782,6 +783,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         self.tx_handler
             .send_raw_transaction_impl(bytes)
             .await
+            .inspect_err(|err| {
+                TX_SUBMISSION_METRICS.rejections[&TxRejectionReason::from(err)].inc();
+            })
             .to_rpc_result()
     }
 
@@ -793,6 +797,11 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         self.tx_handler
             .send_raw_transaction_sync_impl(bytes, max_wait_ms)
             .await
+            .inspect_err(|err| {
+                if let EthSendRawTransactionSyncError::Regular(inner) = err {
+                    TX_SUBMISSION_METRICS.rejections[&TxRejectionReason::from(inner)].inc();
+                }
+            })
             .to_rpc_result()
     }
 
