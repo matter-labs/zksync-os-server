@@ -6,11 +6,11 @@ use alloy::eips::Decodable2718;
 use alloy::primitives::{B256, Bytes, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::transports::{RpcError, TransportErrorKind};
-use zksync_os_mempool::{InvalidPoolTransactionError, PoolErrorKind};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_mempool::PoolError;
 use zksync_os_mempool::subpools::l2::L2Subpool;
+use zksync_os_mempool::{InvalidPoolTransactionError, PoolErrorKind};
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
 use zksync_os_types::{L2Envelope, L2Transaction, NotAcceptingReason, TransactionAcceptanceState};
 
@@ -186,9 +186,7 @@ impl From<&PoolErrorKind> for TxRejectionReason {
             PoolErrorKind::FeeCapBelowMinimumProtocolFeeCap(_) => Self::PoolFeeCapBelowMinimum,
             PoolErrorKind::SpammerExceededCapacity(_) => Self::PoolSpammerExceededCapacity,
             PoolErrorKind::DiscardedOnInsert => Self::PoolDiscardedOnInsert,
-            PoolErrorKind::ExistingConflictingTransactionType(_, _) => {
-                Self::PoolConflictingTxType
-            }
+            PoolErrorKind::ExistingConflictingTransactionType(_, _) => Self::PoolConflictingTxType,
             PoolErrorKind::InvalidTransaction(invalid) => Self::from(invalid),
             PoolErrorKind::Other(_) => Self::PoolOther,
         }

@@ -12,9 +12,7 @@ pub use pool::{MarkingTxStream, Pool};
 mod metrics;
 
 // Re-export some of the reth mempool's types.
-pub use reth_transaction_pool::error::{
-    InvalidPoolTransactionError, PoolError, PoolErrorKind,
-};
+pub use reth_transaction_pool::error::{InvalidPoolTransactionError, PoolError, PoolErrorKind};
 pub use reth_transaction_pool::{
     CanonicalStateUpdate, NewSubpoolTransactionStream, NewTransactionEvent, PoolConfig,
     PoolUpdateKind, SubPoolLimit,
