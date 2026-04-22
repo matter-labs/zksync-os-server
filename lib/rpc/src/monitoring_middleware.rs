@@ -7,7 +7,7 @@ use jsonrpsee::types::Request;
 use jsonrpsee::{BatchResponseBuilder, MethodResponse};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug)]
 pub enum CallKind {
@@ -101,6 +101,12 @@ impl Drop for CallGuard {
         let elapsed = self.started.elapsed();
         let cancelled = self.completed.is_none();
         let (output_size, error_code) = self.completed.take().unwrap_or((0, None));
+        API_METRICS.response_time[&self.method].observe(elapsed);
+        API_METRICS.request_size[&self.method].observe(self.request_size);
+        API_METRICS.response_size[&self.method].observe(output_size);
+        if let Some(code) = error_code {
+            API_METRICS.errors[&(self.method.clone(), code)].inc();
+        }
         if cancelled {
             API_METRICS.cancelled[&self.method].inc();
         }
@@ -113,15 +119,24 @@ impl Drop for CallGuard {
                 }
             }
         }
-        log_and_report(
-            self.kind,
-            &self.method,
-            elapsed,
-            self.request_size,
-            output_size,
-            error_code,
-            cancelled,
-        );
+
+        macro_rules! log {
+            ($target:literal) => {
+                tracing::debug!(
+                    target: $target,
+                    kind = ?self.kind,
+                    cancelled,
+                    "rpc call completed kind={:?} cancelled={}", self.kind, cancelled
+                )
+            };
+        }
+
+        match self.method.as_str() {
+            "eth_call" => log!("rpc::monitoring::eth::call"),
+            "eth_sendRawTransaction" => log!("rpc::monitoring::eth::sendRawTransaction"),
+            "debug_traceTransaction" => log!("rpc::monitoring::debug::traceTransaction"),
+            _ => log!("rpc::monitoring::call"),
+        }
     }
 }
 
@@ -240,37 +255,3 @@ impl RpcServiceT for Monitoring {
     }
 }
 
-fn log_and_report(
-    kind: CallKind,
-    method: &str,
-    elapsed: Duration,
-    request_size: usize,
-    output_size_bytes: usize,
-    error_code: Option<i32>,
-    cancelled: bool,
-) {
-    API_METRICS.response_time[method].observe(elapsed);
-    API_METRICS.request_size[method].observe(request_size);
-    API_METRICS.response_size[method].observe(output_size_bytes);
-    if let Some(code) = error_code {
-        API_METRICS.errors[&(method.to_owned(), code)].inc();
-    }
-
-    macro_rules! log {
-        ($target:literal) => {
-            tracing::debug!(
-                target: $target,
-                ?kind,
-                cancelled,
-                "rpc call completed kind={:?} cancelled={}", kind, cancelled
-            )
-        };
-    }
-
-    match method {
-        "eth_call" => log!("rpc::monitoring::eth::call"),
-        "eth_sendRawTransaction" => log!("rpc::monitoring::eth::sendRawTransaction"),
-        "debug_traceTransaction" => log!("rpc::monitoring::debug::traceTransaction"),
-        _ => log!("rpc::monitoring::call"),
-    }
-}
