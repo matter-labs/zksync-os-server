@@ -23,7 +23,7 @@ To run node locally, first decompress state and launch `anvil`:
 
 ```
 gzip -dfk ./local-chains/v30.2/l1-state.json.gz
-anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545
+anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545 --block-time 1 --mixed-mining
 ```
 
 then launch the server:
@@ -37,6 +37,8 @@ To restart the chain, erase the local DB and re-run anvil:
 ```
 rm -rf db/*
 ```
+
+Use the same `--block-time 1 --mixed-mining` flags when re-running `anvil` manually so local behavior matches the integration-test L1 setup.
 
 By default, fake (dummy) proofs are used both for FRI and SNARK proofs.
 
