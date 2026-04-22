@@ -51,13 +51,6 @@ const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 /// to reach 3 confirmations for such transactions
 const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
 
-/// Base L1 gas for a commit/prove/execute transaction, covering fixed contract execution costs.
-const BASE_L1_GAS: u64 = 2_000_000;
-/// L1 gas charged per pubdata byte in calldata (non-zero byte cost per EIP-2028).
-/// This is the dominant scaling factor for commit transactions in calldata mode.
-/// Blob-mode commits have no pubdata in their calldata, so pubdata_bytes() returns 0 for them.
-const L1_GAS_PER_PUBDATA_BYTE: u64 = 16;
-
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
 /// Loads up to `command_limit` commands from the channel and sends them to L1 in parallel.
@@ -206,18 +199,11 @@ pub async fn run_l1_sender<Input: SendToL1>(
         let pending_txs: Vec<(TransactionReceiptFuture, Input, Instant)> =
             futures::stream::iter(commands.drain(..))
                 .then(|mut cmd| async {
-                    // Scale the gas limit with pubdata size so that large calldata-mode batches
-                    // don't run out of gas, while blob-mode and prove/execute transactions
-                    // (which report 0 pubdata bytes) still get at least the configured floor.
-                    let gas_limit = (BASE_L1_GAS
-                        + cmd.pubdata_bytes() as u64 * L1_GAS_PER_PUBDATA_BYTE)
-                        .max(config.gas_limit);
                     let mut tx_request = tx_request_with_gas_fields(
                         &provider,
                         operator_address,
                         config.max_fee_per_gas_wei,
                         config.max_priority_fee_per_gas_wei,
-                        gas_limit,
                     )
                     .await?
                     .with_to(to_address)
@@ -239,27 +225,6 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
                         tx_request.set_blob_sidecar(blob_sidecar);
                     };
-
-                    // Log the gas estimate for diagnostic purposes, without using it as the limit.
-                    // This helps us understand the gap between our formula and what the settlement
-                    // layer actually needs (especially on gateway, where gas semantics are L2).
-                    // Strip the gas limit so the node estimates without our cap constraining it.
-                    let mut estimate_request = tx_request.clone();
-                    estimate_request.set_gas_limit(u64::MAX);
-                    match provider.estimate_gas(estimate_request).await {
-                        Ok(estimated) => tracing::info!(
-                            command_name,
-                            gas_limit,
-                            estimated_gas = estimated,
-                            "L1 tx gas estimate"
-                        ),
-                        Err(err) => tracing::warn!(
-                            command_name,
-                            gas_limit,
-                            %err,
-                            "L1 tx gas estimation failed"
-                        ),
-                    }
 
                     // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an
                     // envelope.
@@ -576,7 +541,6 @@ async fn tx_request_with_gas_fields(
     operator_address: Address,
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
-    gas_limit: u64,
 ) -> anyhow::Result<TransactionRequest> {
     let eip1559_est = provider.estimate_eip1559_fees().await?;
     L1_SENDER_METRICS.report_l1_eip_1559_estimation(eip1559_est)?;
@@ -617,7 +581,7 @@ async fn tx_request_with_gas_fields(
         .with_from(operator_address)
         .with_max_fee_per_gas(capped_max_fee_per_gas)
         .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas)
-        .with_gas_limit(gas_limit);
+        .with_gas_limit(15000000);
     Ok(tx)
 }
 

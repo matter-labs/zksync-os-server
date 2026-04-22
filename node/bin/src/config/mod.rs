@@ -782,10 +782,6 @@ pub struct L1SenderConfig {
     #[config(default_t = 600 * TimeUnit::Seconds)]
     pub transaction_timeout: Duration,
 
-    /// Gas limit for L1 transactions (commit/prove/execute).
-    #[config(default_t = 2_000_000u64)]
-    pub gas_limit: u64,
-
     /// Use Fusaka blob transaction format if the timestamp has passed.
     ///
     /// Defaults to `2^64-1` which is practically never. This is needed for local setup as anvil
@@ -1337,7 +1333,6 @@ impl L1SenderConfig {
             max_fee_per_gas_wei: self.max_fee_per_gas.0,
             max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
             max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
-            gas_limit: self.gas_limit,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
@@ -1623,7 +1618,6 @@ mod tests {
                 max_fee_per_gas: 200 * EtherUnit::Gwei,
                 max_priority_fee_per_gas: 1 * EtherUnit::Gwei,
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
-                gas_limit: 2_000_000,
                 command_limit: 16,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
