@@ -517,6 +517,7 @@ impl Tester {
             interop_fee_updater_config: default_config.interop_fee_updater_config,
             external_price_api_client_config: default_config.external_price_api_client_config,
             fee_config: default_config.fee_config,
+            backpressure_config: Default::default(),
         };
 
         if let Some(ephemeral_state) = &config.general_config.ephemeral_state {
