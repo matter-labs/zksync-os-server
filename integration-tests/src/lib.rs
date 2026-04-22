@@ -29,12 +29,12 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
-pub use zksync_os_server::config::DeploymentFilterConfig;
 use zksync_os_server::config::{
     BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, FeeConfig,
     GeneralConfig, NetworkConfig, ProofStorageConfig, ProverApiConfig, ProverInputGeneratorConfig,
     RpcConfig, SequencerConfig, StatusServerConfig,
 };
+pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::{
     NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
 };
@@ -499,7 +499,6 @@ impl Tester {
             rpc_config,
             mempool_config: default_config.mempool_config,
             tx_validator_config: default_config.tx_validator_config,
-            policy_service_config: default_config.policy_service_config,
             sequencer_config,
             l1_sender_config: default_config.l1_sender_config,
             l1_watcher_config: default_config.l1_watcher_config,
@@ -1039,6 +1038,7 @@ pub struct GatewayTesterBuilder {
     num_chains: Option<usize>,
     chain_options: NodeBuilderOptions,
     deployment_filter: Option<DeploymentFilterConfig>,
+    policy_service: Option<PolicyServiceConfig>,
 }
 
 impl Default for GatewayTesterBuilder {
@@ -1048,6 +1048,7 @@ impl Default for GatewayTesterBuilder {
             num_chains: None,
             chain_options: NodeBuilderOptions::default(),
             deployment_filter: None,
+            policy_service: None,
         }
     }
 }
@@ -1076,6 +1077,12 @@ impl GatewayTesterBuilder {
     /// Set the deployment filter config for all chains.
     pub fn deployment_filter(mut self, config: DeploymentFilterConfig) -> Self {
         self.deployment_filter = Some(config);
+        self
+    }
+
+    /// Set the policy-service client config for all chains.
+    pub fn policy_service(mut self, config: PolicyServiceConfig) -> Self {
+        self.policy_service = Some(config);
         self
     }
 
@@ -1110,6 +1117,7 @@ impl GatewayTesterBuilder {
             let gateway_rpc_url = gateway_rpc_url.clone();
             let chain_options = self.chain_options.clone();
             let deployment_filter = self.deployment_filter.clone();
+            let policy_service = self.policy_service.clone();
 
             let tester = Tester::launch_node(
                 l1.clone(),
@@ -1121,6 +1129,9 @@ impl GatewayTesterBuilder {
                     chain_options.apply_to_config(config);
                     if let Some(deployment_filter) = deployment_filter {
                         config.sequencer_config.tx_validator.deployment_filter = deployment_filter;
+                    }
+                    if let Some(policy_service) = policy_service {
+                        config.sequencer_config.tx_validator.policy_service = policy_service;
                     }
                 }),
                 chain_layout,
