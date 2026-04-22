@@ -129,6 +129,18 @@ impl SendToL1 for CommitCommand {
     fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
         self.input.batch.batch_info.blob_sidecar.clone()
     }
+
+    fn pubdata_bytes(&self) -> usize {
+        // `operator_da_input` includes a metadata header (~129 bytes) in addition to the raw
+        // pubdata, so this slightly overestimates. That's fine — we're using it to compute a
+        // gas limit upper bound, so erring on the high side is safe.
+        self.input
+            .batch
+            .batch_info
+            .commit_info
+            .operator_da_input
+            .len()
+    }
 }
 
 impl AsRef<[SignedBatchEnvelope<FriProof>]> for CommitCommand {

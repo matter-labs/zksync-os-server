@@ -51,6 +51,13 @@ const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 /// to reach 3 confirmations for such transactions
 const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
 
+/// Base L1 gas for a commit/prove/execute transaction, covering fixed contract execution costs.
+const BASE_L1_GAS: u64 = 1_000_000;
+/// L1 gas charged per pubdata byte in calldata (non-zero byte cost per EIP-2028).
+/// This is the dominant scaling factor for commit transactions in calldata mode.
+/// Blob-mode commits have no pubdata in their calldata, so pubdata_bytes() returns 0 for them.
+const L1_GAS_PER_PUBDATA_BYTE: u64 = 16;
+
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
 /// Loads up to `command_limit` commands from the channel and sends them to L1 in parallel.
@@ -199,12 +206,18 @@ pub async fn run_l1_sender<Input: SendToL1>(
         let pending_txs: Vec<(TransactionReceiptFuture, Input, Instant)> =
             futures::stream::iter(commands.drain(..))
                 .then(|mut cmd| async {
+                    // Scale the gas limit with pubdata size so that large calldata-mode batches
+                    // don't run out of gas, while blob-mode and prove/execute transactions
+                    // (which report 0 pubdata bytes) still get at least the configured floor.
+                    let gas_limit = (BASE_L1_GAS
+                        + cmd.pubdata_bytes() as u64 * L1_GAS_PER_PUBDATA_BYTE)
+                        .max(config.gas_limit);
                     let mut tx_request = tx_request_with_gas_fields(
                         &provider,
                         operator_address,
                         config.max_fee_per_gas_wei,
                         config.max_priority_fee_per_gas_wei,
-                        config.gas_limit,
+                        gas_limit,
                     )
                     .await?
                     .with_to(to_address)

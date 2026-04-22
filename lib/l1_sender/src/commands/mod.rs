@@ -50,6 +50,14 @@ pub trait SendToL1:
         None
     }
 
+    /// Returns the number of pubdata bytes included in this command's L1 calldata.
+    ///
+    /// Used to compute a dynamic L1 gas limit that scales with batch size rather than using a
+    /// fixed cap.
+    fn pubdata_bytes(&self) -> usize {
+        0
+    }
+
     /// Only used for logging - as we send commands in bulk, it's natural to print a single range
     /// for the whole group, e.g. "1-3, 4, 5-6" instead of "1, 2, 3, 4, 5, 6"
     /// Note that one `L1SenderCommand` is still always a single L1 transaction.
