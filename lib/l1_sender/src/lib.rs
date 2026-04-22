@@ -240,6 +240,24 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         tx_request.set_blob_sidecar(blob_sidecar);
                     };
 
+                    // Log the gas estimate for diagnostic purposes, without using it as the limit.
+                    // This helps us understand the gap between our formula and what the settlement
+                    // layer actually needs (especially on gateway, where gas semantics are L2).
+                    match provider.estimate_gas(tx_request.clone()).await {
+                        Ok(estimated) => tracing::info!(
+                            command_name,
+                            gas_limit,
+                            estimated_gas = estimated,
+                            "L1 tx gas estimate"
+                        ),
+                        Err(err) => tracing::warn!(
+                            command_name,
+                            gas_limit,
+                            %err,
+                            "L1 tx gas estimation failed"
+                        ),
+                    }
+
                     // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an
                     // envelope.
                     let envelope = provider.fill(tx_request).await?.try_into_envelope()?.try_into_pooled()?;
