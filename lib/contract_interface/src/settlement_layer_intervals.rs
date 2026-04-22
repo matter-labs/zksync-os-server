@@ -1,4 +1,4 @@
-use crate::{IChainAssetHandler, ZkChain};
+use crate::{IChainAssetHandler, ZkChain, is_method_missing};
 use alloy::primitives::{Address, U256};
 use alloy::providers::DynProvider;
 use anyhow::Context;
@@ -207,15 +207,4 @@ async fn find_settlement_layer_intervals(
         });
     }
     Ok(intervals)
-}
-
-/// Returns `true` if the error came from the contract itself (empty return data or a revert),
-/// which is how an EVM reports a call to a function selector that the deployed code does not
-/// implement. Network / transport failures return `false` so they can be propagated.
-fn is_method_missing(err: &alloy::contract::Error) -> bool {
-    match err {
-        alloy::contract::Error::ZeroData(..) => true,
-        alloy::contract::Error::TransportError(te) => te.as_error_resp().is_some(),
-        _ => false,
-    }
 }

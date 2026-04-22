@@ -242,6 +242,11 @@ alloy::sol! {
 
         /// Address of the L1 bytecodes supplier used for upgrades (v31+).
         function L1_BYTECODES_SUPPLIER() external view returns (address);
+
+        /// The block number on the CTM's chain where `setUpgradeDiamondCutInner` ran for the
+        /// given (old) protocol version. Non-zero means this CTM owns the upgrade cut data for
+        /// that version. Populated starting with the V31 ChainTypeManager.
+        function upgradeCutDataBlock(uint256 protocolVersion) external view returns (uint256);
     }
 
     // `IZKChain.sol`
@@ -913,6 +918,17 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .enrich("serverNotifierAddress", None)
+    }
+}
+
+/// Returns `true` if the error came from the contract itself (empty return data or a revert),
+/// which is how an EVM reports a call to a function selector that the deployed code does not
+/// implement. Network / transport failures return `false` so they can be propagated.
+pub fn is_method_missing(err: &alloy::contract::Error) -> bool {
+    match err {
+        alloy::contract::Error::ZeroData(..) => true,
+        alloy::contract::Error::TransportError(te) => te.as_error_resp().is_some(),
+        _ => false,
     }
 }
 
