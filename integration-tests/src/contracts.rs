@@ -201,7 +201,11 @@ impl<P1: Provider, P2: Provider<Zksync>> L1Nullifier<P1, P2> {
             .enumerate()
             .find(|(_, log)| log.sender == L1_MESSENGER_ADDRESS)
             .expect("no L2->L1 logs found in withdrawal receipt");
-        let proof_retry_timeout = Duration::from_secs(120);
+        // In gateway tests the default proof target is still `L1BatchRoot`, so the proof is only
+        // available after the gateway node has finalized the corresponding SL batch on L1. Since
+        // direct-to-L1 submissions now wait for 3 confirmations, the previous 120s window became
+        // marginal in CI even though the withdrawal flow is otherwise correct.
+        let proof_retry_timeout = Duration::from_secs(300);
         let proof_retry_delay = Duration::from_secs(1);
         let proof_retry_started_at = Instant::now();
         let proof = loop {
