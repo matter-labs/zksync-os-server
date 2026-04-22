@@ -18,25 +18,25 @@ mod rpc_storage;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
 pub mod js_tracer;
-mod txpool_impl;
 mod log_proof_utils;
 mod monitoring_middleware;
 mod net_impl;
 mod sandbox;
 mod tx_handler;
+mod txpool_impl;
 mod types;
 mod unstable_impl;
 mod web3_impl;
 mod zks_impl;
 
 use crate::debug_impl::DebugNamespace;
-use crate::txpool_impl::TxpoolNamespace;
 use crate::eth_filter::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
 use crate::monitoring_middleware::Monitoring;
 use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
+use crate::txpool_impl::TxpoolNamespace;
 use crate::unstable_impl::UnstableNamespace;
 use crate::web3_impl::Web3Namespace;
 use crate::zks_impl::ZksNamespace;
@@ -104,7 +104,9 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     )?;
     let eth_filter = EthFilterNamespace::new(config.clone(), storage.clone(), mempool.clone());
     rpc.merge(eth_filter.clone().into_rpc())?;
-    rpc.merge(EthPubsubNamespace::new(storage.clone(), mempool.clone(), runtime.clone()).into_rpc())?;
+    rpc.merge(
+        EthPubsubNamespace::new(storage.clone(), mempool.clone(), runtime.clone()).into_rpc(),
+    )?;
     rpc.merge(
         ZksNamespace::new(
             bridgehub_address,
