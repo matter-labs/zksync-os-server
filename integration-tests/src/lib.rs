@@ -434,10 +434,17 @@ impl Tester {
         let prover_api_config = ProverApiConfig {
             fake_fri_provers: FakeFriProversConfig {
                 enabled: !enable_prover,
+                // Integration tests validate node behavior rather than prover pacing.
+                // Make fake proving aggressive so batch finalization does not stall under stress.
+                workers: 8,
+                compute_time: Duration::from_millis(200),
+                min_age: Duration::ZERO,
                 ..default_config.prover_api_config.fake_fri_provers
             },
             fake_snark_provers: FakeSnarkProversConfig {
                 enabled: !enable_prover,
+                // Consume fake FRI proofs immediately to keep the proving pipeline drained.
+                max_batch_age: Duration::ZERO,
                 ..default_config.prover_api_config.fake_snark_provers
             },
             address: prover_api_address,
