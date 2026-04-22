@@ -1375,12 +1375,27 @@ impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
             interop_roots_per_tx: c.sequencer_config.interop_roots_per_tx,
             tx_validator: {
                 let df = &c.sequencer_config.tx_validator.deployment_filter;
+                let ps = &c.sequencer_config.tx_validator.policy_service;
+                let policy_client = ps.url.as_ref().map(|url| {
+                    zksync_os_tx_validators::policy_client::PolicyClient::new(
+                        zksync_os_tx_validators::policy_client::Config {
+                            url: url.clone(),
+                            request_timeout: ps.request_timeout,
+                            auth_token: ps.auth_token.clone(),
+                            protocol_version: ps.protocol_version.clone(),
+                            min_protocol_version: ps.min_protocol_version.clone(),
+                            bypass_from: ps.bypass_from.iter().copied().collect(),
+                        },
+                    )
+                    .expect("failed to build PolicyClient from `policy_service`")
+                });
                 zksync_os_sequencer::config::TxValidatorConfig {
                     deployment_filter: if df.enabled {
                         deployment_filter::Config::allow_list(df.allowed_deployers.iter().copied())
                     } else {
                         deployment_filter::Config::Unrestricted
                     },
+                    policy_client,
                 }
             },
         }

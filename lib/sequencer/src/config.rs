@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 use zksync_os_tx_validators::deployment_filter;
+use zksync_os_tx_validators::policy_client::PolicyClient;
 use zksync_os_types::NodeRole;
 
 /// Configuration for all transaction validators applied during block production.
@@ -9,6 +10,11 @@ pub struct TxValidatorConfig {
     /// Deployment filter configuration.
     /// When enabled, only transactions from allowed deployers can deploy contracts.
     pub deployment_filter: deployment_filter::Config,
+    /// Optional Prividium policy client. When set, each tx is consulted
+    /// against the policy service — currently pre-execution admit, with
+    /// an execution-result judge step to follow. Fail-closed on any
+    /// transport or protocol error. When `None`, the client is bypassed.
+    pub policy_client: Option<PolicyClient>,
 }
 
 #[derive(Clone, Debug)]
