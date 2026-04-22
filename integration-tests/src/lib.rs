@@ -5,7 +5,7 @@ use crate::node_log::NodeLogState;
 use crate::prover_tester::ProverTester;
 use crate::provider::{ZksyncApi, ZksyncTestingProvider};
 use crate::utils::LockedPort;
-use alloy::network::EthereumWallet;
+use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::{Address, U256};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{
@@ -25,6 +25,7 @@ use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
+use zksync_os_backpressure::BackpressureConfig;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
@@ -152,6 +153,7 @@ pub struct Tester {
     // Present only when p2p networking is enabled for this test node.
     node_record: Option<NodeRecord>,
     l2_rpc_address: String,
+    status_url: String,
     gateway_rpc_url: Option<String>,
     sl_provider: EthDynProvider,
     log_state: NodeLogState,
@@ -269,6 +271,72 @@ impl Tester {
 
     pub fn l2_rpc_url(&self) -> &str {
         &self.l2_rpc_address
+    }
+
+    pub fn status_url(&self) -> &str {
+        &self.status_url
+    }
+
+    pub async fn get_accepting(&self) -> serde_json::Value {
+        let url = format!("{}/status/accepting", self.status_url);
+        reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .expect("Failed to call /status/accepting")
+            .json()
+            .await
+            .expect("Failed to parse accepting response as JSON")
+    }
+
+    pub async fn get_ready_status(&self) -> reqwest::StatusCode {
+        let url = format!("{}/status/ready", self.status_url);
+        reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .expect("Failed to call /status/ready")
+            .status()
+    }
+
+    pub async fn get_pipeline(&self) -> serde_json::Value {
+        let url = format!("{}/status/pipeline", self.status_url);
+        reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .expect("Failed to call /status/pipeline")
+            .json()
+            .await
+            .expect("Failed to parse pipeline response as JSON")
+    }
+
+    /// Spawns a detached task that keeps the L2 mempool non-empty by submitting a small
+    /// transfer every `interval`. Returns a `JoinHandle` — abort it to stop the load.
+    ///
+    /// Errors fetching the gas price are logged and retried rather than panicked: the
+    /// task runs detached, and a panic would silently kill the load, producing a
+    /// misleading "backpressure did not fire" timeout instead of a direct failure.
+    pub fn spawn_tx_load(&self, interval: Duration) -> tokio::task::JoinHandle<()> {
+        let provider = self.l2_provider.clone();
+        tokio::spawn(async move {
+            loop {
+                let gas_price = match provider.get_gas_price().await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!(%e, "spawn_tx_load: gas price fetch failed, retrying");
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        continue;
+                    }
+                };
+                let tx = TransactionRequest::default()
+                    .to(Address::random())
+                    .value(U256::from(1u64))
+                    .with_gas_price(gas_price * 10);
+                let _ = provider.send_transaction(tx).await;
+                tokio::time::sleep(interval).await;
+            }
+        })
     }
 
     pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
@@ -406,6 +474,7 @@ impl Tester {
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
+        let status_url = format!("http://localhost:{}", status_locked_port.port);
 
         let rocks_db_path = tempdir.path().join("rocksdb");
         // ENs will not use this dir
@@ -679,6 +748,7 @@ impl Tester {
             runtime,
             task_manager_handle: Some(task_manager_handle),
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
+            status_url,
             gateway_rpc_url,
             sl_provider,
             node_record,
@@ -847,6 +917,8 @@ struct NodeBuilderOptions {
     fee_config: Option<FeeConfig>,
     gas_price_scale_factor: Option<f64>,
     estimate_gas_pubdata_price_factor: Option<f64>,
+    backpressure_config: Option<BackpressureConfig>,
+    max_blocks_to_produce: Option<u64>,
 }
 
 impl Default for NodeBuilderOptions {
@@ -860,6 +932,8 @@ impl Default for NodeBuilderOptions {
             fee_config: None,
             gas_price_scale_factor: None,
             estimate_gas_pubdata_price_factor: None,
+            backpressure_config: None,
+            max_blocks_to_produce: None,
         }
     }
 }
@@ -881,6 +955,12 @@ impl NodeBuilderOptions {
         }
         if let Some(factor) = self.estimate_gas_pubdata_price_factor {
             config.rpc_config.estimate_gas_pubdata_price_factor = factor;
+        }
+        if let Some(phc) = self.backpressure_config.clone() {
+            config.backpressure_config = phc;
+        }
+        if let Some(max_blocks) = self.max_blocks_to_produce {
+            config.sequencer_config.max_blocks_to_produce = Some(max_blocks);
         }
     }
 }
@@ -937,6 +1017,16 @@ impl TesterBuilder {
 
     pub fn estimate_gas_pubdata_price_factor(mut self, factor: f64) -> Self {
         self.options.estimate_gas_pubdata_price_factor = Some(factor);
+        self
+    }
+
+    pub fn backpressure_config(mut self, phc: BackpressureConfig) -> Self {
+        self.options.backpressure_config = Some(phc);
+        self
+    }
+
+    pub fn max_blocks_to_produce(mut self, limit: u64) -> Self {
+        self.options.max_blocks_to_produce = Some(limit);
         self
     }
 
