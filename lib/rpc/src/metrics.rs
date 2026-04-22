@@ -54,9 +54,9 @@ pub struct ApiMetrics {
     /// Per-call fraction of blocks skipped by the log index (skipped / total).
     #[metrics(labels = ["filter"], buckets = RATIO_BUCKETS)]
     pub get_logs_index_skip_ratio: LabeledFamily<FilterCategory, Histogram<f64>>,
-    /// Per-call bloom filter false-positive rate among blocks that reached the bloom check.
+    /// Per-call bloom filter precision among blocks that reached the bloom check (true positives / bloom-passed blocks).
     #[metrics(labels = ["filter"], buckets = RATIO_BUCKETS)]
-    pub get_logs_bloom_fp_rate: LabeledFamily<FilterCategory, Histogram<f64>>,
+    pub get_logs_bloom_precision: LabeledFamily<FilterCategory, Histogram<f64>>,
     /// Per-call fraction of the queried block range covered by the log index.
     #[metrics(labels = ["filter"], buckets = RATIO_BUCKETS)]
     pub get_logs_index_coverage: LabeledFamily<FilterCategory, Histogram<f64>>,

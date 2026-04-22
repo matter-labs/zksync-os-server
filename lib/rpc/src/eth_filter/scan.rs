@@ -156,8 +156,8 @@ impl Drop for BlockScanStats {
         }
         let bloom_checked = self.bloom_true_positive + self.bloom_false_positive;
         if bloom_checked > 0 {
-            API_METRICS.get_logs_bloom_fp_rate[&cat]
-                .observe(self.bloom_false_positive as f64 / bloom_checked as f64);
+            API_METRICS.get_logs_bloom_precision[&cat]
+                .observe(self.bloom_true_positive as f64 / bloom_checked as f64);
         }
         if self.truncated {
             API_METRICS.get_logs_truncated.inc();
