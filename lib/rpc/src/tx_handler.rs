@@ -1,5 +1,5 @@
 use crate::eth_impl::build_api_receipt;
-use crate::metrics::TX_SUBMISSION_METRICS;
+use crate::metrics::TX_SUBMISSION;
 use crate::{ReadRpcStorage, RpcConfig};
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
@@ -183,7 +183,7 @@ impl MempoolLatencyGuard {
 
 impl Drop for MempoolLatencyGuard {
     fn drop(&mut self) {
-        TX_SUBMISSION_METRICS
+        TX_SUBMISSION
             .mempool_latency
             .observe(self.0.elapsed());
     }
@@ -200,7 +200,7 @@ impl ForwardingLatencyGuard {
 
 impl Drop for ForwardingLatencyGuard {
     fn drop(&mut self) {
-        TX_SUBMISSION_METRICS
+        TX_SUBMISSION
             .forwarding_latency
             .observe(self.0.elapsed());
     }

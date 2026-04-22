@@ -1,6 +1,6 @@
 use super::EthFilterError;
 use crate::eth_impl::build_api_log;
-use crate::metrics::{FilterCategory, GET_LOGS_METRICS, GetLogsStat};
+use crate::metrics::{FilterCategory, GET_LOGS, GetLogsStat};
 use alloy::rpc::types::{Filter, Log};
 use zksync_os_storage::log_index_filter::candidates;
 use zksync_os_storage_api::{ReadRepository, RepositoryBlock, StoredTxData};
@@ -137,30 +137,30 @@ impl BlockScanStats {
 impl Drop for BlockScanStats {
     fn drop(&mut self) {
         let cat = self.category;
-        GET_LOGS_METRICS.scanned_blocks[&(GetLogsStat::Total, cat)].observe(self.total);
-        GET_LOGS_METRICS.scanned_blocks[&(GetLogsStat::SkippedByIndex, cat)]
+        GET_LOGS.scanned_blocks[&(GetLogsStat::Total, cat)].observe(self.total);
+        GET_LOGS.scanned_blocks[&(GetLogsStat::SkippedByIndex, cat)]
             .observe(self.skipped_by_index);
-        GET_LOGS_METRICS.scanned_blocks[&(GetLogsStat::BloomTruePositive, cat)]
+        GET_LOGS.scanned_blocks[&(GetLogsStat::BloomTruePositive, cat)]
             .observe(self.bloom_true_positive);
-        GET_LOGS_METRICS.scanned_blocks[&(GetLogsStat::BloomFalsePositive, cat)]
+        GET_LOGS.scanned_blocks[&(GetLogsStat::BloomFalsePositive, cat)]
             .observe(self.bloom_false_positive);
-        GET_LOGS_METRICS.scanned_blocks[&(GetLogsStat::BloomNegative, cat)]
+        GET_LOGS.scanned_blocks[&(GetLogsStat::BloomNegative, cat)]
             .observe(self.bloom_negative);
-        GET_LOGS_METRICS.scanned_blocks[&(GetLogsStat::LogsReturned, cat)]
+        GET_LOGS.scanned_blocks[&(GetLogsStat::LogsReturned, cat)]
             .observe(self.logs_returned);
         if self.total > 0 {
-            GET_LOGS_METRICS.index_skip_ratio[&cat]
+            GET_LOGS.index_skip_ratio[&cat]
                 .observe(self.skipped_by_index as f64 / self.total as f64);
-            GET_LOGS_METRICS.index_coverage[&cat]
+            GET_LOGS.index_coverage[&cat]
                 .observe(self.covered_len as f64 / self.total as f64);
         }
         let bloom_checked = self.bloom_true_positive + self.bloom_false_positive;
         if bloom_checked > 0 {
-            GET_LOGS_METRICS.bloom_precision[&cat]
+            GET_LOGS.bloom_precision[&cat]
                 .observe(self.bloom_true_positive as f64 / bloom_checked as f64);
         }
         if self.truncated {
-            GET_LOGS_METRICS.truncated[&cat].inc();
+            GET_LOGS.truncated[&cat].inc();
         }
     }
 }

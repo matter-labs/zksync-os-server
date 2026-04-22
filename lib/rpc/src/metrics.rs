@@ -52,7 +52,7 @@ impl From<&Filter> for FilterCategory {
 /// Metrics for `eth_getLogs` scan behaviour.
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "get_logs")]
-pub struct GetLogsMetrics {
+pub struct GetLogs {
     /// Block disposition per call, broken down by outcome kind and filter category.
     #[metrics(labels = ["kind", "filter"], buckets = BLOCK_COUNTS)]
     pub scanned_blocks: LabeledFamily<(GetLogsStat, FilterCategory), Histogram<u64>, 2>,
@@ -70,10 +70,11 @@ pub struct GetLogsMetrics {
 }
 
 #[vise::register]
-pub static GET_LOGS_METRICS: vise::Global<GetLogsMetrics> = vise::Global::new();
+pub static GET_LOGS: vise::Global<GetLogs> = vise::Global::new();
 
 #[derive(Debug, Metrics)]
-pub struct ApiMetrics {
+#[metrics(prefix = "api")]
+pub struct Api {
     #[metrics(unit = Unit::Seconds, labels = ["method"], buckets = LATENCIES_FAST)]
     pub response_time: LabeledFamily<String, Histogram<Duration>>,
     #[metrics(unit = Unit::Bytes, labels = ["method"], buckets = BYTES_BUCKETS)]
@@ -89,12 +90,12 @@ pub struct ApiMetrics {
 }
 
 #[vise::register]
-pub static API_METRICS: vise::Global<ApiMetrics> = vise::Global::new();
+pub static API_METRICS: vise::Global<Api> = vise::Global::new();
 
 /// Metrics for the transaction submission pipeline.
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "tx_submission")]
-pub struct TxSubmissionMetrics {
+pub struct TxSubmission {
     /// Time spent validating and inserting a transaction into the local mempool.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub mempool_latency: Histogram<Duration>,
@@ -104,4 +105,4 @@ pub struct TxSubmissionMetrics {
 }
 
 #[vise::register]
-pub static TX_SUBMISSION_METRICS: vise::Global<TxSubmissionMetrics> = vise::Global::new();
+pub static TX_SUBMISSION: vise::Global<TxSubmission> = vise::Global::new();
