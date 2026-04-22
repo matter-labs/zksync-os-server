@@ -243,7 +243,10 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     // Log the gas estimate for diagnostic purposes, without using it as the limit.
                     // This helps us understand the gap between our formula and what the settlement
                     // layer actually needs (especially on gateway, where gas semantics are L2).
-                    match provider.estimate_gas(tx_request.clone()).await {
+                    // Strip the gas limit so the node estimates without our cap constraining it.
+                    let mut estimate_request = tx_request.clone();
+                    estimate_request.set_gas_limit(u64::MAX);
+                    match provider.estimate_gas(estimate_request).await {
                         Ok(estimated) => tracing::info!(
                             command_name,
                             gas_limit,
