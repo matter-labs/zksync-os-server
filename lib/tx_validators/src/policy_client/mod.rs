@@ -1,0 +1,287 @@
+//! `PolicyClient` — the server-side `TxValidator` that defers transaction
+//! decisions to a Prividium policy service over HTTP.
+//!
+//! The intended surface is two-stage:
+//!   - pre-execution admit (`begin_tx`) — currently implemented: serializes
+//!     a `BeginTxContext`, POSTs it to `${POLICY_SERVICE_URL}/admit`, and
+//!     maps allow → `Ok(())` / deny → `Err(FilteredByValidator)`.
+//!   - post-execution judge (`finish_tx`) — stubbed `Ok(())` for now. TODO:
+//!     wire once the execution-result judge endpoint is designed.
+//!
+//! Any error on a policy call (timeout, connection failure, non-2xx,
+//! malformed body, protocol-version mismatch) is fail-closed.
+//!
+//! HTTP-over-TCP and HTTP-over-UDS share the `PolicyClient` surface and
+//! differ only in the URL scheme (`http://` vs `unix:///`).
+//!
+//! TODO: reconcile request/response shapes with the Prividium OpenAPI spec
+//! once it's available — the types below are a first pass.
+
+mod metrics;
+mod transport;
+
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use alloy::primitives::{Address, U256};
+use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
+use zksync_os_interface::error::InvalidTransaction;
+use zksync_os_interface::tracing::{
+    AnyTxValidator, BeginTxContext, TxValidationResult, TxValidator,
+};
+
+use self::metrics::{AdmitErrorReason, AdmitOutcome, POLICY_CLIENT_METRICS};
+use self::transport::{Transport, TransportError};
+
+/// Plain config struct — mirrors the fields `node/bin` reads out of env vars
+/// / config files and passes down to the sequencer.
+#[derive(Clone, Debug)]
+pub struct Config {
+    /// `http://host:port` or `unix:///path/to.sock`.
+    pub url: String,
+    /// Per-request timeout for any call to the policy service.
+    pub request_timeout: Duration,
+    /// Bearer token sent in the `Authorization` header. `None` means no auth.
+    pub auth_token: Option<SecretString>,
+    /// Protocol version this server advertises on every policy request.
+    pub protocol_version: String,
+    /// If set, any policy response whose `protocolVersion` is less than this
+    /// is rejected (fail-closed). Independent from `protocol_version`, which
+    /// is what we *send*; this is the floor we *accept*.
+    pub min_protocol_version: Option<String>,
+    /// Source addresses whose txs skip the policy service entirely — no
+    /// admit or judge call is made. Intended for protocol-internal senders
+    /// (bootloader, force-deployer, ...) whose txs the chain cannot let the
+    /// service refuse without bricking startup.
+    pub bypass_from: HashSet<Address>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BuildError {
+    #[error(transparent)]
+    Transport(#[from] TransportError),
+}
+
+/// Clone-cheap handle to the underlying HTTP client and config.
+#[derive(Clone)]
+pub struct PolicyClient {
+    inner: Arc<Inner>,
+}
+
+impl std::fmt::Debug for PolicyClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PolicyClient")
+            .field("request_timeout", &self.inner.request_timeout)
+            .field("protocol_version", &self.inner.protocol_version)
+            .field("min_protocol_version", &self.inner.min_protocol_version)
+            .finish_non_exhaustive()
+    }
+}
+
+struct Inner {
+    transport: Transport,
+    request_timeout: Duration,
+    protocol_version: String,
+    min_protocol_version: Option<String>,
+    bypass_from: HashSet<Address>,
+}
+
+impl PolicyClient {
+    pub fn new(config: Config) -> Result<Self, BuildError> {
+        let transport = Transport::from_url(&config.url, config.auth_token.clone())?;
+        Ok(Self {
+            inner: Arc::new(Inner {
+                transport,
+                request_timeout: config.request_timeout,
+                protocol_version: config.protocol_version,
+                min_protocol_version: config.min_protocol_version,
+                bypass_from: config.bypass_from,
+            }),
+        })
+    }
+
+    /// Blocking-from-sync shim used by [`TxValidator::begin_tx`].
+    /// `PolicyClient` is driven from the block executor's `spawn_blocking`
+    /// thread, so `Handle::block_on` is the correct bridge back into async.
+    fn call_admit(&self, request: AdmitRequest<'_>) -> TxValidationResult {
+        let started = Instant::now();
+        let outcome = self.call_admit_inner(request);
+        POLICY_CLIENT_METRICS.latency.observe(started.elapsed());
+        match &outcome {
+            Ok(()) => {
+                POLICY_CLIENT_METRICS.decisions[&AdmitOutcome::Allow].inc();
+            }
+            Err(AdmitOutcomeErr::Denied) => {
+                POLICY_CLIENT_METRICS.decisions[&AdmitOutcome::Deny].inc();
+            }
+            Err(reason) => {
+                POLICY_CLIENT_METRICS.errors[&reason.error_label()].inc();
+            }
+        }
+        outcome.map_err(|_| InvalidTransaction::FilteredByValidator)
+    }
+
+    fn call_admit_inner(&self, request: AdmitRequest<'_>) -> Result<(), AdmitOutcomeErr> {
+        let body = serde_json::to_vec(&request).map_err(|err| {
+            tracing::error!(?err, "failed to serialize admit request — failing closed");
+            AdmitOutcomeErr::MalformedResponse
+        })?;
+        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+            tracing::error!("PolicyClient invoked outside a tokio runtime — failing closed");
+            AdmitOutcomeErr::NoRuntime
+        })?;
+        let transport = self.inner.transport.clone();
+        let timeout = self.inner.request_timeout;
+        let response = handle.block_on(async move {
+            tokio::time::timeout(timeout, transport.post_admit(body)).await
+        });
+        let raw = match response {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(err)) => {
+                tracing::warn!(?err, "admit request failed — failing closed");
+                return Err(classify_transport_error(&err));
+            }
+            Err(_) => {
+                tracing::warn!(?timeout, "admit request timed out — failing closed");
+                return Err(AdmitOutcomeErr::Timeout);
+            }
+        };
+        let parsed: AdmitResponse = serde_json::from_slice(&raw).map_err(|err| {
+            tracing::warn!(?err, "admit response body malformed — failing closed");
+            AdmitOutcomeErr::MalformedResponse
+        })?;
+        if let Some(floor) = &self.inner.min_protocol_version
+            && parsed.protocol_version.as_deref() != Some(floor.as_str())
+        {
+            // Exact-match for now — until the `protocolVersion` encoding
+            // (semver vs monotone int) is settled, stricter is safer.
+            tracing::warn!(
+                expected = %floor,
+                got = ?parsed.protocol_version,
+                "admit response protocolVersion mismatch — failing closed"
+            );
+            return Err(AdmitOutcomeErr::ProtocolVersionMismatch);
+        }
+        if parsed.allow {
+            Ok(())
+        } else {
+            tracing::info!(
+                rule_id = ?parsed.rule_id,
+                reason = ?parsed.reason,
+                "admit denied by policy service"
+            );
+            Err(AdmitOutcomeErr::Denied)
+        }
+    }
+}
+
+impl AnyTxValidator for PolicyClient {
+    fn as_evm(&mut self) -> Option<&mut impl TxValidator> {
+        Some(self)
+    }
+}
+
+impl TxValidator for PolicyClient {
+    fn begin_tx(&mut self, ctx: &BeginTxContext<'_>) -> TxValidationResult {
+        if self.inner.bypass_from.contains(&ctx.from) {
+            POLICY_CLIENT_METRICS.bypassed.inc();
+            return Ok(());
+        }
+        let request = AdmitRequest::from_context(ctx, &self.inner.protocol_version);
+        self.call_admit(request)
+    }
+
+    fn finish_tx(&mut self) -> TxValidationResult {
+        // TODO: wire the execution-result judge, and apply the same
+        // `bypass_from` check here (requires stashing the begin_tx context).
+        Ok(())
+    }
+}
+
+/// JSON body POSTed to `/admit`. Field names match what the TS policy service
+/// will expose.
+/// TODO: confirm against the Prividium OpenAPI spec once it's available.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AdmitRequest<'a> {
+    pub protocol_version: &'a str,
+    pub from: Address,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<Address>,
+    pub value: U256,
+    #[serde(with = "alloy::hex")]
+    pub calldata: &'a [u8],
+    pub gas_limit: u64,
+}
+
+impl<'a> AdmitRequest<'a> {
+    fn from_context(ctx: &'a BeginTxContext<'a>, protocol_version: &'a str) -> Self {
+        Self {
+            protocol_version,
+            from: ctx.from,
+            to: ctx.to,
+            value: ctx.value,
+            calldata: ctx.calldata,
+            gas_limit: ctx.gas_limit,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AdmitResponse {
+    pub allow: bool,
+    #[serde(default)]
+    pub rule_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub protocol_version: Option<String>,
+}
+
+/// Internal error carrier so `call_admit` can keep one code path for metrics
+/// + logging without leaking details to the caller.
+#[derive(Debug)]
+enum AdmitOutcomeErr {
+    Denied,
+    Timeout,
+    Connect,
+    Http,
+    Status,
+    MalformedResponse,
+    ProtocolVersionMismatch,
+    NoRuntime,
+}
+
+impl AdmitOutcomeErr {
+    fn error_label(&self) -> AdmitErrorReason {
+        match self {
+            Self::Denied => unreachable!("denied is counted as a decision, not an error"),
+            Self::Timeout => AdmitErrorReason::Timeout,
+            Self::Connect => AdmitErrorReason::Connect,
+            Self::Http => AdmitErrorReason::Http,
+            Self::Status => AdmitErrorReason::Status,
+            Self::MalformedResponse => AdmitErrorReason::MalformedResponse,
+            Self::ProtocolVersionMismatch => AdmitErrorReason::ProtocolVersionMismatch,
+            Self::NoRuntime => AdmitErrorReason::NoRuntime,
+        }
+    }
+}
+
+fn classify_transport_error(err: &TransportError) -> AdmitOutcomeErr {
+    match err {
+        TransportError::Timeout(_) => AdmitOutcomeErr::Timeout,
+        TransportError::Connect(_) => AdmitOutcomeErr::Connect,
+        TransportError::NonSuccessStatus(_) => AdmitOutcomeErr::Status,
+        TransportError::Hyper(_)
+        | TransportError::HttpClient(_)
+        | TransportError::BuildRequest(_) => AdmitOutcomeErr::Http,
+        TransportError::InvalidUrl(_) | TransportError::UnsupportedScheme(_) => {
+            // URL problems surface at construction time; if we reach here the
+            // config changed under us, which is still a fail-closed scenario.
+            AdmitOutcomeErr::Connect
+        }
+    }
+}

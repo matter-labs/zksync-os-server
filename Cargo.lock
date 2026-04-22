@@ -14125,6 +14125,7 @@ dependencies = [
  "flate2",
  "fs2",
  "futures",
+ "httpmock",
  "regex",
  "reqwest",
  "reth-tasks",
@@ -14147,6 +14148,7 @@ dependencies = [
  "zksync_os_rpc_api",
  "zksync_os_server",
  "zksync_os_state_full_diffs",
+ "zksync_os_tx_validators",
  "zksync_os_types",
  "zksync_os_verify_storage_proof",
 ]
@@ -14882,7 +14884,20 @@ name = "zksync_os_tx_validators"
 version = "0.19.0"
 dependencies = [
  "alloy",
+ "bytes",
+ "http-body-util",
+ "httpmock",
+ "hyper",
+ "hyper-util",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
  "tracing",
+ "url",
+ "vise",
  "zksync_os_evm_errors",
  "zksync_os_interface",
 ]
