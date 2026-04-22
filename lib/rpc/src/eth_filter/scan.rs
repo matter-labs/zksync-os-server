@@ -160,7 +160,7 @@ impl Drop for BlockScanStats {
                 .observe(self.bloom_true_positive as f64 / bloom_checked as f64);
         }
         if self.truncated {
-            API_METRICS.get_logs_truncated.inc();
+            API_METRICS.get_logs_truncated[&cat].inc();
         }
     }
 }

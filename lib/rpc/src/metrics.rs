@@ -60,8 +60,8 @@ pub struct ApiMetrics {
     /// Per-call fraction of the queried block range covered by the log index.
     #[metrics(buckets = RATIO_BUCKETS)]
     pub get_logs_index_coverage: Family<FilterCategory, Histogram<f64>>,
-    /// Number of `eth_getLogs` calls truncated due to exceeding `max_logs`.
-    pub get_logs_truncated: Counter,
+    /// Number of `eth_getLogs` calls truncated due to exceeding `max_logs`, broken down by filter category.
+    pub get_logs_truncated: Family<FilterCategory, Counter>,
     #[metrics(unit = Unit::Seconds, labels = ["method"], buckets = LATENCIES_FAST)]
     pub response_time: LabeledFamily<String, Histogram<Duration>>,
     #[metrics(unit = Unit::Bytes, labels = ["method"], buckets = BYTES_BUCKETS)]
