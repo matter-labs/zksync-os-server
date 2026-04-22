@@ -1,6 +1,9 @@
 use alloy::rpc::types::Filter;
 use std::time::Duration;
-use vise::{Buckets, Counter, EncodeLabelSet, EncodeLabelValue, Family, Histogram, LabeledFamily, Metrics, Unit};
+use vise::{
+    Buckets, Counter, EncodeLabelSet, EncodeLabelValue, Family, Histogram, LabeledFamily, Metrics,
+    Unit,
+};
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.000001..=32.0, 2.0);
 const BLOCK_COUNTS: Buckets = Buckets::exponential(1.0..=100000.0, 10.0);
