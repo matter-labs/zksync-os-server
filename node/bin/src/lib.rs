@@ -105,7 +105,7 @@ use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider
 use zksync_os_sequencer::execution::{
     BlockApplier, BlockCanonizer, BlockExecutor, FeeParams, FeeProvider,
 };
-use zksync_os_status_server::run_status_server;
+use zksync_os_status_server::{StatusServerState, run_status_server};
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
@@ -943,8 +943,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .address
             .parse()
             .expect("malformed `status_server.address`");
+        let status_state = StatusServerState {
+            stop_receiver: stop_receiver.clone(),
+            acceptance_state: combined_acceptance_rx.clone(),
+            component_states: pipeline_status.component_states.clone(),
+            edges: pipeline_status.edges.clone(),
+            backpressure_config: config.backpressure_config.clone(),
+        };
         runtime.spawn_critical_with_graceful_shutdown_signal("status server", |shutdown| {
-            run_status_server(addr, shutdown)
+            run_status_server(addr, shutdown, status_state)
         });
     }
 
