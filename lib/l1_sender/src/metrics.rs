@@ -1,6 +1,6 @@
 use crate::commands::SendToL1;
+use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::primitives::utils::{format_ether, format_units};
-use alloy::providers::utils::Eip1559Estimation;
 use alloy::rpc::types::TransactionReceipt;
 use anyhow::Context;
 use vise::{Buckets, EncodeLabelValue, Gauge, Histogram, LabeledFamily, Metrics};
@@ -32,6 +32,22 @@ impl StateLabel for L1SenderState {
             L1SenderState::WaitingL1Inclusion => "waiting_l1_inclusion",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
+#[metrics(label = "percentile", rename_all = "snake_case")]
+pub enum PriorityFeeEstimatePercentile {
+    P20,
+    P30,
+    P50,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
+#[metrics(label = "window", rename_all = "snake_case")]
+pub enum PriorityFeeEstimateWindow {
+    Blocks3,
+    Blocks5,
+    Blocks10,
 }
 
 #[derive(Debug, Metrics)]
@@ -90,6 +106,13 @@ pub struct L1SenderMetrics {
     /// L1 max_priority_fee_per_gas (EIP1559) in gwei - as returned by `Eip1559Estimation`. Reported by server when sending L1 transactions.
     #[metrics()]
     pub estimated_max_priority_fee_per_gas_gwei: Gauge<f64>,
+
+    /// L1 max_priority_fee_per_gas (EIP1559) in gwei from our custom estimators over different fee-history windows.
+    /// Reported for comparison against alloy's built-in estimator, which drives actual tx submission.
+    /// Base fee is omitted — both estimators derive it from the same on-chain value.
+    #[metrics(labels = ["window", "percentile"])]
+    pub estimated_custom_max_priority_fee_per_gas_gwei:
+        LabeledFamily<(PriorityFeeEstimateWindow, PriorityFeeEstimatePercentile), Gauge<f64>, 2>,
 
     /// L1 gas used by L1 transaction per l2 transaction (`gas_used / transactions_per_batch`)
     #[metrics(labels = ["command"], buckets = Buckets::exponential(1.0..=10_000_000.0, 3.0))]
@@ -165,6 +188,17 @@ impl L1SenderMetrics {
     pub fn report_blob_base_fee(&self, base_fee_wei: u128) -> anyhow::Result<()> {
         self.blob_base_fee_gwei
             .set(Self::wei_to_gwei(base_fee_wei)?);
+        Ok(())
+    }
+
+    pub fn report_custom_estimated_max_priority_fee_per_gas(
+        &self,
+        window: PriorityFeeEstimateWindow,
+        percentile: PriorityFeeEstimatePercentile,
+        max_priority_fee_per_gas_wei: u128,
+    ) -> anyhow::Result<()> {
+        self.estimated_custom_max_priority_fee_per_gas_gwei[&(window, percentile)]
+            .set(Self::wei_to_gwei(max_priority_fee_per_gas_wei)?);
         Ok(())
     }
 

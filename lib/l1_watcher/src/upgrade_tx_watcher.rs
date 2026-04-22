@@ -28,7 +28,11 @@ const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
 /// and we don't expect a lot of results.
 const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 
-/// Watches L1 and the settlement layer (SL) for protocol upgrade data.
+/// Watches L1 and the settlement layer for protocol upgrade scheduling and payload data.
+///
+/// This component listens for `UpdateUpgradeTimestamp` events on L1, fetches the matching upgrade
+/// cut data and force-deploy preimages from the appropriate contracts, waits until the scheduled
+/// timestamp, and then inserts an `UpgradeInfo` item into `UpgradeSubpool`.
 ///
 /// When settling on Gateway, the upgrade data is split across two layers:
 /// - **Gateway (SL)**: `NewUpgradeCutData` / `NewUpgradeCutHash` events from `ChainTypeManager`,

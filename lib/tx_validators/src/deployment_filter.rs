@@ -188,7 +188,14 @@ mod tests {
         /// Simulate a new transaction boundary.
         fn begin_tx(&mut self) {
             EvmTracer::begin_tx(&mut self.tracer, &[]);
-            TxValidator::begin_tx(&mut self.validator, &[]).unwrap();
+            let dummy_context = zksync_os_interface::tracing::BeginTxContext {
+                from: Address::ZERO,
+                to: Some(Address::ZERO),
+                value: U256::ZERO,
+                gas_limit: 21_000,
+                calldata: &[],
+            };
+            TxValidator::begin_tx(&mut self.validator, &dummy_context).unwrap();
         }
 
         /// Simulate a frame entering execution.

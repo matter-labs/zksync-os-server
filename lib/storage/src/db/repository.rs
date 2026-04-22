@@ -6,6 +6,7 @@ use alloy::{
     primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce},
     rlp::{Decodable, Encodable},
 };
+use log_index::{BitmapCache, deindex_logs, index_logs, rollback_coverage, update_coverage};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -13,9 +14,11 @@ use zksync_os_genesis::Genesis;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{
-    LogIndex, ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
 use zksync_os_types::{ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
+
+mod log_index;
 
 #[derive(Clone, Copy, Debug)]
 pub enum RepositoryCF {
@@ -31,13 +34,25 @@ pub enum RepositoryCF {
     TxMeta,
     // (initiator address, nonce) => tx hash
     InitiatorAndNonceToHash,
-    // meta fields: currently only latest block number
+    // meta fields: latest block number, log index first/last block
     Meta,
+    // (address[20] ++ chunk_start[8]) => roaring bitmap of block numbers containing logs from that address
+    LogBlocksByAddress,
+    // (topic[32] ++ chunk_start[8]) => roaring bitmap of block numbers containing logs with that topic
+    LogBlocksByTopic,
 }
 
 impl RepositoryCF {
     fn block_number_key() -> &'static [u8] {
         b"block_number"
+    }
+
+    fn log_index_first_block_key() -> &'static [u8] {
+        b"log_index_first_block"
+    }
+
+    fn log_index_last_block_key() -> &'static [u8] {
+        b"log_index_last_block"
     }
 }
 
@@ -51,6 +66,8 @@ impl NamedColumnFamily for RepositoryCF {
         RepositoryCF::TxMeta,
         RepositoryCF::InitiatorAndNonceToHash,
         RepositoryCF::Meta,
+        RepositoryCF::LogBlocksByAddress,
+        RepositoryCF::LogBlocksByTopic,
     ];
 
     fn name(&self) -> &'static str {
@@ -62,13 +79,25 @@ impl NamedColumnFamily for RepositoryCF {
             RepositoryCF::TxMeta => "tx_meta",
             RepositoryCF::InitiatorAndNonceToHash => "initiator_and_nonce_to_hash",
             RepositoryCF::Meta => "meta",
+            RepositoryCF::LogBlocksByAddress => "log_blocks_by_address",
+            RepositoryCF::LogBlocksByTopic => "log_blocks_by_topic",
+        }
+    }
+
+    fn prefix_extractor_len(&self) -> Option<usize> {
+        match self {
+            // Keys are address[20] ++ chunk_start[8]; the prefix is the address.
+            RepositoryCF::LogBlocksByAddress => Some(20),
+            // Keys are topic[32] ++ chunk_start[8]; the prefix is the topic hash.
+            RepositoryCF::LogBlocksByTopic => Some(32),
+            _ => None,
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct RepositoryDb {
-    db: RocksDB<RepositoryCF>,
+    pub(self) db: RocksDB<RepositoryCF>,
     /// Points to the latest block whose data has been persisted in `db`. There might be partial
     /// data written for the next block, in other words `db` is caught up to *AT LEAST* this number.
     latest_block_number: watch::Sender<u64>,
@@ -77,11 +106,11 @@ pub struct RepositoryDb {
 impl RepositoryDb {
     pub async fn new(db_path: &Path, genesis: &Genesis) -> Self {
         let db = RocksDB::<RepositoryCF>::new(db_path).expect("Failed to open db");
-        let latest_block_number = db
+        let db_block_number = db
             .get_cf(RepositoryCF::Meta, RepositoryCF::block_number_key())
             .unwrap()
             .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()));
-        let latest_block_number = if let Some(n) = latest_block_number {
+        let latest_block_number = if let Some(n) = db_block_number {
             n
         } else {
             let (header, hash) = genesis.state().await.header.clone().into_parts();
@@ -97,7 +126,6 @@ impl RepositoryDb {
                 hash,
             );
             Self::write_block_inner(&db, &block, &[]);
-
             0
         };
 
@@ -139,12 +167,16 @@ impl RepositoryDb {
         block.encode(&mut block_bytes);
         batch.put_cf(RepositoryCF::BlockData, block_hash.as_slice(), &block_bytes);
 
+        let mut bitmap_cache = BitmapCache::default();
         for tx in txs {
-            Self::add_tx_to_write_batch(&mut batch, tx);
+            Self::add_tx_to_write_batch(db, &mut batch, &mut bitmap_cache, tx, block_number)
+                .expect("write batch failed");
         }
+        bitmap_cache.flush(&mut batch);
 
         let block_number_key = RepositoryCF::block_number_key();
         batch.put_cf(RepositoryCF::Meta, block_number_key, &block_number_bytes);
+        update_coverage(db, &mut batch, &block_number_bytes);
 
         REPOSITORIES_METRICS
             .block_data_size
@@ -160,7 +192,13 @@ impl RepositoryDb {
         self.latest_block_number.send_replace(block.number);
     }
 
-    fn add_tx_to_write_batch(batch: &mut WriteBatch<RepositoryCF>, tx: &StoredTxData) {
+    fn add_tx_to_write_batch(
+        db: &RocksDB<RepositoryCF>,
+        batch: &mut WriteBatch<RepositoryCF>,
+        bitmap_cache: &mut BitmapCache,
+        tx: &StoredTxData,
+        block_number: u64,
+    ) -> RepositoryResult<()> {
         let tx_hash = tx.tx.hash();
         let mut tx_bytes = Vec::new();
         tx.tx.inner.encode_2718(&mut tx_bytes);
@@ -184,6 +222,10 @@ impl RepositoryDb {
             &initiator_and_nonce_key,
             tx_hash.as_slice(),
         );
+
+        index_logs(db, bitmap_cache, block_number, tx.receipt.logs())?;
+
+        Ok(())
     }
 
     pub fn rollback(&self, last_block_to_keep: u64) -> RepositoryResult<()> {
@@ -207,6 +249,12 @@ impl RepositoryDb {
                 &last_block_to_keep_bytes,
             );
 
+            // Bitmap mutations for the log index are accumulated in a local cache so that
+            // successive removals within the same batch for the same bitmap key compose
+            // correctly (plain `with_chunk` always reads from the DB, so the last write
+            // would silently win and earlier removals would be lost).
+            let mut bitmap_cache = BitmapCache::default();
+
             for block_number in (last_block_to_keep + 1)..=latest_block_number {
                 let old_repo_block = self
                     .get_block_by_number(block_number)?
@@ -217,14 +265,13 @@ impl RepositoryDb {
 
                 for tx_hash in &old_repo_block.body.transactions {
                     batch.delete_cf(RepositoryCF::Tx, &tx_hash.0);
-                    batch.delete_cf(RepositoryCF::TxReceipt, &tx_hash.0);
                     batch.delete_cf(RepositoryCF::TxMeta, &tx_hash.0);
 
-                    let tx = self
-                        .get_transaction(*tx_hash)?
+                    let stored_tx = self
+                        .get_stored_transaction(*tx_hash)?
                         .expect("tx to rollback must be present in DB");
-                    let initiator = tx.signer();
-                    let nonce = tx.inner.nonce();
+                    let initiator = stored_tx.tx.signer();
+                    let nonce = stored_tx.tx.inner.nonce();
                     let mut initiator_and_nonce_key = Vec::with_capacity(20 + 8);
                     initiator_and_nonce_key.extend_from_slice(initiator.as_slice());
                     initiator_and_nonce_key.extend_from_slice(&nonce.to_be_bytes());
@@ -232,8 +279,19 @@ impl RepositoryDb {
                         RepositoryCF::InitiatorAndNonceToHash,
                         &initiator_and_nonce_key,
                     );
+
+                    deindex_logs(
+                        &self.db,
+                        &mut bitmap_cache,
+                        block_number,
+                        stored_tx.receipt.logs(),
+                    )?;
+                    batch.delete_cf(RepositoryCF::TxReceipt, &tx_hash.0);
                 }
             }
+
+            bitmap_cache.flush(&mut batch);
+            rollback_coverage(&mut batch, &last_block_to_keep_bytes);
 
             self.db.write(batch)?;
             self.latest_block_number.send_replace(last_block_to_keep);
@@ -242,8 +300,6 @@ impl RepositoryDb {
         Ok(())
     }
 }
-
-impl LogIndex for RepositoryDb {}
 
 impl ReadRepository for RepositoryDb {
     fn get_block_by_number(

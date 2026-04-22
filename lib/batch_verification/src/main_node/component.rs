@@ -128,13 +128,15 @@ struct BatchVerificationRunner {
 pub(crate) enum BatchVerificationError {
     #[error("Not enough signers: {0} < {1}")]
     NotEnoughSigners(u64, u64),
+    #[error("Verify request channel closed")]
+    VerifyRequestChannelClosed,
     #[error("Internal error: {0}")]
     Internal(String),
 }
 
 impl BatchVerificationError {
     fn retryable(&self) -> bool {
-        !matches!(self, BatchVerificationError::Internal(_))
+        matches!(self, BatchVerificationError::NotEnoughSigners(..))
     }
 }
 
@@ -171,7 +173,7 @@ impl BatchVerificationRunner {
         );
         let metrics = &*BATCH_VERIFICATION_SEQUENCER_METRICS;
 
-        loop {
+        'runner: loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             let Some(batch_envelope) = batch_for_signing_receiver.recv().await else {
                 tracing::info!("BatchForSigning channel closed, exiting batch verification runner");
@@ -211,6 +213,13 @@ impl BatchVerificationRunner {
                     .await
                 {
                     Ok(result) => break Ok(result),
+                    Err(BatchVerificationError::VerifyRequestChannelClosed) => {
+                        tracing::info!(
+                            batch_number = batch_envelope.batch_number(),
+                            "Verify request channel closed, exiting batch verification runner"
+                        );
+                        break 'runner Ok(());
+                    }
                     Err(err) if err.retryable() => {
                         if Instant::now() < deadline {
                             retry_count += 1;
@@ -263,9 +272,10 @@ impl BatchVerificationRunner {
             request_id,
             "Starting batch verification"
         );
-        self.verify_request_tx.send(request).await.map_err(|_| {
-            BatchVerificationError::Internal("Verify request channel closed".into())
-        })?;
+        self.verify_request_tx
+            .send(request)
+            .await
+            .map_err(|_| BatchVerificationError::VerifyRequestChannelClosed)?;
 
         let mut responses = BatchSignatureSet::new();
         let start_time = Instant::now();
@@ -645,5 +655,27 @@ mod tests {
 
         assert!(output_rx.recv().await.is_none());
         run_handle.await.expect("run task should complete");
+    }
+
+    #[tokio::test]
+    async fn run_returns_ok_if_verify_request_channel_is_closed() {
+        let batch = dummy_batch_envelope(3, 10, 15);
+        let (verifier, verify_request_rx, _verify_result_tx) = make_verifier(Vec::new(), 0);
+        drop(verify_request_rx);
+
+        let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
+        let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
+        let peekable = zksync_os_pipeline::PeekableReceiver::new(input_rx);
+
+        input_tx.send(batch).await.expect("failed to send batch");
+        drop(input_tx);
+
+        let run_handle = tokio::spawn(async move { verifier.run(peekable, output_tx).await });
+
+        run_handle
+            .await
+            .expect("run task should complete")
+            .expect("run should exit successfully when verify request channel is closed");
+        assert!(output_rx.recv().await.is_none());
     }
 }

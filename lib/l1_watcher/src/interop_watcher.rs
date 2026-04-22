@@ -13,6 +13,11 @@ use crate::util::find_l1_block_by_interop_root_id;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessRawEvents};
 
+/// Watches interop root updates on the settlement layer and feeds them into the interop subpool.
+///
+/// This component reads `NewInteropRoot` events from the bridgehub message root contract,
+/// de-duplicates multiple logs for the same `logId`, and inserts the latest `IndexedInteropRoot`
+/// into `InteropRootsSubpool`.
 pub struct InteropWatcher {
     contract_address: Address,
     starting_interop_root_id: u64,

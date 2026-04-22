@@ -10,6 +10,17 @@ use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::WriteFinality;
 
+/// Watches settlement-layer commit events and advances the committed finality frontier.
+///
+/// This component reads `ReportCommittedBatchRangeZKsyncOS` events, resolves the committed batch
+/// payload from L1 calldata, updates `WriteFinality`, and inserts the discovered batch into
+/// `CommittedBatchProvider`.
+///
+/// Depended on by:
+/// - `L1ExecuteWatcher`, which waits on the committed batches this watcher publishes;
+/// - `Batcher` and `PriorityTreeManager`, which consume the same committed batch data during
+///   startup replay and live operation;
+/// - node startup / recovery logic, which relies on the committed frontier stored in finality.
 pub struct L1CommitWatcher<Finality> {
     zk_chain: ZkChain<DynProvider>,
     next_batch_number: u64,

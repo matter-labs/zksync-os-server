@@ -202,6 +202,50 @@ pub struct OutboundDisconnectMetrics {
     pub(crate) subprotocol_specific: Counter,
 }
 
+/// Metrics for peer discovery in `reth_discv5`.
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "discv5")]
+pub struct Discv5Metrics {
+    /// Total peers currently in discv5 kbuckets.
+    pub(crate) kbucket_peers_raw_total: Gauge,
+    /// Total peers currently connected to discv5.
+    pub(crate) sessions_raw_total: Gauge,
+    /// Total discovered peers inserted into discv5 kbuckets.
+    pub(crate) inserted_kbucket_peers_raw_total: Counter,
+    /// Total number of sessions established by discv5.
+    pub(crate) established_sessions_raw_total: Counter,
+    /// Total established sessions with peers that advertise an unreachable ENR.
+    pub(crate) established_sessions_unreachable_enr_total: Counter,
+    /// Total established sessions that pass configured filters.
+    pub(crate) established_sessions_custom_filtered_total: Counter,
+    /// Total unverifiable ENRs discovered by discv5.
+    pub(crate) unverifiable_enrs_raw_total: Counter,
+}
+
+/// Frequency of networks advertised by discovered peers' node records.
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "discv5")]
+pub struct Discv5AdvertisedChainMetrics {
+    /// Frequency of `opel` entries in discovered peers' ENRs.
+    pub(crate) opel: Counter,
+    /// Frequency of `opstack` entries in discovered peers' ENRs.
+    pub(crate) opstack: Counter,
+    /// Frequency of `eth` entries in discovered peers' ENRs.
+    pub(crate) eth: Counter,
+    /// Frequency of `eth2` entries in discovered peers' ENRs.
+    pub(crate) eth2: Counter,
+}
+
+/// Throughput metrics emitted by `reth_metrics::common::mpsc::MeteredPollSender`.
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "network_active_session")]
+pub struct NetworkActiveSessionMetrics {
+    /// Number of messages sent through the active-session channel.
+    pub(crate) messages_sent_total: Counter,
+    /// Number of delayed deliveries caused by back pressure.
+    pub(crate) back_pressure_total: Counter,
+}
+
 /// Installs [`ViseRecorder`] as the global recorder for the `metrics` crate.
 ///
 /// This bridges reth-network metrics (which use the `metrics` crate) to the `vise` collector.
@@ -238,6 +282,14 @@ pub(crate) static INBOUND_DISCONNECT_METRICS: vise::Global<InboundDisconnectMetr
     vise::Global::new();
 #[vise::register]
 pub(crate) static OUTBOUND_DISCONNECT_METRICS: vise::Global<OutboundDisconnectMetrics> =
+    vise::Global::new();
+#[vise::register]
+pub(crate) static DISCV5_METRICS: vise::Global<Discv5Metrics> = vise::Global::new();
+#[vise::register]
+pub(crate) static DISCV5_ADVERTISED_CHAIN_METRICS: vise::Global<Discv5AdvertisedChainMetrics> =
+    vise::Global::new();
+#[vise::register]
+pub(crate) static NETWORK_ACTIVE_SESSION_METRICS: vise::Global<NetworkActiveSessionMetrics> =
     vise::Global::new();
 
 /// A recorder that wraps `vise` metrics into `metrics`-compatible structs.
@@ -370,6 +422,31 @@ impl Recorder for ViseRecorder {
             "network.outbound.subprotocol_specific" => {
                 &OUTBOUND_DISCONNECT_METRICS.subprotocol_specific
             }
+            // Discv5 counters
+            "discv5.inserted_kbucket_peers_raw_total" => {
+                &DISCV5_METRICS.inserted_kbucket_peers_raw_total
+            }
+            "discv5.established_sessions_raw_total" => {
+                &DISCV5_METRICS.established_sessions_raw_total
+            }
+            "discv5.established_sessions_unreachable_enr_total" => {
+                &DISCV5_METRICS.established_sessions_unreachable_enr_total
+            }
+            "discv5.established_sessions_custom_filtered_total" => {
+                &DISCV5_METRICS.established_sessions_custom_filtered_total
+            }
+            "discv5.unverifiable_enrs_raw_total" => &DISCV5_METRICS.unverifiable_enrs_raw_total,
+            "discv5.opel" => &DISCV5_ADVERTISED_CHAIN_METRICS.opel,
+            "discv5.opstack" => &DISCV5_ADVERTISED_CHAIN_METRICS.opstack,
+            "discv5.eth" => &DISCV5_ADVERTISED_CHAIN_METRICS.eth,
+            "discv5.eth2" => &DISCV5_ADVERTISED_CHAIN_METRICS.eth2,
+            // Dynamic `MeteredPollSender` counters used by active sessions
+            "network_active_session.messages_sent_total" => {
+                &NETWORK_ACTIVE_SESSION_METRICS.messages_sent_total
+            }
+            "network_active_session.back_pressure_total" => {
+                &NETWORK_ACTIVE_SESSION_METRICS.back_pressure_total
+            }
             _ => {
                 tracing::warn!(?key, "unknown counter metric");
                 return metrics::Counter::noop();
@@ -397,6 +474,9 @@ impl Recorder for ViseRecorder {
             "network.acc_duration_poll_swarm" => &NETWORK_METRICS.acc_duration_poll_swarm,
             // SessionManagerMetrics gauges
             "network.queued_outgoing_messages" => &SESSION_MANAGER_METRICS.queued_outgoing_messages,
+            // Discv5 gauges
+            "discv5.kbucket_peers_raw_total" => &DISCV5_METRICS.kbucket_peers_raw_total,
+            "discv5.sessions_raw_total" => &DISCV5_METRICS.sessions_raw_total,
             _ => {
                 tracing::warn!(?key, "unknown gauge metric");
                 return metrics::Gauge::noop();

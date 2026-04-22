@@ -9,11 +9,13 @@ pub mod upgrade_gatekeeper;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
-use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
+use crate::metrics::{
+    L1_SENDER_METRICS, L1SenderState, PriorityFeeEstimatePercentile, PriorityFeeEstimateWindow,
+};
 use alloy::consensus::BlobTransactionValidationError;
 use alloy::consensus::Transaction as ConsensusTransaction;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
-use alloy::eips::{BlockId, Encodable2718};
+use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
 use alloy::network::{
     Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844, TransactionResponse,
 };
@@ -21,13 +23,14 @@ use alloy::primitives::Address;
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
+use alloy::providers::utils::Eip1559Estimation;
 use alloy::providers::{
     PendingTransactionBuilder, PendingTransactionError, Provider, WalletProvider,
 };
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use alloy::transports::TransportError;
-use anyhow::Context;
+use anyhow::Context as _;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Instant;
@@ -39,12 +42,14 @@ use zksync_os_pipeline::PeekableReceiver;
 
 /// A code for "method not found" error response as declared in JSON-RPC 2.0 spec.
 const METHOD_NOT_FOUND_CODE: i64 = -32601;
-/// Number of L1 confirmations required before a transaction is considered final.
-const REQUIRED_CONFIRMATIONS: u64 = 1;
-
 /// Future that resolves into a (fallible) transaction receipt.
 type TransactionReceiptFuture =
     BoxFuture<'static, Result<TransactionReceipt, PendingTransactionError>>;
+
+const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
+/// In case there's only one chain connected to gateway, it is very likely that there will be not enough block production
+/// to reach 3 confirmations for such transactions
+const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
 
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
@@ -132,7 +137,11 @@ pub async fn run_l1_sender<Input: SendToL1>(
             .into_iter()
             .map(|(tx_hash, cmd)| {
                 let fut = PendingTransactionBuilder::new(provider.root().clone(), tx_hash)
-                    .with_required_confirmations(REQUIRED_CONFIRMATIONS)
+                    .with_required_confirmations(if gateway {
+                        REQUIRED_CONFIRMATIONS_GATEWAY
+                    } else {
+                        REQUIRED_CONFIRMATIONS_L1
+                    })
                     .get_receipt()
                     .boxed();
                 (fut, cmd, Instant::now())
@@ -251,7 +260,11 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         // reorg happens and transaction will not be included in the new fork (very-very
                         // unlikely), L1 sender will crash at some point (because a consequent L1
                         // transactions will fail) and recover from the new L1 state after restart.
-                        .with_required_confirmations(REQUIRED_CONFIRMATIONS)
+                        .with_required_confirmations(if gateway {
+                            REQUIRED_CONFIRMATIONS_GATEWAY
+                        } else {
+                            REQUIRED_CONFIRMATIONS_L1
+                        })
                         // Ensure we don't wait indefinitely and crash if the transaction is not
                         // included on L1 in a reasonable time.
                         .with_timeout(Some(config.transaction_timeout));
@@ -533,6 +546,8 @@ async fn tx_request_with_gas_fields(
 ) -> anyhow::Result<TransactionRequest> {
     let eip1559_est = provider.estimate_eip1559_fees().await?;
     L1_SENDER_METRICS.report_l1_eip_1559_estimation(eip1559_est)?;
+    report_custom_priority_fee_metrics(provider).await?;
+
     tracing::debug!(
         max_priority_fee_per_gas_gwei = ?format_units(eip1559_est.max_priority_fee_per_gas, "gwei"),
         max_fee_per_gas_gwei = ?format_units(eip1559_est.max_fee_per_gas, "gwei"),
@@ -570,6 +585,51 @@ async fn tx_request_with_gas_fields(
         .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas)
         .with_gas_limit(gas_limit);
     Ok(tx)
+}
+
+async fn report_custom_priority_fee_metrics(provider: &dyn Provider) -> anyhow::Result<()> {
+    for (window, blocks_behind) in [
+        (PriorityFeeEstimateWindow::Blocks3, 3),
+        (PriorityFeeEstimateWindow::Blocks5, 5),
+        (PriorityFeeEstimateWindow::Blocks10, 10),
+    ] {
+        for (percentile_label, percentile) in [
+            (PriorityFeeEstimatePercentile::P20, 20.0),
+            (PriorityFeeEstimatePercentile::P30, 30.0),
+            (PriorityFeeEstimatePercentile::P50, 50.0),
+        ] {
+            let our_eip1559_est =
+                estimate_eip1559_fees(provider, blocks_behind, percentile).await?;
+            L1_SENDER_METRICS.report_custom_estimated_max_priority_fee_per_gas(
+                window,
+                percentile_label,
+                our_eip1559_est.max_priority_fee_per_gas,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Estimates EIP-1559 fees using the provided percentile of priority fees over the specified
+/// fee-history window.
+///
+/// `estimate_eip1559_fees_with` in alloy hardcodes the block count and percentile, so we call
+/// `get_fee_history` directly and delegate the rest to alloy's default estimator.
+async fn estimate_eip1559_fees(
+    provider: &dyn Provider,
+    blocks_behind: u64,
+    percentile: f64,
+) -> anyhow::Result<Eip1559Estimation> {
+    let fee_history = provider
+        .get_fee_history(blocks_behind, BlockNumberOrTag::Latest, &[percentile])
+        .await
+        .context("fetching fee history")?;
+    let base_fee_per_gas: u128 = fee_history.latest_block_base_fee().unwrap_or_default();
+    let rewards = fee_history.reward.unwrap_or_default();
+    Ok(alloy::providers::utils::eip1559_default_estimator(
+        base_fee_per_gas,
+        &rewards,
+    ))
 }
 
 async fn register_operator<
