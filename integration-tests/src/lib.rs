@@ -499,6 +499,7 @@ impl Tester {
             rpc_config,
             mempool_config: default_config.mempool_config,
             tx_validator_config: default_config.tx_validator_config,
+            policy_service_config: default_config.policy_service_config,
             sequencer_config,
             l1_sender_config: default_config.l1_sender_config,
             l1_watcher_config: default_config.l1_watcher_config,

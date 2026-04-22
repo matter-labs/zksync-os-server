@@ -646,12 +646,28 @@ pub struct SequencerConfig {
 }
 
 /// Configuration for all transaction validators applied during block production.
+///
+/// At most one of `deployment_filter` and `policy_service` may be active at a
+/// time — the policy service can express the same allow-list the deployment
+/// filter does, and the block-build-side dispatch picks the policy client
+/// when configured. Enabling both is a misconfiguration the node refuses
+/// to start with.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct TxValidatorConfig {
     /// Deployment filter configuration.
     #[config(nest)]
+    #[config_validate(custom(
+        |root: &Config, value: &DeploymentFilterConfig|
+            !value.enabled
+                || root.sequencer_config.tx_validator.policy_service.url.is_none(),
+        "cannot be enabled at the same time as `sequencer.tx_validator.policy_service.url` — express the allow-list via the policy service"
+    ))]
     pub deployment_filter: DeploymentFilterConfig,
+
+    /// Prividium policy-service client configuration.
+    #[config(nest)]
+    pub policy_service: PolicyServiceConfig,
 }
 
 /// Configuration for the deployment filter.
@@ -666,6 +682,54 @@ pub struct DeploymentFilterConfig {
     /// List of addresses allowed to deploy contracts.
     #[config(default, with = Serde![*])]
     pub allowed_deployers: Vec<Address>,
+}
+
+/// Prividium policy-service client configuration.
+///
+/// Nested under `sequencer.tx_validator.policy_service` because the policy
+/// service IS a transaction validator; it just lives behind an HTTP RPC.
+/// A `None` `url` means "no policy service configured" — the server wires no
+/// `PolicyClient`, preserving today's behaviour for non-Prividium chains.
+///
+/// Authoritative wire-format contract is held by the Prividium OpenAPI spec;
+/// the fields below mirror what the server consumes and does not invent.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct PolicyServiceConfig {
+    /// Endpoint URL of the Prividium policy service.
+    /// Accepts `http://host:port` or `unix:///path/to/socket`. `unix://` is
+    /// the HTTP-over-UDS fallback for latency-sensitive deployments. Unset =
+    /// PolicyClient disabled.
+    pub url: Option<String>,
+
+    /// Per-request timeout for any call to the policy service. Fail-closed
+    /// on exceed.
+    /// TODO: revisit the 50ms default against the admit latency baseline.
+    #[config(default_t = Duration::from_millis(50))]
+    pub request_timeout: Duration,
+
+    /// Bearer token sent in the `Authorization` header. Unset = no auth.
+    pub auth_token: Option<SecretString>,
+
+    /// Protocol version this server advertises on every policy request.
+    /// Kept as an opaque string while the encoding (semver vs monotone int)
+    /// is unsettled.
+    #[config(default_t = "1".into())]
+    pub protocol_version: String,
+
+    /// If set, policy responses whose `protocolVersion` differs from this are
+    /// rejected. Leave unset to disable the check.
+    pub min_protocol_version: Option<String>,
+
+    /// Source addresses whose txs skip the policy service entirely — no
+    /// admit or judge call is made. Defaults to the known protocol-internal
+    /// senders so the chain's own system txs can't be denied by a mis- or
+    /// partially-configured service.
+    #[config(default_t = vec![
+        zksync_os_types::BOOTLOADER_FORMAL_ADDRESS,
+        zksync_os_tx_validators::deployment_filter::FORCE_DEPLOYER_ADDRESS,
+    ])]
+    pub bypass_from: Vec<Address>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1749,6 +1813,25 @@ mod tests {
         );
         assert!(
             err.contains("`batch_verification.client_enabled` requires `network.enabled=true`")
+        );
+    }
+
+    #[tokio::test]
+    async fn deployment_filter_and_policy_service_are_mutually_exclusive() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.sequencer_config.tx_validator.deployment_filter = DeploymentFilterConfig {
+            enabled: true,
+            allowed_deployers: vec![Address::with_last_byte(0xee)],
+        };
+        config.sequencer_config.tx_validator.policy_service.url =
+            Some("http://policy.local:9000".into());
+
+        let err = config.validate().await.unwrap_err().to_string();
+        assert!(
+            err.contains(
+                "cannot be enabled at the same time as `sequencer.tx_validator.policy_service.url`"
+            ),
+            "expected mutex error, got: {err}"
         );
     }
 }
