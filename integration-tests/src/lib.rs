@@ -512,7 +512,9 @@ impl Tester {
             batcher_config: default_config.batcher_config,
             prover_input_generator_config: ProverInputGeneratorConfig {
                 logging_enabled: enable_prover,
-                enable_input_generation: enable_prover_input_generation,
+                // When tests use fake provers, generating real prover inputs just burns CPU and
+                // stretches batch finalization latency without improving coverage.
+                enable_input_generation: enable_prover && enable_prover_input_generation,
                 ..default_config.prover_input_generator_config
             },
             prover_api_config,
