@@ -49,22 +49,31 @@ impl From<&Filter> for FilterCategory {
     }
 }
 
+/// Metrics for `eth_getLogs` scan behaviour.
 #[derive(Debug, Metrics)]
-pub struct ApiMetrics {
-    /// Block disposition per `eth_getLogs` call, broken down by outcome kind and filter category.
+#[metrics(prefix = "get_logs")]
+pub struct GetLogsMetrics {
+    /// Block disposition per call, broken down by outcome kind and filter category.
     #[metrics(labels = ["kind", "filter"], buckets = BLOCK_COUNTS)]
-    pub get_logs_scanned_blocks: LabeledFamily<(GetLogsStat, FilterCategory), Histogram<u64>, 2>,
+    pub scanned_blocks: LabeledFamily<(GetLogsStat, FilterCategory), Histogram<u64>, 2>,
     /// Per-call fraction of blocks skipped by the log index (skipped / total).
     #[metrics(buckets = RATIO_BUCKETS)]
-    pub get_logs_index_skip_ratio: Family<FilterCategory, Histogram<f64>>,
+    pub index_skip_ratio: Family<FilterCategory, Histogram<f64>>,
     /// Per-call bloom filter precision among blocks that reached the bloom check (true positives / bloom-passed blocks).
     #[metrics(buckets = RATIO_BUCKETS)]
-    pub get_logs_bloom_precision: Family<FilterCategory, Histogram<f64>>,
+    pub bloom_precision: Family<FilterCategory, Histogram<f64>>,
     /// Per-call fraction of the queried block range covered by the log index.
     #[metrics(buckets = RATIO_BUCKETS)]
-    pub get_logs_index_coverage: Family<FilterCategory, Histogram<f64>>,
-    /// Number of `eth_getLogs` calls truncated due to exceeding `max_logs`, broken down by filter category.
-    pub get_logs_truncated: Family<FilterCategory, Counter>,
+    pub index_coverage: Family<FilterCategory, Histogram<f64>>,
+    /// Number of calls truncated due to exceeding `max_logs`, broken down by filter category.
+    pub truncated: Family<FilterCategory, Counter>,
+}
+
+#[vise::register]
+pub static GET_LOGS_METRICS: vise::Global<GetLogsMetrics> = vise::Global::new();
+
+#[derive(Debug, Metrics)]
+pub struct ApiMetrics {
     #[metrics(unit = Unit::Seconds, labels = ["method"], buckets = LATENCIES_FAST)]
     pub response_time: LabeledFamily<String, Histogram<Duration>>,
     #[metrics(unit = Unit::Bytes, labels = ["method"], buckets = BYTES_BUCKETS)]
