@@ -46,9 +46,9 @@ const METHOD_NOT_FOUND_CODE: i64 = -32601;
 type TransactionReceiptFuture =
     BoxFuture<'static, Result<TransactionReceipt, PendingTransactionError>>;
 
-const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
+const REQUIRED_CONFIRMATIONS_L1: u64 = 2;
 /// In case there's only one chain connected to gateway, it is very likely that there will be not enough block production
-/// to reach 3 confirmations for such transactions
+/// to reach 2 confirmations for such transactions
 const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
 
 /// Process responsible for sending transactions to L1.
