@@ -242,6 +242,7 @@ alloy::sol! {
         function getL2UpgradeTxData(
             address _bridgehub,
             uint256 _chainId,
+            bool _zksyncOS,
             bytes memory _existingTxData
         ) external view returns (bytes memory);
     }
