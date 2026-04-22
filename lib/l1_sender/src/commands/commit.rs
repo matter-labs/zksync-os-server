@@ -131,15 +131,23 @@ impl SendToL1 for CommitCommand {
     }
 
     fn pubdata_bytes(&self) -> usize {
-        // `operator_da_input` includes a metadata header (~129 bytes) in addition to the raw
-        // pubdata, so this slightly overestimates. That's fine — we're using it to compute a
-        // gas limit upper bound, so erring on the high side is safe.
-        self.input
-            .batch
-            .batch_info
-            .commit_info
-            .operator_da_input
-            .len()
+        // In blob mode the pubdata is not in calldata — it lives in the blob sidecar.
+        // `operator_da_input` is only 32 bytes × blob_count (versioned hash placeholders),
+        // so we instead compute the total blob payload size directly.
+        //
+        // In calldata mode `operator_da_input` contains the raw pubdata plus a ~129-byte
+        // metadata header, which is a safe (slight) overestimate for our purposes.
+        const BYTES_PER_BLOB: usize = 1 << 17; // 131,072 — EIP-4844
+        if let Some(sidecar) = &self.input.batch.batch_info.blob_sidecar {
+            sidecar.blobs.len() * BYTES_PER_BLOB
+        } else {
+            self.input
+                .batch
+                .batch_info
+                .commit_info
+                .operator_da_input
+                .len()
+        }
     }
 }
 
