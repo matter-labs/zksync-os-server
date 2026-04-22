@@ -19,6 +19,9 @@ pub struct L1Sender<F: TxFiller<Ethereum>, P: Provider<Ethereum>, C> {
     pub to_address: Address,
     pub gateway: bool,
     pub commit_submitted_tx: Option<watch::Sender<u64>>,
+    /// SL block number at which `getTotalBatches*` was read on startup; passed through to
+    /// `run_l1_sender` to keep the confirmed-nonce baseline consistent with the inbound queue.
+    pub sl_block_number: u64,
 }
 
 #[async_trait]
@@ -47,6 +50,7 @@ where
             self.config,
             self.gateway,
             self.commit_submitted_tx,
+            self.sl_block_number,
         )
         .await
     }

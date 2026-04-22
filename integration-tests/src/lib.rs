@@ -417,6 +417,8 @@ impl Tester {
         let general_config = GeneralConfig {
             rocks_db_path: rocks_db_path.clone(),
             l1_rpc_url: l1.address.clone(),
+            l1_rpc_poll_interval: Duration::from_millis(100),
+            gateway_rpc_poll_interval: Duration::from_millis(100),
             ..default_config.general_config
         };
         let sequencer_config = SequencerConfig {
@@ -1218,6 +1220,8 @@ impl AnvilL1 {
             anvil
                 .port(locked_port.port)
                 .chain_id(L1_CHAIN_ID)
+                .block_time(1)
+                .arg("--mixed-mining")
                 .arg("--load-state")
                 .arg(l1_state_path)
         })?;

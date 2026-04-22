@@ -102,7 +102,67 @@ pub struct TxSubmission {
     /// Time spent forwarding a transaction to the main node (external nodes only).
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub forwarding_latency: Histogram<Duration>,
+    /// Count of `eth_sendRawTransaction` rejections, labeled by reason.
+    pub rejections: Family<TxRejectionReason, Counter>,
 }
 
 #[vise::register]
 pub static TX_SUBMISSION: vise::Global<TxSubmission> = vise::Global::new();
+
+/// Reason why an `eth_sendRawTransaction` was rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue, EncodeLabelSet)]
+#[metrics(label = "reason", rename_all = "snake_case")]
+pub enum TxRejectionReason {
+    /// Client sent bytes that don't decode as a valid signed transaction.
+    DecodeFailed,
+    /// Transaction signature is invalid.
+    InvalidSignature,
+    /// Node is temporarily not accepting transactions (e.g. syncing).
+    NotAccepting,
+    /// The signer address is on the blacklist.
+    BlacklistedSigner,
+    /// Forwarding the transaction to the main node failed (transport error).
+    ForwardTransportError,
+    /// Forwarding the transaction to the main node failed (main node rejected it).
+    ForwardRejected,
+    /// Transaction already exists in the pool.
+    PoolAlreadyImported,
+    /// Replacement transaction's gas price is too low.
+    PoolReplacementUnderpriced,
+    /// Transaction fee cap is below the protocol minimum.
+    PoolFeeCapBelowMinimum,
+    /// Sender exceeded the per-account slot capacity.
+    PoolSpammerExceededCapacity,
+    /// Transaction discarded due to pool size limits.
+    PoolDiscardedOnInsert,
+    /// Transaction type conflicts with an existing transaction for this sender.
+    PoolConflictingTxType,
+    /// Transaction exceeds the block gas limit.
+    PoolExceedsGasLimit,
+    /// Transaction gas limit exceeds per-tx maximum.
+    PoolMaxTxGasLimitExceeded,
+    /// Transaction fee exceeds the configured cap.
+    PoolExceedsFeeCap,
+    /// Transaction init code exceeds max size.
+    PoolExceedsMaxInitCodeSize,
+    /// Transaction input data is oversized.
+    PoolOversizedData,
+    /// Transaction is underpriced.
+    PoolUnderpriced,
+    /// Transaction would overdraw the sender's balance.
+    PoolOverdraft,
+    /// Nonce exceeds u64 limit (EIP-2681).
+    PoolNonceOverflow,
+    /// Intrinsic gas is too low.
+    PoolIntrinsicGasTooLow,
+    /// Transaction priority fee is below the minimum.
+    PoolPriorityFeeBelowMinimum,
+    /// Consensus-level invalid transaction.
+    PoolConsensusError,
+    /// EIP-4844 blob transaction error.
+    PoolEip4844Error,
+    /// EIP-7702 transaction error.
+    PoolEip7702Error,
+    /// Other pool error.
+    PoolOther,
+}

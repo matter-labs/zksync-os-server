@@ -4,6 +4,7 @@ use alloy::providers::DynProvider;
 use anyhow::Context;
 use futures::stream::{self, StreamExt};
 use rangemap::RangeInclusiveMap;
+use reth_tasks::Runtime;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -12,6 +13,7 @@ use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 
 const INIT_MAX_PARALLEL_BATCH_FETCHES: usize = 10;
 const WAIT_FOR_BATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -34,6 +36,9 @@ const WAIT_FOR_BATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 #[derive(Debug, Clone)]
 pub struct CommittedBatchProvider {
     inner: Arc<RwLock<Inner>>,
+    /// Intervals used to route batch lookups to the diamond proxy of the SL the batch was
+    /// committed to.
+    intervals: SettlementLayerIntervals,
 }
 
 #[derive(Debug, Default)]
@@ -46,12 +51,14 @@ impl CommittedBatchProvider {
     /// Creates a provider, inserts the genesis batch if needed, and eagerly loads the startup
     /// frontier batches used by startup bookkeeping.
     pub async fn new(
+        runtime: &Runtime,
         l1_state: &L1State,
         max_l1_blocks_to_scan: u64,
         load_genesis_batch_info: impl AsyncFnOnce() -> StoredBatchInfo,
     ) -> anyhow::Result<Self> {
         let provider = Self {
             inner: Arc::new(RwLock::new(Inner::default())),
+            intervals: l1_state.settlement_layer_intervals.clone(),
         };
         // Special case for genesis
         if l1_state.last_executed_batch == 0 {
@@ -75,29 +82,40 @@ impl CommittedBatchProvider {
             l1_state.last_executed_batch,
         );
         provider
-            .load_batch_numbers(
-                l1_state.diamond_proxy_sl.clone(),
-                max_l1_blocks_to_scan,
-                prioritized_batch_numbers,
-            )
+            .load_batch_numbers(max_l1_blocks_to_scan, prioritized_batch_numbers)
             .await?;
+
+        let provider_for_init = provider.clone();
+        let last_committed = l1_state.last_committed_batch;
+        let last_proved = l1_state.last_proved_batch;
+        let last_executed = l1_state.last_executed_batch;
+        runtime.spawn_critical_task("committed batch provider init", async move {
+            provider_for_init
+                .init(
+                    last_committed,
+                    last_proved,
+                    last_executed,
+                    max_l1_blocks_to_scan,
+                )
+                .await
+                .expect("failed to initialize CommittedBatchProvider");
+        });
 
         Ok(provider)
     }
 
     /// Loads the remaining historical committed batches discovered on startup.
-    pub async fn init(&self, l1_state: &L1State, max_l1_blocks_to_scan: u64) -> anyhow::Result<()> {
-        let (_, remaining_batch_numbers) = startup_batch_numbers(
-            l1_state.last_committed_batch,
-            l1_state.last_proved_batch,
-            l1_state.last_executed_batch,
-        );
-        self.load_batch_numbers(
-            l1_state.diamond_proxy_sl.clone(),
-            max_l1_blocks_to_scan,
-            remaining_batch_numbers,
-        )
-        .await?;
+    async fn init(
+        &self,
+        last_committed_batch: u64,
+        last_proved_batch: u64,
+        last_executed_batch: u64,
+        max_l1_blocks_to_scan: u64,
+    ) -> anyhow::Result<()> {
+        let (_, remaining_batch_numbers) =
+            startup_batch_numbers(last_committed_batch, last_proved_batch, last_executed_batch);
+        self.load_batch_numbers(max_l1_blocks_to_scan, remaining_batch_numbers)
+            .await?;
         Ok(())
     }
 
@@ -139,24 +157,21 @@ impl CommittedBatchProvider {
     /// unbounded number of L1 requests.
     async fn load_batch_numbers(
         &self,
-        diamond_proxy_sl: ZkChain<DynProvider>,
         max_l1_blocks_to_scan: u64,
         batch_numbers: Vec<u64>,
     ) -> anyhow::Result<()> {
         stream::iter(batch_numbers)
-            .map(|batch_number| {
-                let provider = self.clone();
-                let diamond_proxy_sl = diamond_proxy_sl.clone();
-                async move {
-                    let discovered_batch =
-                        fetch_batch(diamond_proxy_sl, batch_number, max_l1_blocks_to_scan).await?;
-                    tracing::info!(
-                        "discovered committed batch {} on startup",
-                        discovered_batch.number()
-                    );
-                    provider.insert(discovered_batch);
-                    Ok::<_, anyhow::Error>(())
-                }
+            .map(|batch_number| async move {
+                let proxy = self.intervals.resolve_proxy(batch_number)?;
+                let discovered_batch =
+                    fetch_batch(proxy, batch_number, max_l1_blocks_to_scan).await?;
+                tracing::info!(
+                    batch_number = discovered_batch.number(),
+                    "discovered committed batch {} on startup",
+                    discovered_batch.number()
+                );
+                self.insert(discovered_batch);
+                anyhow::Ok(())
             })
             .buffer_unordered(INIT_MAX_PARALLEL_BATCH_FETCHES)
             .collect::<Vec<_>>()
@@ -195,7 +210,7 @@ fn startup_batch_numbers(
 /// Resolves a committed batch from L1 by first finding the block that committed it and then
 /// decoding the corresponding stored batch data.
 async fn fetch_batch(
-    diamond_proxy_sl: ZkChain<DynProvider>,
+    diamond_proxy_sl: &ZkChain<DynProvider>,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<DiscoveredCommittedBatch> {
@@ -205,7 +220,7 @@ async fn fetch_batch(
         max_l1_blocks_to_scan,
     )
     .await?;
-    util::fetch_stored_batch_data(&diamond_proxy_sl, sl_block_with_commit, batch_number)
+    util::fetch_stored_batch_data(diamond_proxy_sl, sl_block_with_commit, batch_number)
         .await?
         .with_context(|| format!("failed to find committed batch {batch_number} on L1"))
 }

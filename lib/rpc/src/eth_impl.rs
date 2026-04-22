@@ -1,8 +1,9 @@
 use crate::config::RpcConfig;
 use crate::eth_call_handler::EthCallHandler;
+use crate::metrics::{TX_SUBMISSION, TxRejectionReason};
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
-use crate::tx_handler::TxHandler;
+use crate::tx_handler::{EthSendRawTransactionSyncError, TxHandler};
 use alloy::consensus::TrieAccount;
 use alloy::consensus::transaction::Recovered;
 use alloy::dyn_abi::TypedData;
@@ -217,6 +218,21 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         sender: Address,
         nonce: U64,
     ) -> EthResult<Option<ZkApiTransaction>> {
+        // Check the mempool first so that pending transactions (not yet included in a block)
+        // are visible. This is essential for callers like the operator's in-flight tx recovery
+        // path that use this method to inspect transactions that are still pending on Gateway.
+        if let Some(pool_tx) = self
+            .mempool
+            .get_transaction_by_sender_and_nonce(sender, nonce.saturating_to())
+        {
+            let envelope = L2Envelope::from(pool_tx.transaction.transaction.inner().clone());
+            return Ok(Some(build_api_tx(
+                Recovered::new_unchecked(envelope, pool_tx.transaction.transaction.signer()).into(),
+                None,
+            )));
+        }
+
+        // Fall back to the DB for transactions that are already mined.
         let Some(tx_hash) = self
             .storage
             .repository()
@@ -767,6 +783,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         self.tx_handler
             .send_raw_transaction_impl(bytes)
             .await
+            .inspect_err(|err| {
+                TX_SUBMISSION.rejections[&TxRejectionReason::from(err)].inc();
+            })
             .to_rpc_result()
     }
 
@@ -778,6 +797,11 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         self.tx_handler
             .send_raw_transaction_sync_impl(bytes, max_wait_ms)
             .await
+            .inspect_err(|err| {
+                if let EthSendRawTransactionSyncError::Regular(inner) = err {
+                    TX_SUBMISSION.rejections[&TxRejectionReason::from(inner)].inc();
+                }
+            })
             .to_rpc_result()
     }
 
