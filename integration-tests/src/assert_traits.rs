@@ -10,7 +10,10 @@ use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, GethDebugTracingOpti
 use anyhow::Context;
 use std::time::Duration;
 
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
+// Increased from 180s to 300s: the gateway finalization pipeline has multiple L1 sender
+// round-trips (commit/prove/execute on both chain and gateway), and the gateway proof RPC
+// needs time to assemble cross-chain Merkle proofs after execution on L1.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 pub const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[allow(async_fn_in_trait)]

@@ -7,6 +7,7 @@ use crate::provider::{ZksyncApi, ZksyncTestingProvider};
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
+use alloy::providers::ext::AnvilApi;
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{
     DynProvider, Identity, PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider,
@@ -1203,6 +1204,21 @@ pub struct AnvilL1 {
     // Temporary directory that holds uncompressed l1-state.json used to initialize Anvil's state.
     // Needs to be held for the duration of test's lifetime.
     _tempdir: Arc<TempDir>,
+    _background_miner: Arc<BackgroundMiner>,
+}
+
+struct BackgroundMiner(#[allow(dead_code)] tokio::task::JoinHandle<()>);
+
+impl std::fmt::Debug for BackgroundMiner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackgroundMiner").finish_non_exhaustive()
+    }
+}
+
+impl Drop for BackgroundMiner {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 impl AnvilL1 {
@@ -1245,11 +1261,23 @@ impl AnvilL1 {
 
         tracing::info!("L1 chain started on {}", address);
 
+        let miner_provider = provider.clone();
+        let background_miner = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if let Err(err) = miner_provider.anvil_mine(Some(1), None).await {
+                    tracing::debug!(%err, "background L1 miner stopped");
+                    break;
+                }
+            }
+        });
+
         Ok(Self {
             address,
             provider: EthDynProvider::new(provider),
             wallet,
             _tempdir: Arc::new(tempdir),
+            _background_miner: Arc::new(BackgroundMiner(background_miner)),
         })
     }
 }

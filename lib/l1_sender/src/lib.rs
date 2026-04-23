@@ -250,7 +250,13 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         // reorg happens and transaction will not be included in the new fork (very-very
                         // unlikely), L1 sender will crash at some point (because a consequent L1
                         // transactions will fail) and recover from the new L1 state after restart.
-                        .with_required_confirmations(1)
+                        //
+                        // When sending to the gateway (a ZKsync L2 node), we use 1 confirmation
+                        // because Alloy's block-number-based confirmation polling does not work
+                        // correctly against the ZKsync RPC — mirroring the same pattern used by the
+                        // L1 watcher (see l1_watcher/src/watcher.rs, "Gateway case, zero out
+                        // confirmations"). For L1 (Ethereum) sends we keep the full 3 confirmations.
+                        .with_required_confirmations(if gateway { 1 } else { 3 })
                         // Ensure we don't wait indefinitely and crash if the transaction is not
                         // included on L1 in a reasonable time.
                         .with_timeout(Some(config.transaction_timeout));

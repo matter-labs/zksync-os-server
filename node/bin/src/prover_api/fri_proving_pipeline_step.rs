@@ -32,9 +32,11 @@ impl FriProvingPipelineStep {
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> (Self, Arc<FriJobManager>) {
-        // Create channel for completed proofs - between FriProveManager and GaplessCommitter
+        // Create channel for completed proofs - between FriProveManager and GaplessCommitter.
+        // A larger capacity prevents backpressure when many batches complete in quick succession
+        // (e.g. interop tests that drive the node through 40+ batches under parallel test load).
         let (batches_with_proof_sender, batches_with_proof_receiver) =
-            mpsc::channel::<SignedBatchEnvelope<FriProof>>(5);
+            mpsc::channel::<SignedBatchEnvelope<FriProof>>(50);
 
         let fri_job_manager = Arc::new(FriJobManager::new(
             batches_with_proof_sender,
