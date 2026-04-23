@@ -42,7 +42,7 @@ use zksync_os_pipeline::PeekableReceiver;
 const METHOD_NOT_FOUND_CODE: i64 = -32601;
 /// Future that resolves into a (fallible) transaction receipt.
 type TransactionReceiptFuture = BoxFuture<'static, anyhow::Result<TransactionReceipt>>;
-type PendingTx<Input> = (B256, TransactionReceiptFuture, Input, Instant);
+type PendingTx<Input> = (TransactionReceiptFuture, Input, Instant);
 
 const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 /// In case there's only one chain connected to gateway, it is very likely that there will be not enough block production
@@ -145,7 +145,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     config.transaction_timeout,
                 )
                 .boxed();
-                (tx_hash, fut, cmd, Instant::now())
+                (fut, cmd, Instant::now())
             })
             .collect();
         wait_for_txs_and_forward(
@@ -288,7 +288,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     cmd.as_mut()
                         .iter_mut()
                         .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
-                    anyhow::Ok((tx_hash, receipt_fut, cmd, submitted_at))
+                    anyhow::Ok((receipt_fut, cmd, submitted_at))
                 })
                 // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
                 // but this is not necessary for now - we wait for them to be included in parallel
@@ -325,7 +325,7 @@ where
     latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
 
     let mut completed_commands = Vec::with_capacity(pending_txs.len());
-    for (_tx_hash, receipt_fut, command, submitted_at) in pending_txs {
+    for (receipt_fut, command, submitted_at) in pending_txs {
         let receipt = receipt_fut.await;
         // Observe latency before propagating errors so timeout cases are recorded.
         let elapsed = submitted_at.elapsed();
