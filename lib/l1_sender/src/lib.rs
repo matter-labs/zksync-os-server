@@ -378,9 +378,8 @@ where
     loop {
         let latest_block = provider.get_block_number().await.map_err(|err| {
             tracing::warn!(
-                %tx_hash,
-                error = %err,
-                "failed to fetch latest L1 block while waiting for transaction confirmation",
+                "Failed to fetch latest L1 block while waiting for transaction confirmation \
+                 for tx {tx_hash}: {err}",
             );
             anyhow::Error::from(err)
         })?;
@@ -388,9 +387,8 @@ where
             Ok(receipt) => receipt,
             Err(err) => {
                 tracing::warn!(
-                    %tx_hash,
-                    error = %err,
-                    "failed to fetch transaction receipt while waiting for confirmation",
+                    "Failed to fetch transaction receipt while waiting for confirmation \
+                     for tx {tx_hash}: {err}",
                 );
                 return Err(err.into());
             }
@@ -414,13 +412,11 @@ where
             let confirmed_at =
                 receipt_block_number.map(|block| block + required_confirmations.saturating_sub(1));
             tracing::warn!(
-                %tx_hash,
-                required_confirmations,
-                waited_secs = elapsed.as_secs_f64(),
-                latest_l1_block = latest_block,
-                receipt_block_number,
-                confirmed_at,
-                "still waiting for L1 transaction confirmation",
+                "Still waiting for L1 transaction confirmation for tx {tx_hash}. \
+                 required_confirmations={required_confirmations}, \
+                 waited_secs={}, latest_l1_block={latest_block}, \
+                 receipt_block_number={receipt_block_number:?}, confirmed_at={confirmed_at:?}",
+                elapsed.as_secs_f64(),
             );
             next_warning_at = Some(warning_at + timeout);
         }
