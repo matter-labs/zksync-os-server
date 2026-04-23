@@ -68,6 +68,17 @@ impl HttpRpcSample {
     pub fn is_ready(&self) -> bool {
         matches!(self.status, HttpRpcSampleStatus::Ready)
     }
+
+    fn failed(elapsed: Duration, latency: Duration, status: HttpRpcSampleStatus) -> Self {
+        Self {
+            elapsed,
+            latency,
+            chain_id: None,
+            block_number: None,
+            latest_block_hash: None,
+            status,
+        }
+    }
 }
 
 impl HttpRpcRecorder {
@@ -92,16 +103,13 @@ impl HttpRpcRecorder {
                 Ok(client) => client,
                 Err(err) => {
                     let mut samples = task_shared.lock().await;
-                    samples.push(HttpRpcSample {
-                        elapsed: started_at.elapsed(),
-                        latency: Duration::ZERO,
-                        chain_id: None,
-                        block_number: None,
-                        latest_block_hash: None,
-                        status: HttpRpcSampleStatus::TransportError {
+                    samples.push(HttpRpcSample::failed(
+                        started_at.elapsed(),
+                        Duration::ZERO,
+                        HttpRpcSampleStatus::TransportError {
                             message: format!("failed to build HTTP client: {err}"),
                         },
-                    });
+                    ));
                     return;
                 }
             };
@@ -206,19 +214,19 @@ impl HttpRpcReport {
     pub fn longest_error_streak(&self) -> Option<HttpRpcOutage> {
         let mut current_start = None;
         let mut current_end = None;
-        let mut longest = None;
+        let mut longest: Option<HttpRpcOutage> = None;
+
+        let mut try_update = |start, end| {
+            let outage = HttpRpcOutage::new(start, end);
+            if longest.as_ref().map_or(true, |known| outage.duration > known.duration) {
+                longest = Some(outage);
+            }
+        };
 
         for sample in &self.samples {
             if sample.is_ready() {
                 if let (Some(start), Some(end)) = (current_start.take(), current_end.take()) {
-                    let outage = HttpRpcOutage::new(start, end);
-                    if longest
-                        .as_ref()
-                        .map(|known: &HttpRpcOutage| outage.duration > known.duration)
-                        .unwrap_or(true)
-                    {
-                        longest = Some(outage);
-                    }
+                    try_update(start, end);
                 }
             } else {
                 current_start.get_or_insert(sample.elapsed);
@@ -227,14 +235,7 @@ impl HttpRpcReport {
         }
 
         if let (Some(start), Some(end)) = (current_start, current_end) {
-            let outage = HttpRpcOutage::new(start, end);
-            if longest
-                .as_ref()
-                .map(|known: &HttpRpcOutage| outage.duration > known.duration)
-                .unwrap_or(true)
-            {
-                longest = Some(outage);
-            }
+            try_update(start, end);
         }
 
         longest
@@ -316,9 +317,7 @@ impl HttpRpcReport {
                     previous_transition_at = Some(transition.observed_at);
                     formatted
                 }
-                HttpRpcTimelineEntry::Stable(span) => {
-                    HttpRpcTimelineEntry::Stable(span).to_string()
-                }
+                HttpRpcTimelineEntry::Stable(span) => format!("         | {}", span.describe()),
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -705,7 +704,7 @@ fn format_transition(
             )
         })
         .unwrap_or(elapsed);
-    format!("{:>8} | {}{}", header, transition.description, "")
+    format!("{:>8} | {}", header, transition.description)
 }
 
 // Uses raw reqwest rather than an alloy provider so we can distinguish error levels:
@@ -750,30 +749,24 @@ async fn sample_http_rpc(
             let body = match response.text().await {
                 Ok(body) => body,
                 Err(err) => {
-                    return HttpRpcSample {
+                    return HttpRpcSample::failed(
                         elapsed,
                         latency,
-                        chain_id: None,
-                        block_number: None,
-                        latest_block_hash: None,
-                        status: HttpRpcSampleStatus::InvalidResponse {
+                        HttpRpcSampleStatus::InvalidResponse {
                             message: format!("failed reading HTTP response body: {err}"),
                         },
-                    };
+                    );
                 }
             };
             if !status.is_success() {
-                return HttpRpcSample {
+                return HttpRpcSample::failed(
                     elapsed,
                     latency,
-                    chain_id: None,
-                    block_number: None,
-                    latest_block_hash: None,
-                    status: HttpRpcSampleStatus::HttpError {
+                    HttpRpcSampleStatus::HttpError {
                         status: status.as_u16(),
                         body,
                     },
-                };
+                );
             }
 
             match decode_rpc_batch_response(&body) {
@@ -785,89 +778,78 @@ async fn sample_http_rpc(
                     latest_block_hash: Some(latest_block_hash),
                     status: HttpRpcSampleStatus::Ready,
                 },
-                Err(message) => HttpRpcSample {
-                    elapsed,
-                    latency,
-                    chain_id: None,
-                    block_number: None,
-                    latest_block_hash: None,
-                    status: message,
-                },
+                Err(status) => HttpRpcSample::failed(elapsed, latency, status),
             }
         }
-        Err(err) => HttpRpcSample {
+        Err(err) => HttpRpcSample::failed(
             elapsed,
             latency,
-            chain_id: None,
-            block_number: None,
-            latest_block_hash: None,
-            status: HttpRpcSampleStatus::TransportError {
+            HttpRpcSampleStatus::TransportError {
                 message: err.to_string(),
             },
-        },
+        ),
     }
 }
 
+fn as_invalid<T>(result: anyhow::Result<T>) -> Result<T, HttpRpcSampleStatus> {
+    result.map_err(|err| HttpRpcSampleStatus::InvalidResponse {
+        message: err.to_string(),
+    })
+}
+
 fn decode_rpc_batch_response(body: &str) -> Result<(String, u64, String), HttpRpcSampleStatus> {
-    let responses: Vec<Value> =
-        serde_json::from_str(body).map_err(|err| HttpRpcSampleStatus::InvalidResponse {
-            message: format!("failed to decode JSON-RPC batch response: {err}"),
-        })?;
+    let responses: Vec<Value> = as_invalid(
+        serde_json::from_str(body).context("failed to decode JSON-RPC batch response"),
+    )?;
     if responses.len() != 3 {
         return Err(HttpRpcSampleStatus::InvalidResponse {
             message: format!("expected 3 JSON-RPC responses, got {}", responses.len()),
         });
     }
 
-    let chain_id = decode_rpc_result(&responses, 1)?
-        .as_str()
-        .context("eth_chainId response was not a string")
-        .map_err(|err| HttpRpcSampleStatus::InvalidResponse {
-            message: err.to_string(),
-        })?
-        .to_owned();
-    let block_number_hex = decode_rpc_result(&responses, 2)?
-        .as_str()
-        .context("eth_blockNumber response was not a string")
-        .map_err(|err| HttpRpcSampleStatus::InvalidResponse {
-            message: err.to_string(),
-        })?;
-    let block_number = u64::from_str_radix(
-        block_number_hex
-            .strip_prefix("0x")
-            .unwrap_or(block_number_hex),
-        16,
-    )
-    .with_context(|| format!("invalid eth_blockNumber hex value: {block_number_hex}"))
-    .map_err(|err| HttpRpcSampleStatus::InvalidResponse {
-        message: err.to_string(),
-    })?;
-    let latest_block = decode_rpc_result(&responses, 3)?
-        .as_object()
-        .context("eth_getBlockByNumber response was not an object")
-        .map_err(|err| HttpRpcSampleStatus::InvalidResponse {
-            message: err.to_string(),
-        })?;
-    let latest_block_hash = latest_block
-        .get("hash")
-        .and_then(Value::as_str)
-        .context("eth_getBlockByNumber response did not contain a string hash")
-        .map_err(|err| HttpRpcSampleStatus::InvalidResponse {
-            message: err.to_string(),
-        })?
-        .to_owned();
+    let chain_id = as_invalid(
+        decode_rpc_result(&responses, 1)?
+            .as_str()
+            .context("eth_chainId response was not a string"),
+    )?
+    .to_owned();
+    let block_number_hex = as_invalid(
+        decode_rpc_result(&responses, 2)?
+            .as_str()
+            .context("eth_blockNumber response was not a string"),
+    )?;
+    let block_number = as_invalid(
+        u64::from_str_radix(
+            block_number_hex
+                .strip_prefix("0x")
+                .unwrap_or(block_number_hex),
+            16,
+        )
+        .with_context(|| format!("invalid eth_blockNumber hex value: {block_number_hex}")),
+    )?;
+    let latest_block = as_invalid(
+        decode_rpc_result(&responses, 3)?
+            .as_object()
+            .context("eth_getBlockByNumber response was not an object"),
+    )?;
+    let latest_block_hash = as_invalid(
+        latest_block
+            .get("hash")
+            .and_then(Value::as_str)
+            .context("eth_getBlockByNumber response did not contain a string hash"),
+    )?
+    .to_owned();
 
     Ok((chain_id, block_number, latest_block_hash))
 }
 
 fn decode_rpc_result(responses: &[Value], id: u64) -> Result<&Value, HttpRpcSampleStatus> {
-    let response = responses
-        .iter()
-        .find(|response| response.get("id").and_then(Value::as_u64) == Some(id))
-        .with_context(|| format!("missing JSON-RPC response with id={id}"))
-        .map_err(|err| HttpRpcSampleStatus::InvalidResponse {
-            message: err.to_string(),
-        })?;
+    let response = as_invalid(
+        responses
+            .iter()
+            .find(|response| response.get("id").and_then(Value::as_u64) == Some(id))
+            .with_context(|| format!("missing JSON-RPC response with id={id}")),
+    )?;
 
     if let Some(error) = response.get("error") {
         return Err(HttpRpcSampleStatus::JsonRpcError {
@@ -875,10 +857,9 @@ fn decode_rpc_result(responses: &[Value], id: u64) -> Result<&Value, HttpRpcSamp
         });
     }
 
-    response
-        .get("result")
-        .with_context(|| format!("missing JSON-RPC result for id={id}"))
-        .map_err(|err| HttpRpcSampleStatus::InvalidResponse {
-            message: err.to_string(),
-        })
+    as_invalid(
+        response
+            .get("result")
+            .with_context(|| format!("missing JSON-RPC result for id={id}")),
+    )
 }
