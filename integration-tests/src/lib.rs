@@ -1220,7 +1220,7 @@ impl AnvilL1 {
             anvil
                 .port(locked_port.port)
                 .chain_id(L1_CHAIN_ID)
-                .block_time(1)
+                .block_time(0.25)
                 .arg("--mixed-mining")
                 .arg("--load-state")
                 .arg(l1_state_path)
