@@ -708,6 +708,9 @@ fn format_transition(
     format!("{:>8} | {}{}", header, transition.description, "")
 }
 
+// Uses raw reqwest rather than an alloy provider so we can distinguish error levels:
+// transport failure (connection refused) → HTTP error (non-2xx) → JSON-RPC error.
+// A higher-level client would collapse these into a single error type.
 async fn sample_http_rpc(
     client: &reqwest::Client,
     started_at: Instant,

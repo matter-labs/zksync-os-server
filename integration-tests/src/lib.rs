@@ -391,12 +391,8 @@ impl Tester {
         &self.l2_rpc_address
     }
 
-    pub fn l2_http_rpc_url(&self) -> &str {
-        &self.l2_rpc_address
-    }
-
     pub fn record_l2_http_rpc(&self, config: RpcRecordConfig) -> HttpRpcRecorder {
-        HttpRpcRecorder::start_http("l2", self.l2_http_rpc_url(), config)
+        HttpRpcRecorder::start_http("l2", self.l2_rpc_url(), config)
     }
 
     pub fn external_node_config(&self) -> Config {
