@@ -420,22 +420,55 @@ where
 {
     let started_at = Instant::now();
     let poll_interval = provider.client().poll_interval();
+    let mut next_warning_at = if timeout.is_zero() {
+        None
+    } else {
+        Some(timeout)
+    };
 
     loop {
-        if let Some(receipt) = provider.get_transaction_receipt(tx_hash).await? {
+        let latest_block = provider.get_block_number().await?;
+        let receipt = provider.get_transaction_receipt(tx_hash).await?;
+        if let Some(receipt) = receipt.as_ref() {
             let receipt_block_number = receipt
                 .block_number
                 .context("transaction receipt missing block number")?;
             let confirmed_at =
                 receipt_block_number.saturating_add(required_confirmations.saturating_sub(1));
-            let latest_block = provider.get_block_number().await?;
             if latest_block >= confirmed_at {
-                return Ok(receipt);
+                return Ok(receipt.clone());
             }
         }
 
-        if started_at.elapsed() >= timeout {
-            anyhow::bail!("transaction was not confirmed within the timeout");
+        let elapsed = started_at.elapsed();
+        if let Some(warning_at) = next_warning_at
+            && elapsed >= warning_at
+        {
+            let tx = provider
+                .get_transaction_by_hash(tx_hash)
+                .await
+                .ok()
+                .flatten();
+            let tx_block_number = tx.as_ref().and_then(|tx| tx.block_number);
+            let tx_nonce = tx.as_ref().map(|tx| tx.nonce());
+            let receipt_block_number = receipt.as_ref().and_then(|receipt| receipt.block_number);
+            let receipt_status = receipt.as_ref().map(|receipt| receipt.status());
+            let confirmed_at =
+                receipt_block_number.map(|block| block + required_confirmations.saturating_sub(1));
+            tracing::warn!(
+                %tx_hash,
+                required_confirmations,
+                waited_secs = elapsed.as_secs_f64(),
+                latest_l1_block = latest_block,
+                tx_block_number,
+                tx_nonce,
+                receipt_block_number,
+                receipt_status,
+                confirmed_at,
+                warning_interval_secs = timeout.as_secs_f64(),
+                "still waiting for L1 transaction confirmation",
+            );
+            next_warning_at = Some(warning_at + timeout);
         }
 
         tokio::time::sleep(poll_interval).await;
