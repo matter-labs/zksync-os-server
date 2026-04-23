@@ -328,9 +328,8 @@ where
     for (receipt_fut, command, submitted_at) in pending_txs {
         let receipt = receipt_fut.await;
         // Observe latency before propagating errors so timeout cases are recorded.
-        let elapsed = submitted_at.elapsed();
         L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
-            .observe(elapsed.as_secs_f64());
+            .observe(submitted_at.elapsed().as_secs_f64());
         let receipt = receipt?;
         validate_tx_receipt(provider, &command, receipt).await?;
         completed_commands.push(command);
