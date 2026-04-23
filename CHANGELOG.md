@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.19.1](https://github.com/matter-labs/zksync-os-server/compare/v0.19.0...v0.19.1) (2026-04-23)
+
+
+### Features
+
+* allow l1 poll interval to be configured ([#1175](https://github.com/matter-labs/zksync-os-server/issues/1175)) ([14c8bb6](https://github.com/matter-labs/zksync-os-server/commit/14c8bb624f7ab0196e61ded57a23e1ba3afae60a)), closes [#1176](https://github.com/matter-labs/zksync-os-server/issues/1176)
+* async batch provider init ([#1160](https://github.com/matter-labs/zksync-os-server/issues/1160)) ([d5867dc](https://github.com/matter-labs/zksync-os-server/commit/d5867dce972429c0c6bd54114632c5b6111d5542))
+* bytecodes supplier support ([#1155](https://github.com/matter-labs/zksync-os-server/issues/1155)) ([bc1c98c](https://github.com/matter-labs/zksync-os-server/commit/bc1c98cc307515b6ffc9511aa2e7a0062a20178f))
+* detect SL intervals using L1 ([#1185](https://github.com/matter-labs/zksync-os-server/issues/1185)) ([ac97007](https://github.com/matter-labs/zksync-os-server/commit/ac97007392f205f0845f3307acdb12c5492ce797))
+* **l1_sender:** configurable tx timeout and inclusion latency metric ([#1162](https://github.com/matter-labs/zksync-os-server/issues/1162)) ([b09f672](https://github.com/matter-labs/zksync-os-server/commit/b09f6726564e2712edd8b380ff68461b1158778b))
+* **l1-sender:** In-flight tx detection & minor enhancements ([#1172](https://github.com/matter-labs/zksync-os-server/issues/1172)) ([3defe95](https://github.com/matter-labs/zksync-os-server/commit/3defe9538dcfd0efe4aa8a9e12a0b9bad422b56e))
+* **l1-sender:** increase L1 required confirmations ([#1189](https://github.com/matter-labs/zksync-os-server/issues/1189)) ([51b65bf](https://github.com/matter-labs/zksync-os-server/commit/51b65bf03fad370ec1cd6bdfcd5832bee1771390))
+* **l1-sender:** Increase required confirmations to 3 ([#1197](https://github.com/matter-labs/zksync-os-server/issues/1197)) ([100f218](https://github.com/matter-labs/zksync-os-server/commit/100f218b6ef1a0381d8610de9245d08c85ed1725))
+* **rpc:** add txpool_inspect/content/status RPC methods ([#1200](https://github.com/matter-labs/zksync-os-server/issues/1200)) ([5ee3f21](https://github.com/matter-labs/zksync-os-server/commit/5ee3f21444df61d8ca4a61f756a3a0a683a029bc))
+* **rpc:** use log index in eth_getLogs to skip candidate blocks ([#1182](https://github.com/matter-labs/zksync-os-server/issues/1182)) ([8dc21c2](https://github.com/matter-labs/zksync-os-server/commit/8dc21c2d124f71a21c3879f6470288a4c28b25a0))
+* **storage:** build RocksDB log index on block write/rollback ([#1158](https://github.com/matter-labs/zksync-os-server/issues/1158)) ([28a0d63](https://github.com/matter-labs/zksync-os-server/commit/28a0d63b57b9ca6aa45baedc5223c839765c9b0d))
+
+
+### Bug Fixes
+
+* BatchVerificationRunner shutdown ([#1184](https://github.com/matter-labs/zksync-os-server/issues/1184)) ([25048c5](https://github.com/matter-labs/zksync-os-server/commit/25048c5ba889ee1f9a45bb3809292b53dae34471))
+* bump rustls-webpki to 0.103.12 ([#1177](https://github.com/matter-labs/zksync-os-server/issues/1177)) ([b427f45](https://github.com/matter-labs/zksync-os-server/commit/b427f45e2f4ae118e087dbaea20a57f25119f603))
+* **deps:** patch rustls-webpki advisory ([#1203](https://github.com/matter-labs/zksync-os-server/issues/1203)) ([da7d944](https://github.com/matter-labs/zksync-os-server/commit/da7d944597270974a767d0f14ea02c02313df38b))
+* minor issues that lead to panic/error ([#1181](https://github.com/matter-labs/zksync-os-server/issues/1181)) ([fa29459](https://github.com/matter-labs/zksync-os-server/commit/fa29459fbd89914cd8737e7a6e6247a2ee8b440a))
+* record sl block used for l1 state fetch ([#1166](https://github.com/matter-labs/zksync-os-server/issues/1166)) ([76f44d2](https://github.com/matter-labs/zksync-os-server/commit/76f44d2ee13251fb804449d7f6d63576ebe885dc))
+* resolve misc warnings ([#1180](https://github.com/matter-labs/zksync-os-server/issues/1180)) ([6f2ab9f](https://github.com/matter-labs/zksync-os-server/commit/6f2ab9f1f38a1575a303a0d52bceba35a83abad4))
+* return back required confirmations to 1 ([#1205](https://github.com/matter-labs/zksync-os-server/issues/1205)) ([1f4a966](https://github.com/matter-labs/zksync-os-server/commit/1f4a966d7539a6b9a30c60e497eb418658b27724))
+* **rpc:** correct error codes and add detailed rejection metrics for eth_sendRawTransaction ([#1199](https://github.com/matter-labs/zksync-os-server/issues/1199)) ([b9960d3](https://github.com/matter-labs/zksync-os-server/commit/b9960d3028c4b4870a2cd99e0e41b422688656e0))
+
 ## [0.19.0](https://github.com/matter-labs/zksync-os-server/compare/v0.18.2...v0.19.0) (2026-04-08)
 
 
