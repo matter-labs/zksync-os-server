@@ -210,6 +210,12 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     .with_to(to_address)
                     .with_input(cmd.solidity_call(gateway, &operator_address));
 
+                    // Estimate gas and apply a 2x multiplier. A hardcoded limit (previously 15M)
+                    // causes "insufficient funds" rejections during gas spikes since nodes reserve
+                    // gas_limit * gas_price upfront, regardless of actual gas used.
+                    let estimated_gas = provider.estimate_gas(tx_request.clone()).await?;
+                    tx_request.set_gas_limit(estimated_gas.saturating_mul(2));
+
                     if let Some(blob_sidecar) = cmd.blob_sidecar() {
                         let fee_per_blob_gas = provider.get_blob_base_fee().await?;
                         L1_SENDER_METRICS
@@ -642,8 +648,7 @@ async fn tx_request_with_gas_fields(
     let tx = TransactionRequest::default()
         .with_from(operator_address)
         .with_max_fee_per_gas(capped_max_fee_per_gas)
-        .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas)
-        .with_gas_limit(15000000);
+        .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas);
     Ok(tx)
 }
 
