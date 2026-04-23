@@ -325,19 +325,13 @@ where
     latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
 
     let mut completed_commands = Vec::with_capacity(pending_txs.len());
-    for (tx_hash, receipt_fut, command, submitted_at) in pending_txs {
+    for (_tx_hash, receipt_fut, command, submitted_at) in pending_txs {
         let receipt = receipt_fut.await;
         // Observe latency before propagating errors so timeout cases are recorded.
         let elapsed = submitted_at.elapsed();
         L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
             .observe(elapsed.as_secs_f64());
-        let receipt = match receipt {
-            Ok(receipt) => receipt,
-            Err(err) => {
-                log_tx_wait_failure(provider, command_name, tx_hash, &command, elapsed, &err).await;
-                return Err(err.into());
-            }
-        };
+        let receipt = receipt?;
         validate_tx_receipt(provider, &command, receipt).await?;
         completed_commands.push(command);
     }
@@ -365,50 +359,6 @@ where
     Ok(())
 }
 
-async fn log_tx_wait_failure<F, P, Input>(
-    provider: &FillProvider<F, P>,
-    command_name: &'static str,
-    tx_hash: B256,
-    command: &Input,
-    elapsed: std::time::Duration,
-    err: &anyhow::Error,
-) where
-    F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
-    P: Provider<Ethereum>,
-    Input: SendToL1,
-{
-    let range = Input::display_range(std::slice::from_ref(command));
-    let latest_l1_block = provider.get_block_number().await.ok();
-    let tx = provider
-        .get_transaction_by_hash(tx_hash)
-        .await
-        .ok()
-        .flatten();
-    let receipt = provider
-        .get_transaction_receipt(tx_hash)
-        .await
-        .ok()
-        .flatten();
-    let tx_block_number = tx.as_ref().and_then(|tx| tx.block_number);
-    let tx_nonce = tx.as_ref().map(|tx| tx.nonce());
-    let receipt_block_number = receipt.as_ref().and_then(|receipt| receipt.block_number);
-    let receipt_status = receipt.as_ref().map(|receipt| receipt.status());
-
-    tracing::warn!(
-        command_name,
-        range,
-        %tx_hash,
-        elapsed_secs = elapsed.as_secs_f64(),
-        latest_l1_block,
-        tx_block_number,
-        tx_nonce,
-        receipt_block_number,
-        receipt_status,
-        error = %err,
-        "L1 transaction confirmation wait failed",
-    );
-}
-
 async fn wait_for_confirmed_receipt<P>(
     provider: P,
     tx_hash: B256,
@@ -427,8 +377,25 @@ where
     };
 
     loop {
-        let latest_block = provider.get_block_number().await?;
-        let receipt = provider.get_transaction_receipt(tx_hash).await?;
+        let latest_block = provider.get_block_number().await.map_err(|err| {
+            tracing::warn!(
+                %tx_hash,
+                error = %err,
+                "failed to fetch latest L1 block while waiting for transaction confirmation",
+            );
+            anyhow::Error::from(err)
+        })?;
+        let receipt = provider
+            .get_transaction_receipt(tx_hash)
+            .await
+            .map_err(|err| {
+                tracing::warn!(
+                    %tx_hash,
+                    error = %err,
+                    "failed to fetch transaction receipt while waiting for confirmation",
+                );
+                anyhow::Error::from(err)
+            })?;
         if let Some(receipt) = receipt.as_ref() {
             let receipt_block_number = receipt
                 .block_number
