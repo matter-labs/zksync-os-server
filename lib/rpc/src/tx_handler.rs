@@ -1,5 +1,5 @@
 use crate::eth_impl::build_api_receipt;
-use crate::metrics::TX_SUBMISSION_METRICS;
+use crate::metrics::{TX_SUBMISSION_METRICS, TxRejectionReason};
 use crate::{ReadRpcStorage, RpcConfig};
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_mempool::PoolError;
 use zksync_os_mempool::subpools::l2::L2Subpool;
+use zksync_os_mempool::{InvalidPoolTransactionError, PoolErrorKind};
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
 use zksync_os_types::{L2Envelope, L2Transaction, NotAcceptingReason, TransactionAcceptanceState};
 
@@ -159,6 +160,64 @@ pub enum EthSendRawTransactionError {
     ForwardError(#[from] RpcError<TransportErrorKind>),
     #[error("Signer is blacklisted")]
     BlacklistedSigner,
+}
+
+impl From<&EthSendRawTransactionError> for TxRejectionReason {
+    fn from(err: &EthSendRawTransactionError) -> Self {
+        match err {
+            EthSendRawTransactionError::FailedToDecodeSignedTransaction => Self::DecodeFailed,
+            EthSendRawTransactionError::InvalidTransactionSignature => Self::InvalidSignature,
+            EthSendRawTransactionError::NotAcceptingTransactions(_) => Self::NotAccepting,
+            EthSendRawTransactionError::BlacklistedSigner => Self::BlacklistedSigner,
+            EthSendRawTransactionError::ForwardError(rpc_err) => match rpc_err {
+                RpcError::ErrorResp(_) => Self::ForwardRejected,
+                _ => Self::ForwardTransportError,
+            },
+            EthSendRawTransactionError::PoolError(pool_err) => Self::from(&pool_err.kind),
+        }
+    }
+}
+
+impl From<&PoolErrorKind> for TxRejectionReason {
+    fn from(kind: &PoolErrorKind) -> Self {
+        match kind {
+            PoolErrorKind::AlreadyImported => Self::PoolAlreadyImported,
+            PoolErrorKind::ReplacementUnderpriced => Self::PoolReplacementUnderpriced,
+            PoolErrorKind::FeeCapBelowMinimumProtocolFeeCap(_) => Self::PoolFeeCapBelowMinimum,
+            PoolErrorKind::SpammerExceededCapacity(_) => Self::PoolSpammerExceededCapacity,
+            PoolErrorKind::DiscardedOnInsert => Self::PoolDiscardedOnInsert,
+            PoolErrorKind::ExistingConflictingTransactionType(_, _) => Self::PoolConflictingTxType,
+            PoolErrorKind::InvalidTransaction(invalid) => Self::from(invalid),
+            PoolErrorKind::Other(_) => Self::PoolOther,
+        }
+    }
+}
+
+impl From<&InvalidPoolTransactionError> for TxRejectionReason {
+    fn from(err: &InvalidPoolTransactionError) -> Self {
+        match err {
+            InvalidPoolTransactionError::Consensus(_) => Self::PoolConsensusError,
+            InvalidPoolTransactionError::ExceedsGasLimit(_, _) => Self::PoolExceedsGasLimit,
+            InvalidPoolTransactionError::MaxTxGasLimitExceeded(_, _) => {
+                Self::PoolMaxTxGasLimitExceeded
+            }
+            InvalidPoolTransactionError::ExceedsFeeCap { .. } => Self::PoolExceedsFeeCap,
+            InvalidPoolTransactionError::ExceedsMaxInitCodeSize(_, _) => {
+                Self::PoolExceedsMaxInitCodeSize
+            }
+            InvalidPoolTransactionError::OversizedData { .. } => Self::PoolOversizedData,
+            InvalidPoolTransactionError::Underpriced => Self::PoolUnderpriced,
+            InvalidPoolTransactionError::Overdraft { .. } => Self::PoolOverdraft,
+            InvalidPoolTransactionError::Eip2681 => Self::PoolNonceOverflow,
+            InvalidPoolTransactionError::Eip4844(_) => Self::PoolEip4844Error,
+            InvalidPoolTransactionError::Eip7702(_) => Self::PoolEip7702Error,
+            InvalidPoolTransactionError::Other(_) => Self::PoolOther,
+            InvalidPoolTransactionError::IntrinsicGasTooLow => Self::PoolIntrinsicGasTooLow,
+            InvalidPoolTransactionError::PriorityFeeBelowMinimum { .. } => {
+                Self::PoolPriorityFeeBelowMinimum
+            }
+        }
+    }
 }
 
 /// Error types returned by `eth_sendRawTransactionSync` implementation

@@ -423,8 +423,9 @@ where
 
     loop {
         if let Some(receipt) = provider.get_transaction_receipt(tx_hash).await? {
-            let receipt_block_number =
-                receipt.block_number.context("transaction receipt missing block number")?;
+            let receipt_block_number = receipt
+                .block_number
+                .context("transaction receipt missing block number")?;
             let confirmed_at =
                 receipt_block_number.saturating_add(required_confirmations.saturating_sub(1));
             let latest_block = provider.get_block_number().await?;

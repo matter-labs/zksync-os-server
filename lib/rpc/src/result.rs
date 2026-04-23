@@ -14,6 +14,7 @@ use crate::zks_impl::ZksError;
 use alloy::primitives::Bytes;
 use alloy::rpc::types::error::EthRpcErrorCode;
 use alloy::sol_types::{ContractError, RevertReason};
+use alloy::transports::{RpcError, TransportErrorKind};
 use jsonrpsee::core::RpcResult;
 use std::fmt;
 use std::fmt::Display;
@@ -77,12 +78,14 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionError> for Result<Ok, EthSendRawTr
         self.map_err(|err| match err {
             EthSendRawTransactionError::FailedToDecodeSignedTransaction
             | EthSendRawTransactionError::InvalidTransactionSignature
-            | EthSendRawTransactionError::BlacklistedSigner => {
-                invalid_params_rpc_err(err.to_string())
+            | EthSendRawTransactionError::BlacklistedSigner
+            | EthSendRawTransactionError::PoolError(_) => invalid_params_rpc_err(err.to_string()),
+            EthSendRawTransactionError::NotAcceptingTransactions(_) => {
+                internal_rpc_err(err.to_string())
             }
-            EthSendRawTransactionError::NotAcceptingTransactions(_)
-            | EthSendRawTransactionError::PoolError(_)
-            | EthSendRawTransactionError::ForwardError(_) => internal_rpc_err(err.to_string()),
+            EthSendRawTransactionError::ForwardError(ref rpc_err) => {
+                forward_error_to_rpc_err(rpc_err, &err)
+            }
         })
     }
 }
@@ -122,12 +125,28 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionSyncError>
         EthSendRawTransactionSyncError: Display,
     {
         self.map_err(|err| match err {
-            err @ EthSendRawTransactionSyncError::Regular(_) => internal_rpc_err(err.to_string()),
+            EthSendRawTransactionSyncError::Regular(inner) => {
+                Result::<(), _>::Err(inner).to_rpc_result().unwrap_err()
+            }
             err @ EthSendRawTransactionSyncError::Timeout(_) => {
                 // Code 4 is used as per EIP-7966 (see https://eips.ethereum.org/EIPS/eip-7966)
                 rpc_error_with_code(4, err.to_string())
             }
         })
+    }
+}
+
+/// Converts an alloy `RpcError` from tx forwarding into a jsonrpsee error object,
+/// preserving the original JSON-RPC error code when the main node returned one.
+/// Falls back to internal error (-32603) for transport failures.
+fn forward_error_to_rpc_err(
+    rpc_err: &RpcError<TransportErrorKind>,
+    display: &impl fmt::Display,
+) -> jsonrpsee::types::error::ErrorObject<'static> {
+    if let RpcError::ErrorResp(payload) = rpc_err {
+        rpc_error_with_code(payload.code as i32, display.to_string())
+    } else {
+        internal_rpc_err(display.to_string())
     }
 }
 
