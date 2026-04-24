@@ -177,6 +177,7 @@ impl<T: L2Subpool> Pool<T> {
 
     pub fn update_pending_block_fees(
         &self,
+        // native
         pending_block_base_fee: u64,
         pending_block_blob_fee: Option<u128>,
     ) {
@@ -184,6 +185,7 @@ impl<T: L2Subpool> Pool<T> {
         block_info.pending_basefee = pending_block_base_fee;
         block_info.pending_blob_fee = pending_block_blob_fee;
         self.l2_subpool.set_block_info(block_info);
+        self.l2_subpool.validator().update_fee_params();
     }
 
     pub async fn on_canonical_state_change(

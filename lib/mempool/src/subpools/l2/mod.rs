@@ -1,3 +1,5 @@
+mod validator;
+
 use crate::metrics::ViseRecorder;
 use crate::{L2PooledTransaction, TxValidatorConfig};
 use alloy::consensus::transaction::Recovered;
@@ -11,8 +13,8 @@ use reth_transaction_pool::blobstore::NoopBlobStore;
 use reth_transaction_pool::error::InvalidPoolTransactionError;
 use reth_transaction_pool::validate::EthTransactionValidatorBuilder;
 use reth_transaction_pool::{
-    AddedTransactionOutcome, CoinbaseTipOrdering, EthTransactionValidator, Pool, PoolConfig,
-    PoolResult, PoolTransaction, TransactionListenerKind, TransactionOrigin, TransactionPoolExt,
+    AddedTransactionOutcome, CoinbaseTipOrdering, Pool, PoolConfig, PoolResult, PoolTransaction,
+    TransactionListenerKind, TransactionOrigin, TransactionPoolExt,
 };
 use reth_transaction_pool::{BestTransactions, ValidPoolTransaction};
 use std::fmt::Debug;
@@ -20,16 +22,13 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
+use validator::ZkTransactionValidator;
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_storage_api::{ReadRepository, ReadStateHistory};
 use zksync_os_types::{L2Transaction, ZkTransaction};
 
 pub(crate) type RethPool<State, Repository> = Pool<
-    EthTransactionValidator<
-        ZkProviderFactory<State, Repository>,
-        L2PooledTransaction,
-        EthEvmConfig,
-    >,
+    ZkTransactionValidator<ZkProviderFactory<State, Repository>, L2PooledTransaction>,
     CoinbaseTipOrdering<L2PooledTransaction>,
     NoopBlobStore,
 >;
@@ -147,14 +146,16 @@ pub fn in_memory(
     // affected.
     ::metrics::with_local_recorder(&ViseRecorder, move || {
         let chain_spec = zk_provider_factory.chain_spec();
-        RethPool::new(
+        let eth_validator =
             EthTransactionValidatorBuilder::new(zk_provider_factory, EthEvmConfig::new(chain_spec))
                 .no_prague()
                 .with_max_tx_input_bytes(validator_config.max_input_bytes)
                 // set tx_fee_cap to 0, effectively disabling the tx fee checks in the reth mempool
                 // this is necessary to process transactions with more than 1e18 tx fee
                 .set_tx_fee_cap(0)
-                .build(blob_store),
+                .build(blob_store);
+        RethPool::new(
+            ZkTransactionValidator::new(eth_validator),
             CoinbaseTipOrdering::default(),
             blob_store,
             pool_config,
