@@ -696,11 +696,13 @@ async fn estimate_gas_limits_with_simulation(
             Ok(simulated_block
                 .calls
                 .iter()
-                .map(|call| {
+                .enumerate()
+                .map(|(tx_index, call)| {
                     if !call.status {
                         if let Some(error) = &call.error {
                             tracing::warn!(
                                 command_name,
+                                tx_index,
                                 error_code = error.code,
                                 error_message = %error.message,
                                 "eth_simulateV1 returned a failed call, falling back to the gas cap"
@@ -708,16 +710,26 @@ async fn estimate_gas_limits_with_simulation(
                         } else {
                             tracing::warn!(
                                 command_name,
+                                tx_index,
                                 "eth_simulateV1 returned a failed call without an error, falling back to the gas cap"
                             );
                         }
                         return L1_GAS_LIMIT_CAP;
                     }
 
-                    call.gas_used
+                    let estimated_gas_limit = call
+                        .gas_used
                         .saturating_mul(SIMULATED_GAS_LIMIT_PADDING_NUMERATOR)
                         .div_ceil(SIMULATED_GAS_LIMIT_PADDING_DENOMINATOR)
-                        .min(L1_GAS_LIMIT_CAP)
+                        .min(L1_GAS_LIMIT_CAP);
+                    tracing::info!(
+                        command_name,
+                        tx_index,
+                        simulated_gas_used = call.gas_used,
+                        estimated_gas_limit,
+                        "estimated L1 gas limit via eth_simulateV1"
+                    );
+                    estimated_gas_limit
                 })
                 .collect())
         }

@@ -89,6 +89,14 @@ jobs:
       - name: Run tests
         run: cargo nextest run --release --workspace ${NEXTEST_ITERATIONS}
 
+      - name: Print interop gas estimation logs
+        env:
+          RUST_LOG: info
+        run: |
+          set -o pipefail
+          cargo test --release -p zksync_os_integration_tests protocol::interop:: -- --nocapture 2>&1 \
+            | rg 'estimated L1 gas limit via eth_simulateV1|Executing transaction .* gas limit [0-9]+'
+
       - name: Upload test results
         if: always() && !cancelled()
         uses: EnricoMi/publish-unit-test-result-action@3a74b2957438d0b6e2e61d67b05318aa25c9e6c6 # v2.20.0
