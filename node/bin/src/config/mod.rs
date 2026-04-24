@@ -1367,9 +1367,7 @@ impl PolicyServiceConfig {
     /// `None` when `url` is unset (non-Prividium chains). Panics on invalid
     /// URL — the config has already been validated at load time, so reaching
     /// this branch means a real misconfiguration that should fail fast.
-    pub fn build_client(
-        &self,
-    ) -> Option<zksync_os_tx_validators::policy_client::PolicyClient> {
+    pub fn build_client(&self) -> Option<zksync_os_tx_validators::policy_client::PolicyClient> {
         self.url.as_ref().map(|url| {
             zksync_os_tx_validators::policy_client::PolicyClient::new(
                 zksync_os_tx_validators::policy_client::Config {

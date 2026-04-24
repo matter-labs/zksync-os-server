@@ -7,7 +7,6 @@ use httpmock::{Method, MockServer};
 use serde_json::json;
 use tokio::time::Duration;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::{GatewayTester, PolicyServiceConfig};
 use zksync_os_tx_validators::deployment_filter::FORCE_DEPLOYER_ADDRESS;
 use zksync_os_types::BOOTLOADER_FORMAL_ADDRESS;
@@ -62,59 +61,240 @@ async fn allow_response_lets_tx_through() -> Result<()> {
     Ok(())
 }
 
-#[test_log::test(tokio::test)]
-async fn deny_response_filters_tx() -> Result<()> {
-    let server = MockServer::start_async().await;
+/// The test wallet is pre-funded via an L1 priority tx and drives every
+/// RPC-admit call the setup phase makes. We can't deny those calls without
+/// breaking node bring-up, so the deny tests install an allow-mock first,
+/// let setup finish, then swap the mock to deny for the test payload only.
+///
+/// The target address is the unambiguous signal: setup's `estimate_gas`
+/// self-targets the wallet (beneficiary → beneficiary), while the test
+/// payload targets this sentinel. That keeps any future setup-side admit
+/// requests passing.
+const TEST_DENY_TARGET: Address =
+    alloy::primitives::address!("00000000000000000000000000000000deadbeef");
 
-    // Deny every admit call. Protocol-internal txs never reach the service
-    // because their `from` is on the bypass allowlist, so denying blanket
-    // here is safe for startup.
-    let deny_mock = server
+#[test_log::test(tokio::test)]
+async fn deny_response_rejects_send_raw_transaction() -> Result<()> {
+    let server = MockServer::start_async().await;
+    let allow_mock = server
         .mock_async(|when, then| {
             when.method(Method::POST).path("/admit");
+            then.status(200).json_body(json!({ "allow": true }));
+        })
+        .await;
+
+    let mc = setup(server.base_url()).await?;
+    allow_mock.delete_async().await;
+    let deny_mock = deny_for_target(&server, TEST_DENY_TARGET).await;
+    let allow_mock = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/admit");
+            then.status(200).json_body(json!({ "allow": true }));
+        })
+        .await;
+
+    // With M2, the deny lands synchronously at the RPC boundary — the
+    // client never sees a tx hash.
+    let err = mc
+        .chain(0)
+        .l2_provider
+        .send_transaction(
+            TransactionRequest::default()
+                .with_to(TEST_DENY_TARGET)
+                .with_value(U256::from(1)),
+        )
+        .await
+        .expect_err("denied sendRawTransaction should fail synchronously");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("policy service"),
+        "expected policy deny message, got: {msg}"
+    );
+
+    assert!(
+        deny_mock.calls_async().await >= 1,
+        "the deny rule should have matched at least once"
+    );
+    drop(allow_mock);
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn deny_response_rejects_eth_call() -> Result<()> {
+    let server = MockServer::start_async().await;
+    let allow_mock = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/admit");
+            then.status(200).json_body(json!({ "allow": true }));
+        })
+        .await;
+
+    let mc = setup(server.base_url()).await?;
+    allow_mock.delete_async().await;
+    let deny_mock = deny_for_target(&server, TEST_DENY_TARGET).await;
+    let _fallback_allow = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/admit");
+            then.status(200).json_body(json!({ "allow": true }));
+        })
+        .await;
+
+    let err = mc
+        .chain(0)
+        .l2_provider
+        .call(
+            TransactionRequest::default()
+                .with_to(TEST_DENY_TARGET)
+                .with_value(U256::from(1)),
+        )
+        .await
+        .expect_err("denied eth_call should fail synchronously");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("policy service"),
+        "expected policy deny message, got: {msg}"
+    );
+
+    assert!(
+        deny_mock.calls_async().await >= 1,
+        "eth_call must consult the policy service"
+    );
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn deny_response_rejects_eth_estimate_gas() -> Result<()> {
+    let server = MockServer::start_async().await;
+    let allow_mock = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/admit");
+            then.status(200).json_body(json!({ "allow": true }));
+        })
+        .await;
+
+    let mc = setup(server.base_url()).await?;
+    allow_mock.delete_async().await;
+    let deny_mock = deny_for_target(&server, TEST_DENY_TARGET).await;
+    let _fallback_allow = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/admit");
+            then.status(200).json_body(json!({ "allow": true }));
+        })
+        .await;
+
+    let err = mc
+        .chain(0)
+        .l2_provider
+        .estimate_gas(
+            TransactionRequest::default()
+                .with_to(TEST_DENY_TARGET)
+                .with_value(U256::from(1)),
+        )
+        .await
+        .expect_err("denied eth_estimateGas should fail synchronously");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("policy service"),
+        "expected policy deny message, got: {msg}"
+    );
+
+    assert!(
+        deny_mock.calls_async().await >= 1,
+        "eth_estimateGas must consult the policy service"
+    );
+
+    Ok(())
+}
+
+/// Deny only admit requests whose payload targets `address`. Anything else
+/// falls through to the allow-mock installed after it.
+async fn deny_for_target(server: &MockServer, address: Address) -> httpmock::Mock<'_> {
+    let target = format!("{address:#x}").to_ascii_lowercase();
+    server
+        .mock_async(move |when, then| {
+            let target = target.clone();
+            when.method(Method::POST)
+                .path("/admit")
+                .is_true(move |req| {
+                    let body = req.body();
+                    let parsed: serde_json::Value = match serde_json::from_slice(body.as_ref()) {
+                        Ok(v) => v,
+                        Err(_) => return false,
+                    };
+                    parsed
+                        .get("to")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_ascii_lowercase() == target)
+                        .unwrap_or(false)
+                });
             then.status(200).json_body(json!({
                 "allow": false,
                 "ruleId": "integration_test",
                 "reason": "denied by test mock"
             }));
         })
+        .await
+}
+
+#[test_log::test(tokio::test)]
+async fn allow_response_lets_eth_call_through() -> Result<()> {
+    let server = MockServer::start_async().await;
+    let allow_mock = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/admit");
+            then.status(200).json_body(json!({ "allow": true }));
+        })
         .await;
 
     let mc = setup(server.base_url()).await?;
-    let block_at_submission = mc.chain(0).l2_zk_provider.get_block_number().await?;
 
-    let pending = mc
+    // Admit-allow should land the call on the VM; an empty-target call
+    // executes cleanly against an EOA and returns empty bytes.
+    let result = mc
         .chain(0)
         .l2_provider
-        .send_transaction(
+        .call(TransactionRequest::default().with_to(Address::random()))
+        .await?;
+    assert!(result.is_empty(), "empty-target call returns empty bytes");
+
+    assert!(
+        allow_mock.calls_async().await >= 1,
+        "eth_call must consult the policy service"
+    );
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn allow_response_lets_eth_estimate_gas_through() -> Result<()> {
+    let server = MockServer::start_async().await;
+    let allow_mock = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/admit");
+            then.status(200).json_body(json!({ "allow": true }));
+        })
+        .await;
+
+    let mc = setup(server.base_url()).await?;
+
+    let estimate = mc
+        .chain(0)
+        .l2_provider
+        .estimate_gas(
             TransactionRequest::default()
                 .with_to(Address::random())
                 .with_value(U256::from(1)),
         )
         .await?;
-    let tx_hash = *pending.tx_hash();
-
-    // A tx rejected by the validator is purged — never retried. Wait for
-    // the chain to produce enough blocks past submission that the
-    // sequencer has had multiple opportunities to include the tx; if it's
-    // missing after that, it's gone for good. Block-based synchronisation
-    // is immune to CI-speed flakiness that a fixed sleep or receipt
-    // timeout would inherit.
-    mc.chain(0)
-        .l2_zk_provider
-        .wait_for_block(block_at_submission + 3)
-        .await?;
-
-    let receipt = mc
-        .chain(0)
-        .l2_zk_provider
-        .get_transaction_receipt(tx_hash)
-        .await?;
-    assert!(receipt.is_none(), "denied tx should not produce a receipt");
+    assert!(estimate > 0, "estimate_gas should return a positive value");
 
     assert!(
-        deny_mock.calls_async().await >= 1,
-        "the deny rule should have matched at least once"
+        allow_mock.calls_async().await >= 1,
+        "eth_estimateGas must consult the policy service"
     );
 
     Ok(())
