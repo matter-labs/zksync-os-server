@@ -1,16 +1,24 @@
-use std::sync::RwLock;
+use alloy::primitives::U256;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, EthereumHardforks};
 use reth_evm_ethereum::EthEvmConfig;
 use reth_primitives::Block as EthBlock;
 use reth_primitives_traits::SealedBlock;
 use reth_storage_api::{AccountInfoReader, StateProviderFactory};
+use reth_transaction_pool::error::InvalidPoolTransactionError;
 use reth_transaction_pool::{
-    EthPoolTransaction, EthTransactionValidator, TransactionOrigin,
-    TransactionValidationOutcome, TransactionValidator,
+    EthPoolTransaction, EthTransactionValidator, TransactionOrigin, TransactionValidationOutcome,
+    TransactionValidator,
 };
+use std::sync::RwLock;
+use zk_os_api_dev::helpers::validate_l2_tx_intrinsic_native_resources;
+use zksync_os_types::FeeParams;
 
 /// A wrapper around [`EthTransactionValidator`] that adds ZKSync OS specific
-/// stateful validation on top of the standard Ethereum checks.
+/// stateless validation on top of the standard Ethereum checks.
+///
+/// The extra L2 checks rely only on the transaction and the latest fee params cached on
+/// `self` (see [`Self::fee_params`]), so they don't need access to on-chain state and run
+/// during the stateless phase.
 ///
 /// The validation pipeline mirrors reth's own call chain:
 ///
@@ -18,17 +26,33 @@ use reth_transaction_pool::{
 /// TransactionValidator::validate_transaction
 ///   └─ validate_one
 ///        └─ validate_one_with_provider
-///             ├─ inner.validate_stateless  (delegated to EthTransactionValidator)
-///             └─ self.validate_stateful    (our override, then calls inner.validate_stateful)
+///             ├─ self.validate_stateless   (our override, then calls inner.validate_stateless)
+///             └─ inner.validate_stateful   (delegated to EthTransactionValidator)
 /// ```
 #[derive(Debug)]
 pub(crate) struct ZkTransactionValidator<Client, Tx> {
     inner: EthTransactionValidator<Client, Tx, EthEvmConfig>,
+    fee_params: RwLock<FeeParams>,
 }
 
 impl<Client, Tx> ZkTransactionValidator<Client, Tx> {
     pub(crate) fn new(inner: EthTransactionValidator<Client, Tx, EthEvmConfig>) -> Self {
-        Self { inner }
+        // Before the first `update_fee_params` call, treat the chain as a 0 gas price chain with
+        // unlimited native resource: basefee/pubdata are 0, native_price is 1 (not 0) so that any
+        // divisions by native_price remain well-defined.
+        let fee_params = FeeParams {
+            eip1559_basefee: U256::ZERO,
+            native_price: U256::from(1u64),
+            pubdata_price: U256::ZERO,
+        };
+        Self {
+            inner,
+            fee_params: RwLock::new(fee_params),
+        }
+    }
+
+    pub(crate) fn update_fee_params(&self, fee_params: FeeParams) {
+        *self.fee_params.write().expect("lock poisoned") = fee_params;
     }
 }
 
@@ -37,35 +61,70 @@ where
     Client: ChainSpecProvider<ChainSpec: EthChainSpec + EthereumHardforks> + StateProviderFactory,
     Tx: EthPoolTransaction,
 {
-    /// Stateful validation with additional L2-specific checks.
+    /// Checks that the transaction's `gas_limit` and `gas_price` covers the intrinsic native
+    /// resources (computational + pubdata) cost under the currently cached fee params.
+    fn validate_intrinsic_native_resources(
+        &self,
+        transaction: &Tx,
+    ) -> Result<(), InvalidPoolTransactionError> {
+        let fee_params = *self.fee_params.read().expect("lock poisoned");
+        let (access_list_accounts, access_list_storage_keys) = transaction
+            .access_list()
+            .map(|l| {
+                (
+                    l.len() as u64,
+                    l.iter().map(|i| i.storage_keys.len()).sum::<usize>() as u64,
+                )
+            })
+            .unwrap_or((0, 0));
+        let authorization_list_num = transaction
+            .authorization_list()
+            .map(|l| l.len())
+            .unwrap_or(0) as u64;
+        validate_l2_tx_intrinsic_native_resources(
+            fee_params.eip1559_basefee,
+            fee_params.native_price,
+            fee_params.pubdata_price,
+            transaction.gas_limit(),
+            transaction.input().len() as u64,
+            access_list_accounts,
+            access_list_storage_keys,
+            authorization_list_num,
+            U256::from(transaction.max_fee_per_gas()),
+            transaction
+                .max_priority_fee_per_gas()
+                .map(U256::from)
+                .unwrap_or(U256::ZERO),
+        )
+        .map_err(|()| InvalidPoolTransactionError::IntrinsicGasTooLow) // we return it as intrinsic gas error to user
+    }
+
+    /// Stateless validation with additional L2-specific checks.
     ///
-    /// Called after stateless validation passes. Runs custom L2 checks first,
-    /// then delegates to the inner [`EthTransactionValidator::validate_stateful`].
-    fn validate_stateful(
+    /// Runs custom checks first (using the latest fee params cached on `self`), then
+    /// delegates to the inner [`EthTransactionValidator::validate_stateless`].
+    fn validate_stateless(
         &self,
         origin: TransactionOrigin,
         transaction: Tx,
-        state: impl AccountInfoReader,
-    ) -> TransactionValidationOutcome<Tx> {
-        // TODO: Add custom L2 validation checks here.
-        // Example:
-        // if let Err(err) = self.validate_l2_specific(&transaction, &state) {
-        //     return TransactionValidationOutcome::Invalid(transaction, err);
-        // }
-        self.inner.validate_stateful(origin, transaction, state)
+    ) -> Result<Tx, TransactionValidationOutcome<Tx>> {
+        if let Err(err) = self.validate_intrinsic_native_resources(&transaction) {
+            return Err(TransactionValidationOutcome::Invalid(transaction, err));
+        }
+        self.inner.validate_stateless(origin, transaction)
     }
 
     /// Validates a single transaction using an optional cached state provider.
     ///
     /// Mirrors [`EthTransactionValidator::validate_one_with_provider`] but routes
-    /// stateful validation through [`Self::validate_stateful`].
+    /// stateless validation through [`Self::validate_stateless`].
     fn validate_one_with_provider(
         &self,
         origin: TransactionOrigin,
         transaction: Tx,
         maybe_state: &mut Option<Box<dyn AccountInfoReader + Send>>,
     ) -> TransactionValidationOutcome<Tx> {
-        match self.inner.validate_stateless(origin, transaction) {
+        match self.validate_stateless(origin, transaction) {
             Ok(transaction) => {
                 if maybe_state.is_none() {
                     match self.inner.client().latest() {
@@ -76,13 +135,13 @@ where
                             return TransactionValidationOutcome::Error(
                                 *transaction.hash(),
                                 Box::new(err),
-                            )
+                            );
                         }
                     }
                 }
 
                 let state = maybe_state.as_deref().expect("provider is set");
-                self.validate_stateful(origin, transaction, state)
+                self.inner.validate_stateful(origin, transaction, state)
             }
             Err(invalid_outcome) => invalid_outcome,
         }
@@ -138,10 +197,8 @@ where
 
     async fn validate_transactions(
         &self,
-        transactions: impl IntoIterator<
-                Item = (TransactionOrigin, Self::Transaction),
-                IntoIter: Send,
-            > + Send,
+        transactions: impl IntoIterator<Item = (TransactionOrigin, Self::Transaction), IntoIter: Send>
+        + Send,
     ) -> Vec<TransactionValidationOutcome<Self::Transaction>> {
         self.validate_batch(transactions)
     }

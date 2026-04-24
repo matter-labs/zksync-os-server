@@ -15,6 +15,7 @@ zksync_os_storage_api.workspace = true
 zksync_os_reth_compat.workspace = true
 
 zksync_os_interface = { workspace = true }
+zk_os_api_dev.workspace = true
 
 reth-transaction-pool = { workspace = true }
 reth-primitives = { workspace = true }

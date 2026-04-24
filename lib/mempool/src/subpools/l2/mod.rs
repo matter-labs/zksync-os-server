@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 use validator::ZkTransactionValidator;
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_storage_api::{ReadRepository, ReadStateHistory};
-use zksync_os_types::{L2Transaction, ZkTransaction};
+use zksync_os_types::{FeeParams, L2Transaction, ZkTransaction};
 
 pub(crate) type RethPool<State, Repository> = Pool<
     ZkTransactionValidator<ZkProviderFactory<State, Repository>, L2PooledTransaction>,
@@ -42,6 +42,10 @@ pub trait L2Subpool:
     + Debug
     + 'static
 {
+    /// Propagates the latest pending block fee params to the validator so that subsequent
+    /// validations use up-to-date prices.
+    fn update_pending_fee_params(&self, fee_params: FeeParams);
+
     /// Convenience method to add a local L2 transaction
     fn add_l2_transaction(
         &self,
@@ -68,6 +72,9 @@ pub trait L2Subpool:
 impl<State: ReadStateHistory + Clone, Repository: ReadRepository + Clone> L2Subpool
     for RethPool<State, Repository>
 {
+    fn update_pending_fee_params(&self, fee_params: FeeParams) {
+        self.validator().update_fee_params(fee_params);
+    }
 }
 
 pub struct L2TransactionsStream {

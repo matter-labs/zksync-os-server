@@ -16,7 +16,9 @@ use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
 use tokio::time::Instant;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{L1TxSerialId, SystemTxType, UpgradeMetadata, ZkEnvelope, ZkTransaction};
+use zksync_os_types::{
+    FeeParams, L1TxSerialId, SystemTxType, UpgradeMetadata, ZkEnvelope, ZkTransaction,
+};
 
 /// General pool that provides unified access to all transaction sources in the system.
 ///
@@ -177,15 +179,14 @@ impl<T: L2Subpool> Pool<T> {
 
     pub fn update_pending_block_fees(
         &self,
-        // native
-        pending_block_base_fee: u64,
+        fee_params: FeeParams,
         pending_block_blob_fee: Option<u128>,
     ) {
         let mut block_info = self.l2_subpool.block_info();
-        block_info.pending_basefee = pending_block_base_fee;
+        block_info.pending_basefee = fee_params.eip1559_basefee.saturating_to();
         block_info.pending_blob_fee = pending_block_blob_fee;
         self.l2_subpool.set_block_info(block_info);
-        self.l2_subpool.validator().update_fee_params();
+        self.l2_subpool.update_pending_fee_params(fee_params);
     }
 
     pub async fn on_canonical_state_change(

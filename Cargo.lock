@@ -13944,6 +13944,25 @@ dependencies = [
 [[package]]
 name = "zksync_os_api"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
+dependencies = [
+ "alloy",
+ "alloy-sol-types",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "ruint",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "zksync_os_interface",
+ "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+]
+
+[[package]]
+name = "zksync_os_api"
+version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
  "alloy",
@@ -14119,7 +14138,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tokio",
- "zksync_os_api",
+ "zksync_os_api 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_l1_watcher",
@@ -14152,7 +14171,7 @@ dependencies = [
  "test-log",
  "tokio",
  "tracing",
- "zksync_os_api",
+ "zksync_os_api 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_contract_interface",
  "zksync_os_integration_tests_macros",
  "zksync_os_merkle_tree_api",
@@ -14261,7 +14280,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vise",
- "zksync_os_api",
+ "zksync_os_api 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_mempool",
@@ -14283,11 +14302,13 @@ dependencies = [
  "reth-execution-types",
  "reth-primitives",
  "reth-primitives-traits",
+ "reth-storage-api",
  "reth-transaction-pool",
  "tokio",
  "tokio-stream",
  "tracing",
  "vise",
+ "zksync_os_api 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "zksync_os_interface",
  "zksync_os_reth_compat",
  "zksync_os_storage_api",
@@ -14503,7 +14524,7 @@ dependencies = [
  "reth-revm",
  "reth-storage-api",
  "reth-trie-common",
- "zksync_os_api",
+ "zksync_os_api 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_storage_api",
 ]
 
@@ -14588,7 +14609,7 @@ dependencies = [
  "tracing",
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
- "zksync_os_api",
+ "zksync_os_api 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_evm_errors",
@@ -14885,7 +14906,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
- "zksync_os_api",
+ "zksync_os_api 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_batch_types",
  "zksync_os_interface",
  "zksync_os_observability",

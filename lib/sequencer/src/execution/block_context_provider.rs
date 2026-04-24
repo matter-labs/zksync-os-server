@@ -114,8 +114,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         let prepared_command = match block_command {
             BlockCommand::Produce(_) => {
                 let fee_params = self.fee_provider.produce_fee_params().await?;
-                self.pool
-                    .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
+                self.pool.update_pending_block_fees(fee_params, None);
                 let block_number = self.next_block_number;
                 // Create stream:
                 // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
