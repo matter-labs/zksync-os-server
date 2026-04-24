@@ -95,7 +95,7 @@ jobs:
         run: |
           set -o pipefail
           cargo test --release -p zksync_os_integration_tests protocol::interop:: -- --nocapture 2>&1 \
-            | rg 'estimated L1 gas limit via eth_simulateV1|Executing transaction .* gas limit [0-9]+'
+            | grep -E 'estimated L1 gas limit via eth_simulateV1|Executing transaction .* gas limit [0-9]+'
 
       - name: Upload test results
         if: always() && !cancelled()
