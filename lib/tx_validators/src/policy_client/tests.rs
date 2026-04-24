@@ -317,3 +317,61 @@ async fn uds_happy_path_allow() {
     let res = run_begin_tx(client, test_context()).await;
     assert!(res.is_ok(), "expected UDS admit to succeed, got {res:?}");
 }
+
+// ---------- Async admit path ----------
+//
+// `admit` is the RPC-side entry point: it runs the same logic as
+// `begin_tx` but stays async so handlers don't need `spawn_blocking`.
+
+#[tokio::test]
+async fn async_admit_happy_path_allow() {
+    let server = MockServer::start_async().await;
+    let _mock = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/admit");
+            then.status(200).json_body(json!({ "allow": true }));
+        })
+        .await;
+
+    let client = PolicyClient::new(base_config(server.base_url())).unwrap();
+    let res = client.admit(&test_context()).await;
+    assert!(res.is_ok());
+}
+
+#[tokio::test]
+async fn async_admit_deny_maps_to_filtered_by_validator() {
+    let server = MockServer::start_async().await;
+    let _mock = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/admit");
+            then.status(200).json_body(json!({ "allow": false }));
+        })
+        .await;
+
+    let client = PolicyClient::new(base_config(server.base_url())).unwrap();
+    let res = client.admit(&test_context()).await;
+    assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
+}
+
+#[tokio::test]
+async fn async_admit_bypass_skips_call() {
+    let server = MockServer::start_async().await;
+    let deny_mock = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/admit");
+            then.status(200).json_body(json!({ "allow": false }));
+        })
+        .await;
+
+    let mut cfg = base_config(server.base_url());
+    cfg.bypass_from = HashSet::from([FROM]);
+    let client = PolicyClient::new(cfg).unwrap();
+    let res = client.admit(&test_context()).await;
+
+    assert!(res.is_ok(), "bypassed tx should be allowed without a call");
+    assert_eq!(
+        deny_mock.calls_async().await,
+        0,
+        "bypass must not reach the policy service"
+    );
+}

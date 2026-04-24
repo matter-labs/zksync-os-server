@@ -102,41 +102,30 @@ impl PolicyClient {
         })
     }
 
-    /// Blocking-from-sync shim used by [`TxValidator::begin_tx`].
-    /// `PolicyClient` is driven from the block executor's `spawn_blocking`
-    /// thread, so `Handle::block_on` is the correct bridge back into async.
-    fn call_admit(&self, request: AdmitRequest<'_>) -> TxValidationResult {
-        let started = Instant::now();
-        let outcome = self.call_admit_inner(request);
-        POLICY_CLIENT_METRICS.latency.observe(started.elapsed());
-        match &outcome {
-            Ok(()) => {
-                POLICY_CLIENT_METRICS.decisions[&AdmitOutcome::Allow].inc();
-            }
-            Err(AdmitOutcomeErr::Denied) => {
-                POLICY_CLIENT_METRICS.decisions[&AdmitOutcome::Deny].inc();
-            }
-            Err(reason) => {
-                POLICY_CLIENT_METRICS.errors[&reason.error_label()].inc();
-            }
+    /// Consult the policy service. Used directly by RPC handlers; the sync
+    /// [`TxValidator::begin_tx`] shim wraps this with `Handle::block_on`
+    /// for the block-build path.
+    pub async fn admit(&self, ctx: &BeginTxContext<'_>) -> TxValidationResult {
+        if self.inner.bypass_from.contains(&ctx.from) {
+            POLICY_CLIENT_METRICS.bypassed.inc();
+            return Ok(());
         }
+        let request = AdmitRequest::from_context(ctx, &self.inner.protocol_version);
+        let started = Instant::now();
+        let outcome = self.admit_http(request).await;
+        POLICY_CLIENT_METRICS.latency.observe(started.elapsed());
+        record_outcome(&outcome);
         outcome.map_err(|_| InvalidTransaction::FilteredByValidator)
     }
 
-    fn call_admit_inner(&self, request: AdmitRequest<'_>) -> Result<(), AdmitOutcomeErr> {
+    async fn admit_http(&self, request: AdmitRequest<'_>) -> Result<(), AdmitOutcomeErr> {
         let body = serde_json::to_vec(&request).map_err(|err| {
             tracing::error!(?err, "failed to serialize admit request — failing closed");
             AdmitOutcomeErr::MalformedResponse
         })?;
-        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
-            tracing::error!("PolicyClient invoked outside a tokio runtime — failing closed");
-            AdmitOutcomeErr::NoRuntime
-        })?;
         let transport = self.inner.transport.clone();
         let timeout = self.inner.request_timeout;
-        let response = handle.block_on(async move {
-            tokio::time::timeout(timeout, transport.post_admit(body)).await
-        });
+        let response = tokio::time::timeout(timeout, transport.post_admit(body)).await;
         let raw = match response {
             Ok(Ok(bytes)) => bytes,
             Ok(Err(err)) => {
@@ -177,6 +166,20 @@ impl PolicyClient {
     }
 }
 
+fn record_outcome(outcome: &Result<(), AdmitOutcomeErr>) {
+    match outcome {
+        Ok(()) => {
+            POLICY_CLIENT_METRICS.decisions[&AdmitOutcome::Allow].inc();
+        }
+        Err(AdmitOutcomeErr::Denied) => {
+            POLICY_CLIENT_METRICS.decisions[&AdmitOutcome::Deny].inc();
+        }
+        Err(reason) => {
+            POLICY_CLIENT_METRICS.errors[&reason.error_label()].inc();
+        }
+    }
+}
+
 impl AnyTxValidator for PolicyClient {
     fn as_evm(&mut self) -> Option<&mut impl TxValidator> {
         Some(self)
@@ -185,12 +188,19 @@ impl AnyTxValidator for PolicyClient {
 
 impl TxValidator for PolicyClient {
     fn begin_tx(&mut self, ctx: &BeginTxContext<'_>) -> TxValidationResult {
-        if self.inner.bypass_from.contains(&ctx.from) {
-            POLICY_CLIENT_METRICS.bypassed.inc();
-            return Ok(());
-        }
-        let request = AdmitRequest::from_context(ctx, &self.inner.protocol_version);
-        self.call_admit(request)
+        // Block-build drives `PolicyClient` from `spawn_blocking`, so
+        // `Handle::block_on` is the correct bridge into the async admit
+        // path. Outside a tokio context there's nothing to block on —
+        // fail closed and record it so the deployment can spot it.
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle,
+            Err(_) => {
+                tracing::error!("PolicyClient invoked outside a tokio runtime — failing closed");
+                POLICY_CLIENT_METRICS.errors[&AdmitErrorReason::NoRuntime].inc();
+                return Err(InvalidTransaction::FilteredByValidator);
+            }
+        };
+        handle.block_on(self.admit(ctx))
     }
 
     fn finish_tx(&mut self) -> TxValidationResult {
@@ -241,8 +251,9 @@ pub(crate) struct AdmitResponse {
     pub protocol_version: Option<String>,
 }
 
-/// Internal error carrier so `call_admit` can keep one code path for metrics
-/// + logging without leaking details to the caller.
+/// Internal error carrier so `admit` can keep one code path for metrics +
+/// logging without leaking details to the caller. `NoRuntime` is recorded
+/// separately from `begin_tx`; everything here is an HTTP-path outcome.
 #[derive(Debug)]
 enum AdmitOutcomeErr {
     Denied,
@@ -252,7 +263,6 @@ enum AdmitOutcomeErr {
     Status,
     MalformedResponse,
     ProtocolVersionMismatch,
-    NoRuntime,
 }
 
 impl AdmitOutcomeErr {
@@ -265,7 +275,6 @@ impl AdmitOutcomeErr {
             Self::Status => AdmitErrorReason::Status,
             Self::MalformedResponse => AdmitErrorReason::MalformedResponse,
             Self::ProtocolVersionMismatch => AdmitErrorReason::ProtocolVersionMismatch,
-            Self::NoRuntime => AdmitErrorReason::NoRuntime,
         }
     }
 }
