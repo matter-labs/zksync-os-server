@@ -78,6 +78,10 @@ pub struct L1SenderMetrics {
     #[metrics(labels = ["command"], buckets = Buckets::exponential(1.0..=10_000_000.0, 3.0))]
     pub gas_used: LabeledFamily<&'static str, Histogram<u64>>,
 
+    /// Estimated L1 gas limit picked before submission (post-padding, pre-cap).
+    #[metrics(labels = ["command"], buckets = Buckets::exponential(1.0..=15_000_000.0, 3.0))]
+    pub estimated_gas_limit: LabeledFamily<&'static str, Histogram<u64>>,
+
     /// L1 blob base fee (EIP4844) of pending L1 block.
     /// Reported by server when sending blob L1 transactions.
     /// Value returned by `provider.get_blob_base_fee()`
@@ -200,6 +204,10 @@ impl L1SenderMetrics {
         self.estimated_custom_max_priority_fee_per_gas_gwei[&(window, percentile)]
             .set(Self::wei_to_gwei(max_priority_fee_per_gas_wei)?);
         Ok(())
+    }
+
+    pub fn report_estimated_gas_limit(&self, command_name: &'static str, gas_limit: u64) {
+        self.estimated_gas_limit[&command_name].observe(gas_limit);
     }
 
     fn wei_to_gwei(wei: u128) -> anyhow::Result<f64> {

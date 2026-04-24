@@ -1,15 +1,18 @@
 use crate::call_fees::{CallFees, CallFeesError};
 use crate::config::RpcConfig;
+use crate::eth_impl::build_api_log;
 use crate::js_tracer;
 use crate::result::RevertError;
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
 use crate::sandbox::{call_trace_simulate, execute};
-use alloy::consensus::Header as ConsensusHeader;
+use alloy::consensus::Transaction as _;
+use alloy::consensus::proofs::{calculate_receipt_root, calculate_transaction_root};
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::BlockId;
+use alloy::eips::{Encodable2718, Typed2718};
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
+use alloy::primitives::{Address, B256, Bloom, Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::simulate::{SimCallResult, SimulateError, SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
@@ -34,7 +37,7 @@ use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
     L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
     REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, SYSTEM_TX_TYPE_ID, UpgradeTxType, ZkEnvelope,
-    ZkTransaction, ZkTxType,
+    ZkReceipt, ZkReceiptEnvelope, ZkTransaction, ZkTxType,
 };
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
@@ -430,13 +433,20 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         opts: SimulatePayload,
         block: Option<BlockId>,
     ) -> Result<Vec<SimulatedBlock>, EthCallError> {
+        if opts.return_full_transactions {
+            return Err(EthCallError::SimulateFullTransactionsNotSupported);
+        }
+        if opts.trace_transfers {
+            return Err(EthCallError::SimulateTraceTransfersNotSupported);
+        }
+
         let mut block_context = self.resolve_block_context(block)?;
         let mut overlays = OverlayBuffer::default();
         let mut simulated_blocks = Vec::with_capacity(opts.block_state_calls.len());
 
         for sim_block in opts.block_state_calls {
-            if sim_block.block_overrides.is_some() {
-                return Err(EthCallError::BlockOverridesNotSupported);
+            if let Some(block_overrides) = sim_block.block_overrides {
+                apply_block_overrides(&mut block_context, block_overrides)?;
             }
 
             let txs = sim_block
@@ -453,34 +463,27 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 Some(state_overrides) => run_simulation_block(
                     block_context,
                     OverriddenStateView::with_state_overrides(state_view, state_overrides),
-                    txs,
+                    txs.clone(),
                 )?,
-                None => run_simulation_block(block_context, state_view, txs)?,
+                None => run_simulation_block(block_context, state_view, txs.clone())?,
             };
 
-            let gas_used = block_output
-                .tx_results
-                .iter()
-                .flatten()
-                .map(|tx| tx.gas_used)
-                .sum();
-            let calls = block_output
-                .tx_results
-                .iter()
-                .map(simulated_call_from_result)
-                .collect();
-            let inner = simulated_block_response(block_context, gas_used);
+            let simulated_block = build_simulated_block_response(block_context, txs, block_output)?;
+            let next_hash = simulated_block.inner.header.hash;
 
             overlays
                 .add_block(
                     block_context.block_number,
-                    block_output.storage_writes,
-                    block_output.published_preimages,
+                    simulated_block.storage_writes,
+                    simulated_block.published_preimages,
                 )
                 .map_err(EthCallError::ForwardSubsystemError)?;
-            simulated_blocks.push(SimulatedBlock { inner, calls });
+            simulated_blocks.push(SimulatedBlock {
+                inner: simulated_block.inner,
+                calls: simulated_block.calls,
+            });
 
-            block_context = next_block_context(block_context);
+            block_context = next_block_context(block_context, next_hash);
         }
 
         Ok(simulated_blocks)
@@ -752,64 +755,277 @@ where
     .map_err(EthCallError::ForwardSubsystemError)
 }
 
-fn simulated_call_from_result(
-    result: &Result<zksync_os_interface::types::TxOutput, InvalidTransaction>,
-) -> SimCallResult {
-    match result {
-        Ok(tx_output) => match &tx_output.execution_result {
-            ExecutionResult::Success(
-                ExecutionOutput::Call(return_bytes) | ExecutionOutput::Create(return_bytes, _),
-            ) => SimCallResult {
-                return_data: Bytes::from(return_bytes.clone()),
-                logs: vec![],
-                gas_used: tx_output.gas_used,
-                status: true,
-                error: None,
+struct SimulatedBlockResponse {
+    inner: Block,
+    calls: Vec<SimCallResult>,
+    storage_writes: Vec<zksync_os_interface::types::StorageWrite>,
+    published_preimages: Vec<(B256, Vec<u8>)>,
+}
+
+fn build_simulated_block_response(
+    block_context: BlockContext,
+    txs: Vec<ZkTransaction>,
+    block_output: zksync_os_interface::types::BlockOutput,
+) -> Result<SimulatedBlockResponse, EthCallError> {
+    let zksync_os_interface::types::BlockOutput {
+        header: sealed_header,
+        tx_results,
+        storage_writes,
+        account_diffs: _,
+        published_preimages,
+        pubdata: _,
+        computational_native_used: _,
+    } = block_output;
+    let mut block_bloom = Bloom::default();
+    let mut number_of_logs_before_this_tx = 0;
+    let mut cumulative_gas_used = 0;
+    let mut receipts = Vec::with_capacity(tx_results.len());
+    let mut simulated_txs = Vec::with_capacity(tx_results.len());
+
+    for (tx_index, (tx, result)) in txs.into_iter().zip(tx_results.into_iter()).enumerate() {
+        let simulated_tx = match result {
+            Ok(tx_output) => {
+                let receipt = build_simulated_receipt(&tx, &tx_output, cumulative_gas_used);
+                block_bloom.accrue_bloom(receipt.logs_bloom());
+                cumulative_gas_used += tx_output.gas_used;
+                let simulated_tx = SimulatedTx {
+                    tx,
+                    tx_index_in_block: tx_index as u64,
+                    number_of_logs_before_this_tx,
+                    tx_output: Some(tx_output),
+                    receipt: Some(receipt.clone()),
+                    invalid_tx_error: None,
+                };
+                number_of_logs_before_this_tx += receipt.logs().len() as u64;
+                receipts.push(receipt);
+                simulated_tx
+            }
+            Err(err) => SimulatedTx {
+                tx,
+                tx_index_in_block: tx_index as u64,
+                number_of_logs_before_this_tx,
+                tx_output: None,
+                receipt: None,
+                invalid_tx_error: Some(err),
             },
-            ExecutionResult::Revert(return_bytes) => {
-                let revert = RevertError::new(Bytes::from(return_bytes.clone()));
-                SimCallResult {
-                    return_data: Bytes::from(return_bytes.clone()),
-                    logs: vec![],
-                    gas_used: tx_output.gas_used,
-                    status: false,
-                    error: Some(SimulateError {
-                        code: -3200,
-                        message: revert.to_string(),
-                    }),
+        };
+        simulated_txs.push(simulated_tx);
+    }
+
+    let mut header = sealed_header.unseal();
+    header.logs_bloom = block_bloom;
+    header.gas_used = cumulative_gas_used;
+    let encoded_txs = simulated_txs
+        .iter()
+        .map(|tx| Encoded2718(tx.tx.clone().encode().bytes().clone()))
+        .collect::<Vec<_>>();
+    header.transactions_root = calculate_transaction_root(&encoded_txs);
+    header.receipts_root = calculate_receipt_root(&receipts.iter().collect::<Vec<_>>());
+
+    let header = Header::new(header);
+    let block_hash = header.hash;
+    let calls = simulated_txs
+        .iter()
+        .map(|tx| tx.to_call_result(block_hash, block_context))
+        .collect();
+    let transactions = simulated_txs
+        .iter()
+        .map(|tx| *tx.tx.hash())
+        .collect::<Vec<_>>()
+        .into();
+    let inner = Block::new(header, transactions);
+
+    Ok(SimulatedBlockResponse {
+        inner,
+        calls,
+        storage_writes,
+        published_preimages,
+    })
+}
+
+fn build_simulated_receipt(
+    tx: &ZkTransaction,
+    tx_output: &zksync_os_interface::types::TxOutput,
+    cumulative_gas_used_before_this_tx: u64,
+) -> ZkReceiptEnvelope {
+    let l2_to_l1_logs = tx_output
+        .l2_to_l1_logs
+        .iter()
+        .map(|l2_to_l1_log| zksync_os_types::L2ToL1Log {
+            l2_shard_id: l2_to_l1_log.log.l2_shard_id,
+            is_service: l2_to_l1_log.log.is_service,
+            tx_number_in_block: l2_to_l1_log.log.tx_number_in_block,
+            sender: l2_to_l1_log.log.sender,
+            key: l2_to_l1_log.log.key,
+            value: l2_to_l1_log.log.value,
+        })
+        .collect();
+    ZkReceiptEnvelope::from_typed(
+        tx.tx_type(),
+        ZkReceipt {
+            status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
+            cumulative_gas_used: cumulative_gas_used_before_this_tx + tx_output.gas_used,
+            logs: tx_output.logs.clone(),
+            l2_to_l1_logs,
+        },
+    )
+}
+
+fn next_block_context(mut block_context: BlockContext, simulated_block_hash: B256) -> BlockContext {
+    block_context.block_number += 1;
+    block_context.timestamp += 1;
+    block_context.block_hashes.0.rotate_left(1);
+    block_context.block_hashes.0[255] = U256::from_be_bytes(simulated_block_hash.0);
+    block_context
+}
+
+fn apply_block_overrides(
+    block_context: &mut BlockContext,
+    overrides: BlockOverrides,
+) -> Result<(), EthCallError> {
+    if overrides.difficulty.is_some() {
+        return Err(EthCallError::SimulateUnsupportedBlockOverride("difficulty"));
+    }
+    if let Some(number) = overrides.number {
+        block_context.block_number = u64::try_from(number)
+            .map_err(|_| EthCallError::SimulateInvalidBlockOverride("number"))?;
+    }
+    if let Some(time) = overrides.time {
+        block_context.timestamp = time;
+    }
+    if let Some(gas_limit) = overrides.gas_limit {
+        block_context.gas_limit = gas_limit;
+    }
+    if let Some(coinbase) = overrides.coinbase {
+        block_context.coinbase = coinbase;
+    }
+    if let Some(random) = overrides.random {
+        block_context.mix_hash = U256::from_be_bytes(random.0);
+    }
+    if let Some(base_fee) = overrides.base_fee {
+        block_context.eip1559_basefee = base_fee;
+    }
+    if let Some(blob_base_fee) = overrides.blob_base_fee {
+        block_context.blob_fee = blob_base_fee;
+    }
+    if let Some(block_hash_overrides) = overrides.block_hash {
+        for (block_number, block_hash) in block_hash_overrides {
+            apply_block_hash_override(block_context, block_number, block_hash);
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_block_hash_override(
+    block_context: &mut BlockContext,
+    block_number: u64,
+    block_hash: B256,
+) {
+    if block_number >= block_context.block_number {
+        return;
+    }
+    let distance = block_context.block_number - block_number;
+    if distance == 0 || distance > 256 {
+        return;
+    }
+
+    let index = 256 - distance as usize;
+    block_context.block_hashes.0[index] = U256::from_be_bytes(block_hash.0);
+}
+
+struct SimulatedTx {
+    tx: ZkTransaction,
+    tx_index_in_block: u64,
+    number_of_logs_before_this_tx: u64,
+    tx_output: Option<zksync_os_interface::types::TxOutput>,
+    receipt: Option<ZkReceiptEnvelope>,
+    invalid_tx_error: Option<InvalidTransaction>,
+}
+
+impl SimulatedTx {
+    fn to_call_result(&self, block_hash: B256, block_context: BlockContext) -> SimCallResult {
+        match (&self.tx_output, &self.receipt, &self.invalid_tx_error) {
+            (Some(tx_output), Some(receipt), None) => {
+                let tx_hash = *self.tx.hash();
+                let meta =
+                    zksync_os_storage_api::TxMeta {
+                        block_hash,
+                        block_number: block_context.block_number,
+                        block_timestamp: block_context.timestamp,
+                        tx_index_in_block: self.tx_index_in_block,
+                        effective_gas_price: self.tx.inner.inner().effective_gas_price(Some(
+                            block_context.eip1559_basefee.saturating_to(),
+                        )),
+                        number_of_logs_before_this_tx: self.number_of_logs_before_this_tx,
+                        gas_used: tx_output.gas_used,
+                        contract_address: tx_output.contract_address,
+                    };
+                let logs = receipt
+                    .logs()
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(i, log)| build_api_log(tx_hash, log, meta.clone(), i as u64))
+                    .collect();
+
+                match &tx_output.execution_result {
+                    ExecutionResult::Success(
+                        ExecutionOutput::Call(return_bytes)
+                        | ExecutionOutput::Create(return_bytes, _),
+                    ) => SimCallResult {
+                        return_data: Bytes::from(return_bytes.clone()),
+                        logs,
+                        gas_used: tx_output.gas_used,
+                        status: true,
+                        error: None,
+                    },
+                    ExecutionResult::Revert(return_bytes) => {
+                        let revert = RevertError::new(Bytes::from(return_bytes.clone()));
+                        SimCallResult {
+                            return_data: Bytes::from(return_bytes.clone()),
+                            logs,
+                            gas_used: tx_output.gas_used,
+                            status: false,
+                            error: Some(SimulateError {
+                                code: -3200,
+                                message: revert.to_string(),
+                            }),
+                        }
+                    }
                 }
             }
-        },
-        Err(err) => SimCallResult {
-            return_data: Bytes::default(),
-            logs: vec![],
-            gas_used: 0,
-            status: false,
-            error: Some(SimulateError {
-                code: -32015,
-                message: err.to_string(),
-            }),
-        },
+            (_, _, Some(err)) => SimCallResult {
+                return_data: Bytes::default(),
+                logs: vec![],
+                gas_used: 0,
+                status: false,
+                error: Some(SimulateError {
+                    code: -32015,
+                    message: err.to_string(),
+                }),
+            },
+            _ => SimCallResult::default(),
+        }
     }
 }
 
-fn simulated_block_response(block_context: BlockContext, gas_used: u64) -> Block {
-    let mut header = ConsensusHeader::default();
-    header.number = block_context.block_number;
-    header.timestamp = block_context.timestamp;
-    header.gas_limit = block_context.gas_limit;
-    header.gas_used = gas_used;
-    header.beneficiary = block_context.coinbase;
-    header.mix_hash = block_context.mix_hash.into();
-    header.base_fee_per_gas = Some(block_context.eip1559_basefee.saturating_to());
+struct Encoded2718(Vec<u8>);
 
-    Block::empty(Header::new(header))
+impl Typed2718 for Encoded2718 {
+    fn ty(&self) -> u8 {
+        0
+    }
 }
 
-fn next_block_context(mut block_context: BlockContext) -> BlockContext {
-    block_context.block_number += 1;
-    block_context.timestamp += 1;
-    block_context
+impl Encodable2718 for Encoded2718 {
+    fn encode_2718_len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn encode_2718(&self, out: &mut dyn alloy::rlp::BufMut) {
+        out.put_slice(&self.0);
+    }
 }
 
 fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
@@ -865,6 +1081,14 @@ pub enum EthCallError {
     // todo: temporary, needs to be supported eventually
     #[error("block overrides are not supported in `eth_call`")]
     BlockOverridesNotSupported,
+    #[error("`eth_simulateV1` does not support `returnFullTransactions` yet")]
+    SimulateFullTransactionsNotSupported,
+    #[error("`eth_simulateV1` does not support `traceTransfers` yet")]
+    SimulateTraceTransfersNotSupported,
+    #[error("unsupported block override in `eth_simulateV1`: {0}")]
+    SimulateUnsupportedBlockOverride(&'static str),
+    #[error("invalid block override in `eth_simulateV1`: {0}")]
+    SimulateInvalidBlockOverride(&'static str),
     // todo(EIP-4844)
     #[error("EIP-4844 transactions are not supported")]
     Eip4844NotSupported,

@@ -722,13 +722,7 @@ async fn estimate_gas_limits_with_simulation(
                         .saturating_mul(SIMULATED_GAS_LIMIT_PADDING_NUMERATOR)
                         .div_ceil(SIMULATED_GAS_LIMIT_PADDING_DENOMINATOR)
                         .min(L1_GAS_LIMIT_CAP);
-                    tracing::info!(
-                        command_name,
-                        tx_index,
-                        simulated_gas_used = call.gas_used,
-                        estimated_gas_limit,
-                        "estimated L1 gas limit via eth_simulateV1"
-                    );
+                    L1_SENDER_METRICS.report_estimated_gas_limit(command_name, estimated_gas_limit);
                     estimated_gas_limit
                 })
                 .collect())
