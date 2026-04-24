@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
-use zksync_os_interface::tracing::NopTracer;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
@@ -134,11 +133,16 @@ where
                 .then(|| self.config.tx_validator.policy_client.clone())
                 .flatten();
             let exec_result = if let Some(policy_client) = policy_client {
+                // Pair the policy tracer with the client *before* moving the
+                // client into `execute_block_in_vm` — the two share a
+                // per-instance scratch slot that `paired_tracer()` returns a
+                // handle into.
+                let policy_tracer = policy_client.paired_tracer();
                 execute_block_in_vm(
                     prepared_command,
                     exec_view,
                     &latency_tracker,
-                    NopTracer,
+                    policy_tracer,
                     policy_client,
                 )
                 .await
