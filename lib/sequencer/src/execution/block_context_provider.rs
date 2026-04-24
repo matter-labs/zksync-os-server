@@ -1,4 +1,4 @@
-use crate::execution::fee_provider::{FeeParams, FeeProvider};
+use crate::execution::fee_provider::FeeProvider;
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use alloy::primitives::{Address, TxHash, U256};
@@ -11,8 +11,8 @@ use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, SystemTxEnvelope, SystemTxType,
-    ZkEnvelope, ZkTransaction,
+    BlockStartCursors, ExecutionVersion, FeeParams, ProtocolSemanticVersion, SystemTxEnvelope,
+    SystemTxType, ZkEnvelope, ZkTransaction,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
