@@ -693,11 +693,12 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
 
     async fn simulate_v1(
         &self,
-        _opts: SimulatePayload,
-        _block_number: Option<BlockId>,
+        opts: SimulatePayload,
+        block_number: Option<BlockId>,
     ) -> RpcResult<Vec<SimulatedBlock>> {
-        // todo(#51): implement
-        Err(unimplemented_rpc_err())
+        self.eth_call_handler
+            .simulate_v1_impl(opts, block_number)
+            .to_rpc_result()
     }
 
     async fn call(

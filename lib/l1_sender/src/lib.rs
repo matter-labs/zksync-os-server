@@ -25,12 +25,13 @@ use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::utils::Eip1559Estimation;
 use alloy::providers::{Provider, WalletProvider};
+use alloy::rpc::types::simulate::{SimBlock, SimulatePayload};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use alloy::transports::TransportError;
 use anyhow::Context as _;
+use futures::FutureExt;
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Instant;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
@@ -48,6 +49,9 @@ const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 /// In case there's only one chain connected to gateway, it is very likely that there will be not enough block production
 /// to reach 3 confirmations for such transactions
 const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
+const L1_GAS_LIMIT_CAP: u64 = 15_000_000;
+const SIMULATED_GAS_LIMIT_PADDING_NUMERATOR: u64 = 2;
+const SIMULATED_GAS_LIMIT_PADDING_DENOMINATOR: u64 = 1;
 
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
@@ -193,107 +197,127 @@ pub async fn run_l1_sender<Input: SendToL1>(
         let range = Input::display_range(&commands); // Only for logging
         tracing::info!(command_name, range, "sending L1 transactions");
         L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
+        let base_nonce = provider
+            .get_transaction_count(operator_address)
+            .pending()
+            .await?;
+        let mut prepared_txs = Vec::with_capacity(commands.len());
+        for (idx, cmd) in commands.iter().enumerate() {
+            let nonce = base_nonce + idx as u64;
+            let mut tx_request = tx_request_with_fee_fields(
+                &provider,
+                operator_address,
+                config.max_fee_per_gas_wei,
+                config.max_priority_fee_per_gas_wei,
+            )
+            .await?
+            .with_to(to_address)
+            .with_input(cmd.solidity_call(gateway, &operator_address));
+            tx_request.set_nonce(nonce);
+
+            let mut simulated_request = tx_request.clone();
+            simulated_request.set_gas_limit(L1_GAS_LIMIT_CAP);
+
+            if let Some(blob_sidecar) = cmd.blob_sidecar() {
+                let fee_per_blob_gas = provider.get_blob_base_fee().await?;
+                L1_SENDER_METRICS.report_blob_base_fee(fee_per_blob_gas)?;
+                let max_fee_per_blob_gas = config.max_fee_per_blob_gas_wei;
+
+                if fee_per_blob_gas > max_fee_per_blob_gas {
+                    tracing::warn!(
+                        max_fee_per_blob_gas,
+                        fee_per_blob_gas,
+                        "L1 sender's configured maxFeePerBlobGas is lower than the one estimated from network"
+                    );
+                }
+                tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
+                tx_request.set_blob_sidecar(blob_sidecar);
+            };
+
+            prepared_txs.push((tx_request, simulated_request));
+        }
+        let gas_limits =
+            estimate_gas_limits_with_simulation(provider.root(), &prepared_txs, command_name)
+                .await?;
+
         // It's important to preserve the order of commands -
         // so that we send them downstream also in order.
         // This holds true because l1 transactions are included in the order of sender nonce.
-        // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
-        let pending_txs: Vec<PendingTx<Input>> =
-            futures::stream::iter(commands.drain(..))
-                .then(|mut cmd| async {
-                    let mut tx_request = tx_request_with_gas_fields(
-                        &provider,
-                        operator_address,
-                        config.max_fee_per_gas_wei,
-                        config.max_priority_fee_per_gas_wei,
-                    )
-                    .await?
-                    .with_to(to_address)
-                    .with_input(cmd.solidity_call(gateway, &operator_address));
+        let mut pending_txs = Vec::with_capacity(commands.len());
+        for (mut cmd, ((mut tx_request, _), gas_limit)) in commands
+            .drain(..)
+            .zip(prepared_txs.into_iter().zip(gas_limits.into_iter()))
+        {
+            tx_request.set_gas_limit(gas_limit);
 
-                    if let Some(blob_sidecar) = cmd.blob_sidecar() {
-                        let fee_per_blob_gas = provider.get_blob_base_fee().await?;
-                        L1_SENDER_METRICS
-                            .report_blob_base_fee(fee_per_blob_gas)?;
-                        let max_fee_per_blob_gas = config.max_fee_per_blob_gas_wei;
+            // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an
+            // envelope.
+            let envelope = provider
+                .fill(tx_request)
+                .await?
+                .try_into_envelope()?
+                .try_into_pooled()?;
 
-                        if fee_per_blob_gas > max_fee_per_blob_gas {
-                            tracing::warn!(
-                                max_fee_per_blob_gas,
-                                fee_per_blob_gas,
-                                "L1 sender's configured maxFeePerBlobGas is lower than the one estimated from network"
-                            );
-                        }
-                        tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
-                        tx_request.set_blob_sidecar(blob_sidecar);
-                    };
+            let pending_block = provider
+                .get_block(BlockId::pending())
+                .await?
+                .expect("no pending block");
+            // todo: make conversion unconditional (and remove respective config) once anvil
+            //       supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
+            let tx = if config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
+                // Convert the envelope into an EIP-7594 transaction by converting the sidecar
+                envelope.try_map_eip4844(|tx| {
+                    tx.try_map_sidecar(|sidecar| {
+                        Ok::<_, BlobTransactionValidationError>(
+                            BlobTransactionSidecarVariant::Eip7594(sidecar.try_into_eip7594()?),
+                        )
+                    })
+                })?
+            } else {
+                // Keep the regular EIP-4844 sidecar
+                envelope
+            };
 
-                    // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an
-                    // envelope.
-                    let envelope = provider.fill(tx_request).await?.try_into_envelope()?.try_into_pooled()?;
+            let pending_tx = provider.send_raw_transaction(&tx.encoded_2718()).await?;
+            let submitted_at = Instant::now();
+            let tx_hash = *pending_tx.tx_hash();
+            let receipt_fut = wait_for_confirmed_receipt(
+                provider.root().clone(),
+                tx_hash,
+                if gateway {
+                    REQUIRED_CONFIRMATIONS_GATEWAY
+                } else {
+                    REQUIRED_CONFIRMATIONS_L1
+                },
+                config.transaction_timeout,
+            )
+            .boxed();
+            tracing::info!(
+                "{command_name}: L1 transaction submitted for {range}. Hash: {tx_hash:?} Waiting for inclusion...",
+            );
 
-                    let pending_block = provider.get_block(BlockId::pending()).await?.expect("no pending block");
-                    // todo: make conversion unconditional (and remove respective config) once anvil
-                    //       supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
-                    let tx = if config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
-                        // Convert the envelope into an EIP-7594 transaction by converting the sidecar
-                        envelope.try_map_eip4844(|tx| {
-                            tx.try_map_sidecar(|sidecar| {
-                                Ok::<_, BlobTransactionValidationError>(
-                                    BlobTransactionSidecarVariant::Eip7594(sidecar.try_into_eip7594()?)
-                                )
-                            })
-                        })?
+            // Notify CommitWatcher: this batch number has been submitted to L1.
+            if let Some(sender) = &commit_submitted_tx {
+                let batch_number = cmd
+                    .as_ref()
+                    .last()
+                    .expect("commands is non-empty after recv_many")
+                    .batch_number();
+                sender.send_if_modified(|current| {
+                    if batch_number > *current {
+                        *current = batch_number;
+                        true
                     } else {
-                        // Keep the regular EIP-4844 sidecar
-                        envelope
-                    };
-
-                    let pending_tx = provider
-                        .send_raw_transaction(&tx.encoded_2718())
-                        .await?;
-                    let submitted_at = Instant::now();
-                    let tx_hash = *pending_tx.tx_hash();
-                    let receipt_fut = wait_for_confirmed_receipt(
-                        provider.root().clone(),
-                        tx_hash,
-                        if gateway {
-                            REQUIRED_CONFIRMATIONS_GATEWAY
-                        } else {
-                            REQUIRED_CONFIRMATIONS_L1
-                        },
-                        config.transaction_timeout,
-                    )
-                    .boxed();
-                    tracing::info!(
-                        "{command_name}: L1 transaction submitted for {range}. Hash: {tx_hash:?} Waiting for inclusion...",
-                    );
-
-                    // Notify CommitWatcher: this batch number has been submitted to L1.
-                    if let Some(sender) = &commit_submitted_tx {
-                        let batch_number = cmd
-                            .as_ref()
-                            .last()
-                            .expect("commands is non-empty after recv_many")
-                            .batch_number();
-                        sender.send_if_modified(|current| {
-                            if batch_number > *current {
-                                *current = batch_number;
-                                true
-                            } else {
-                                false
-                            }
-                        });
+                        false
                     }
+                });
+            }
 
-                    cmd.as_mut()
-                        .iter_mut()
-                        .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
-                    anyhow::Ok((receipt_fut, cmd, submitted_at))
-                })
-                // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
-                // but this is not necessary for now - we wait for them to be included in parallel
-                .try_collect::<Vec<_>>()
-                .await?;
+            cmd.as_mut()
+                .iter_mut()
+                .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
+            pending_txs.push((receipt_fut, cmd, submitted_at));
+        }
         tracing::info!(command_name, range, "sent to L1, waiting for inclusion");
         wait_for_txs_and_forward(
             pending_txs,
@@ -598,7 +622,7 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
     }
 }
 
-async fn tx_request_with_gas_fields(
+async fn tx_request_with_fee_fields(
     provider: &dyn Provider,
     operator_address: Address,
     max_fee_per_gas: u128,
@@ -642,9 +666,70 @@ async fn tx_request_with_gas_fields(
     let tx = TransactionRequest::default()
         .with_from(operator_address)
         .with_max_fee_per_gas(capped_max_fee_per_gas)
-        .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas)
-        .with_gas_limit(15000000);
+        .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas);
     Ok(tx)
+}
+
+async fn estimate_gas_limits_with_simulation(
+    provider: &dyn Provider,
+    prepared_txs: &[(TransactionRequest, TransactionRequest)],
+    command_name: &'static str,
+) -> anyhow::Result<Vec<u64>> {
+    let simulated_calls = prepared_txs
+        .iter()
+        .map(|(_, simulated_request)| simulated_request.clone());
+    let payload =
+        SimulatePayload::default().extend(SimBlock::default().extend_calls(simulated_calls));
+
+    match provider.simulate(&payload).pending().await {
+        Ok(simulated_blocks) => {
+            let Some(simulated_block) = simulated_blocks.first() else {
+                anyhow::bail!("eth_simulateV1 returned no blocks");
+            };
+            anyhow::ensure!(
+                simulated_block.calls.len() == prepared_txs.len(),
+                "eth_simulateV1 returned {} calls for {} transactions",
+                simulated_block.calls.len(),
+                prepared_txs.len()
+            );
+
+            Ok(simulated_block
+                .calls
+                .iter()
+                .map(|call| {
+                    if !call.status {
+                        if let Some(error) = &call.error {
+                            tracing::warn!(
+                                command_name,
+                                error_code = error.code,
+                                error_message = %error.message,
+                                "eth_simulateV1 returned a failed call, falling back to the gas cap"
+                            );
+                        } else {
+                            tracing::warn!(
+                                command_name,
+                                "eth_simulateV1 returned a failed call without an error, falling back to the gas cap"
+                            );
+                        }
+                        return L1_GAS_LIMIT_CAP;
+                    }
+
+                    call.gas_used
+                        .saturating_mul(SIMULATED_GAS_LIMIT_PADDING_NUMERATOR)
+                        .div_ceil(SIMULATED_GAS_LIMIT_PADDING_DENOMINATOR)
+                        .min(L1_GAS_LIMIT_CAP)
+                })
+                .collect())
+        }
+        Err(TransportError::ErrorResp(err)) if err.code == METHOD_NOT_FOUND_CODE => {
+            tracing::warn!(
+                command_name,
+                "eth_simulateV1 is not available on the settlement RPC, falling back to the gas cap"
+            );
+            Ok(vec![L1_GAS_LIMIT_CAP; prepared_txs.len()])
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 async fn report_custom_priority_fee_metrics(provider: &dyn Provider) -> anyhow::Result<()> {
