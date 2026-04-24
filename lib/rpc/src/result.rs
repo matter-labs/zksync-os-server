@@ -80,6 +80,17 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionError> for Result<Ok, EthSendRawTr
             | EthSendRawTransactionError::BlacklistedSigner => {
                 invalid_params_rpc_err(err.to_string())
             }
+            EthSendRawTransactionError::PolicyDenied(_) => {
+                // `TransactionRejected` in EIP-1474 semantics — the policy
+                // service has refused to admit the tx. Distinct from a
+                // validation error so clients can tell policy deny apart
+                // from a malformed tx.
+                rpc_err(
+                    EthRpcErrorCode::TransactionRejected.code(),
+                    err.to_string(),
+                    None,
+                )
+            }
             EthSendRawTransactionError::NotAcceptingTransactions(_)
             | EthSendRawTransactionError::PoolError(_)
             | EthSendRawTransactionError::ForwardError(_) => internal_rpc_err(err.to_string()),
@@ -108,6 +119,11 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
                 EthRpcErrorCode::ExecutionError.code(),
                 revert.to_string(),
                 revert.output.as_ref().map(|out| out.as_ref()),
+            ),
+            EthCallError::PolicyDenied(_) => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
             ),
             err => internal_rpc_err(err.to_string()),
         })

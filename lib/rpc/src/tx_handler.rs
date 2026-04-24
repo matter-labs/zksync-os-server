@@ -1,6 +1,7 @@
 use crate::eth_impl::build_api_receipt;
 use crate::metrics::TX_SUBMISSION_METRICS;
 use crate::{ReadRpcStorage, RpcConfig};
+use alloy::consensus::Transaction as _;
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
 use alloy::primitives::{B256, Bytes, U256};
@@ -8,9 +9,12 @@ use alloy::providers::{DynProvider, Provider};
 use alloy::transports::{RpcError, TransportErrorKind};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
+use zksync_os_interface::error::InvalidTransaction;
+use zksync_os_interface::tracing::BeginTxContext;
 use zksync_os_mempool::PoolError;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
+use zksync_os_tx_validators::policy_client::PolicyClient;
 use zksync_os_types::{L2Envelope, L2Transaction, NotAcceptingReason, TransactionAcceptanceState};
 
 /// Maximum user provided timeout for `eth_sendRawTransactionSync`. Chosen liberally as waiting is
@@ -24,6 +28,12 @@ pub struct TxHandler<RpcStorage, Mempool> {
     mempool: Mempool,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     tx_forwarder: Option<DynProvider>,
+    /// When set, each incoming tx is consulted against the policy service
+    /// before mempool insertion. The block-build pass remains authoritative
+    /// (see `lib/sequencer/src/execution/block_executor.rs::make_tx_validator`);
+    /// this call short-circuits the round trip so denied txs never receive a
+    /// hash the client would then have to infer failure by polling for.
+    policy_client: Option<PolicyClient>,
 }
 
 impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempool> {
@@ -33,6 +43,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         mempool: Mempool,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
         tx_forwarder: Option<DynProvider>,
+        policy_client: Option<PolicyClient>,
     ) -> Self {
         Self {
             config,
@@ -40,6 +51,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             mempool,
             acceptance_state,
             tx_forwarder,
+            policy_client,
         }
     }
 
@@ -61,6 +73,21 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         let hash = *l2_tx.hash();
         if self.config.l2_signer_blacklist.contains(&l2_tx.signer()) {
             return Err(EthSendRawTransactionError::BlacklistedSigner);
+        }
+
+        if let Some(policy_client) = &self.policy_client {
+            let envelope = l2_tx.inner();
+            let ctx = BeginTxContext {
+                from: l2_tx.signer(),
+                to: envelope.kind().to().copied(),
+                value: envelope.value(),
+                calldata: envelope.input(),
+                gas_limit: envelope.gas_limit(),
+            };
+            policy_client
+                .admit(&ctx)
+                .await
+                .map_err(EthSendRawTransactionError::PolicyDenied)?;
         }
         {
             let _guard = MempoolLatencyGuard::new();
@@ -159,6 +186,9 @@ pub enum EthSendRawTransactionError {
     ForwardError(#[from] RpcError<TransportErrorKind>),
     #[error("Signer is blacklisted")]
     BlacklistedSigner,
+    /// Policy service rejected the transaction at the RPC admit boundary.
+    #[error("transaction denied by policy service: {0:?}")]
+    PolicyDenied(InvalidTransaction),
 }
 
 /// Error types returned by `eth_sendRawTransactionSync` implementation

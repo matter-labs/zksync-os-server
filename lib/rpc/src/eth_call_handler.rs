@@ -21,10 +21,12 @@ use zksync_os_interface::{
     error::InvalidTransaction,
     types::{BlockContext, ExecutionResult},
 };
+use zksync_os_interface::tracing::BeginTxContext;
 use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::{
     RepositoryError, StateError, state_override_view::OverriddenStateView,
 };
+use zksync_os_tx_validators::policy_client::PolicyClient;
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
     L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
@@ -41,6 +43,11 @@ pub struct EthCallHandler<RpcStorage> {
     chain_id: u64,
     /// Last block context constructed by sequencer but not necessarily executed yet.
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
+    /// Admit boundary for `eth_call` / `eth_estimateGas`. When set, every
+    /// simulation request is first consulted against the policy service —
+    /// denied requests never touch the VM. The block-build pass remains
+    /// authoritative for actual state changes.
+    policy_client: Option<PolicyClient>,
 }
 
 struct ExecutionEnv {
@@ -54,12 +61,14 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         storage: RpcStorage,
         chain_id: u64,
         last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
+        policy_client: Option<PolicyClient>,
     ) -> Self {
         Self {
             config,
             storage,
             chain_id,
             last_constructed_block_context,
+            policy_client,
         }
     }
 
@@ -660,6 +669,28 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     pub fn last_constructed_block_context(&self) -> Option<BlockContext> {
         *self.last_constructed_block_context.borrow()
     }
+
+    /// Consult the policy service for a simulation request. Invoked by
+    /// `eth_call` / `eth_estimateGas` before any VM work; Err short-circuits
+    /// the simulation and surfaces a JSON-RPC error. No-op when
+    /// `policy_client` is unset (non-Prividium chains).
+    pub async fn admit_request(&self, request: &TransactionRequest) -> Result<(), EthCallError> {
+        let Some(policy_client) = &self.policy_client else {
+            return Ok(());
+        };
+        let calldata = request.input.input().map(|b| b.as_ref()).unwrap_or(&[]);
+        let ctx = BeginTxContext {
+            from: request.from.unwrap_or_default(),
+            to: request.to.and_then(|kind| kind.to().copied()),
+            value: request.value.unwrap_or_default(),
+            calldata,
+            gas_limit: request.gas.unwrap_or(self.config.eth_call_gas as u64),
+        };
+        policy_client
+            .admit(&ctx)
+            .await
+            .map_err(EthCallError::PolicyDenied)
+    }
 }
 
 fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
@@ -712,6 +743,10 @@ pub fn update_estimated_gas_range(
 /// Error types returned by `eth_call` implementation
 #[derive(Debug, thiserror::Error)]
 pub enum EthCallError {
+    /// Policy service rejected the simulation request at the RPC admit
+    /// boundary.
+    #[error("simulation denied by policy service: {0:?}")]
+    PolicyDenied(InvalidTransaction),
     // todo: temporary, needs to be supported eventually
     #[error("block overrides are not supported in `eth_call`")]
     BlockOverridesNotSupported,

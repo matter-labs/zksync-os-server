@@ -51,6 +51,7 @@ use tower_http::cors::{Any, CorsLayer};
 use zksync_os_genesis::GenesisInputSource;
 use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::subpools::l2::L2Subpool;
+use zksync_os_tx_validators::policy_client::PolicyClient;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
@@ -75,6 +76,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     tx_forwarder: Option<DynProvider>,
     gateway_provider: Option<DynProvider>,
+    policy_client: Option<PolicyClient>,
     runtime: &Runtime,
     wait_for_db: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
@@ -86,6 +88,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         storage.clone(),
         chain_id,
         last_constructed_block_context,
+        policy_client.clone(),
     );
     rpc.merge(
         EthNamespace::new(
@@ -96,6 +99,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             chain_id,
             acceptance_state,
             tx_forwarder,
+            policy_client,
         )
         .into_rpc(),
     )?;

@@ -32,6 +32,7 @@ use zksync_os_rpc_api::types::{
     L2FeeHistory, RpcBlockConvert, ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt,
 };
 use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
+use zksync_os_tx_validators::policy_client::PolicyClient;
 use zksync_os_types::{L2Envelope, TransactionAcceptanceState, ZkReceiptEnvelope};
 
 pub struct EthNamespace<RpcStorage, Mempool> {
@@ -48,6 +49,7 @@ pub struct EthNamespace<RpcStorage, Mempool> {
 }
 
 impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Mempool> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: RpcConfig,
         storage: RpcStorage,
@@ -56,6 +58,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         chain_id: u64,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
         tx_forwarder: Option<DynProvider>,
+        policy_client: Option<PolicyClient>,
     ) -> Self {
         let tx_handler = TxHandler::new(
             config.clone(),
@@ -63,6 +66,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
             mempool.clone(),
             acceptance_state,
             tx_forwarder,
+            policy_client,
         );
 
         Self {
@@ -692,6 +696,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
         self.eth_call_handler
+            .admit_request(&request)
+            .await
+            .to_rpc_result()?;
+        self.eth_call_handler
             .call_impl(request, block_number, state_overrides, block_overrides)
             .to_rpc_result()
     }
@@ -722,6 +730,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         block_number: Option<BlockId>,
         state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
+        self.eth_call_handler
+            .admit_request(&request)
+            .await
+            .to_rpc_result()?;
         self.eth_call_handler
             .estimate_gas_impl(request, block_number, state_override)
             .to_rpc_result()
