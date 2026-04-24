@@ -103,6 +103,7 @@ where
     ///
     /// Runs custom checks first (using the latest fee params cached on `self`), then
     /// delegates to the inner [`EthTransactionValidator::validate_stateless`].
+    #[allow(clippy::result_large_err)]
     fn validate_stateless(
         &self,
         origin: TransactionOrigin,
