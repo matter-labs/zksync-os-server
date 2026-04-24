@@ -6,8 +6,8 @@
 //! transport-agnostic. HTTP-over-UDS is the first latency-tuning fallback
 //! if TCP round-trips don't hold the latency budget.
 //!
-//! Only the admit endpoint is wired today; the judge endpoint will share
-//! the same transport surface.
+//! Both the admit and judge endpoints share the same transport surface;
+//! they differ only in the request path passed to [`Transport::post`].
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -104,9 +104,17 @@ impl Transport {
     }
 
     pub async fn post_admit(&self, body: Vec<u8>) -> Result<Bytes, TransportError> {
+        self.post("/admit", body).await
+    }
+
+    pub async fn post_judge(&self, body: Vec<u8>) -> Result<Bytes, TransportError> {
+        self.post("/judge", body).await
+    }
+
+    async fn post(&self, path: &str, body: Vec<u8>) -> Result<Bytes, TransportError> {
         match self {
             Self::Http(http) => {
-                let uri = format!("{}/admit", http.base_url);
+                let uri = format!("{}{path}", http.base_url);
                 let request = build_request(&uri, body, http.auth_token.as_ref())?;
                 let response = http
                     .client
@@ -118,7 +126,7 @@ impl Transport {
             Self::Unix {
                 socket_path,
                 auth_token,
-            } => post_admit_over_uds(socket_path, body, auth_token.as_ref()).await,
+            } => post_over_uds(socket_path, path, body, auth_token.as_ref()).await,
         }
     }
 }
@@ -154,8 +162,9 @@ async fn collect_success_body(response: Response<Incoming>) -> Result<Bytes, Tra
 /// UDS path uses a one-shot connection per request. Simpler than plumbing
 /// a full pooled hyper-util client with a custom connector.
 /// TODO: add pooling alongside the latency-measurement work.
-async fn post_admit_over_uds(
+async fn post_over_uds(
     socket_path: &Path,
+    path: &str,
     body: Vec<u8>,
     auth_token: Option<&SecretString>,
 ) -> Result<Bytes, TransportError> {
@@ -179,7 +188,7 @@ async fn post_admit_over_uds(
     // Host header is irrelevant over UDS but required by HTTP/1.1.
     let request = Request::builder()
         .method(Method::POST)
-        .uri("/admit")
+        .uri(path)
         .header(hyper::header::HOST, "localhost")
         .header(hyper::header::CONTENT_TYPE, "application/json")
         .header(hyper::header::ACCEPT, "application/json");
