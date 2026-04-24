@@ -14,9 +14,11 @@ use httpmock::{Method, MockServer};
 use serde_json::json;
 use tokio::task::spawn_blocking;
 use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::tracing::{BeginTxContext, TxValidator};
+use zksync_os_interface::tracing::{
+    BeginTxContext, CallModifier, EvmRequest, EvmResources, EvmTracer, TxValidator,
+};
 
-use super::{Config, PolicyClient};
+use super::{Config, PolicyClient, Tracer};
 
 const FROM: Address = address!("0x1111111111111111111111111111111111111111");
 const TO: Address = address!("0x2222222222222222222222222222222222222222");
@@ -237,12 +239,271 @@ async fn invalid_url_rejected_at_construction() {
     assert!(err.is_err(), "expected BuildError for invalid url");
 }
 
+// ---------- Judge path ----------
+//
+// `finish_tx` runs the post-execution judge. Tests below drive the full
+// tx lifecycle (validator.begin_tx → tracer frames → validator.finish_tx)
+// in `spawn_blocking` to mirror the bootloader's call ordering inside
+// `spawn_blocking`.
+
+/// Minimal `EvmRequest` impl used to drive captured frames into the tracer.
+struct MockFrame {
+    caller: Address,
+    callee: Address,
+    modifier: CallModifier,
+    input: Vec<u8>,
+    value: U256,
+}
+
+impl EvmRequest for &MockFrame {
+    fn resources(&self) -> EvmResources {
+        EvmResources::default()
+    }
+    fn caller(&self) -> Address {
+        self.caller
+    }
+    fn callee(&self) -> Address {
+        self.callee
+    }
+    fn modifier(&self) -> CallModifier {
+        self.modifier
+    }
+    fn input(&self) -> &[u8] {
+        &self.input
+    }
+    fn nominal_token_value(&self) -> U256 {
+        self.value
+    }
+}
+
+/// Recursive test frame that drives the tracer through a nested CREATE/CALL
+/// shape — `children` open *while their parent is still open*, matching how
+/// the bootloader fires `on_new_execution_frame` / `after_execution_frame_completed`
+/// in real execution.
+struct TraceScript {
+    frame: MockFrame,
+    children: Vec<TraceScript>,
+}
+
+impl TraceScript {
+    fn leaf(frame: MockFrame) -> Self {
+        Self {
+            frame,
+            children: Vec::new(),
+        }
+    }
+
+    fn drive(&self, tracer: &mut Tracer) {
+        tracer.on_new_execution_frame(&self.frame);
+        for child in &self.children {
+            child.drive(tracer);
+        }
+        tracer.after_execution_frame_completed(None);
+    }
+}
+
+/// Drive a full tx through the (validator, tracer) pair on a blocking thread.
+/// Mirrors the bootloader: `tracer.begin_tx` → `validator.begin_tx` →
+/// nested frame hooks → `validator.finish_tx` → `tracer.finish_tx`.
+async fn run_full_tx(
+    mut client: PolicyClient,
+    mut tracer: Tracer,
+    ctx: BeginTxContext<'static>,
+    scripts: Vec<TraceScript>,
+) -> Result<(), InvalidTransaction> {
+    spawn_blocking(move || {
+        EvmTracer::begin_tx(&mut tracer, ctx.calldata);
+        let begin = TxValidator::begin_tx(&mut client, &ctx);
+        if begin.is_err() {
+            EvmTracer::finish_tx(&mut tracer);
+            return begin;
+        }
+        for script in &scripts {
+            script.drive(&mut tracer);
+        }
+        let finish = TxValidator::finish_tx(&mut client);
+        EvmTracer::finish_tx(&mut tracer);
+        finish
+    })
+    .await
+    .unwrap()
+}
+
+fn allow_admit_mock(server: &MockServer) -> impl Future<Output = httpmock::Mock<'_>> {
+    server.mock_async(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({ "allow": true }));
+    })
+}
+
+fn one_frame() -> Vec<TraceScript> {
+    vec![TraceScript::leaf(MockFrame {
+        caller: FROM,
+        callee: TO,
+        modifier: CallModifier::NoModifier,
+        input: CALLDATA.to_vec(),
+        value: U256::from(1_000u64),
+    })]
+}
+
 #[tokio::test]
-async fn finish_tx_is_stub_ok() {
+async fn judge_happy_path_allow() {
     let server = MockServer::start_async().await;
-    let mut client = PolicyClient::new(base_config(server.base_url())).unwrap();
-    // `finish_tx` is a stub until the execution-result judge lands.
-    assert!(client.finish_tx().is_ok());
+    let _admit_mock = allow_admit_mock(&server).await;
+    let judge_mock = server
+        .mock_async(|when, then| {
+            when.method(Method::POST)
+                .path("/judge")
+                .header("content-type", "application/json");
+            then.status(200).json_body(json!({ "allow": true }));
+        })
+        .await;
+
+    let client = PolicyClient::new(base_config(server.base_url())).unwrap();
+    let tracer = client.paired_tracer();
+    let res = run_full_tx(client, tracer, test_context(), one_frame()).await;
+
+    assert!(res.is_ok(), "expected judge to allow, got {res:?}");
+    assert_eq!(judge_mock.calls_async().await, 1);
+}
+
+#[tokio::test]
+async fn judge_deny_maps_to_filtered_by_validator() {
+    let server = MockServer::start_async().await;
+    let _admit_mock = allow_admit_mock(&server).await;
+    let _judge_mock = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/judge");
+            then.status(200).json_body(json!({
+                "allow": false,
+                "ruleId": "post_exec_disallowed",
+                "reason": "wrote to a forbidden slot"
+            }));
+        })
+        .await;
+
+    let client = PolicyClient::new(base_config(server.base_url())).unwrap();
+    let tracer = client.paired_tracer();
+    let res = run_full_tx(client, tracer, test_context(), one_frame()).await;
+
+    assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
+}
+
+#[tokio::test]
+async fn judge_transport_error_fails_closed() {
+    // No /judge mock registered: the mock server replies 404 to that path,
+    // which the client must treat as fail-closed.
+    let server = MockServer::start_async().await;
+    let _admit_mock = allow_admit_mock(&server).await;
+
+    let client = PolicyClient::new(base_config(server.base_url())).unwrap();
+    let tracer = client.paired_tracer();
+    let res = run_full_tx(client, tracer, test_context(), one_frame()).await;
+
+    assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
+}
+
+#[tokio::test]
+async fn judge_bypass_from_skips_call() {
+    // Mock /judge to deny — the bypass must prevent the call from ever firing.
+    let server = MockServer::start_async().await;
+    let _admit_mock = allow_admit_mock(&server).await;
+    let judge_deny = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/judge");
+            then.status(200).json_body(json!({ "allow": false }));
+        })
+        .await;
+
+    let mut cfg = base_config(server.base_url());
+    cfg.bypass_from = HashSet::from([FROM]);
+    let client = PolicyClient::new(cfg).unwrap();
+    let tracer = client.paired_tracer();
+    let res = run_full_tx(client, tracer, test_context(), one_frame()).await;
+
+    assert!(res.is_ok(), "bypassed tx should not be judged");
+    assert_eq!(
+        judge_deny.calls_async().await,
+        0,
+        "bypass must not reach the policy service"
+    );
+}
+
+#[tokio::test]
+async fn judge_serialized_request_carries_captured_frames() {
+    let server = MockServer::start_async().await;
+    let _admit_mock = allow_admit_mock(&server).await;
+
+    let captured = Arc::new(std::sync::Mutex::new(None));
+    let captured_clone = captured.clone();
+    let _judge_mock = server
+        .mock_async(|when, then| {
+            when.method(Method::POST)
+                .path("/judge")
+                .is_true(move |req| {
+                    *captured_clone.lock().unwrap() = Some(req.body().to_vec());
+                    true
+                });
+            then.status(200).json_body(json!({ "allow": true }));
+        })
+        .await;
+
+    let client = PolicyClient::new(base_config(server.base_url())).unwrap();
+    let tracer = client.paired_tracer();
+
+    // Top-level call EOA->Factory, with a nested CREATE that deploys
+    // `deployed`. The wire body should record the deploy in the *parent*'s
+    // `deploys` list, not on the constructor frame itself.
+    let deployed = address!("0x4444444444444444444444444444444444444444");
+    let scripts = vec![TraceScript {
+        frame: MockFrame {
+            caller: FROM,
+            callee: TO,
+            modifier: CallModifier::NoModifier,
+            input: CALLDATA.to_vec(),
+            value: U256::from(1_000u64),
+        },
+        children: vec![TraceScript::leaf(MockFrame {
+            caller: TO,
+            callee: deployed,
+            modifier: CallModifier::Constructor,
+            input: vec![0xab, 0xcd],
+            value: U256::ZERO,
+        })],
+    }];
+    let res = run_full_tx(client, tracer, test_context(), scripts).await;
+    assert!(res.is_ok());
+
+    let body = captured.lock().unwrap().clone().expect("body captured");
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed["protocolVersion"], "1");
+    let frames_json = parsed["trace"]["frames"].as_array().expect("frames array");
+    assert_eq!(frames_json.len(), 2);
+    assert_eq!(
+        frames_json[0]["caller"]
+            .as_str()
+            .unwrap()
+            .to_ascii_lowercase(),
+        format!("{FROM:#x}")
+    );
+    assert_eq!(
+        frames_json[0]["callee"]
+            .as_str()
+            .unwrap()
+            .to_ascii_lowercase(),
+        format!("{TO:#x}")
+    );
+    assert_eq!(frames_json[0]["value"].as_str().unwrap(), "0x3e8");
+    assert_eq!(frames_json[0]["calldata"].as_str().unwrap(), "0xdeadbeef");
+    let deploys = frames_json[0]["deploys"].as_array().unwrap();
+    assert_eq!(deploys.len(), 1);
+    assert_eq!(
+        deploys[0].as_str().unwrap().to_ascii_lowercase(),
+        format!("{deployed:#x}")
+    );
+    // Constructor frame itself records no deploy.
+    assert!(frames_json[1]["deploys"].as_array().unwrap().is_empty());
+    assert_eq!(frames_json[1]["calldata"].as_str().unwrap(), "0xabcd");
 }
 
 #[tokio::test]
