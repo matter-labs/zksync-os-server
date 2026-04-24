@@ -5,8 +5,10 @@
 //!   - pre-execution admit (`begin_tx`) — currently implemented: serializes
 //!     a `BeginTxContext`, POSTs it to `${POLICY_SERVICE_URL}/admit`, and
 //!     maps allow → `Ok(())` / deny → `Err(FilteredByValidator)`.
-//!   - post-execution judge (`finish_tx`) — stubbed `Ok(())` for now. TODO:
-//!     wire once the execution-result judge endpoint is designed.
+//!   - post-execution judge (`finish_tx`) — stubbed `Ok(())` for now. The
+//!     paired [`Tracer`] already captures per-frame data into a shared slot
+//!     so a follow-up commit can drain it into a `/judge` call with no
+//!     further plumbing changes.
 //!
 //! Any error on a policy call (timeout, connection failure, non-2xx,
 //! malformed body, protocol-version mismatch) is fail-closed.
@@ -18,6 +20,7 @@
 //! once it's available — the types below are a first pass.
 
 mod metrics;
+mod tracer;
 mod transport;
 
 use std::collections::HashSet;
@@ -33,6 +36,8 @@ use zksync_os_interface::tracing::{
 };
 
 use self::metrics::{AdmitErrorReason, AdmitOutcome, POLICY_CLIENT_METRICS};
+pub use self::tracer::Tracer;
+use self::tracer::TraceSlot;
 use self::transport::{Transport, TransportError};
 
 /// Plain config struct — mirrors the fields `node/bin` reads out of env vars
@@ -86,6 +91,12 @@ struct Inner {
     protocol_version: String,
     min_protocol_version: Option<String>,
     bypass_from: HashSet<Address>,
+    /// Per-tx scratchpad shared with the paired [`Tracer`]. The tracer
+    /// appends frames during execution; the post-execution judge call will
+    /// drain them in a follow-up commit. Mutex contention is structurally
+    /// zero — only one block-build task ever writes to this slot, and
+    /// RPC's async [`PolicyClient::admit`] path never touches it.
+    trace_slot: TraceSlot,
 }
 
 impl PolicyClient {
@@ -98,8 +109,17 @@ impl PolicyClient {
                 protocol_version: config.protocol_version,
                 min_protocol_version: config.min_protocol_version,
                 bypass_from: config.bypass_from,
+                trace_slot: tracer::new_slot(),
             }),
         })
+    }
+
+    /// Construct the [`Tracer`] paired with this client. Must be threaded
+    /// through `run_block` alongside this client on the same task — they
+    /// share a per-instance scratch slot that the tracer fills in during
+    /// execution.
+    pub fn paired_tracer(&self) -> Tracer {
+        Tracer::new(self.inner.trace_slot.clone())
     }
 
     /// Consult the policy service. Used directly by RPC handlers; the sync
