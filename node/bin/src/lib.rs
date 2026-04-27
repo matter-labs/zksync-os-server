@@ -1042,7 +1042,8 @@ async fn run_main_node_pipeline(
             .join(INTERNAL_CONFIG_FILE_NAME),
     );
 
-    let monitor = BackpressureMonitor::new(config.backpressure_config.clone(), stop_receiver);
+    let monitor =
+        BackpressureMonitor::new(config.backpressure_config.clone().into(), stop_receiver);
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::channel(8);
     let (applied_block_number_sender, applied_block_number_receiver) =
@@ -1276,8 +1277,10 @@ async fn run_en_pipeline(
     let (applied_block_number_sender, applied_block_number_receiver) =
         watch::channel(starting_block - 1);
 
-    let monitor =
-        BackpressureMonitor::new(config.backpressure_config.clone(), stop_receiver.clone());
+    let monitor = BackpressureMonitor::new(
+        config.backpressure_config.clone().into(),
+        stop_receiver.clone(),
+    );
 
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {

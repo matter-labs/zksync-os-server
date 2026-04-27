@@ -1,4 +1,4 @@
-use crate::config::{BackpressureConfig, ComponentId};
+use crate::config::{BackpressureConfig, ComponentId, is_pipeline_stage};
 use crate::metrics::MONITOR_METRICS;
 use reth_tasks::Runtime;
 use std::collections::HashMap;
@@ -20,11 +20,10 @@ pub struct AdjacentSnapshot {
 
 fn compute_adjacent_snapshots(
     snapshot: &PipelineSnapshot,
-    config: &BackpressureConfig,
 ) -> HashMap<ComponentId, AdjacentSnapshot> {
     snapshot
         .iter()
-        .filter(|(id, _)| config.backpressure_enabled_for(*id))
+        .filter(|(id, _)| is_pipeline_stage(*id))
         .collect::<Vec<_>>()
         .windows(2)
         .filter_map(|w| {
@@ -87,17 +86,20 @@ impl BackpressureMonitor {
         let snapshot = snapshot_rx.borrow_and_update().clone();
 
         // Log startup summary.
-        let mut active = Vec::new();
-        let mut disabled = Vec::new();
+        let mut with_threshold = Vec::new();
+        let mut no_threshold = Vec::new();
         for (id, _) in &snapshot {
+            if !is_pipeline_stage(*id) {
+                continue;
+            }
             let cond = self.config.condition_for(*id);
-            let is_active = cond.max_block_diff_to_upstream.is_some()
+            let has_threshold = cond.max_block_diff_to_upstream.is_some()
                 || cond.max_time_diff_to_upstream.is_some()
                 || cond.max_batch_diff_to_upstream.is_some();
-            if is_active {
-                active.push(id.as_str());
+            if has_threshold {
+                with_threshold.push(id.as_str());
             } else {
-                disabled.push(id.as_str());
+                no_threshold.push(id.as_str());
             }
             tracing::debug!(
                 "BackpressureMonitor: component {} threshold — max_block_diff_to_upstream={:?}, max_time_diff_to_upstream={:?}, max_batch_diff_to_upstream={:?}",
@@ -122,13 +124,6 @@ impl BackpressureMonitor {
         if *self.stop_receiver.borrow_and_update() {
             return;
         }
-
-        tracing::info!(
-            "BackpressureMonitor starting: active={}/{} components, disabled={:?}",
-            active.len(),
-            snapshot.len(),
-            disabled,
-        );
 
         // Snapshot current state immediately so operators see accurate lag at monitor startup.
         self.evaluate_and_update(&snapshot);
@@ -178,9 +173,7 @@ impl BackpressureMonitor {
             }
         }
 
-        // Compute adjacent block, time, and batch diffs using last_processed on both sides.
-        // Only components where backpressure_enabled_for returns true participate in the window.
-        let adjacent = compute_adjacent_snapshots(snapshot, &self.config);
+        let adjacent = compute_adjacent_snapshots(snapshot);
 
         let mut active_component_ids: std::collections::HashSet<ComponentId> =
             std::collections::HashSet::new();
@@ -316,18 +309,6 @@ impl BackpressureMonitor {
         }
     }
 
-    // TODO: decide about this state age as it's not directly related to backpressure monitor
-    fn emit_state_age(&self, snapshot: &PipelineSnapshot) {
-        let now = tokio::time::Instant::now();
-        for (id, h) in snapshot {
-            let age = now
-                .saturating_duration_since(h.state_entered_at)
-                .as_secs_f64();
-            GENERAL_METRICS.component_state_age_seconds[&(id.as_str(), h.state, h.specific_state)]
-                .set(age);
-        }
-    }
-
     fn evaluate(
         &self,
         id: ComponentId,
@@ -378,6 +359,18 @@ impl BackpressureMonitor {
 
         causes
     }
+
+    // TODO: decide about this state age as it's not directly related to backpressure monitor
+    fn emit_state_age(&self, snapshot: &PipelineSnapshot) {
+        let now = tokio::time::Instant::now();
+        for (id, h) in snapshot {
+            let age = now
+                .saturating_duration_since(h.state_entered_at)
+                .as_secs_f64();
+            GENERAL_METRICS.component_state_age_seconds[&(id.as_str(), h.state, h.specific_state)]
+                .set(age);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -396,53 +389,35 @@ mod tests {
             .collect()
     }
 
-    fn block_config_with_block_diff_to_upstream(max_diff: u64) -> BackpressureConfig {
-        BackpressureConfig {
-            block_pipeline: crate::config::PipelineCondition {
-                max_block_diff_to_upstream: Some(max_diff),
-                max_time_diff_to_upstream: None,
-                max_batch_diff_to_upstream: None,
-            },
-            ..BackpressureConfig::default()
-        }
+    fn config_for(
+        id: ComponentId,
+        condition: crate::config::PipelineCondition,
+    ) -> BackpressureConfig {
+        let mut config = BackpressureConfig::default();
+        config.set(id, condition);
+        config
     }
 
-    fn block_config_with_time_diff_to_upstream(max_diff: Duration) -> BackpressureConfig {
-        BackpressureConfig {
-            block_pipeline: crate::config::PipelineCondition {
-                max_block_diff_to_upstream: None,
-                max_time_diff_to_upstream: Some(max_diff),
-                max_batch_diff_to_upstream: None,
-            },
-            ..BackpressureConfig::default()
+    fn multi_config(
+        ids: &[ComponentId],
+        condition: crate::config::PipelineCondition,
+    ) -> BackpressureConfig {
+        let mut config = BackpressureConfig::default();
+        for &id in ids {
+            config.set(id, condition.clone());
         }
-    }
-
-    fn batch_config_with_block_diff_to_upstream(max_diff: u64) -> BackpressureConfig {
-        BackpressureConfig {
-            batch_pipeline: crate::config::PipelineCondition {
-                max_block_diff_to_upstream: Some(max_diff),
-                max_time_diff_to_upstream: None,
-                max_batch_diff_to_upstream: None,
-            },
-            ..BackpressureConfig::default()
-        }
-    }
-
-    fn batch_config_with_batch_diff_to_upstream(max_diff: u64) -> BackpressureConfig {
-        BackpressureConfig {
-            batch_pipeline: crate::config::PipelineCondition {
-                max_block_diff_to_upstream: None,
-                max_time_diff_to_upstream: None,
-                max_batch_diff_to_upstream: Some(max_diff),
-            },
-            ..BackpressureConfig::default()
-        }
+        config
     }
 
     #[test]
     fn below_lag_threshold_no_trigger() {
-        let config = block_config_with_block_diff_to_upstream(10);
+        let config = config_for(
+            ComponentId::BlockApplier,
+            crate::config::PipelineCondition {
+                max_block_diff_to_upstream: Some(10),
+                ..Default::default()
+            },
+        );
         let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
         let result = monitor.evaluate(ComponentId::BlockApplier, 5, None, None);
         assert!(result.is_empty());
@@ -450,7 +425,13 @@ mod tests {
 
     #[test]
     fn above_lag_threshold_triggers() {
-        let config = block_config_with_block_diff_to_upstream(10);
+        let config = config_for(
+            ComponentId::BlockApplier,
+            crate::config::PipelineCondition {
+                max_block_diff_to_upstream: Some(10),
+                ..Default::default()
+            },
+        );
         let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
         let result = monitor.evaluate(ComponentId::BlockApplier, 15, None, None);
         assert!(matches!(
@@ -464,7 +445,13 @@ mod tests {
 
     #[test]
     fn at_exact_threshold_no_trigger() {
-        let config = block_config_with_block_diff_to_upstream(10);
+        let config = config_for(
+            ComponentId::BlockApplier,
+            crate::config::PipelineCondition {
+                max_block_diff_to_upstream: Some(10),
+                ..Default::default()
+            },
+        );
         let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
         let result = monitor.evaluate(ComponentId::BlockApplier, 10, None, None);
         assert!(result.is_empty());
@@ -472,7 +459,13 @@ mod tests {
 
     #[test]
     fn time_diff_to_upstream_triggers_when_exceeded() {
-        let config = block_config_with_time_diff_to_upstream(Duration::from_secs(30));
+        let config = config_for(
+            ComponentId::BlockApplier,
+            crate::config::PipelineCondition {
+                max_time_diff_to_upstream: Some(Duration::from_secs(30)),
+                ..Default::default()
+            },
+        );
         let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
         let result = monitor.evaluate(
             ComponentId::BlockApplier,
@@ -501,7 +494,14 @@ mod tests {
 
     #[tokio::test]
     async fn counter_does_not_increment_on_reason_change() {
-        let config = block_config_with_block_diff_to_upstream(10);
+        let cond = crate::config::PipelineCondition {
+            max_block_diff_to_upstream: Some(10),
+            ..Default::default()
+        };
+        let config = multi_config(
+            &[ComponentId::BlockExecutor, ComponentId::BlockApplier],
+            cond,
+        );
         let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
         let (exec_reporter, exec_rx) = ComponentStateReporter::new("block_executor");
         let (reporter, rx) = ComponentStateReporter::new("block_applier");
@@ -538,14 +538,14 @@ mod tests {
 
     #[test]
     fn evaluate_collects_both_block_and_time_diff_to_upstream() {
-        let config = BackpressureConfig {
-            block_pipeline: crate::config::PipelineCondition {
+        let config = config_for(
+            ComponentId::BlockApplier,
+            crate::config::PipelineCondition {
                 max_block_diff_to_upstream: Some(10),
                 max_time_diff_to_upstream: Some(Duration::from_secs(30)),
                 max_batch_diff_to_upstream: None,
             },
-            ..BackpressureConfig::default()
-        };
+        );
         let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
         let causes = monitor.evaluate(
             ComponentId::BlockApplier,
@@ -561,14 +561,18 @@ mod tests {
         // canon is 100 blocks behind exec (>> threshold=10, triggers).
         // apply is only 2 blocks behind canon (< threshold=10, must NOT trigger).
         // Verifies that backpressure is per-adjacent-pair, not cumulative from head.
-        let config = BackpressureConfig {
-            block_pipeline: crate::config::PipelineCondition {
-                max_block_diff_to_upstream: Some(10),
-                max_time_diff_to_upstream: None,
-                max_batch_diff_to_upstream: None,
-            },
-            ..BackpressureConfig::default()
+        let cond = crate::config::PipelineCondition {
+            max_block_diff_to_upstream: Some(10),
+            ..Default::default()
         };
+        let config = multi_config(
+            &[
+                ComponentId::BlockExecutor,
+                ComponentId::BlockCanonizer,
+                ComponentId::BlockApplier,
+            ],
+            cond,
+        );
         let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
 
         let (exec_reporter, exec_rx) = ComponentStateReporter::new("block_executor");
@@ -602,10 +606,19 @@ mod tests {
 
     #[tokio::test]
     async fn fri_job_manager_skipped_gapless_committer_adjacent_to_batch_verification() {
-        // FriJobManager is excluded from the adjacency window by default. With it present
-        // in the snapshot but backpressure_enabled_for returning false, GaplessCommitter
-        // should be measured against BatchVerification (skipping FriJobManager).
-        let config = batch_config_with_block_diff_to_upstream(10);
+        // FriJobManager is excluded from the adjacency window by is_pipeline_stage
+        // (hardcoded topology rule). GaplessCommitter must be measured against BatchVerification,
+        // skipping FriJobManager regardless of which thresholds are configured.
+        let config = multi_config(
+            &[
+                ComponentId::BatchVerification,
+                ComponentId::GaplessCommitter,
+            ],
+            crate::config::PipelineCondition {
+                max_block_diff_to_upstream: Some(10),
+                ..Default::default()
+            },
+        );
         let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
         let (bv_reporter, bv_rx) = ComponentStateReporter::new("batch_verification");
         let (fri_reporter, fri_rx) = ComponentStateReporter::new("fri_job_manager");
@@ -649,7 +662,13 @@ mod tests {
 
     #[tokio::test]
     async fn l1_sender_triggers_max_batch_diff_to_upstream_via_last_processed() {
-        let config = batch_config_with_batch_diff_to_upstream(3);
+        let config = multi_config(
+            &[ComponentId::UpgradeGatekeeper, ComponentId::L1SenderCommit],
+            crate::config::PipelineCondition {
+                max_batch_diff_to_upstream: Some(3),
+                ..Default::default()
+            },
+        );
         let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
         let (exec_reporter, exec_rx) = ComponentStateReporter::new("block_executor");
         let (up_reporter, up_rx) = ComponentStateReporter::new("upgrade_gatekeeper");

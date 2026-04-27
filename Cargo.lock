@@ -14196,11 +14196,10 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_backpressure"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "futures",
  "reth-tasks",
- "smart-config",
  "tokio",
  "tokio-stream",
  "tracing",

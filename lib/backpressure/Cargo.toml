@@ -19,7 +19,6 @@ tokio-stream            = { workspace = true }
 futures                 = { workspace = true }
 vise                    = { workspace = true }
 tracing                 = { workspace = true }
-smart-config            = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

@@ -1,14 +1,13 @@
 use crate::config::{
-    BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config,
-    ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
-    InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
+    BackpressureConfig, BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig,
+    Config, ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig,
+    GenesisConfig, InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
     MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig, ProverApiConfig,
     ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use std::fs;
 use std::path::{Path, PathBuf};
-use zksync_os_backpressure::BackpressureConfig;
 use zksync_os_types::ConfigFormat;
 
 /// Builds the runtime [`Config`] by parsing all supported sections from the repository

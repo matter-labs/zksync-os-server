@@ -15,7 +15,6 @@ use smart_config::{
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::{path::PathBuf, time::Duration};
-use zksync_os_backpressure::BackpressureConfig;
 use zksync_os_batch_verification;
 use zksync_os_config_validation_macros::ConfigValidate;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
@@ -954,12 +953,6 @@ pub struct ProverApiConfig {
     /// If the difference is larger than this, provers will not be assigned new jobs - only retries.
     /// We use max range instead of length limit to avoid having one old batch stuck -
     /// otherwise GaplessCommitter's buffer would grow indefinitely.
-    ///
-    /// This is the **sole in-flight capacity** for the FRI and SNARK stages: `ProverJobMap::add_job`
-    /// blocks when the range is full, and the job-manager → pipeline-step channel is unbounded.
-    /// For the pipeline-level backpressure monitor to attribute "prover is the bottleneck" to the
-    /// right component, keep this strictly less than `backpressure.batch_pipeline.max_batch_diff_to_upstream` —
-    /// otherwise the monitor trips on the batcher side before add_job backpressure is visible.
     #[config(default_t = 10)]
     pub max_assigned_batch_range: usize,
 
@@ -1275,6 +1268,64 @@ pub struct FeeConfig {
     /// Override for native price (in base token units).
     /// If set, native price will be constant and equal to this value.
     pub native_price_override: Option<U128>,
+}
+
+/// Backpressure configuration.
+///
+/// Each field caps the number of unprocessed batches between a pipeline stage and its
+/// upstream neighbour. Leave a field unset to impose no limit on that stage.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct BackpressureConfig {
+    /// Stop accepting transactions when the FRI-prover output queue grows beyond this
+    /// many batches (measured at `gapless_committer` vs `batch_verification`).
+    pub fri_prover: Option<u64>,
+    /// Stop accepting transactions when the SNARK-prover output queue grows beyond this
+    /// many batches.
+    pub snark_prover: Option<u64>,
+    /// Stop accepting transactions when the batch verification queue grows beyond this
+    /// many batches.
+    pub batch_verification: Option<u64>,
+    /// Stop accepting transactions when the upgrade gatekeeper queue grows beyond this many batches.
+    /// Defaults to 100.
+    #[config(default_t = Some(100_u64))]
+    pub upgrade_gatekeeper: Option<u64>,
+    /// Stop accepting transactions when any L1-sender queue grows beyond this many batches.
+    pub l1_senders: Option<u64>,
+}
+
+impl From<BackpressureConfig> for zksync_os_backpressure::BackpressureConfig {
+    fn from(c: BackpressureConfig) -> Self {
+        use zksync_os_backpressure::{ComponentId, PipelineCondition};
+        let batch = |v| PipelineCondition {
+            max_batch_diff_to_upstream: v,
+            ..Default::default()
+        };
+        let mut cfg = zksync_os_backpressure::BackpressureConfig::default();
+
+        if let Some(v) = c.batch_verification {
+            cfg.set(ComponentId::BatchVerification, batch(Some(v)));
+        }
+        if let Some(v) = c.fri_prover {
+            cfg.set(ComponentId::GaplessCommitter, batch(Some(v)));
+        }
+        if let Some(v) = c.upgrade_gatekeeper {
+            cfg.set(ComponentId::UpgradeGatekeeper, batch(Some(v)));
+        }
+        if let Some(v) = c.snark_prover {
+            cfg.set(ComponentId::GaplessL1ProofSender, batch(Some(v)));
+        }
+        if let Some(v) = c.l1_senders {
+            for id in [
+                ComponentId::L1SenderCommit,
+                ComponentId::L1SenderProve,
+                ComponentId::L1SenderExecute,
+            ] {
+                cfg.set(id, batch(Some(v)));
+            }
+        }
+        cfg
+    }
 }
 
 impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {

@@ -27,10 +27,9 @@ sequencer:
   revm_consistency_checker_enabled: false
 
 backpressure:
-  block_pipeline:
-    max_block_diff_to_upstream: 500
-  batch_pipeline:
-    max_batch_diff_to_upstream: 50
+  fri_prover: 100
+  snark_prover: 100
+  l1_senders: 100
 
 external_price_api_client:
   source: Forced
