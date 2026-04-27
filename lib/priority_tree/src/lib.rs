@@ -336,7 +336,7 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
         self,
         mut priority_ops_internal_receiver: mpsc::UnboundedReceiver<(u64, u64, Option<usize>)>,
     ) -> anyhow::Result<()> {
-        let state_reporter = ComponentStateReporter::unmonitored("priority_tree_keep_caching");
+        let (state_reporter, _rx) = ComponentStateReporter::new("priority_tree_keep_caching");
         let mut finality_receiver = self.finality.subscribe();
 
         loop {

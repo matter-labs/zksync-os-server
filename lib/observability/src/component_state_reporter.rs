@@ -94,12 +94,6 @@ impl ComponentStateReporter {
         (Self { sender, component }, receiver)
     }
 
-    /// Reporter registration for components with disabled backpressure monitoring.
-    pub fn unmonitored(component: &'static str) -> Self {
-        let (reporter, _rx) = Self::new(component);
-        reporter
-    }
-
     /// Transition to a new state and record time-in-previous-state metric.
     pub fn enter_state(&self, new_state: impl StateLabel) {
         let now = Instant::now();

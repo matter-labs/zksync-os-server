@@ -50,7 +50,6 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 
     const COMPONENT_ID: zksync_os_pipeline::ComponentId =
         zksync_os_pipeline::ComponentId::ConsensusNodeCommandSource;
-    const REGISTER_WITH_MONITOR: bool = false;
 
     async fn run(
         mut self,
@@ -200,7 +199,6 @@ impl PipelineComponent for ExternalNodeCommandSource {
 
     const COMPONENT_ID: zksync_os_pipeline::ComponentId =
         zksync_os_pipeline::ComponentId::ExternalNodeCommandSource;
-    const REGISTER_WITH_MONITOR: bool = false;
 
     async fn run(
         mut self,

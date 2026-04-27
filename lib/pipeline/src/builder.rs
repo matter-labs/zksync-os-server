@@ -92,17 +92,8 @@ impl<Output: Send + 'static> Pipeline<Output> {
         let id = C::COMPONENT_ID;
         let name = id.as_str();
 
-        let reporter = if C::REGISTER_WITH_MONITOR {
-            let (reporter, rx) = ComponentStateReporter::new(name);
-            assert!(
-                !self.components.iter().any(|(cid, _)| *cid == id),
-                "Pipeline: component {id:?} registered twice"
-            );
-            self.components.push((id, rx));
-            reporter
-        } else {
-            ComponentStateReporter::unmonitored(name)
-        };
+        let (reporter, rx) = ComponentStateReporter::new(name);
+        self.components.push((id, rx));
 
         let (output_sender, output_receiver) = mpsc::unbounded_channel::<C::Output>();
         let output_receiver = PeekableReceiver::new(output_receiver);

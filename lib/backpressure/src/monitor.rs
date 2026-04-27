@@ -20,8 +20,12 @@ pub struct AdjacentSnapshot {
 
 fn compute_adjacent_snapshots(
     snapshot: &PipelineSnapshot,
+    config: &BackpressureConfig,
 ) -> HashMap<ComponentId, AdjacentSnapshot> {
     snapshot
+        .iter()
+        .filter(|(id, _)| config.backpressure_enabled_for(*id))
+        .collect::<Vec<_>>()
         .windows(2)
         .filter_map(|w| {
             let down = w[1].0;
@@ -175,7 +179,8 @@ impl BackpressureMonitor {
         }
 
         // Compute adjacent block, time, and batch diffs using last_processed on both sides.
-        let adjacent = compute_adjacent_snapshots(snapshot);
+        // Only components where backpressure_enabled_for returns true participate in the window.
+        let adjacent = compute_adjacent_snapshots(snapshot, &self.config);
 
         let mut active_component_ids: std::collections::HashSet<ComponentId> =
             std::collections::HashSet::new();
@@ -596,35 +601,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fri_job_manager_block_diff_to_upstream_triggers_and_clears() {
+    async fn fri_job_manager_skipped_gapless_committer_adjacent_to_batch_verification() {
+        // FriJobManager is excluded from the adjacency window by default. With it present
+        // in the snapshot but backpressure_enabled_for returning false, GaplessCommitter
+        // should be measured against BatchVerification (skipping FriJobManager).
         let config = batch_config_with_block_diff_to_upstream(10);
         let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
-        let (exec_reporter, exec_rx) = ComponentStateReporter::new("block_executor");
-        let (reporter, rx) = ComponentStateReporter::new("fri_job_manager");
-        exec_reporter.record_processed(100, None, None);
+        let (bv_reporter, bv_rx) = ComponentStateReporter::new("batch_verification");
+        let (fri_reporter, fri_rx) = ComponentStateReporter::new("fri_job_manager");
+        let (gc_reporter, gc_rx) = ComponentStateReporter::new("gapless_committer");
+
         let components: ComponentStateReceivers = vec![
-            (ComponentId::BlockExecutor, exec_rx),
-            (ComponentId::FriJobManager, rx),
+            (ComponentId::BatchVerification, bv_rx),
+            (ComponentId::FriJobManager, fri_rx),
+            (ComponentId::GaplessCommitter, gc_rx),
         ];
 
-        reporter.record_processed(85, None, None);
-        reporter.record_picked(85, None, None);
+        // BatchVerification at 100, FriJobManager at 60 (large lag — expected for proving),
+        // GaplessCommitter at 85 (lag=15 vs BatchVerification, above threshold=10).
+        bv_reporter.record_processed(100, None, None);
+        fri_reporter.record_processed(60, None, None);
+        fri_reporter.record_picked(60, None, None);
+        gc_reporter.record_processed(85, None, None);
+        gc_reporter.record_picked(85, None, None);
+
         monitor.evaluate_and_update(&snapshot(&components));
+        // FriJobManager lag=40 must NOT trigger (excluded from window).
+        // GaplessCommitter lag=15 vs BatchVerification exceeds threshold=10 — must trigger.
         assert!(
             matches!(
                 *monitor.acceptance_tx.borrow(),
                 TransactionAcceptanceState::NotAccepting(_)
             ),
-            "FriJobManager lag=15 must trigger backpressure with threshold=10"
+            "GaplessCommitter lag=15 vs BatchVerification must trigger; FriJobManager lag must not"
         );
 
-        reporter.record_processed(100, None, None);
-        reporter.record_picked(100, None, None);
+        // GaplessCommitter catches up — lag drops below threshold, backpressure clears.
+        gc_reporter.record_processed(98, None, None);
+        gc_reporter.record_picked(98, None, None);
         monitor.evaluate_and_update(&snapshot(&components));
         assert_eq!(
             *monitor.acceptance_tx.borrow(),
             TransactionAcceptanceState::Accepting,
-            "FriJobManager catching up must clear backpressure"
+            "GaplessCommitter catching up must clear backpressure"
         );
     }
 

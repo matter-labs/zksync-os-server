@@ -27,13 +27,12 @@ impl PipelineComponent for BatchSink {
 
     const COMPONENT_ID: zksync_os_pipeline::ComponentId =
         zksync_os_pipeline::ComponentId::BatchSink;
-    const REGISTER_WITH_MONITOR: bool = false;
 
     async fn run(
         self,
         mut input: PeekableReceiver<Self::Input>,
         _output: mpsc::UnboundedSender<Self::Output>,
-        _state_reporter: ComponentStateReporter,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         let mut internal_config = self.internal_config_manager.read_config()?;
         loop {
@@ -41,6 +40,11 @@ impl PipelineComponent for BatchSink {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
+            state_reporter.record_picked(
+                envelope.batch.last_block_number,
+                None,
+                Some(envelope.batch_number()),
+            );
             tracing::info!(
                 batch_number = envelope.batch_number(),
                 latency_tracker = %envelope.latency_tracker,
@@ -49,6 +53,11 @@ impl PipelineComponent for BatchSink {
                 block_to = envelope.batch.last_block_number,
                 proof = ?envelope.data,
                 " ▶▶▶ Batch has been fully processed"
+            );
+            state_reporter.record_processed(
+                envelope.batch.last_block_number,
+                None,
+                Some(envelope.batch_number()),
             );
             if let Some(n) = internal_config.failing_block
                 && envelope.batch.last_block_number >= n
@@ -89,7 +98,6 @@ impl<T: Send + 'static> PipelineComponent for NoOpSink<T> {
     type Output = ();
 
     const COMPONENT_ID: zksync_os_pipeline::ComponentId = zksync_os_pipeline::ComponentId::NoopSink;
-    const REGISTER_WITH_MONITOR: bool = false;
 
     async fn run(
         self,

@@ -21,16 +21,7 @@ pub trait PipelineComponent: Send + 'static {
     /// Used as the task name for logging, shutdown tracking, and state-monitor adjacency.
     const COMPONENT_ID: ComponentId;
 
-    /// Whether `Pipeline::pipe()` should include this component in the pipeline snapshot.
-    /// Sources/sinks that never call `record_*` (e.g. `BatchSink`, command sources) opt out
-    /// by setting this to `false`; the component is absent from the snapshot so adjacency
-    /// and backpressure computations skip over it as if it were not there.
-    const REGISTER_WITH_MONITOR: bool = true;
-
-    /// Run the component, receiving from input and sending to output. `state_reporter` is the
-    /// reporter `pipe()` created for this component; unmonitored components (those with
-    /// `REGISTER_WITH_MONITOR = false`) receive a metrics-only reporter that is never included
-    /// in the pipeline snapshot.
+    /// Run the component, receiving from input and sending to output.
     async fn run(
         self,
         input: PeekableReceiver<Self::Input>,

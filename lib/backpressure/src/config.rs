@@ -21,16 +21,22 @@ pub struct BackpressureCondition {
 /// BlockApplier, TreeManager, ProverInputGenerator, BatchVerificationResponder, Batcher.
 /// Batcher is grouped here because its upstream (ProverInputGenerator) is block-level.
 ///
-/// Batch-pipeline components: BatchVerification, FriJobManager, GaplessCommitter,
-/// UpgradeGatekeeper, L1SenderCommit, SnarkJobManager, GaplessL1ProofSender, L1SenderProve,
-/// PriorityTree, L1SenderExecute.
+/// Batch-pipeline components: BatchVerification, GaplessCommitter, UpgradeGatekeeper,
+/// L1SenderCommit, GaplessL1ProofSender, L1SenderProve, PriorityTree, L1SenderExecute.
+///
+/// FriJobManager and SnarkJobManager are excluded from the adjacency window by default
+/// (`backpressure_enabled_for` returns false). FRI and SNARK proving take arbitrarily long,
+/// so their lag to upstream is expected and not a useful backpressure signal. The sequencing
+/// stages that follow them (GaplessCommitter, GaplessL1ProofSender) are the correct signals:
+/// those stages receive completed proofs and reorder them, so their lag to upstream reflects
+/// the real reorder-buffer depth rather than proving time.
 ///
 /// `max_block_diff_to_upstream` reflects true adjacent channel occupancy for both groups:
 /// every component records `picked` on each block it dequeues, so in steady state the diff
 /// stays near 0. A sustained non-zero value indicates a real bottleneck. Batch-pipeline
-/// components that submit work concurrently (FriJobManager, SnarkJobManager, L1SenderCommit,
-/// L1SenderProve, L1SenderExecute) use high-watermark reporting, so out-of-order completions
-/// will not walk the watermark backward and create false positives.
+/// components that submit work concurrently (L1SenderCommit, L1SenderProve, L1SenderExecute)
+/// use high-watermark reporting, so out-of-order completions will not walk the watermark
+/// backward and create false positives.
 ///
 /// `max_batch_diff_to_upstream` is meaningful only for batch-pipeline components; block-pipeline
 /// upstreams carry no batch_number, so `condition_for` forces it to `None` for that group.
@@ -54,17 +60,12 @@ pub struct PipelineCondition {
 /// When set, this condition **completely replaces** the group condition for that component:
 /// unset fields (`None`) mean "no threshold" for that component, not "inherit from group".
 ///
-/// To disable backpressure entirely for a component, set `enabled = false` — this is the
-/// only way to express an all-None override, since an absent section is indistinguishable
-/// from no override at all.
-///
 /// Note: `max_block_diff_to_upstream` measures adjacent channel occupancy — the diff between
 /// upstream and downstream picked watermarks. It stays near 0 in steady state;
 /// a sustained non-zero value signals a real bottleneck.
 #[derive(DescribeConfig, DeserializeConfig, Clone, Debug)]
 pub struct ComponentConditionOverride {
-    /// When false, backpressure is completely disabled for this component regardless
-    /// of the other fields. Default: true.
+    /// Whether this component participates in backpressure trigger.
     #[config(default_t = true)]
     pub enabled: bool,
     /// Override the block-diff-to-upstream threshold for this component.
@@ -182,6 +183,33 @@ pub struct BackpressureConfig {
 }
 
 impl BackpressureConfig {
+    /// Returns whether `id` participates in the adjacency window for backpressure.
+    ///
+    /// Components where this returns `false` are skipped in `.windows(2)`: they still
+    /// appear in the pipeline snapshot (all metrics emitted) but never trigger backpressure,
+    /// and their downstream component becomes adjacent to the nearest enabled upstream.
+    ///
+    /// Precedence: `component_overrides.{component}.enabled` overrides the default below.
+    pub fn backpressure_enabled_for(&self, id: ComponentId) -> bool {
+        if let Some(o) = self.component_overrides.get(id) {
+            return o.enabled;
+        }
+        match id {
+            // Async provers: proving takes arbitrarily long so their lag to upstream is
+            // expected and not a useful signal. The sequencing stages that follow them
+            // (GaplessCommitter, GaplessL1ProofSender) are the correct signals.
+            ComponentId::FriJobManager | ComponentId::SnarkJobManager => false,
+            // Pipeline sources and sinks: no meaningful upstream/downstream to measure against.
+            ComponentId::ConsensusNodeCommandSource
+            | ComponentId::ExternalNodeCommandSource
+            | ComponentId::BatchSink
+            | ComponentId::NoopSink
+            | ComponentId::RevmConsistencyChecker => false,
+            // All other components participate in the adjacency window.
+            _ => true,
+        }
+    }
+
     /// Returns the effective backpressure condition for `id`.
     ///
     /// Precedence (highest to lowest):
@@ -191,18 +219,10 @@ impl BackpressureConfig {
     pub fn condition_for(&self, id: ComponentId) -> BackpressureCondition {
         // Per-component override takes full precedence over the group default.
         if let Some(o) = self.component_overrides.get(id) {
-            return if o.enabled {
-                BackpressureCondition {
-                    max_block_diff_to_upstream: o.max_block_diff_to_upstream,
-                    max_time_diff_to_upstream: o.max_time_diff_to_upstream,
-                    max_batch_diff_to_upstream: o.max_batch_diff_to_upstream,
-                }
-            } else {
-                BackpressureCondition {
-                    max_block_diff_to_upstream: None,
-                    max_time_diff_to_upstream: None,
-                    max_batch_diff_to_upstream: None,
-                }
+            return BackpressureCondition {
+                max_block_diff_to_upstream: o.max_block_diff_to_upstream,
+                max_time_diff_to_upstream: o.max_time_diff_to_upstream,
+                max_batch_diff_to_upstream: o.max_batch_diff_to_upstream,
             };
         }
 
@@ -227,6 +247,10 @@ impl BackpressureConfig {
             },
             // All batch-level components track block, time, and batch diff to upstream with
             // true adjacent channel-occupancy semantics; see PipelineCondition docs.
+            // FriJobManager and SnarkJobManager are excluded from the adjacency window via
+            // backpressure_enabled_for, so their thresholds here are never evaluated in
+            // practice; they are listed for completeness and to allow component_overrides
+            // to re-enable them with explicit thresholds.
             ComponentId::BatchVerification
             | ComponentId::FriJobManager
             | ComponentId::GaplessCommitter
@@ -241,7 +265,8 @@ impl BackpressureConfig {
                 max_time_diff_to_upstream: self.batch_pipeline.max_time_diff_to_upstream,
                 max_batch_diff_to_upstream: self.batch_pipeline.max_batch_diff_to_upstream,
             },
-            // Unmonitored components are never subject to backpressure.
+            // Sources, sinks, and side checkers: excluded from the adjacency window via
+            // backpressure_enabled_for, so thresholds are never evaluated in practice.
             ComponentId::ConsensusNodeCommandSource
             | ComponentId::ExternalNodeCommandSource
             | ComponentId::BatchSink
@@ -312,11 +337,9 @@ mod tests {
         };
         for id in [
             ComponentId::BatchVerification,
-            ComponentId::FriJobManager,
             ComponentId::GaplessCommitter,
             ComponentId::UpgradeGatekeeper,
             ComponentId::L1SenderCommit,
-            ComponentId::SnarkJobManager,
             ComponentId::GaplessL1ProofSender,
             ComponentId::L1SenderProve,
             ComponentId::PriorityTree,
@@ -345,10 +368,68 @@ mod tests {
             },
             ..Default::default()
         };
-        let cond = config.condition_for(ComponentId::FriJobManager);
+        let cond = config.condition_for(ComponentId::GaplessCommitter);
         assert!(
             cond.max_block_diff_to_upstream.is_none(),
-            "FriJobManager must not get max_block_diff_to_upstream from block_pipeline config"
+            "GaplessCommitter must not get max_block_diff_to_upstream from block_pipeline config"
+        );
+    }
+
+    #[test]
+    fn fri_and_snark_job_managers_disabled_in_adjacency_by_default() {
+        let config = BackpressureConfig::default();
+        assert!(
+            !config.backpressure_enabled_for(ComponentId::FriJobManager),
+            "FriJobManager must be excluded from the adjacency window by default"
+        );
+        assert!(
+            !config.backpressure_enabled_for(ComponentId::SnarkJobManager),
+            "SnarkJobManager must be excluded from the adjacency window by default"
+        );
+        // Their downstream sequencing stages must be enabled.
+        assert!(config.backpressure_enabled_for(ComponentId::GaplessCommitter));
+        assert!(config.backpressure_enabled_for(ComponentId::GaplessL1ProofSender));
+    }
+
+    #[test]
+    fn component_override_enabled_false_removes_from_adjacency_window() {
+        let config = BackpressureConfig {
+            component_overrides: ComponentOverrides {
+                gapless_committer: Some(ComponentConditionOverride {
+                    enabled: false,
+                    max_block_diff_to_upstream: None,
+                    max_time_diff_to_upstream: None,
+                    max_batch_diff_to_upstream: None,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            !config.backpressure_enabled_for(ComponentId::GaplessCommitter),
+            "enabled=false must remove GaplessCommitter from the adjacency window"
+        );
+        // Other components unaffected.
+        assert!(config.backpressure_enabled_for(ComponentId::BatchVerification));
+    }
+
+    #[test]
+    fn component_override_enabled_true_can_re_enable_fri_job_manager() {
+        let config = BackpressureConfig {
+            component_overrides: ComponentOverrides {
+                fri_job_manager: Some(ComponentConditionOverride {
+                    enabled: true,
+                    max_block_diff_to_upstream: None,
+                    max_time_diff_to_upstream: Some(Duration::from_secs(300)),
+                    max_batch_diff_to_upstream: None,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            config.backpressure_enabled_for(ComponentId::FriJobManager),
+            "component_overrides enabled=true must re-enable FriJobManager in the adjacency window"
         );
     }
 
@@ -388,8 +469,9 @@ mod tests {
     }
 
     #[test]
-    fn component_override_enabled_false_disables_backpressure() {
-        // enabled=false fully silences the component regardless of group config
+    fn component_override_enabled_false_removes_from_adjacency_and_clears_threshold_override() {
+        // enabled=false removes the component from the adjacency window; it has no effect
+        // on condition_for (thresholds are a separate concern from adjacency participation).
         let config = BackpressureConfig {
             batch_pipeline: PipelineCondition {
                 max_block_diff_to_upstream: None,
@@ -397,7 +479,7 @@ mod tests {
                 max_batch_diff_to_upstream: None,
             },
             component_overrides: ComponentOverrides {
-                batcher: Some(ComponentConditionOverride {
+                gapless_committer: Some(ComponentConditionOverride {
                     enabled: false,
                     max_block_diff_to_upstream: None,
                     max_time_diff_to_upstream: None,
@@ -408,12 +490,10 @@ mod tests {
             ..Default::default()
         };
 
-        let cond = config.condition_for(ComponentId::Batcher);
-        assert!(cond.max_block_diff_to_upstream.is_none());
-        assert!(cond.max_time_diff_to_upstream.is_none());
+        assert!(!config.backpressure_enabled_for(ComponentId::GaplessCommitter));
 
-        // Other batch components still have the group time diff
-        let cond = config.condition_for(ComponentId::FriJobManager);
+        // Other batch components still have the group time diff.
+        let cond = config.condition_for(ComponentId::BatchVerification);
         assert_eq!(
             cond.max_time_diff_to_upstream,
             Some(Duration::from_secs(300))
@@ -492,11 +572,9 @@ mod tests {
         };
         for id in [
             ComponentId::BatchVerification,
-            ComponentId::FriJobManager,
             ComponentId::GaplessCommitter,
             ComponentId::UpgradeGatekeeper,
             ComponentId::L1SenderCommit,
-            ComponentId::SnarkJobManager,
             ComponentId::GaplessL1ProofSender,
             ComponentId::L1SenderProve,
             ComponentId::PriorityTree,
