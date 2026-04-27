@@ -6,7 +6,7 @@ pub enum SequencerState {
     /// Waiting for the next block command from the command source.
     WaitingForCommand,
     /// Command dequeued, waiting for BlockApplier to finish applying the
-    /// previous block. Throttled because downstream backpressure is the cause.
+    /// previous block.
     WaitingForApplier,
     /// Setting up the VM for block execution.
     InitializingVm,
@@ -20,7 +20,7 @@ impl StateLabel for SequencerState {
     fn generic(&self) -> GenericComponentState {
         match self {
             Self::WaitingForCommand => GenericComponentState::Idle,
-            Self::WaitingForApplier => GenericComponentState::Throttled,
+            Self::WaitingForApplier => GenericComponentState::Active,
             Self::InitializingVm | Self::Execution | Self::UpdatingMempool => {
                 GenericComponentState::Active
             }
@@ -59,7 +59,7 @@ impl StateLabel for BlockCanonizerState {
     fn generic(&self) -> GenericComponentState {
         match self {
             Self::Idle => GenericComponentState::Idle,
-            Self::ProducedQueueFull => GenericComponentState::Throttled,
+            Self::ProducedQueueFull => GenericComponentState::Active,
             Self::HandlingConsensusBlock
             | Self::HandlingExecutorBlock
             | Self::ProposingToConsensus => GenericComponentState::Active,

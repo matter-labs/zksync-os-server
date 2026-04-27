@@ -4,9 +4,7 @@ use zksync_os_observability::{GenericComponentState, StateLabel};
 ///
 /// These managers have no run loop — they're driven by HTTP handlers, fake
 /// provers, and `add_job`. `WaitingForProver` captures the dominant steady
-/// state: jobs queued, blocked on an external prover submission. The generic
-/// mapping is `Throttled`, consistent with the documented use for "prover job
-/// slots" in `GenericComponentState::Throttled`.
+/// state: jobs queued, blocked on an external prover submission.
 pub enum ProverJobManagerState {
     /// Queue empty — no work in flight.
     Idle,
@@ -20,7 +18,7 @@ impl StateLabel for ProverJobManagerState {
     fn generic(&self) -> GenericComponentState {
         match self {
             Self::Idle => GenericComponentState::Idle,
-            Self::WaitingForProver => GenericComponentState::Throttled,
+            Self::WaitingForProver => GenericComponentState::Active,
             Self::ProcessingSubmission => GenericComponentState::Active,
         }
     }

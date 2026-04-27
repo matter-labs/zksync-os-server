@@ -50,7 +50,7 @@ impl StateLabel for L1SenderState {
         match self {
             Self::Idle => GenericComponentState::Idle,
             Self::SendingToL1 => GenericComponentState::Active,
-            Self::WaitingL1Inclusion => GenericComponentState::Throttled,
+            Self::WaitingL1Inclusion => GenericComponentState::Active,
         }
     }
     fn specific(&self) -> &'static str {
