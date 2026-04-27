@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.19.2](https://github.com/matter-labs/zksync-os-server/compare/v0.19.1...v0.19.2) (2026-04-27)
+
+
+### Bug Fixes
+
+* Add --block-time to all the places where anvil is being run ([#1214](https://github.com/matter-labs/zksync-os-server/issues/1214)) ([f7ccfb8](https://github.com/matter-labs/zksync-os-server/commit/f7ccfb8a95b6878f31539acbf32065043c54aba4))
+* **network:** treat EN starting_block as replay eligibility proof ([#1209](https://github.com/matter-labs/zksync-os-server/issues/1209)) ([b9e36bf](https://github.com/matter-labs/zksync-os-server/commit/b9e36bf364d0da9c2e395876a04f4e27f4d107eb))
+
 ## [0.19.1](https://github.com/matter-labs/zksync-os-server/compare/v0.19.0...v0.19.1) (2026-04-23)
 
 
