@@ -13,15 +13,15 @@ pub struct MonitorMetrics {
     /// Last block number successfully processed by this component.
     pub component_last_processed_block: Family<ComponentId, Gauge<u64>>,
     /// Blocks queued between this component and its upstream neighbour.
-    /// Computed as upstream.last_processed_block_number − this.last_picked_block_number.
+    /// Computed as upstream.block_processed.block_number − this.block_picked.block_number.
     /// (Pure channel occupancy: blocks forwarded by upstream not yet dequeued by this component.)
     pub component_block_diff_to_upstream: Family<ComponentId, Gauge<u64>>,
     /// Block-timestamp lag in seconds between this component and its upstream neighbour.
-    /// Computed as upstream.last_processed_block_timestamp − this.last_picked_block_timestamp.
+    /// Computed as upstream.block_processed.timestamp − this.block_picked.timestamp.
     /// (Channel occupancy in time units.) 0 if either timestamp is unavailable.
     pub component_time_diff_to_upstream_seconds: Family<ComponentId, Gauge<f64>>,
     /// Batches queued between this component and its upstream neighbour.
-    /// Computed as upstream.batch_number − this.last_batch_picked.
+    /// Computed as upstream.batch_processed − this.batch_picked.
     /// Only non-zero for batch-pipeline components with batch tracking.
     pub component_batch_diff_to_upstream: Family<ComponentId, Gauge<u64>>,
     /// Last batch number fully processed by this component (high-watermark).
@@ -37,7 +37,7 @@ pub struct MonitorMetrics {
     pub in_flight_first_batch: Family<ComponentId, Gauge<u64>>,
     /// Newest batch number currently in-flight. See `in_flight_first_batch` for producers.
     pub in_flight_last_batch: Family<ComponentId, Gauge<u64>>,
-    /// Number of batches currently in-flight (in_flight_last − in_flight_first + 1).
+    /// Number of batches currently in-flight (in_flight_last_batch − in_flight_first_batch + 1).
     /// See `in_flight_first_batch` for producers. 0 when empty.
     pub in_flight_batch_count: Family<ComponentId, Gauge<u64>>,
     /// Counts transitions from Accepting to NotAccepting (transaction acceptance suspended).

@@ -44,7 +44,7 @@ pub struct PipelineCondition {
     /// duration. Only evaluated when both head and component timestamps are available (Some).
     pub max_time_diff_to_upstream: Option<Duration>,
     /// Trigger backpressure when a component has more than N batches queued between it and
-    /// its upstream neighbour. Computed as upstream.batch_number − downstream.last_batch_picked.
+    /// its upstream neighbour. Computed as upstream.batch_processed − downstream.batch_picked.
     /// Ignored for block-pipeline components — see struct-level docs.
     pub max_batch_diff_to_upstream: Option<u64>,
 }
@@ -179,10 +179,6 @@ pub struct BackpressureConfig {
     /// replaced by the override. Omitted components use the group default.
     #[config(nest, default)]
     pub component_overrides: ComponentOverrides,
-    /// How often to refresh Prometheus metrics regardless of state change events.
-    /// Default: 5 seconds.
-    #[config(default_t = Duration::from_secs(5))]
-    pub metrics_interval: Duration,
 }
 
 impl BackpressureConfig {

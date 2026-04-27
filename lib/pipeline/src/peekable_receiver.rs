@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(
             state_rx
                 .borrow()
-                .last_picked
+                .block_picked
                 .as_ref()
                 .map(|c| c.block_number),
             Some(10)
@@ -274,7 +274,7 @@ mod tests {
         assert_eq!(
             state_rx
                 .borrow()
-                .last_picked
+                .block_picked
                 .as_ref()
                 .and_then(|c| c.timestamp),
             Some(1000)

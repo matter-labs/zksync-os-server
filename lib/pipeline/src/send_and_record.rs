@@ -62,7 +62,7 @@ mod tests {
         assert_eq!(
             state_rx
                 .borrow()
-                .last_processed
+                .block_processed
                 .as_ref()
                 .map(|c| c.block_number),
             Some(7)
@@ -70,7 +70,7 @@ mod tests {
         assert_eq!(
             state_rx
                 .borrow()
-                .last_processed
+                .block_processed
                 .as_ref()
                 .and_then(|c| c.timestamp),
             Some(700)
@@ -94,6 +94,6 @@ mod tests {
         let (reporter, state_rx) = ComponentStateReporter::new("test");
 
         assert!(tx.send_and_record(MsgNoTs { seq: 1 }, &reporter).is_err());
-        assert!(state_rx.borrow().last_processed.is_none());
+        assert!(state_rx.borrow().block_processed.is_none());
     }
 }

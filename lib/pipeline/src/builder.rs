@@ -1,12 +1,12 @@
 use crate::PipelineComponent;
 use crate::component_id::ComponentId;
-use crate::monitor::PipelineMonitor;
 use crate::peekable_receiver::PeekableReceiver;
 use reth_tasks::Runtime;
 use std::collections::HashSet;
-use std::sync::Arc;
-use tokio::sync::mpsc;
-use zksync_os_observability::ComponentStateReporter;
+use tokio::sync::{mpsc, watch};
+use zksync_os_observability::{ComponentState, ComponentStateReporter};
+
+pub type ComponentStateReceivers = Vec<(ComponentId, watch::Receiver<ComponentState>)>;
 
 /// Pipeline with an active output stream that can be piped to more components
 pub struct Pipeline<Output: Send + 'static> {
@@ -15,12 +15,20 @@ pub struct Pipeline<Output: Send + 'static> {
     spawned_tasks: HashSet<&'static str>,
     shutdown_sender: mpsc::Sender<&'static str>,
     shutdown_receiver: mpsc::Receiver<&'static str>,
-    monitor: Arc<dyn PipelineMonitor>,
-    prev_id: Option<ComponentId>,
+    components: ComponentStateReceivers,
+}
+
+impl<Output: Send + 'static> Pipeline<Output> {
+    pub fn components(&self) -> ComponentStateReceivers {
+        self.components
+            .iter()
+            .map(|(id, rx)| (*id, rx.clone()))
+            .collect()
+    }
 }
 
 impl Pipeline<()> {
-    pub fn new(runtime: Runtime, monitor: Arc<dyn PipelineMonitor>) -> Self {
+    pub fn new(runtime: Runtime) -> Self {
         let (_sender, receiver) = mpsc::unbounded_channel::<()>();
         let receiver = PeekableReceiver::new(receiver);
         let (shutdown_sender, shutdown_receiver) = mpsc::channel(16);
@@ -30,12 +38,12 @@ impl Pipeline<()> {
             spawned_tasks: HashSet::default(),
             shutdown_sender,
             shutdown_receiver,
-            monitor,
-            prev_id: None,
+            components: Vec::new(),
         }
     }
 
     /// Spawns a final supervisor that waits for all pipeline segments to shut down.
+    /// Returns the accumulated component state receivers for backpressure monitoring.
     pub fn spawn(mut self) {
         // No consumer exists after the terminal stage.
         drop(self.receiver);
@@ -85,11 +93,15 @@ impl<Output: Send + 'static> Pipeline<Output> {
         let name = id.as_str();
 
         let reporter = if C::REGISTER_WITH_MONITOR {
-            let r = self.monitor.register(id, self.prev_id);
-            self.prev_id = Some(id);
-            r
+            let (reporter, rx) = ComponentStateReporter::new(name);
+            assert!(
+                !self.components.iter().any(|(cid, _)| *cid == id),
+                "Pipeline: component {id:?} registered twice"
+            );
+            self.components.push((id, rx));
+            reporter
         } else {
-            ComponentStateReporter::new(name).0
+            ComponentStateReporter::unmonitored(name)
         };
 
         let (output_sender, output_receiver) = mpsc::unbounded_channel::<C::Output>();
@@ -119,8 +131,7 @@ impl<Output: Send + 'static> Pipeline<Output> {
             spawned_tasks: self.spawned_tasks,
             shutdown_sender: self.shutdown_sender,
             shutdown_receiver: self.shutdown_receiver,
-            monitor: self.monitor,
-            prev_id: self.prev_id,
+            components: self.components,
         }
     }
 

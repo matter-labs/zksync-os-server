@@ -14422,7 +14422,6 @@ dependencies = [
  "tokio",
  "tracing",
  "zksync_os_api",
- "zksync_os_backpressure",
  "zksync_os_contract_interface",
  "zksync_os_integration_tests_macros",
  "zksync_os_merkle_tree_api",
@@ -15113,12 +15112,8 @@ dependencies = [
  "axum",
  "reth-tasks",
  "serde",
- "serde_json",
  "tokio",
  "tracing",
- "zksync_os_backpressure",
- "zksync_os_observability",
- "zksync_os_types",
 ]
 
 [[package]]

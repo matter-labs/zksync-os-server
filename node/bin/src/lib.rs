@@ -53,7 +53,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
-use zksync_os_backpressure::{BackpressureMonitor, ComponentId, PipelineStatus};
+use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{
     BatchVerificationConfig as BatchVerificationPolicyConfig, BatchVerificationPipelineStep,
@@ -92,7 +92,7 @@ use zksync_os_network::protocol::{
 };
 use zksync_os_network::service::{NetworkService, PeerVerifyBatch, PeerVerifyBatchResult};
 use zksync_os_observability::GENERAL_METRICS;
-use zksync_os_pipeline::{Pipeline, PipelineMonitor};
+use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, loopback_consensus,
@@ -900,7 +900,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    let pipeline_status = if node_role.is_main() {
+    let backpressure_acceptance_rx = if node_role.is_main() {
         run_main_node_pipeline(
             &config,
             sl_provider.clone(),
@@ -953,7 +953,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let combined_acceptance_rx = {
         let (mut gate, rx) = acceptance::TxAcceptanceGate::new();
         gate.register(tx_acceptance_state_receiver); // BlockProductionDisabled
-        gate.register(pipeline_status.acceptance_rx); // PipelineBackpressure
+        gate.register(backpressure_acceptance_rx); // PipelineBackpressure
         runtime.spawn_critical_task("tx acceptance gate", gate.run(stop_receiver.clone()));
         rx
     };
@@ -1026,7 +1026,7 @@ async fn run_main_node_pipeline(
     commit_submitted_tx: watch::Sender<u64>,
     verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
-) -> PipelineStatus {
+) -> watch::Receiver<TransactionAcceptanceState> {
     let pubdata_mode = config
         .l1_sender_config
         .pubdata_mode
@@ -1048,7 +1048,7 @@ async fn run_main_node_pipeline(
     let (applied_block_number_sender, applied_block_number_receiver) =
         watch::channel(starting_block - 1);
 
-    let pipeline = Pipeline::new(runtime.clone(), monitor.registrar())
+    let pipeline = Pipeline::new(runtime.clone())
         .pipe(ConsensusNodeCommandSource {
             block_replay_storage: block_replay_storage.clone(),
             starting_block,
@@ -1099,8 +1099,11 @@ async fn run_main_node_pipeline(
         tracing::warn!(
             "Batcher subsystem disabled — skipping prover input generation, L1 settlement, and downstream components"
         );
-        pipeline.pipe(NoOpSink::new()).spawn();
-        return monitor.spawn(runtime);
+        let pipeline = pipeline.pipe(NoOpSink::new());
+        let components = pipeline.components();
+        pipeline.spawn();
+        let snapshot_rx = PipelineTracker::spawn(runtime, components);
+        return monitor.spawn(runtime, snapshot_rx);
     }
 
     tracing::info!("Initializing ProofStorage");
@@ -1236,8 +1239,10 @@ async fn run_main_node_pipeline(
         .pipe(BatchSink::new(internal_config_manager));
 
     tracing::info!("Launching pipeline");
+    let components = pipeline.components();
     pipeline.spawn();
-    monitor.spawn(runtime)
+    let snapshot_rx = PipelineTracker::spawn(runtime, components);
+    monitor.spawn(runtime, snapshot_rx)
 }
 
 /// Only for EN - we still populate channels destined for the batcher subsystem -
@@ -1261,7 +1266,7 @@ async fn run_en_pipeline(
     chain_id: u64,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
-) -> PipelineStatus {
+) -> watch::Receiver<TransactionAcceptanceState> {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
             .general_config
@@ -1274,7 +1279,7 @@ async fn run_en_pipeline(
     let monitor =
         BackpressureMonitor::new(config.backpressure_config.clone(), stop_receiver.clone());
 
-    let pipeline = Pipeline::new(runtime.clone(), monitor.registrar())
+    let pipeline = Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
             replays_for_sequencer,
             up_to_block: config.sequencer_config.en_sync_up_to_block,
@@ -1323,19 +1328,9 @@ async fn run_en_pipeline(
             NoOpSink::new(),
         );
 
-    // PriorityTree on EN runs outside the pipe chain — it's a standalone task driven by
-    // finality polling, not a pipeline channel consumer — so register it ad-hoc before
-    // the monitor spawns. Deliberately registered with no upstream: EN's PriorityTree is
-    // pure observational caching (no downstream consumer; `execute_batches_sender = None`
-    // in `PriorityTreeManager::run`), so adjacent-lag backpressure has no causal meaning
-    // here. Registering with `upstream = None` keeps Prometheus gauges and
-    // /status/pipeline visibility while ensuring no threshold can ever trigger.
-    let priority_tree_reporter = config
-        .general_config
-        .run_priority_tree
-        .then(|| monitor.handle().register(ComponentId::PriorityTree, None));
-
+    let components = pipeline.components();
     pipeline.spawn();
+    let snapshot_rx = PipelineTracker::spawn(runtime, components);
 
     if config.general_config.run_priority_tree {
         let priority_tree_manager = PriorityTreeManager::new(
@@ -1354,7 +1349,7 @@ async fn run_en_pipeline(
             "priority tree caching",
             |shutdown| async move {
                 tokio::select! {
-                    result = priority_tree_manager.run(None, priority_tree_reporter.expect("reporter created when priority tree is enabled")) => {
+                    result = priority_tree_manager.run(None, zksync_os_observability::ComponentStateReporter::new("priority_tree").0) => {
                         result.expect("PriorityTreeManager run failed");
                     }
                     _guard = shutdown => {
@@ -1367,7 +1362,7 @@ async fn run_en_pipeline(
         "clear failing block config",
         clear_failing_block_config_task(finality, internal_config_manager),
     );
-    monitor.spawn(runtime)
+    monitor.spawn(runtime, snapshot_rx)
 }
 
 fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashes {

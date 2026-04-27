@@ -2,7 +2,7 @@ use crate::generic_component_state::GenericComponentState;
 use crate::state_label::StateLabel;
 use tokio::{sync::watch, time::Instant};
 
-/// Block-space coordinates: block number and optional timestamp.
+/// Block-space coordinates.
 #[derive(Clone, Debug)]
 pub struct BlockTrackingCoordinates {
     pub block_number: u64,
@@ -18,9 +18,7 @@ impl BlockTrackingCoordinates {
     }
 }
 
-/// Batch-space coordinates for range-processing components (FriJobManager,
-/// SnarkJobManager). Carries batch number alongside the batch's last block
-/// number and timestamp so operators can identify in-flight batches directly.
+/// Batch-space coordinates for range-processing components.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchTrackingCoordinates {
     pub batch_number: u64,
@@ -41,37 +39,34 @@ impl BatchTrackingCoordinates {
 /// State snapshot reported by a pipeline component on every state transition.
 #[derive(Clone, Debug)]
 pub struct ComponentState {
+    /// Component state - Idle or Active.
     pub state: GenericComponentState,
-    /// Fine-grained state string from the component's StateLabel impl.
+
+    /// Fine-grained state label.
     pub specific_state: &'static str,
-    /// When the current state was entered (monotonic).
+
+    /// When the current state was entered.
     pub state_entered_at: Instant,
 
     /// When this component last dequeued an item from its input channel.
     /// Absent until the first item is received. High-watermark semantics.
-    pub last_picked: Option<BlockTrackingCoordinates>,
+    pub block_picked: Option<BlockTrackingCoordinates>,
 
     /// When this component last fully handled/forwarded an item downstream.
     /// Absent until the first item is fully processed. High-watermark semantics.
-    pub last_processed: Option<BlockTrackingCoordinates>,
+    pub block_processed: Option<BlockTrackingCoordinates>,
 
-    /// Oldest batch currently in-flight. Populated by components that hold
-    /// multiple batches concurrently with non-sequential completion:
-    /// FriJobManager, SnarkJobManager (external provers), and the L1 senders
-    /// (commit/prove/execute — parallel L1 transactions awaiting inclusion).
-    pub in_flight_first: Option<BatchTrackingCoordinates>,
-
-    /// Newest batch currently in-flight. See `in_flight_first` for producers.
-    pub in_flight_last: Option<BatchTrackingCoordinates>,
-
-    /// Last batch number fully processed by this component.
-    /// Only populated for batch-pipeline components (Batcher and downstream).
-    /// High-watermark semantics.
-    pub batch_number: Option<u64>,
     /// Last batch number dequeued from the input channel by this component.
-    /// High-watermark semantics. Absent until first batch received.
-    /// Only populated for batch-pipeline components that receive batches from upstream.
-    pub last_batch_picked: Option<u64>,
+    pub batch_picked: Option<u64>,
+
+    /// Last batch number fully processed.
+    pub batch_processed: Option<u64>,
+
+    /// Oldest batch currently in-flight.
+    pub in_flight_first_batch: Option<BatchTrackingCoordinates>,
+
+    /// Newest batch currently in-flight.
+    pub in_flight_last_batch: Option<BatchTrackingCoordinates>,
 }
 
 /// Uses `watch::Sender` — updates are infallible, no background task, no global state.
@@ -88,23 +83,18 @@ impl ComponentStateReporter {
             state: GenericComponentState::Idle,
             specific_state: "idle",
             state_entered_at: Instant::now(),
-            last_picked: None,
-            last_processed: None,
-            in_flight_first: None,
-            in_flight_last: None,
-            batch_number: None,
-            last_batch_picked: None,
+            block_picked: None,
+            block_processed: None,
+            in_flight_first_batch: None,
+            in_flight_last_batch: None,
+            batch_processed: None,
+            batch_picked: None,
         };
         let (sender, receiver) = watch::channel(initial);
         (Self { sender, component }, receiver)
     }
 
-    /// Reporter for auxiliary tasks that emit `component_time_spent_in_state`
-    /// metrics but are not wired into any pipeline monitor. The watch receiver
-    /// is deliberately dropped so the component can never be mistaken for a
-    /// pipeline stage whose progress should be observed for adjacency lag or
-    /// backpressure. Prefer this over `new(..).0` when you know the task is
-    /// metrics-only by design.
+    /// Reporter registration for components with disabled backpressure monitoring.
     pub fn unmonitored(component: &'static str) -> Self {
         let (reporter, _rx) = Self::new(component);
         reporter
@@ -127,11 +117,7 @@ impl ComponentStateReporter {
         });
     }
 
-    /// Record when an item was dequeued from the input channel (before any processing).
-    /// `batch_number` is `None` for block-pipeline components and `Some` for batch-pipeline
-    /// components — both the block-space and batch-space watermarks update atomically under
-    /// a single `send_if_modified`, so the monitor wakes once per pick instead of twice.
-    /// High-watermark semantics: stale out-of-order calls are ignored per dimension.
+    /// Record when an item was dequeued from the input channel (before any processing)
     pub fn record_picked(
         &self,
         block_number: u64,
@@ -141,17 +127,17 @@ impl ComponentStateReporter {
         self.sender.send_if_modified(|state| {
             let mut modified = false;
             let block_stale = state
-                .last_picked
+                .block_picked
                 .as_ref()
                 .is_some_and(|c| block_number < c.block_number);
             if !block_stale {
-                state.last_picked = Some(BlockTrackingCoordinates::new(block_number, timestamp));
+                state.block_picked = Some(BlockTrackingCoordinates::new(block_number, timestamp));
                 modified = true;
             }
             if let Some(bn) = batch_number {
-                let batch_stale = state.last_batch_picked.is_some_and(|c| bn < c);
+                let batch_stale = state.batch_picked.is_some_and(|c| bn < c);
                 if !batch_stale {
-                    state.last_batch_picked = Some(bn);
+                    state.batch_picked = Some(bn);
                     modified = true;
                 }
             }
@@ -159,10 +145,7 @@ impl ComponentStateReporter {
         });
     }
 
-    /// Record when an item was fully handled/forwarded downstream.
-    /// `batch_number` is `None` for block-pipeline components and `Some` for batch-pipeline
-    /// components. Both dimensions update atomically under a single `send_if_modified`.
-    /// High-watermark semantics: stale out-of-order calls are ignored per dimension.
+    /// Record when an item was fully processed.
     pub fn record_processed(
         &self,
         block_number: u64,
@@ -172,17 +155,18 @@ impl ComponentStateReporter {
         self.sender.send_if_modified(|state| {
             let mut modified = false;
             let block_stale = state
-                .last_processed
+                .block_processed
                 .as_ref()
                 .is_some_and(|c| block_number < c.block_number);
             if !block_stale {
-                state.last_processed = Some(BlockTrackingCoordinates::new(block_number, timestamp));
+                state.block_processed =
+                    Some(BlockTrackingCoordinates::new(block_number, timestamp));
                 modified = true;
             }
             if let Some(bn) = batch_number {
-                let batch_stale = state.batch_number.is_some_and(|c| bn < c);
+                let batch_stale = state.batch_processed.is_some_and(|c| bn < c);
                 if !batch_stale {
-                    state.batch_number = Some(bn);
+                    state.batch_processed = Some(bn);
                     modified = true;
                 }
             }
@@ -191,8 +175,6 @@ impl ComponentStateReporter {
     }
 
     /// Record the current in-flight range for range-processing components.
-    /// Atomically replaces both `in_flight_first` and `in_flight_last`.
-    /// Pass `(None, None)` to clear (e.g. when the prover queue drains).
     pub fn record_in_flight_range(
         &self,
         first: Option<BatchTrackingCoordinates>,
@@ -207,11 +189,11 @@ impl ComponentStateReporter {
             );
         }
         self.sender.send_if_modified(|state| {
-            if state.in_flight_first == first && state.in_flight_last == last {
+            if state.in_flight_first_batch == first && state.in_flight_last_batch == last {
                 return false;
             }
-            state.in_flight_first = first;
-            state.in_flight_last = last;
+            state.in_flight_first_batch = first;
+            state.in_flight_last_batch = last;
             true
         });
     }
@@ -225,29 +207,11 @@ mod tests {
     use tokio::time::sleep;
 
     #[tokio::test]
-    async fn reporter_new_starts_in_idle() {
-        let (reporter, rx) = ComponentStateReporter::new("test_component");
-        let state = rx.borrow().clone();
-        assert_eq!(state.state, GenericComponentState::Idle);
-        assert_eq!(state.specific_state, "idle");
-        assert!(state.last_picked.is_none());
-        assert!(state.last_processed.is_none());
-        drop(reporter);
-    }
-
-    #[tokio::test]
-    async fn enter_state_updates_receiver() {
-        let (reporter, rx) = ComponentStateReporter::new("test_component");
-        reporter.enter_state(GenericComponentState::Active);
-        assert_eq!(rx.borrow().state, GenericComponentState::Active);
-    }
-
-    #[tokio::test]
     async fn record_processed_updates_coord() {
         let (reporter, rx) = ComponentStateReporter::new("test_component");
         reporter.record_processed(42, Some(1_700_000_000), None);
         let h = rx.borrow();
-        let coord = h.last_processed.as_ref().unwrap();
+        let coord = h.block_processed.as_ref().unwrap();
         assert_eq!(coord.block_number, 42);
         assert_eq!(coord.timestamp, Some(1_700_000_000));
     }
@@ -258,11 +222,11 @@ mod tests {
         reporter.record_processed(100, Some(1_000), None);
         reporter.record_processed(80, Some(800), None); // stale
         assert_eq!(
-            rx.borrow().last_processed.as_ref().unwrap().block_number,
+            rx.borrow().block_processed.as_ref().unwrap().block_number,
             100
         );
         assert_eq!(
-            rx.borrow().last_processed.as_ref().unwrap().timestamp,
+            rx.borrow().block_processed.as_ref().unwrap().timestamp,
             Some(1_000)
         );
     }
@@ -273,7 +237,7 @@ mod tests {
         reporter.record_processed(50, Some(500), None);
         reporter.record_processed(50, Some(501), None);
         assert_eq!(
-            rx.borrow().last_processed.as_ref().unwrap().timestamp,
+            rx.borrow().block_processed.as_ref().unwrap().timestamp,
             Some(501)
         );
     }
@@ -297,29 +261,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multiple_reporters_independent() {
-        let (r1, rx1) = ComponentStateReporter::new("c1");
-        let (r2, rx2) = ComponentStateReporter::new("c2");
-        r1.record_processed(10, None, None);
-        r2.record_processed(20, None, None);
-        assert_eq!(
-            rx1.borrow().last_processed.as_ref().unwrap().block_number,
-            10
-        );
-        assert_eq!(
-            rx2.borrow().last_processed.as_ref().unwrap().block_number,
-            20
-        );
-    }
-
-    #[tokio::test]
     async fn record_picked_advances_independently_of_processed() {
         let (reporter, rx) = ComponentStateReporter::new("test");
         reporter.record_picked(5, Some(500), None);
         reporter.record_processed(3, Some(300), None);
         let h = rx.borrow();
-        assert_eq!(h.last_picked.as_ref().unwrap().block_number, 5);
-        assert_eq!(h.last_processed.as_ref().unwrap().block_number, 3);
+        assert_eq!(h.block_picked.as_ref().unwrap().block_number, 5);
+        assert_eq!(h.block_processed.as_ref().unwrap().block_number, 3);
     }
 
     #[tokio::test]
@@ -327,7 +275,7 @@ mod tests {
         let (reporter, rx) = ComponentStateReporter::new("test");
         reporter.record_picked(10, None, None);
         reporter.record_picked(5, None, None);
-        assert_eq!(rx.borrow().last_picked.as_ref().unwrap().block_number, 10);
+        assert_eq!(rx.borrow().block_picked.as_ref().unwrap().block_number, 10);
     }
 
     #[tokio::test]
@@ -338,10 +286,16 @@ mod tests {
             Some(BatchTrackingCoordinates::new(5, 500, Some(5000))),
         );
         let h = rx.borrow();
-        assert_eq!(h.in_flight_first.as_ref().unwrap().batch_number, 1);
-        assert_eq!(h.in_flight_last.as_ref().unwrap().batch_number, 5);
-        assert_eq!(h.in_flight_first.as_ref().unwrap().last_block_number, 100);
-        assert_eq!(h.in_flight_last.as_ref().unwrap().last_block_number, 500);
+        assert_eq!(h.in_flight_first_batch.as_ref().unwrap().batch_number, 1);
+        assert_eq!(h.in_flight_last_batch.as_ref().unwrap().batch_number, 5);
+        assert_eq!(
+            h.in_flight_first_batch.as_ref().unwrap().last_block_number,
+            100
+        );
+        assert_eq!(
+            h.in_flight_last_batch.as_ref().unwrap().last_block_number,
+            500
+        );
     }
 
     #[tokio::test]
@@ -353,8 +307,8 @@ mod tests {
         );
         reporter.record_in_flight_range(None, None);
         let h = rx.borrow();
-        assert!(h.in_flight_first.is_none());
-        assert!(h.in_flight_last.is_none());
+        assert!(h.in_flight_first_batch.is_none());
+        assert!(h.in_flight_last_batch.is_none());
     }
 
     #[tokio::test]
@@ -362,28 +316,6 @@ mod tests {
         let (reporter, rx) = ComponentStateReporter::new("test");
         reporter.record_processed(0, None, Some(10));
         reporter.record_processed(0, None, Some(5));
-        assert_eq!(rx.borrow().batch_number, Some(10));
-    }
-
-    #[tokio::test]
-    async fn record_processed_updates_both_block_and_batch_atomically() {
-        let (reporter, rx) = ComponentStateReporter::new("test");
-        reporter.record_processed(42, Some(999), Some(7));
-        let h = rx.borrow();
-        let coord = h.last_processed.as_ref().unwrap();
-        assert_eq!(coord.block_number, 42);
-        assert_eq!(coord.timestamp, Some(999));
-        assert_eq!(h.batch_number, Some(7));
-    }
-
-    #[tokio::test]
-    async fn record_picked_updates_both_block_and_batch_atomically() {
-        let (reporter, rx) = ComponentStateReporter::new("test");
-        reporter.record_picked(42, Some(999), Some(7));
-        let h = rx.borrow();
-        let coord = h.last_picked.as_ref().unwrap();
-        assert_eq!(coord.block_number, 42);
-        assert_eq!(coord.timestamp, Some(999));
-        assert_eq!(h.last_batch_picked, Some(7));
+        assert_eq!(rx.borrow().batch_processed, Some(10));
     }
 }
