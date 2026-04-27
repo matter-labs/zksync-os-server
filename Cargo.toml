@@ -155,6 +155,7 @@ zk_os_basic_system_dev = { package = "basic_system", git = "https://github.com/m
 # Other dependencies.
 
 tokio = "1.45.1"
+tokio-metrics = "0.5.0"
 tokio-stream = "0.1.17"
 tokio-util = { version = "0.7", features = ["codec"], default-features = false }
 ruint = { version = "1.12", default-features = false }

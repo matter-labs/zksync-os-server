@@ -79,7 +79,7 @@ jobs:
       - name: Build
         env:
           # Build static binaries
-          RUSTFLAGS: '-C target-feature=+crt-static'
+          RUSTFLAGS: '-C target-feature=+crt-static --cfg tokio_unstable'
         run: |
           cargo build --profile "${RELEASE_PROFILE}" \
             --target "${{ matrix.target }}" --bin "${ZKSYNC_OS_SERVER_BIN}"
