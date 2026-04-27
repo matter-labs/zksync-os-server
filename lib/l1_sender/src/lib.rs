@@ -32,7 +32,7 @@ use anyhow::Context as _;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Instant;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::watch;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_operator_signer::SignerConfig;
@@ -90,10 +90,13 @@ pub async fn run_l1_sender<Input: SendToL1>(
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
     let command_name = Input::NAME;
+    anyhow::ensure!(
+        config.command_limit > 0,
+        "l1 sender command_limit must be greater than zero"
+    );
 
     let operator_address =
-        register_operator::<_, Input>(&mut provider, config.operator_signer).await?;
-    let mut cmd_buffer = Vec::with_capacity(config.command_limit);
+        register_operator::<_, Input>(&mut provider, config.operator_signer.clone()).await?;
     // Process all potential passthrough commands first
     if process_prepending_passthrough_commands(
         &mut inbound,
@@ -161,6 +164,78 @@ pub async fn run_l1_sender<Input: SendToL1>(
 
     // At this point, all in-flight transactions from the previous session are confirmed.
     // Only actual SendToL1 commands are expected from here on.
+
+    /// TODO: prefetched channel is a temporary solution, until OUTPUT_BUFFER_SIZE is replaced by a different mechanism.
+    let (prefetched_commands_sender, prefetched_commands) =
+        mpsc::channel::<L1SenderCommand<Input>>(config.command_limit);
+    let prefetch = prefetch_l1_sender_commands(inbound, prefetched_commands_sender, command_name);
+    let sender = run_prefetched_l1_sender(
+        prefetched_commands,
+        outbound,
+        to_address,
+        provider,
+        config,
+        gateway,
+        commit_submitted_tx,
+        operator_address,
+        command_name,
+        latency_tracker,
+    );
+
+    tokio::pin!(prefetch);
+    tokio::pin!(sender);
+
+    tokio::select! {
+        result = &mut sender => result,
+        result = &mut prefetch => {
+            result?;
+            // Wait for inbound transactions before finishing. Consistent with old behavior
+            sender.await
+        }
+    }
+}
+
+/// Forwards commands to an internal channel, usually with a larger capacity
+/// TODO: This is a temporary solution until OUTPUT_BUFFER_SIZE is replaced by a different mechanism.
+/// We need this to achieve config.command_limit throughput, otehrwise backpressure mechanism will limit this.
+async fn prefetch_l1_sender_commands<Input: SendToL1>(
+    mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
+    output: Sender<L1SenderCommand<Input>>,
+    command_name: &'static str,
+) -> anyhow::Result<()> {
+    while let Some(command) = inbound.recv().await {
+        if output.send(command).await.is_err() {
+            tracing::debug!(
+                command_name,
+                "prefetched L1 command receiver closed, stopping prefetch"
+            );
+            return Ok(());
+        }
+    }
+
+    tracing::info!(command_name, "inbound channel closed");
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_prefetched_l1_sender<F, P, Input>(
+    mut inbound: Receiver<L1SenderCommand<Input>>,
+    outbound: Sender<SignedBatchEnvelope<FriProof>>,
+    to_address: Address,
+    provider: FillProvider<F, P>,
+    config: L1SenderConfig<Input>,
+    gateway: bool,
+    commit_submitted_tx: Option<watch::Sender<u64>>,
+    operator_address: Address,
+    command_name: &'static str,
+    latency_tracker: ComponentStateHandle<L1SenderState>,
+) -> anyhow::Result<()>
+where
+    F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
+    P: Provider<Ethereum>,
+    Input: SendToL1,
+{
+    let mut cmd_buffer = Vec::with_capacity(config.command_limit);
     loop {
         latency_tracker.enter_state(L1SenderState::WaitingRecv);
         // This sleeps until **at least one** command is received from the channel. Additionally,
