@@ -205,6 +205,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         operator_address,
                         config.max_fee_per_gas_wei,
                         config.max_priority_fee_per_gas_wei,
+                        gateway,
+                        config.l1_gas_limit,
                     )
                     .await?
                     .with_to(to_address)
@@ -603,6 +605,8 @@ async fn tx_request_with_gas_fields(
     operator_address: Address,
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
+    gateway: bool,
+    l1_gas_limit: u64,
 ) -> anyhow::Result<TransactionRequest> {
     let eip1559_est = provider.estimate_eip1559_fees().await?;
     L1_SENDER_METRICS.report_l1_eip_1559_estimation(eip1559_est)?;
@@ -643,7 +647,10 @@ async fn tx_request_with_gas_fields(
         .with_from(operator_address)
         .with_max_fee_per_gas(capped_max_fee_per_gas)
         .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas)
-        .with_gas_limit(15000000);
+        // We don't care much about high gas limit on gateway since it doesn't have a concept of priority fee there,
+        // although the transactions there(like containing interop bundles) can consume significant amount of gas
+        // On L1 the limit is configurable since it can actually impact the time of inclusion
+        .with_gas_limit(if gateway { 15_000_000 } else { l1_gas_limit });
     Ok(tx)
 }
 

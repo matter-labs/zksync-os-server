@@ -19,6 +19,10 @@ pub struct L1SenderConfig<Input> {
     /// Max fee per blob gas we are willing to spend (in wei).
     pub max_fee_per_blob_gas_wei: u128,
 
+    /// Per-transaction gas limit when the settlement layer is L1.
+    /// Ignored when settling on a gateway
+    pub l1_gas_limit: u64,
+
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     pub command_limit: usize,
 

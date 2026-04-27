@@ -767,6 +767,11 @@ pub struct L1SenderConfig {
     #[config(default_t = 2 * EtherUnit::Gwei)]
     pub max_fee_per_blob_gas: EtherAmount,
 
+    /// Per-transaction gas limit used when settling on L1.
+    /// Ignored when settling on a gateway (which uses a higher fixed limit).
+    #[config(default_t = 2_000_000)]
+    pub l1_gas_limit: u64,
+
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
     pub command_limit: usize,
@@ -1333,6 +1338,7 @@ impl L1SenderConfig {
             max_fee_per_gas_wei: self.max_fee_per_gas.0,
             max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
             max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
+            l1_gas_limit: self.l1_gas_limit,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
@@ -1618,6 +1624,7 @@ mod tests {
                 max_fee_per_gas: 200 * EtherUnit::Gwei,
                 max_priority_fee_per_gas: 1 * EtherUnit::Gwei,
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
+                l1_gas_limit: 2_000_000,
                 command_limit: 16,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
