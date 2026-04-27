@@ -165,7 +165,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
     // At this point, all in-flight transactions from the previous session are confirmed.
     // Only actual SendToL1 commands are expected from here on.
 
-    /// TODO: prefetched channel is a temporary solution, until OUTPUT_BUFFER_SIZE is replaced by a different mechanism.
+    // TODO: prefetched channel is a temporary solution, until OUTPUT_BUFFER_SIZE is replaced by a different mechanism.
     let (prefetched_commands_sender, prefetched_commands) =
         mpsc::channel::<L1SenderCommand<Input>>(config.command_limit);
     let prefetch = prefetch_l1_sender_commands(inbound, prefetched_commands_sender, command_name);
