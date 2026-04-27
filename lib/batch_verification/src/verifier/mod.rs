@@ -222,9 +222,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
                                 block_number,
                                 (block_output, replay_record, tree_data),
                             )?;
-                            // No record_picked: recv → insert is synchronous, so last_picked
-                            // would equal last_processed. The adjacent-lag fallback to
-                            // last_processed gives the correct measurement.
+                            state_reporter.record_picked(block_number, Some(block_timestamp), None);
                             state_reporter.record_processed(block_number, Some(block_timestamp), None);
                         }
                         None => return Ok(()),

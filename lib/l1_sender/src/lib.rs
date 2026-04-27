@@ -186,28 +186,22 @@ pub async fn run_l1_sender<Input: SendToL1>(
     // Only actual SendToL1 commands are expected from here on.
     loop {
         state_reporter.enter_state(L1SenderState::Idle);
-        // This sleeps until **at least one** command is received from the channel. Additionally,
-        // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
-        // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
-        // emptied in every iteration, its size never exceeds `self.command_limit`.
-        //
-        // NOTE: record_picked is intentionally NOT called here (nor via any recv helper).
-        // L1Sender drains the input channel quickly — before waiting for L1 confirmation —
-        // so if we reported last_picked at dequeue time the adjacent-lag formula
-        // (upstream.last_processed − downstream.last_picked) would always be near zero even
-        // when L1 mining is stalled. By leaving last_picked = None the monitor falls back to
-        // using last_processed for the downstream side, which correctly captures the gap
-        // between what UpgradeGatekeeper sent and what L1Sender confirmed.
-        // record_processed is called only after the L1 transactions are mined
-        // (see `record_processed` calls below).
+        // Sleeps until at least one command is available, then greedily drains up to
+        // command_limit items without waiting. cmd_buffer is emptied every iteration.
         let received = inbound
             .recv_many(&mut cmd_buffer, config.command_limit)
             .await;
-        // This method only returns `0` if the channel has been closed and there are no more items
-        // in the queue.
+        // Only returns 0 when the channel is closed and drained.
         if received == 0 {
             tracing::info!("inbound channel closed");
             return Ok(());
+        }
+        if let Some(last) = cmd_buffer.last() {
+            state_reporter.record_picked(
+                last.last_block_number(),
+                last.block_timestamp(),
+                Some(last.last_batch_number()),
+            );
         }
         let mut commands = cmd_buffer
             .drain(..)

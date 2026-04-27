@@ -53,6 +53,11 @@ impl<C: SendToL1> L1SenderCommand<C> {
     pub fn last_block_number(&self) -> u64 {
         self.last_block().batch.last_block_number
     }
+
+    /// Timestamp of the last block in this command's final batch.
+    pub fn block_timestamp(&self) -> Option<u64> {
+        Some(self.last_block().batch.batch_info.last_block_timestamp)
+    }
 }
 
 impl<C: SendToL1 + Send + 'static> HasBlockRangeEnd for L1SenderCommand<C> {

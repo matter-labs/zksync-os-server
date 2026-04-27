@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
+use zksync_os_pipeline::{HasBlockRangeEnd, PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_types::ProtocolSemanticVersion;
 
 /// Receives Batches with proofs - potentially with incompatible protocol version.
@@ -97,6 +97,11 @@ impl PipelineComponent for UpgradeGatekeeper {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
+            state_reporter.record_picked(
+                command.block_number(),
+                command.block_timestamp(),
+                command.batch_number(),
+            );
 
             if let L1SenderCommand::SendToL1(command) = &command {
                 state_reporter.enter_state(GenericComponentState::Active);
