@@ -49,13 +49,27 @@ pub fn spawn_monitor() {
         for interval in monitor.intervals() {
             METRICS.worker_busy_ratio.set(interval.busy_ratio());
             METRICS.workers_count.set(interval.workers_count as u64);
-            METRICS.global_queue_depth.set(interval.global_queue_depth as u64);
-            METRICS.live_tasks_count.set(interval.live_tasks_count as u64);
-            METRICS.total_local_queue_depth.set(interval.total_local_queue_depth as u64);
-            METRICS.blocking_queue_depth.set(interval.blocking_queue_depth as u64);
-            METRICS.blocking_threads_count.set(interval.blocking_threads_count as u64);
-            METRICS.idle_blocking_threads_count.set(interval.idle_blocking_threads_count as u64);
-            METRICS.mean_poll_duration.set(interval.mean_poll_duration.as_secs_f64());
+            METRICS
+                .global_queue_depth
+                .set(interval.global_queue_depth as u64);
+            METRICS
+                .live_tasks_count
+                .set(interval.live_tasks_count as u64);
+            METRICS
+                .total_local_queue_depth
+                .set(interval.total_local_queue_depth as u64);
+            METRICS
+                .blocking_queue_depth
+                .set(interval.blocking_queue_depth as u64);
+            METRICS
+                .blocking_threads_count
+                .set(interval.blocking_threads_count as u64);
+            METRICS
+                .idle_blocking_threads_count
+                .set(interval.idle_blocking_threads_count as u64);
+            METRICS
+                .mean_poll_duration
+                .set(interval.mean_poll_duration.as_secs_f64());
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });
