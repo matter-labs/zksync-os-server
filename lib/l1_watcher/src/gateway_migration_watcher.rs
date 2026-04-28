@@ -40,7 +40,7 @@ impl GatewayMigrationWatcher {
         l2_chain_id: ChainId,
         l1_chain_id: ChainId,
         gw_chain_id: ChainId,
-        current_migration_number: u64,
+        next_migration_number: u64,
         config: L1WatcherConfig,
         sl_chain_id_subpool: SlChainIdSubpool,
     ) -> anyhow::Result<L1Watcher> {
@@ -52,7 +52,7 @@ impl GatewayMigrationWatcher {
             zk_chain.clone(),
             chain_asset_handler_address,
             l2_chain_id,
-            current_migration_number,
+            next_migration_number,
         )
         .await
         .or_else(|err| {
@@ -156,20 +156,20 @@ impl ProcessRawEvents for GatewayMigrationWatcher {
     }
 }
 
-/// Finds the first L1 block where `migrationNumber(_chainId) >= migration_number` on the
+/// Finds the first L1 block where `migrationNumber(_chainId) + 1 >= migration_number` on the
 /// `IChainAssetHandler` contract, using binary search. This is used to determine the starting
 /// L1 block for the gateway migration watcher.
 async fn find_l1_block_by_migration_number(
     zk_chain: ZkChain<DynProvider>,
     chain_asset_handler: Address,
     chain_id: u64,
-    migration_number: u64,
+    next_migration_number: u64,
 ) -> anyhow::Result<BlockNumber> {
     let instance = Arc::new(IChainAssetHandler::new(
         chain_asset_handler,
         zk_chain.provider().clone(),
     ));
-    let target = U256::from(migration_number);
+    let target = U256::from(next_migration_number);
 
     util::find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| {
         let instance = instance.clone();
@@ -187,7 +187,7 @@ async fn find_l1_block_by_migration_number(
                 .block(block.into())
                 .call()
                 .await?;
-            Ok(res >= target)
+            Ok(res + U256::ONE >= target)
         }
     })
     .await
