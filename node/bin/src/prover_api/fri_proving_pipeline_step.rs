@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use zksync_os_l1_sender::batcher_model::{FriProof, ProverInput, SignedBatchEnvelope};
+use zksync_os_batch_types::batcher_model::{FriProof, ProverInput, SignedBatchEnvelope};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
 /// Pipeline step that waits for batches to be FRI proved.

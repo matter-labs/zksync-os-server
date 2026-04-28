@@ -2,8 +2,8 @@ use alloy::primitives::{Address, B256};
 /// This module is for sharing various testing utilities and helpers.
 use tokio::sync::watch;
 use zksync_os_batch_types::CommitBatchInfoExt;
+use zksync_os_batch_types::batcher_model::{BatchEnvelope, BatchMetadata, MissingSignature};
 use zksync_os_contract_interface::models::{CommitBatchInfo, DACommitmentScheme, StoredBatchInfo};
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, MissingSignature};
 use zksync_os_storage_api::{FinalityStatus, ReadFinality};
 use zksync_os_types::ProtocolSemanticVersion;
 

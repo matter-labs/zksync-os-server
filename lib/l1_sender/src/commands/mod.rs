@@ -1,8 +1,8 @@
-use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{Address, Bytes};
 use itertools::Itertools;
 use std::fmt::Display;
+use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_batcher_metrics::BatchExecutionStage;
 
 pub mod commit;

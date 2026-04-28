@@ -1,9 +1,9 @@
 use crate::main_node::component::BatchVerificationError;
 use alloy::sol_types::SolValue;
 use anyhow::anyhow;
+use zksync_os_batch_types::batcher_model::BatchForSigning;
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_contract_interface::{IExecutor, IExecutorV29, IExecutorV30};
-use zksync_os_l1_sender::batcher_model::BatchForSigning;
 use zksync_os_network::VerifyBatch;
 use zksync_os_types::PubdataMode;
 

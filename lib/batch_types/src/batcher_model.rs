@@ -1,3 +1,4 @@
+use crate::{BatchSignatureSet, CommitBatchInfoExt};
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{Address, B256, Bytes};
 use anyhow::Context as _;
@@ -6,7 +7,6 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
-use zksync_os_batch_types::{BatchSignatureSet, CommitBatchInfoExt};
 use zksync_os_batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_observability::LatencyDistributionTracker;

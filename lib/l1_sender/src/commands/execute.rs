@@ -1,8 +1,8 @@
-use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::SendToL1;
 use alloy::primitives::{Address, Bytes, U256};
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
+use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 use zksync_os_contract_interface::{IExecutor, InteropRoot};

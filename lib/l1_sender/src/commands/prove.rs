@@ -1,9 +1,9 @@
-use crate::batcher_model::{FriProof, SignedBatchEnvelope, SnarkProof};
 use crate::commands::SendToL1;
 use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy::sol_types::SolCall;
 use std::collections::HashMap;
 use std::fmt::Display;
+use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope, SnarkProof};
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::IExecutor;
 use zksync_os_contract_interface::IExecutor::{proofPayloadCall, proveBatchesSharedBridgeCall};

@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Notify};
-use zksync_os_l1_sender::batcher_model::{BatchMetadata, SignedBatchEnvelope};
+use zksync_os_batch_types::batcher_model::{BatchMetadata, SignedBatchEnvelope};
 
 /// Concurrent map of prover jobs that support FRI and SNARK workflows.
 /// Imposes a limit on batch range
@@ -467,10 +467,10 @@ mod tests {
     use alloy::primitives::{Address, B256};
     use std::time::Duration;
     use zksync_os_batch_types::CommitBatchInfoExt;
+    use zksync_os_batch_types::batcher_model::{BatchForSigning, BatchMetadata};
     use zksync_os_contract_interface::models::{
         CommitBatchInfo, DACommitmentScheme, StoredBatchInfo,
     };
-    use zksync_os_l1_sender::batcher_model::{BatchForSigning, BatchMetadata};
     use zksync_os_types::{ProtocolSemanticVersion, PubdataMode};
 
     fn create_test_batch_envelope(batch_number: u64) -> SignedBatchEnvelope<Vec<u8>> {
@@ -521,7 +521,7 @@ mod tests {
         };
 
         BatchForSigning::new(batch, vec![1, 2, 3])
-            .with_signatures(zksync_os_l1_sender::batcher_model::BatchSignatureData::NotNeeded)
+            .with_signatures(zksync_os_batch_types::batcher_model::BatchSignatureData::NotNeeded)
     }
 
     #[tokio::test]

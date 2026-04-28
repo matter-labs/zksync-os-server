@@ -12,6 +12,7 @@ categories.workspace = true
 [dependencies]
 zksync_os_contract_interface.workspace = true
 zksync_os_crypto.workspace = true
+zksync_os_batch_types.workspace = true
 zksync_os_l1_sender.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_mini_merkle_tree.workspace = true

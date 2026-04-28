@@ -13968,15 +13968,20 @@ name = "zksync_os_batch_types"
 version = "0.19.0"
 dependencies = [
  "alloy",
+ "anyhow",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
  "blake2",
  "serde",
+ "serde_json",
  "thiserror 2.0.17",
+ "time",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zksync_os_batcher_metrics",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_merkle_tree",
  "zksync_os_mini_merkle_tree",
+ "zksync_os_observability",
  "zksync_os_types",
 ]
 
@@ -14219,7 +14224,6 @@ dependencies = [
  "ruint",
  "secrecy",
  "serde",
- "serde_json",
  "thiserror 2.0.17",
  "time",
  "tokio",
@@ -14460,6 +14464,7 @@ dependencies = [
  "bincode 2.0.1",
  "tokio",
  "tracing",
+ "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_crypto",
  "zksync_os_l1_sender",

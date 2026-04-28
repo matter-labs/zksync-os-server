@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+use zksync_os_batch_types::batcher_model::{
+    BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
+};
 use zksync_os_batch_types::{BatchSignatureSet, ValidatedBatchSignature};
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
-use zksync_os_l1_sender::batcher_model::{
-    BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
-};
 use zksync_os_network::{PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
@@ -439,10 +439,10 @@ mod tests {
     use alloy::signers::local::PrivateKeySigner;
     use secrecy::SecretString;
     use tokio::sync::mpsc;
-    use zksync_os_batch_types::{BatchSignature, ValidatedBatchSignature};
-    use zksync_os_l1_sender::batcher_model::{
+    use zksync_os_batch_types::batcher_model::{
         BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
     };
+    use zksync_os_batch_types::{BatchSignature, ValidatedBatchSignature};
     use zksync_os_network::{PeerVerifyBatchResult, VerifyBatchResult};
 
     const DUMMY_ADDRESS: &str = "0x1111111111111111111111111111111111111111";
