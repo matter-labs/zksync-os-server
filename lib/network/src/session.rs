@@ -30,7 +30,11 @@ pub struct ReplaySession {
 
 impl ReplaySession {
     pub fn can_verify(&self, required_block: BlockNumber) -> bool {
-        matches!(self.last_block_sent, Some(sent) if sent >= required_block)
+        // `requested_from_block` is derived from the EN's local DB at startup, so
+        // `requested_from_block > required_block` means the EN already persisted
+        // all blocks through `required_block` before connecting.
+        self.requested_from_block > required_block
+            || matches!(self.last_block_sent, Some(sent) if sent >= required_block)
     }
 }
 
@@ -157,8 +161,9 @@ impl PeerSessionStore {
     /// - replayed at least through `required_block`
     /// - completed verifier authentication successfully for the current session
     ///
-    /// Note: replay eligibility here is based only on blocks the main node has sent, not on any
-    /// acknowledgment that the peer actually consumed, persisted, or applied those replay records.
+    /// Replay eligibility is satisfied either by the main node having streamed blocks up to
+    /// `required_block` this session, or by the peer having connected with a `starting_block`
+    /// already past `required_block` (proving it held those blocks locally before connecting).
     pub fn authorized_verifier_peers(
         &self,
         required_block: BlockNumber,
@@ -269,6 +274,32 @@ mod tests {
             session.verifier.as_ref().unwrap().auth_state,
             VerifierAuthState::Unauthorized { signer } if signer == Some(unauthorized_signer)
         ));
+    }
+
+    #[test]
+    fn en_with_starting_block_past_required_is_immediately_eligible() {
+        let mut store = PeerSessionStore::default();
+        let now = Instant::now();
+        let peer_id = peer_id();
+        store.insert(now, peer_id, socket_addr(30309));
+
+        // EN already had blocks 0..=10 locally; connects requesting from 11.
+        store.replay_requested(peer_id, 11);
+        store.verifier_authorized(peer_id, signer(0x11));
+
+        // No blocks have been streamed this session, but the EN is still eligible
+        // for any batch whose last block is <= 10.
+        let replay = store.get(peer_id).unwrap().replay.as_ref().unwrap();
+        assert!(replay.can_verify(10));
+        assert!(replay.can_verify(9));
+        // Not eligible for block 11 — hasn't received it yet this session.
+        assert!(!replay.can_verify(11));
+
+        let peers: Vec<_> = store.authorized_verifier_peers(10).collect();
+        assert_eq!(peers, vec![peer_id]);
+
+        let peers: Vec<_> = store.authorized_verifier_peers(11).collect();
+        assert!(peers.is_empty());
     }
 
     #[test]

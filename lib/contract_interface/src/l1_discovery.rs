@@ -1,5 +1,6 @@
 use crate::metrics::L1_STATE_METRICS;
 use crate::models::BatchDaInputMode;
+use crate::settlement_layer_intervals::SettlementLayerIntervals;
 use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256, address};
@@ -39,6 +40,9 @@ pub struct L1State {
     pub da_input_mode: BatchDaInputMode,
     pub l1_chain_id: u64,
     pub sl_chain_id: u64,
+    /// Settlement layer intervals discovered on startup. Can be used to route batch lookups to the
+    /// diamond proxy of the SL the batch was committed to.
+    pub settlement_layer_intervals: SettlementLayerIntervals,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,7 +72,9 @@ impl L1State {
         // Call ZKChainStorage::getSettlementLayer() on the L1 diamond proxy to determine whether
         // this chain is currently settling on L1 or on the Gateway.
         // Returns address(0) when settling on L1, or the Gateway diamond proxy address after migration.
-        let settlement_layer_address = diamond_proxy_l1.get_settlement_layer().await?;
+        let settlement_layer_address = diamond_proxy_l1
+            .get_settlement_layer(BlockId::latest())
+            .await?;
 
         let (sl_chain_id, bridgehub_sl) = if settlement_layer_address.is_zero() {
             // Settling on L1: the settlement layer is L1 itself.
@@ -138,6 +144,24 @@ impl L1State {
             None => BatchVerificationSL::Disabled,
         };
 
+        let chain_asset_handler = bridgehub_l1.chain_asset_handler_address().await?;
+        let diamond_proxy_gw = if sl_chain_id == l1_chain_id {
+            None
+        } else {
+            Some((sl_chain_id, diamond_proxy_sl.clone()))
+        };
+        let settlement_layer_intervals = SettlementLayerIntervals::discover(
+            chain_asset_handler,
+            diamond_proxy_l1.clone(),
+            diamond_proxy_gw,
+            l2_chain_id,
+        )
+        .await?;
+        tracing::info!(
+            "discovered {} settlement layer intervals",
+            settlement_layer_intervals.intervals().len()
+        );
+
         Ok(Self {
             bridgehub_l1,
             bridgehub_sl,
@@ -152,6 +176,7 @@ impl L1State {
             da_input_mode,
             l1_chain_id,
             sl_chain_id,
+            settlement_layer_intervals,
         })
     }
 
@@ -218,6 +243,7 @@ impl L1State {
             da_input_mode: this.da_input_mode,
             l1_chain_id: this.l1_chain_id,
             sl_chain_id: this.sl_chain_id,
+            settlement_layer_intervals: this.settlement_layer_intervals,
         })
     }
 

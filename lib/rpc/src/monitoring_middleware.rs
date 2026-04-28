@@ -1,12 +1,15 @@
 use crate::metrics::API_METRICS;
+use crate::result::internal_rpc_err;
+use futures::FutureExt as _;
 use jsonrpsee::core::middleware::{Batch, BatchEntry, Notification};
 use jsonrpsee::server::middleware::rpc::{RpcService, RpcServiceT};
 use jsonrpsee::types::Request;
 use jsonrpsee::{BatchResponseBuilder, MethodResponse};
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::panic::AssertUnwindSafe;
+use std::time::Instant;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum CallKind {
     Call,
     Notification,
@@ -29,21 +32,40 @@ impl Monitoring {
 
 /// Ensures latency is recorded even if the future is dropped mid-flight (client disconnected).
 struct CallGuard {
+    kind: CallKind,
     method: String,
     started: Instant,
     request_size: usize,
     /// `Some((output_size, error_code))` once the future has resolved.
     completed: Option<(usize, Option<i32>)>,
+    panicked: bool,
 }
 
 impl CallGuard {
-    fn new(method: String, request_size: usize) -> Self {
+    fn new(kind: CallKind, method: String, request_size: usize) -> Self {
         Self {
+            kind,
             method,
             started: Instant::now(),
             request_size,
             completed: None,
+            panicked: false,
         }
+    }
+
+    async fn handle_result<F>(
+        mut self,
+        fut: F,
+        on_panic: impl FnOnce() -> MethodResponse + Send,
+    ) -> MethodResponse
+    where
+        F: Future<Output = MethodResponse> + Send,
+    {
+        let result = AssertUnwindSafe(fut).catch_unwind().await;
+        self.panicked = result.is_err();
+        let out = result.unwrap_or_else(|_| on_panic());
+        self.completed = Some((out.as_json().get().len(), out.as_error_code()));
+        out
     }
 }
 
@@ -94,18 +116,42 @@ impl Drop for CallGuard {
         let elapsed = self.started.elapsed();
         let cancelled = self.completed.is_none();
         let (output_size, error_code) = self.completed.take().unwrap_or((0, None));
+        API_METRICS.response_time[&self.method].observe(elapsed);
+        API_METRICS.request_size[&self.method].observe(self.request_size);
+        API_METRICS.response_size[&self.method].observe(output_size);
+        if let Some(code) = error_code {
+            API_METRICS.errors[&(self.method.clone(), code)].inc();
+        }
         if cancelled {
             API_METRICS.cancelled[&self.method].inc();
         }
-        log_and_report(
-            CallKind::Call,
-            &self.method,
-            elapsed,
-            self.request_size,
-            output_size,
-            error_code,
-            cancelled,
-        );
+        if self.panicked {
+            API_METRICS.panicked[&self.method].inc();
+            match self.kind {
+                CallKind::Call => tracing::error!(method = %self.method, "RPC handler panicked"),
+                CallKind::Notification => {
+                    tracing::error!(method = %self.method, "Notification handler panicked")
+                }
+            }
+        }
+
+        macro_rules! log {
+            ($target:literal) => {
+                tracing::debug!(
+                    target: $target,
+                    kind = ?self.kind,
+                    cancelled,
+                    "rpc call completed kind={:?} cancelled={}", self.kind, cancelled
+                )
+            };
+        }
+
+        match self.method.as_str() {
+            "eth_call" => log!("rpc::monitoring::eth::call"),
+            "eth_sendRawTransaction" => log!("rpc::monitoring::eth::sendRawTransaction"),
+            "debug_traceTransaction" => log!("rpc::monitoring::debug::traceTransaction"),
+            _ => log!("rpc::monitoring::call"),
+        }
     }
 }
 
@@ -120,13 +166,15 @@ impl RpcServiceT for Monitoring {
     ) -> impl Future<Output = Self::MethodResponse> + Send + 'a {
         let method = request.method_name().to_owned();
         let request_size = request.params.as_ref().map_or(0, |p| p.get().len());
-        let fut = self.inner.call(request);
+        let inner = self.inner.clone();
 
         async move {
-            let mut guard = CallGuard::new(method, request_size);
-            let out = fut.await;
-            guard.completed = Some((out.as_json().get().len(), out.as_error_code()));
-            out
+            let id = request.id.clone().into_owned();
+            let handler = async move { inner.call(request).await };
+            let on_panic = || MethodResponse::error(id, internal_rpc_err("Internal error"));
+            CallGuard::new(CallKind::Call, method, request_size)
+                .handle_result(handler, on_panic)
+                .await
         }
     }
 
@@ -203,58 +251,13 @@ impl RpcServiceT for Monitoring {
     ) -> impl Future<Output = Self::NotificationResponse> + Send + 'a {
         let request_size = n.params.as_ref().map_or(0, |p| p.get().len());
         let method = n.method_name().to_owned();
-        let fut = self.inner.notification(n);
+        let inner = self.inner.clone();
 
         async move {
-            let started = Instant::now();
-            let out = fut.await;
-            let output_size = out.as_json().get().len();
-
-            log_and_report(
-                CallKind::Notification,
-                &method,
-                started.elapsed(),
-                request_size,
-                output_size,
-                out.as_error_code(),
-                false,
-            );
-            out
+            let handler = async move { inner.notification(n).await };
+            CallGuard::new(CallKind::Notification, method, request_size)
+                .handle_result(handler, MethodResponse::notification)
+                .await
         }
-    }
-}
-
-fn log_and_report(
-    kind: CallKind,
-    method: &str,
-    elapsed: Duration,
-    request_size: usize,
-    output_size_bytes: usize,
-    error_code: Option<i32>,
-    cancelled: bool,
-) {
-    API_METRICS.response_time[method].observe(elapsed);
-    API_METRICS.request_size[method].observe(request_size);
-    API_METRICS.response_size[method].observe(output_size_bytes);
-    if let Some(code) = error_code {
-        API_METRICS.errors[&(method.to_owned(), code)].inc();
-    }
-
-    macro_rules! log {
-        ($target:literal) => {
-            tracing::debug!(
-                target: $target,
-                ?kind,
-                cancelled,
-                "rpc call completed kind={:?} cancelled={}", kind, cancelled
-            )
-        };
-    }
-
-    match method {
-        "eth_call" => log!("rpc::monitoring::eth::call"),
-        "eth_sendRawTransaction" => log!("rpc::monitoring::eth::sendRawTransaction"),
-        "debug_traceTransaction" => log!("rpc::monitoring::debug::traceTransaction"),
-        _ => log!("rpc::monitoring::call"),
     }
 }

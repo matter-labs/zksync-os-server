@@ -221,6 +221,17 @@ dependencies = [
 
 [[package]]
 name = "ahash"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "891477e0c6a8957309ee5c45a6368af3ae14bb510732d2684ffa19af310920f9"
+dependencies = [
+ "getrandom 0.2.16",
+ "once_cell",
+ "version_check",
+]
+
+[[package]]
+name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
@@ -684,6 +695,7 @@ dependencies = [
  "alloy-rpc-types-debug",
  "alloy-rpc-types-eth",
  "alloy-rpc-types-trace",
+ "alloy-rpc-types-txpool",
  "alloy-signer",
  "alloy-sol-types",
  "alloy-transport",
@@ -790,6 +802,7 @@ dependencies = [
  "alloy-rpc-types-engine",
  "alloy-rpc-types-eth",
  "alloy-rpc-types-trace",
+ "alloy-rpc-types-txpool",
  "alloy-serde",
  "serde",
 ]
@@ -894,6 +907,18 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.17",
+]
+
+[[package]]
+name = "alloy-rpc-types-txpool"
+version = "1.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d459f902a2313737bc66d18ed094c25d2aeb268b74d98c26bbbda2aa44182ab0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-rpc-types-eth",
+ "alloy-serde",
+ "serde",
 ]
 
 [[package]]
@@ -1247,6 +1272,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyerror"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71add24cc141a1e8326f249b74c41cfd217aeb2a67c9c6cf9134d175469afd49"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.99"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1305,7 +1339,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43d68f2d516162846c1238e755a7c4d131b892b70cc70c471a8e3ca3ed818fce"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "ark-ff 0.5.0",
  "ark-poly",
  "ark-serialize 0.5.0",
@@ -1452,7 +1486,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "579305839da207f02b89cd1679e50e67b4331e2f9294a57693e5051b7703fe27"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
@@ -2113,213 +2147,213 @@ checksum = "55248b47b0caf0546f7988906588779981c43bb1bc9d0c44087278f80cdb44ba"
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 dependencies = [
  "arrayvec",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "cfg-if",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "paste",
  "ruint",
  "serde-big-array",
  "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
 ]
 
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 dependencies = [
  "arrayvec",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "hex",
  "paste",
  "ruint",
  "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 dependencies = [
  "arrayvec",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "cfg-if",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "hex",
  "paste",
  "ruint",
  "serde",
  "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 dependencies = [
  "arrayvec",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "cfg-if",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "paste",
  "ruint",
  "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
  "arrayvec",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "cfg-if",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "paste",
  "ruint",
  "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 dependencies = [
  "arrayvec",
  "cc-traits",
  "const-hex",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "either",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "num-bigint",
  "num-traits",
  "paste",
  "rand 0.9.2",
  "ruint",
  "serde",
- "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
 ]
 
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 dependencies = [
  "arrayvec",
  "cfg-if",
  "const_for",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "either",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "paste",
  "rand 0.9.2",
  "ruint",
  "serde",
- "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 dependencies = [
  "arrayvec",
  "cfg-if",
  "const-hex",
  "const_for",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "either",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "num-bigint",
  "num-traits",
  "paste",
  "rand 0.9.2",
  "ruint",
  "serde",
- "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 dependencies = [
  "arrayvec",
  "cfg-if",
  "const-hex",
  "const_for",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "either",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "paste",
  "ruint",
- "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "strum_macros",
  "zerocopy",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
  "arrayvec",
  "cfg-if",
  "const-hex",
  "const_for",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "either",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "num-bigint",
  "num-traits",
  "paste",
  "rand 0.9.2",
  "ruint",
  "serde",
- "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "strum_macros",
  "zerocopy",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
 ]
 
 [[package]]
@@ -2739,6 +2773,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
 
 [[package]]
+name = "byte-unit"
+version = "5.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c6d47a4e2961fb8721bcfc54feae6455f2f64e7054f9bc67e875f0e77f4c58d"
+dependencies = [
+ "rust_decimal",
+ "schemars 1.0.4",
+ "serde",
+ "utf8-width",
+]
+
+[[package]]
+name = "bytecheck"
+version = "0.6.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23cdc57ce23ac53c931e88a43d06d070a6fd142f2617be5855eb75efc9beb1c2"
+dependencies = [
+ "bytecheck_derive",
+ "ptr_meta",
+ "simdutf8",
+]
+
+[[package]]
+name = "bytecheck_derive"
+version = "0.6.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3db406d29fbcd95542e92559bed4d8ad92636d1ca8b3b72ede10b4bcc010e659"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2821,79 +2889,79 @@ dependencies = [
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 dependencies = [
- "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "c-kzg",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
  "ruint",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
 ]
 
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 dependencies = [
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "num-bigint",
  "num-traits",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "ruint",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 dependencies = [
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "num-bigint",
  "num-traits",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "ruint",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
-dependencies = [
- "alloy-consensus",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "c-kzg",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "num-bigint",
- "num-traits",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
- "ruint",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
-]
-
-[[package]]
-name = "callable_oracles"
-version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 dependencies = [
  "alloy-consensus",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "c-kzg",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "num-bigint",
  "num-traits",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "ruint",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+]
+
+[[package]]
+name = "callable_oracles"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
+dependencies = [
+ "alloy-consensus",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "c-kzg",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "num-bigint",
+ "num-traits",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
+ "ruint",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
 ]
 
 [[package]]
@@ -2965,7 +3033,7 @@ dependencies = [
 [[package]]
 name = "cc-traits"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 
 [[package]]
 name = "cesu8"
@@ -3448,7 +3516,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -3475,7 +3543,7 @@ dependencies = [
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -3502,7 +3570,7 @@ dependencies = [
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -3529,7 +3597,7 @@ dependencies = [
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -3556,7 +3624,7 @@ dependencies = [
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -3702,27 +3770,27 @@ dependencies = [
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 
 [[package]]
 name = "darling"
@@ -3925,11 +3993,32 @@ dependencies = [
 
 [[package]]
 name = "derive_more"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a9b99b9cbbe49445b21764dc0625032a89b145a2642e67603e1c936f5458d05"
+dependencies = [
+ "derive_more-impl 1.0.0",
+]
+
+[[package]]
+name = "derive_more"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "093242cf7570c207c83073cf82f79706fe7b8317e98620a47d5be7c3d8497678"
 dependencies = [
- "derive_more-impl",
+ "derive_more-impl 2.0.1",
+]
+
+[[package]]
+name = "derive_more-impl"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7330aeadfbe296029522e6c40f315320aba36fc43a5b3632f3795348f3bd22"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "unicode-xid",
 ]
 
 [[package]]
@@ -4281,7 +4370,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4348,79 +4437,79 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 dependencies = [
  "arrayvec",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "either",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
 ]
 
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 dependencies = [
  "arrayvec",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "either",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "zksync_os_evm_errors",
 ]
 
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 dependencies = [
  "arrayvec",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "either",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "zksync_os_evm_errors",
 ]
 
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 dependencies = [
  "arrayvec",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "either",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "zksync_os_evm_errors",
 ]
 
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
  "arrayvec",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "either",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_evm_errors",
 ]
 
@@ -4724,125 +4813,125 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 dependencies = [
  "alloy",
- "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "bincode 1.3.3",
- "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "hex",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "paste",
  "ruint",
  "serde",
  "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "zksync_os_evm_errors",
  "zksync_os_interface",
- "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
 ]
 
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 dependencies = [
  "alloy",
  "arrayvec",
- "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "bincode 1.3.3",
- "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "hex",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "paste",
  "ruint",
  "serde",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "zksync_os_evm_errors",
  "zksync_os_interface",
- "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 dependencies = [
  "alloy",
  "arrayvec",
- "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "bincode 1.3.3",
- "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "hex",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "paste",
  "ruint",
  "serde",
  "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "zksync_os_evm_errors",
  "zksync_os_interface",
- "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 dependencies = [
  "alloy",
  "arrayvec",
- "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "bincode 1.3.3",
- "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "hex",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "paste",
  "ruint",
  "serde",
  "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "zksync_os_evm_errors",
  "zksync_os_interface",
- "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
  "alloy",
  "arrayvec",
- "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "bincode 1.3.3",
- "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "hex",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "paste",
  "ruint",
  "serde",
  "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_evm_errors",
  "zksync_os_interface",
- "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
 ]
 
 [[package]]
@@ -5264,6 +5353,9 @@ name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+dependencies = [
+ "ahash 0.7.8",
+]
 
 [[package]]
 name = "hashbrown"
@@ -5640,7 +5732,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -5893,7 +5985,7 @@ version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e96d2465363ed2d81857759fc864cf6bb7997f79327aec028d65bd7989393685"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "clap",
  "crossbeam-channel",
  "crossbeam-utils",
@@ -6381,7 +6473,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.53.5",
 ]
 
 [[package]]
@@ -6609,6 +6701,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "maplit"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
+
+[[package]]
 name = "match-lookup"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6673,7 +6771,7 @@ version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25dea7ac8057892855ec285c440160265225438c3c45072613c25a4b26e98ef5"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "portable-atomic",
 ]
 
@@ -6735,27 +6833,27 @@ dependencies = [
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 
 [[package]]
 name = "modular-bitfield"
@@ -7275,6 +7373,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "openraft"
+version = "0.9.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80d35e2f60cdf9bcfc39a020966091017c6dc2a4b43b355a22ca3e76106f4a0a"
+dependencies = [
+ "anyerror",
+ "byte-unit",
+ "chrono",
+ "clap",
+ "derive_more 1.0.0",
+ "futures",
+ "maplit",
+ "openraft-macros",
+ "rand 0.8.5",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+ "validit",
+]
+
+[[package]]
+name = "openraft-macros"
+version = "0.9.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbf0342d747a8da209c8e1d3ca8f788100966669412aaacb449409205931251"
+dependencies = [
+ "chrono",
+ "proc-macro2",
+ "quote",
+ "semver 1.0.26",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "openssl"
 version = "0.10.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7413,46 +7547,46 @@ dependencies = [
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
 ]
 
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
 ]
 
 [[package]]
@@ -8166,6 +8300,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ptr_meta"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0738ccf7ea06b608c10564b31debd4f5bc5e197fc8bfe088f68ae5ce81e7a4f1"
+dependencies = [
+ "ptr_meta_derive",
+]
+
+[[package]]
+name = "ptr_meta_derive"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16b845dbfca988fa33db069c0e230574d15a3088f147a87b64c7589eb662c9ac"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8211,7 +8365,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -8248,9 +8402,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8539,6 +8693,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rend"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71fe3824f5629716b1589be05dacd749f6aa084c87e00e016714a8cdfccc997c"
+dependencies = [
+ "bytecheck",
+]
+
+[[package]]
 name = "reqwest"
 version = "0.12.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8598,7 +8761,7 @@ checksum = "1e061d1b48cb8d38042de4ae0a7a6401009d6143dc80d2e2d6f31f0bdd6470c7"
 [[package]]
 name = "reth-chain-state"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -8629,7 +8792,7 @@ dependencies = [
 [[package]]
 name = "reth-chainspec"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-chains",
  "alloy-consensus",
@@ -8649,7 +8812,7 @@ dependencies = [
 [[package]]
 name = "reth-codecs"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -8669,7 +8832,7 @@ dependencies = [
 [[package]]
 name = "reth-codecs-derive"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8679,7 +8842,7 @@ dependencies = [
 [[package]]
 name = "reth-consensus"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
@@ -8692,7 +8855,7 @@ dependencies = [
 [[package]]
 name = "reth-db"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "derive_more 2.0.1",
@@ -8719,7 +8882,7 @@ dependencies = [
 [[package]]
 name = "reth-db-api"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-genesis",
@@ -8748,7 +8911,7 @@ dependencies = [
 [[package]]
 name = "reth-db-models"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -8763,7 +8926,7 @@ dependencies = [
 [[package]]
 name = "reth-discv4"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -8788,7 +8951,7 @@ dependencies = [
 [[package]]
 name = "reth-discv5"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -8812,7 +8975,7 @@ dependencies = [
 [[package]]
 name = "reth-dns-discovery"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "dashmap",
@@ -8834,7 +8997,7 @@ dependencies = [
 [[package]]
 name = "reth-ecies"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "aes",
  "alloy-primitives",
@@ -8862,7 +9025,7 @@ dependencies = [
 [[package]]
 name = "reth-engine-primitives"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -8887,7 +9050,7 @@ dependencies = [
 [[package]]
 name = "reth-errors"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "reth-consensus",
  "reth-execution-errors",
@@ -8898,7 +9061,7 @@ dependencies = [
 [[package]]
 name = "reth-eth-wire"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -8925,7 +9088,7 @@ dependencies = [
 [[package]]
 name = "reth-eth-wire-types"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-chains",
  "alloy-consensus",
@@ -8946,7 +9109,7 @@ dependencies = [
 [[package]]
 name = "reth-ethereum-engine-primitives"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -8964,7 +9127,7 @@ dependencies = [
 [[package]]
 name = "reth-ethereum-forks"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-eip2124",
  "alloy-hardforks 0.4.7",
@@ -8977,7 +9140,7 @@ dependencies = [
 [[package]]
 name = "reth-ethereum-primitives"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -8997,7 +9160,7 @@ dependencies = [
 [[package]]
 name = "reth-evm"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9019,7 +9182,7 @@ dependencies = [
 [[package]]
 name = "reth-evm-ethereum"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9041,7 +9204,7 @@ dependencies = [
 [[package]]
 name = "reth-execution-errors"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-evm",
  "alloy-primitives",
@@ -9054,7 +9217,7 @@ dependencies = [
 [[package]]
 name = "reth-execution-types"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9072,7 +9235,7 @@ dependencies = [
 [[package]]
 name = "reth-fs-util"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "serde",
  "serde_json",
@@ -9082,7 +9245,7 @@ dependencies = [
 [[package]]
 name = "reth-libmdbx"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "bitflags 2.11.0",
  "byteorder",
@@ -9098,7 +9261,7 @@ dependencies = [
 [[package]]
 name = "reth-mdbx-sys"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "bindgen",
  "cc",
@@ -9107,7 +9270,7 @@ dependencies = [
 [[package]]
 name = "reth-metrics"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "futures",
  "metrics",
@@ -9119,7 +9282,7 @@ dependencies = [
 [[package]]
 name = "reth-net-banlist"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "ipnet",
@@ -9128,7 +9291,7 @@ dependencies = [
 [[package]]
 name = "reth-net-nat"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "futures-util",
  "if-addrs",
@@ -9142,7 +9305,7 @@ dependencies = [
 [[package]]
 name = "reth-network"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9198,7 +9361,7 @@ dependencies = [
 [[package]]
 name = "reth-network-api"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
@@ -9222,7 +9385,7 @@ dependencies = [
 [[package]]
 name = "reth-network-p2p"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9245,7 +9408,7 @@ dependencies = [
 [[package]]
 name = "reth-network-peers"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -9260,7 +9423,7 @@ dependencies = [
 [[package]]
 name = "reth-network-types"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-eip2124",
  "reth-net-banlist",
@@ -9272,7 +9435,7 @@ dependencies = [
 [[package]]
 name = "reth-nippy-jar"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "anyhow",
  "bincode 1.3.3",
@@ -9289,7 +9452,7 @@ dependencies = [
 [[package]]
 name = "reth-node-types"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "reth-chainspec",
  "reth-db-api",
@@ -9301,7 +9464,7 @@ dependencies = [
 [[package]]
 name = "reth-payload-builder-primitives"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "pin-project 1.1.10",
  "reth-payload-primitives",
@@ -9313,7 +9476,7 @@ dependencies = [
 [[package]]
 name = "reth-payload-primitives"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9336,7 +9499,7 @@ dependencies = [
 [[package]]
 name = "reth-primitives"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9354,7 +9517,7 @@ dependencies = [
 [[package]]
 name = "reth-primitives-traits"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9388,7 +9551,7 @@ dependencies = [
 [[package]]
 name = "reth-provider"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9432,7 +9595,7 @@ dependencies = [
 [[package]]
 name = "reth-prune-types"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "arbitrary",
@@ -9448,7 +9611,7 @@ dependencies = [
 [[package]]
 name = "reth-revm"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "reth-primitives-traits",
@@ -9460,7 +9623,7 @@ dependencies = [
 [[package]]
 name = "reth-rpc-convert"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-evm",
@@ -9481,7 +9644,7 @@ dependencies = [
 [[package]]
 name = "reth-rpc-eth-types"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9529,7 +9692,7 @@ dependencies = [
 [[package]]
 name = "reth-rpc-server-types"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -9545,7 +9708,7 @@ dependencies = [
 [[package]]
 name = "reth-stages-types"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "arbitrary",
@@ -9559,7 +9722,7 @@ dependencies = [
 [[package]]
 name = "reth-static-file-types"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "derive_more 2.0.1",
@@ -9573,7 +9736,7 @@ dependencies = [
 [[package]]
 name = "reth-storage-api"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9597,7 +9760,7 @@ dependencies = [
 [[package]]
 name = "reth-storage-errors"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -9614,7 +9777,7 @@ dependencies = [
 [[package]]
 name = "reth-tasks"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "auto_impl",
  "dyn-clone",
@@ -9632,7 +9795,7 @@ dependencies = [
 [[package]]
 name = "reth-tokio-util"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "tokio",
  "tokio-stream",
@@ -9642,7 +9805,7 @@ dependencies = [
 [[package]]
 name = "reth-tracing"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "clap",
  "eyre",
@@ -9658,7 +9821,7 @@ dependencies = [
 [[package]]
 name = "reth-transaction-pool"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9702,7 +9865,7 @@ dependencies = [
 [[package]]
 name = "reth-trie"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9728,7 +9891,7 @@ dependencies = [
 [[package]]
 name = "reth-trie-common"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
@@ -9755,7 +9918,7 @@ dependencies = [
 [[package]]
 name = "reth-trie-db"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "metrics",
@@ -9775,7 +9938,7 @@ dependencies = [
 [[package]]
 name = "reth-trie-sparse"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -9792,7 +9955,7 @@ dependencies = [
 [[package]]
 name = "reth-zstd-compressors"
 version = "1.11.1"
-source = "git+https://github.com/paradigmxyz/reth?tag=v1.11.1#bef3d7b4d1da937fcccc9bbd6f8bd93e16380dc7"
+source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
 dependencies = [
  "zstd",
 ]
@@ -10031,7 +10194,7 @@ version = "1.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2780e813b755850e50b178931aaf94ed24f6817f46aaaf5d21c13c12d939a249"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "bitflags 2.11.0",
  "instant",
  "num-traits",
@@ -10155,6 +10318,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "rkyv"
+version = "0.7.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2297bf9c81a3f0dc96bc9521370b88f054168c29826a75e89c55ff196e7ed6a1"
+dependencies = [
+ "bitvec",
+ "bytecheck",
+ "bytes",
+ "hashbrown 0.12.3",
+ "ptr_meta",
+ "rend",
+ "rkyv_derive",
+ "seahash",
+ "tinyvec",
+ "uuid",
+]
+
+[[package]]
+name = "rkyv_derive"
+version = "0.7.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84d7b42d4b8d06048d3ac8db0eb31bcb942cbeb709f0b5f2b2ebde398d3038f5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "rlp"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10245,6 +10437,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust_decimal"
+version = "1.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ce901f9a19d251159075a4c37af514c3b8ef99c22e02dd8c19161cf397ee94a"
+dependencies = [
+ "arrayvec",
+ "borsh",
+ "bytes",
+ "num-traits",
+ "rand 0.8.5",
+ "rkyv",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10302,7 +10511,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -10380,9 +10589,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.10"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -10487,7 +10696,7 @@ version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "356285bbf17bea63d9e52e96bd18f039672ac92b55b8cb997d6162a2a37d1649"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "cfg-if",
  "hashbrown 0.13.2",
 ]
@@ -10503,6 +10712,12 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "seahash"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "sec1"
@@ -11094,6 +11309,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
 
 [[package]]
+name = "simdutf8"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
 name = "similar"
 version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11268,45 +11489,45 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 dependencies = [
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
 ]
 
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 dependencies = [
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 dependencies = [
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 dependencies = [
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
 ]
 
 [[package]]
@@ -11478,71 +11699,71 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 dependencies = [
  "arrayvec",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
 ]
 
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 dependencies = [
  "arrayvec",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 dependencies = [
  "arrayvec",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 dependencies = [
  "arrayvec",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
  "arrayvec",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
 ]
 
 [[package]]
@@ -11650,9 +11871,9 @@ dependencies = [
 
 [[package]]
 name = "thin-vec"
-version = "0.2.14"
+version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "144f754d318415ac792f9d69fc87abbbfc043ce2ef041c60f16ad828f638717d"
+checksum = "259cdf8ed4e4aca6f1e9d011e10bd53f524a2d0637d7b28450f6c64ac298c4c6"
 
 [[package]]
 name = "thiserror"
@@ -12572,6 +12793,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8232dd3cdaed5356e0f716d285e4b40b932ac434100fe9b7e0e8e935b9e6246"
 
 [[package]]
+name = "utf8-width"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1292c0d970b54115d14f2492fe0170adf21d68a1de108eebc51c1df4f346a091"
+
+[[package]]
 name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12593,6 +12820,15 @@ dependencies = [
  "js-sys",
  "serde",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "validit"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4efba0434d5a0a62d4f22070b44ce055dc18cb64d4fa98276aa523dadfaba0e7"
+dependencies = [
+ "anyerror",
 ]
 
 [[package]]
@@ -13013,7 +13249,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -13837,13 +14073,13 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.0",
  "cfg-if",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "paste",
  "ruint",
  "serde",
@@ -13853,30 +14089,13 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.0",
  "cfg-if",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "paste",
- "ruint",
- "serde",
- "strum_macros",
- "zksync_os_evm_errors",
-]
-
-[[package]]
-name = "zk_ee"
-version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
-dependencies = [
- "arrayvec",
- "bitflags 2.11.0",
- "cfg-if",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "paste",
  "ruint",
  "serde",
@@ -13887,13 +14106,30 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.0",
  "cfg-if",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "paste",
+ "ruint",
+ "serde",
+ "strum_macros",
+ "zksync_os_evm_errors",
+]
+
+[[package]]
+name = "zk_ee"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
+dependencies = [
+ "arrayvec",
+ "bitflags 2.11.0",
+ "cfg-if",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "paste",
  "ruint",
  "strum_macros",
@@ -13903,13 +14139,13 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.0",
  "cfg-if",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "paste",
  "ruint",
  "serde",
@@ -13930,25 +14166,25 @@ dependencies = [
 [[package]]
 name = "zksync_os_api"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
  "alloy",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "ruint",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_interface",
- "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
 ]
 
 [[package]]
 name = "zksync_os_base_token_adjuster"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -13965,29 +14201,24 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batch_types"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
- "anyhow",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "blake2",
  "serde",
- "serde_json",
  "thiserror 2.0.17",
- "time",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "zksync_os_batcher_metrics",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_merkle_tree",
  "zksync_os_mini_merkle_tree",
- "zksync_os_observability",
  "zksync_os_types",
 ]
 
 [[package]]
 name = "zksync_os_batch_verification"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -13998,7 +14229,6 @@ dependencies = [
  "tracing",
  "vise",
  "zksync_os_batch_types",
- "zksync_os_batcher_metrics",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_l1_sender",
@@ -14011,15 +14241,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "zksync_os_batcher_metrics"
-version = "0.19.0"
-dependencies = [
- "vise",
-]
-
-[[package]]
 name = "zksync_os_config_validation_macros"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -14027,12 +14250,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_consensus_types"
+version = "0.19.1"
+dependencies = [
+ "openraft",
+ "reth-network-peers",
+ "zksync_os_storage_api",
+]
+
+[[package]]
 name = "zksync_os_contract_interface"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "backon",
+ "futures",
  "serde",
  "structdiff",
  "thiserror 2.0.17",
@@ -14042,7 +14275,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_crypto"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "blake2",
@@ -14051,13 +14284,13 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_evm_errors"
-version = "0.0.14"
+version = "0.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d11a0784093ae6b84a29c91617f203264c31dd2cdb2c250a134f5209c1abf9f7"
+checksum = "a7e143e8ed5c5b99fece20b77ebef0f0314a349b74c9a788b823e170a68df1de"
 
 [[package]]
 name = "zksync_os_external_price_api"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14079,7 +14312,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_gas_adjuster"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14094,7 +14327,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_generate_deposit"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14106,12 +14339,12 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_genesis"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "blake2",
  "serde",
  "serde_json",
@@ -14126,13 +14359,13 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_integration_tests"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
  "backon",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "blake2",
  "flate2",
  "fs2",
@@ -14165,7 +14398,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_integration_tests_macros"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -14174,9 +14407,9 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_interface"
-version = "0.0.14"
+version = "0.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f39e007e7bb8439476cc72ed4d20d9c1309ba42589efd28271523fb7fad67fc"
+checksum = "4d8ec5e64c8977a3c70cf276acf052723c20e054dbba0005966081c080fea4a3"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
@@ -14186,7 +14419,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_internal_config"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14197,7 +14430,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_interop_fee_updater"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14212,26 +14445,26 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_sender"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "blake2",
  "futures",
  "itertools 0.14.0",
  "ruint",
  "secrecy",
  "serde",
+ "serde_json",
  "thiserror 2.0.17",
  "time",
  "tokio",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_batch_types",
- "zksync_os_batcher_metrics",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_merkle_tree",
@@ -14244,16 +14477,17 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_watcher"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
  "backon",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "blake2",
  "futures",
  "rangemap",
+ "reth-tasks",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -14268,7 +14502,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_mempool"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "auto_impl",
@@ -14293,15 +14527,15 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_merkle_tree"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "clap",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "insta",
  "leb128",
  "once_cell",
@@ -14315,15 +14549,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.22",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_merkle_tree_api",
  "zksync_os_rocksdb",
 ]
 
 [[package]]
 name = "zksync_os_merkle_tree_api"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14336,14 +14570,14 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_metadata"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "semver 1.0.26",
 ]
 
 [[package]]
 name = "zksync_os_mini_merkle_tree"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "criterion",
@@ -14354,16 +14588,16 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_multivm"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "cargo_metadata",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "reqwest",
  "tempfile",
  "test-casing",
@@ -14375,14 +14609,17 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_network"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "alloy-rlp",
  "assert_matches",
+ "async-trait",
  "backon",
+ "dashmap",
  "futures",
  "metrics",
+ "openraft",
  "reth-chainspec",
  "reth-discv5",
  "reth-eth-wire",
@@ -14393,12 +14630,15 @@ dependencies = [
  "reth-tasks",
  "secrecy",
  "semver 1.0.26",
+ "serde",
+ "serde_json",
  "test-casing",
  "test-log",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
  "vise",
+ "zksync_os_consensus_types",
  "zksync_os_interface",
  "zksync_os_metadata",
  "zksync_os_reth_compat",
@@ -14408,7 +14648,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_observability"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -14435,7 +14675,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_operator_signer"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14445,7 +14685,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_pipeline"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -14457,14 +14697,13 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_priority_tree"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "bincode 2.0.1",
  "tokio",
  "tracing",
- "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_crypto",
  "zksync_os_l1_sender",
@@ -14479,7 +14718,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_raft"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -14491,7 +14730,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_reth_compat"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "reth-chainspec",
@@ -14507,14 +14746,14 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_revm_consistency_checker"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "blake2",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "futures",
  "reth-execution-types",
  "reth-primitives",
@@ -14529,7 +14768,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync-os-revm",
  "zksync_os_genesis",
  "zksync_os_interface",
@@ -14545,7 +14784,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rocksdb"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "num_cpus",
  "once_cell",
@@ -14558,22 +14797,23 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "blake2",
  "boa_engine",
  "boa_gc",
  "dashmap",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "futures",
  "hyper",
  "jsonrpsee",
  "reth-rpc-eth-types",
  "reth-tasks",
+ "roaring",
  "ruint",
  "serde",
  "serde_json",
@@ -14584,7 +14824,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_api",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
@@ -14598,13 +14838,14 @@ dependencies = [
  "zksync_os_mini_merkle_tree",
  "zksync_os_multivm",
  "zksync_os_rpc_api",
+ "zksync_os_storage",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
 
 [[package]]
 name = "zksync_os_rpc_api"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -14621,9 +14862,9 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260421#e98e0299bef9b53a99bef424f140e297042bbf88"
 dependencies = [
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
  "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
@@ -14632,9 +14873,9 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14#56b7589f26928b0755f3c19610935da4b8998e48"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15#f7f4b111f4b748afc6e7697f2483cc2ee07a5df8"
 dependencies = [
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.14)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.28-interface-v0.0.15)",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -14643,9 +14884,9 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14#ddc4fc73527ad4137856b19f12ddf28018dea267"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15#8793598ca253b6177c80d32384b3519627ec2dae"
 dependencies = [
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.14)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.0.15)",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -14654,9 +14895,9 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14#2815e823e67f1b558292ba57573fb4a6ca8a4c8e"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15#f7c84ab16549d21ab4c56fec63171985dfc55bae"
 dependencies = [
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.14)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-simulation-only-interface-v0.0.15)",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -14665,9 +14906,9 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14#414c746e9c81392b8c0b75602c4a62097abdf066"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15#06a5f8a20b54632036079d2438dadaece27c6dae"
 dependencies = [
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -14675,13 +14916,13 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_sequencer"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "futures",
  "num",
  "ruint",
@@ -14692,7 +14933,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_gas_adjuster",
  "zksync_os_genesis",
  "zksync_os_interface",
@@ -14708,21 +14949,21 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_server"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
  "axum",
  "base64",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "bincode 2.0.1",
  "blake2",
  "clap",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
  "flate2",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "full_statement_verifier",
  "futures",
  "http 1.3.1",
@@ -14750,12 +14991,11 @@ dependencies = [
  "tokio-util",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260402)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_base_token_adjuster",
  "zksync_os_batch_types",
  "zksync_os_batch_verification",
- "zksync_os_batcher_metrics",
  "zksync_os_config_validation_macros",
  "zksync_os_contract_interface",
  "zksync_os_external_price_api",
@@ -14793,17 +15033,17 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
  "dashmap",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "ruint",
  "tokio",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_rocksdb",
@@ -14812,16 +15052,16 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state_full_diffs"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "ruint",
  "tempfile",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_rocksdb",
@@ -14830,7 +15070,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_status_server"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -14842,7 +15082,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14850,6 +15090,7 @@ dependencies = [
  "dashmap",
  "roaring",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "vise",
@@ -14864,13 +15105,13 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage_api"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "alloy-rlp",
  "anyhow",
  "auto_impl",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "futures",
  "pin-project 1.1.10",
  "roaring",
@@ -14880,7 +15121,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_api",
  "zksync_os_batch_types",
  "zksync_os_interface",
@@ -14891,7 +15132,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_tx_validators"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "tracing",
@@ -14901,7 +15142,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_types"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -14920,7 +15161,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_verify_storage_proof"
-version = "0.19.0"
+version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",

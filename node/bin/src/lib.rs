@@ -189,9 +189,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
-    let l1_provider = build_node_provider(&config.general_config.l1_rpc_url).await;
+    let l1_provider = build_node_provider(
+        &config.general_config.l1_rpc_url,
+        config.general_config.l1_rpc_poll_interval,
+    )
+    .await;
     let gateway_provider = match &config.general_config.gateway_rpc_url {
-        Some(url) => Some(build_node_provider(url).await),
+        Some(url) => {
+            Some(build_node_provider(url, config.general_config.gateway_rpc_poll_interval).await)
+        }
         None => None,
     };
 
@@ -302,9 +308,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let tree_db = tree_at_genesis.tree;
     let tree_for_rpc = Arc::new(tree_db.clone());
 
-    // todo: this can take a while; ideally committed batches should be loaded in the background
-    //       and then `get()` method can be made async so that it waits for relevant batch to load
-    let committed_batch_provider = CommittedBatchProvider::init(
+    let committed_batch_provider = CommittedBatchProvider::new(
+        runtime,
         &l1_state,
         config.l1_watcher_config.max_blocks_to_process,
         || async {
@@ -429,6 +434,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
+                None,
             )
             .await
         } else {
@@ -457,6 +463,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
+                None,
             )
             .await
         }
@@ -1146,6 +1153,7 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
             commit_submitted_tx: Some(commit_submitted_tx),
+            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })
         .pipe(snark_proving_step)
         .pipe(GaplessL1ProofSender::new(
@@ -1157,6 +1165,7 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
             commit_submitted_tx: None,
+            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })
         .pipe(
             PriorityTreePipelineStep::new(
@@ -1173,6 +1182,7 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
             commit_submitted_tx: None,
+            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })
         .pipe(BatchSink::new(internal_config_manager));
 
@@ -1362,7 +1372,7 @@ async fn commit_proof_execute_block_numbers(
     } else {
         committed_batch_provider
             .get(l1_state.last_committed_batch)
-            .expect("last committed batch was not discovered on L1")
+            .expect("last_committed_batch is expected to be loaded")
             .last_block_number()
     };
 
@@ -1372,7 +1382,7 @@ async fn commit_proof_execute_block_numbers(
     } else {
         committed_batch_provider
             .get(l1_state.last_proved_batch)
-            .expect("last proved batch was not discovered on L1")
+            .expect("last_proved_batch is expected to be loaded")
             .last_block_number()
     };
 
@@ -1381,7 +1391,7 @@ async fn commit_proof_execute_block_numbers(
     } else {
         committed_batch_provider
             .get(l1_state.last_executed_batch)
-            .expect("last executed batch was not discovered on L1")
+            .expect("last_executed_batch is expected to be loaded")
             .last_block_number()
     };
     (last_committed_block, last_proved_block, last_executed_block)

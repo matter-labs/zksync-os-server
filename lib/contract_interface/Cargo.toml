@@ -13,6 +13,7 @@ categories.workspace = true
 alloy = { workspace = true, default-features = false, features = ["contract", "providers"] }
 anyhow.workspace = true
 backon.workspace = true
+futures.workspace = true
 serde.workspace = true
 tracing.workspace = true
 vise.workspace = true

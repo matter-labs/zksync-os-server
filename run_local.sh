@@ -151,10 +151,10 @@ echo -e "${GREEN}Build completed${NC}"
 echo -e "\n${GREEN}Starting Anvil...${NC}"
 if [ -n "$LOGS_DIR" ]; then
     ANVIL_LOG_FILE="$LOGS_DIR/anvil-$LOG_TIMESTAMP.log"
-    anvil --load-state "$L1_STATE_FILE" --port 8545 > "$ANVIL_LOG_FILE" 2>&1 &
+    anvil --load-state "$L1_STATE_FILE" --port 8545 --block-time 0.25 --mixed-mining > "$ANVIL_LOG_FILE" 2>&1 &
     echo -e "${GREEN}Anvil logs: $ANVIL_LOG_FILE${NC}"
 else
-    anvil --load-state "$L1_STATE_FILE" --port 8545 > /dev/null 2>&1 &
+    anvil --load-state "$L1_STATE_FILE" --port 8545 --block-time 0.25 --mixed-mining > /dev/null 2>&1 &
 fi
 ANVIL_PID=$!
 PIDS+=($ANVIL_PID)

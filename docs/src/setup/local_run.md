@@ -23,7 +23,7 @@ To run node locally, first decompress state and launch `anvil`:
 
 ```
 gzip -dfk ./local-chains/v30.2/l1-state.json.gz
-anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545
+anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545 --block-time 0.25 --mixed-mining
 ```
 
 then launch the server:

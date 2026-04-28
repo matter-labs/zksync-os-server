@@ -177,7 +177,7 @@ jobs:
         run: gzip -dfk ./local-chains/v30.2/l1-state.json.gz
 
       - name: Run anvil L1
-        run: anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545 &
+        run: anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545 --block-time 0.25 --mixed-mining &
 
       - name: Build server
         run: cargo build --release --bin zksync-os-server

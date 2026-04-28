@@ -57,7 +57,7 @@ L1 state snapshot for Anvil. Contains the deployed L1 contracts state. It can be
 
 ```bash
 gzip -dfk ./local-chains/v30.2/l1-state.json.gz
-anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545
+anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545 --block-time 0.25 --mixed-mining
 ```
 
 ### `config.yaml`

@@ -13,6 +13,7 @@ categories.workspace = true
 zksync_os_mempool.workspace = true
 zksync_os_mini_merkle_tree.workspace = true
 zksync_os_rpc_api = { workspace = true, features = ["server"] }
+zksync_os_storage.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_multivm.workspace = true
@@ -32,13 +33,14 @@ zk_ee.workspace = true
 
 reth-rpc-eth-types.workspace = true
 reth-tasks.workspace = true
-alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc", "rand"] }
+alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc", "rand", "rpc-types-txpool"] }
 anyhow.workspace = true
 async-trait.workspace = true
 blake2.workspace = true
 dashmap.workspace = true
 futures.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = ["macros", "client"] }
+roaring.workspace = true
 ruint.workspace = true
 serde.workspace = true
 serde_json.workspace = true

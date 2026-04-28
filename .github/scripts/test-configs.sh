@@ -64,7 +64,7 @@ for entry in "${CONFIGS[@]}"; do
   gzip -dfk "${CUR_STATE}.gz"
 
   echo "Starting anvil..."
-  anvil --load-state "${CUR_STATE}" --port 8545 > anvil.log 2>&1 &
+  anvil --load-state "${CUR_STATE}" --port 8545 --block-time 0.25 --mixed-mining > anvil.log 2>&1 &
   ANVIL_PID=$!
 
   echo "Starting server..."
