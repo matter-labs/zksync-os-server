@@ -35,7 +35,7 @@ pub trait ZksApi {
         block_number: u64,
     ) -> RpcResult<Option<BlockMetadata>>;
 
-    #[method(name = "getProof")]
+    #[method(name = "getProof", blocking)]
     fn get_proof(
         &self,
         account: Address,

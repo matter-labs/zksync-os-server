@@ -79,7 +79,7 @@ pub trait EthApi {
     ) -> RpcResult<Option<U256>>;
 
     /// Returns all transaction receipts for a given block.
-    #[method(name = "getBlockReceipts")]
+    #[method(name = "getBlockReceipts", blocking)]
     fn block_receipts(&self, block_id: BlockId) -> RpcResult<Option<Vec<ZkTransactionReceipt>>>;
 
     /// Returns an uncle block of the given block and index.
@@ -196,7 +196,7 @@ pub trait EthApi {
     ) -> RpcResult<Vec<SimulatedBlock>>;
 
     /// Executes a new message call immediately without creating a transaction on the block chain.
-    #[method(name = "call")]
+    #[method(name = "call", blocking)]
     fn call(
         &self,
         request: TransactionRequest,
@@ -239,7 +239,7 @@ pub trait EthApi {
 
     /// Generates and returns an estimate of how much gas is necessary to allow the transaction to
     /// complete.
-    #[method(name = "estimateGas")]
+    #[method(name = "estimateGas", blocking)]
     fn estimate_gas(
         &self,
         request: TransactionRequest,
@@ -272,7 +272,7 @@ pub trait EthApi {
     /// can be a subsection of the requested range if not all blocks are available.
     ///
     /// The L2 pubdata price history is also included in the response.
-    #[method(name = "feeHistory")]
+    #[method(name = "feeHistory", blocking)]
     fn fee_history(
         &self,
         block_count: U64,

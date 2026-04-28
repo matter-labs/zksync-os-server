@@ -9,6 +9,6 @@ pub trait UnstableApi {
     #[method(name = "getBatchByBlockNumber")]
     fn get_batch_by_block_number(&self, block_number: u64) -> RpcResult<PersistedBatch>;
 
-    #[method(name = "getLocalRoot")]
+    #[method(name = "getLocalRoot", blocking)]
     fn get_local_root(&self, batch_number: u64) -> RpcResult<B256>;
 }

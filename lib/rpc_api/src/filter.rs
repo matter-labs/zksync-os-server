@@ -35,7 +35,7 @@ pub trait EthFilterApi {
     ) -> RpcResult<FilterChanges<Transaction<L2Envelope>>>;
 
     /// Returns all logs matching given filter (in a range 'from' - 'to').
-    #[method(name = "getFilterLogs")]
+    #[method(name = "getFilterLogs", blocking)]
     fn filter_logs(&self, id: FilterId) -> RpcResult<Vec<Log>>;
 
     /// Uninstalls filter.
@@ -43,6 +43,6 @@ pub trait EthFilterApi {
     fn uninstall_filter(&self, id: FilterId) -> RpcResult<bool>;
 
     /// Returns logs matching given filter object.
-    #[method(name = "getLogs")]
+    #[method(name = "getLogs", blocking)]
     fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>>;
 }

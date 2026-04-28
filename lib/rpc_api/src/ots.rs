@@ -57,7 +57,7 @@ pub trait OtsApi {
 
     /// Tailor-made and expanded version of `eth_getBlockByNumber` for block details page in
     /// Otterscan.
-    #[method(name = "getBlockDetails")]
+    #[method(name = "getBlockDetails", blocking)]
     fn get_block_details(
         &self,
         block_number: LenientBlockNumberOrTag,
@@ -65,11 +65,11 @@ pub trait OtsApi {
 
     /// Tailor-made and expanded version of `eth_getBlockByHash` for block details page in
     /// Otterscan.
-    #[method(name = "getBlockDetailsByHash")]
+    #[method(name = "getBlockDetailsByHash", blocking)]
     fn get_block_details_by_hash(&self, block_hash: BlockHash) -> RpcResult<BlockDetails>;
 
     /// Get paginated transactions for a certain block. Also remove some verbose fields like logs.
-    #[method(name = "getBlockTransactions")]
+    #[method(name = "getBlockTransactions", blocking)]
     fn get_block_transactions(
         &self,
         block_number: LenientBlockNumberOrTag,
@@ -78,7 +78,7 @@ pub trait OtsApi {
     ) -> RpcResult<OtsBlockTransactions<ZkApiTransaction>>;
 
     /// Gets paginated inbound/outbound transaction calls for a certain address.
-    #[method(name = "searchTransactionsBefore")]
+    #[method(name = "searchTransactionsBefore", blocking)]
     fn search_transactions_before(
         &self,
         address: Address,
@@ -87,7 +87,7 @@ pub trait OtsApi {
     ) -> RpcResult<TransactionsWithReceipts<ZkApiTransaction>>;
 
     /// Gets paginated inbound/outbound transaction calls for a certain address.
-    #[method(name = "searchTransactionsAfter")]
+    #[method(name = "searchTransactionsAfter", blocking)]
     fn search_transactions_after(
         &self,
         address: Address,

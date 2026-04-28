@@ -53,7 +53,7 @@ pub trait DebugApi {
     /// Similar to `debug_traceBlock`, `debug_traceBlockByHash` accepts a block hash and will replay
     /// the block that is already present in the database. For the second parameter see
     /// [`GethDebugTracingOptions`].
-    #[method(name = "traceBlockByHash")]
+    #[method(name = "traceBlockByHash", blocking)]
     fn debug_trace_block_by_hash(
         &self,
         block: BlockHash,
@@ -63,7 +63,7 @@ pub trait DebugApi {
     /// Similar to `debug_traceBlockByHash`, `debug_traceBlockByNumber` accepts a block number
     /// [`BlockNumberOrTag`] and will replay the block that is already present in the database.
     /// For the second parameter see [`GethDebugTracingOptions`].
-    #[method(name = "traceBlockByNumber")]
+    #[method(name = "traceBlockByNumber", blocking)]
     fn debug_trace_block_by_number(
         &self,
         block: BlockNumberOrTag,
@@ -74,7 +74,7 @@ pub trait DebugApi {
     /// exact same manner as it was executed on the network. It will replay any transaction that
     /// may have been executed prior to this one before it will finally attempt to execute the
     /// transaction that corresponds to the given hash.
-    #[method(name = "traceTransaction")]
+    #[method(name = "traceTransaction", blocking)]
     fn debug_trace_transaction(
         &self,
         tx_hash: TxHash,
@@ -90,7 +90,7 @@ pub trait DebugApi {
     /// The trace can be configured similar to `debug_traceTransaction`,
     /// see [`GethDebugTracingOptions`]. The method returns the same output as
     /// `debug_traceTransaction`.
-    #[method(name = "traceCall")]
+    #[method(name = "traceCall", blocking)]
     fn debug_trace_call(
         &self,
         request: TransactionRequest,
