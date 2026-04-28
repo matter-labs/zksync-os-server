@@ -94,15 +94,15 @@ impl ExecuteCommand {
             .collect::<Vec<_>>();
         let interop_roots = self.interop_roots.clone();
 
-        let encoded_data: Vec<u8> = match self
+        let protocol_version_minor = self
             .batches
             .first()
             .unwrap()
             .batch
             .batch_info
             .protocol_version
-            .minor
-        {
+            .minor;
+        let encoded_data: Vec<u8> = match protocol_version_minor {
             29 | 30 => (stored_batch_infos, priority_ops, interop_roots).abi_encode_params(),
             31 | 32 => {
                 let mut logs = Vec::new();
@@ -144,15 +144,7 @@ impl ExecuteCommand {
                 )
                     .abi_encode_params()
             }
-            _ => panic!(
-                "Unsupported protocol version: {}",
-                self.batches
-                    .first()
-                    .unwrap()
-                    .batch
-                    .batch_info
-                    .protocol_version
-            ),
+            _ => panic!("Unsupported protocol version: {}", protocol_version_minor),
         };
 
         /// Current commitment encoding version as per protocol.
