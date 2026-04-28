@@ -64,11 +64,11 @@ auto_impl = "1.3.0"
 blake2 = "0.10.6"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-alloy = { version = "1.7.3", default-features = false, features = [
+alloy = { version = "2.0.1", default-features = false, features = [
     "serde",
     "serde-bincode-compat",
 ] }
-alloy-rlp = { version = "0.3.12" }
+alloy-rlp = { version = "0.3.13" }
 anyhow = "1"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
@@ -247,25 +247,25 @@ opentelemetry-semantic-conventions = "0.31.0"
 opentelemetry-appender-tracing = "0.31.1"
 
 # Reth dependencies
-# currently pinned to specific commit that bounds the per-connection RLPx multiplexer outbound buffer
-reth-db-models = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-evm-ethereum = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-chainspec = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-trie-common = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-primitives = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-primitives-traits = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-revm = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-storage-api = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-transaction-pool = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-execution-types = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-network = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-network-peers = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-net-nat = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-eth-wire = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-discv5 = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-provider = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-rpc-eth-types = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-tasks = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
+# pinned to a v2.2.0-based fork with the RLPx buffer fix applied
+reth-db-models = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-evm-ethereum = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-chainspec = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-trie-common = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-ethereum-primitives = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-primitives-traits = { version = "0.3.1", default-features = false }
+reth-revm = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-storage-api = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-transaction-pool = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-execution-types = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-network = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-network-peers = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-net-nat = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-eth-wire = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-discv5 = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-provider = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-rpc-eth-types = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-tasks = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
 
 zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.1.0" }
 revm = { version = "=38.0.0", features = ["optional_balance_check"] }
