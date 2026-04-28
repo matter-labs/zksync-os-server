@@ -275,7 +275,7 @@ pub async fn find_l1_execute_block_by_batch_number(
     .await
 }
 
-/// Finds the first L1 block where `totalPublishedInteropRoots >= next_interop_root_id`.
+/// Finds the first L1 block where `interopRootLogId >= next_interop_root_id`.
 /// Uses binary search for efficiency.
 pub async fn find_l1_block_by_interop_root_id(
     bridgehub: Bridgehub<DynProvider>,
@@ -305,9 +305,7 @@ pub async fn find_l1_block_by_interop_root_id(
             if !message_root.code_exists_at_block(block.into()).await? {
                 return Ok(false);
             }
-            let res = message_root
-                .total_published_interop_roots(block.into())
-                .await?;
+            let res = message_root.interop_root_log_id(block.into()).await?;
             Ok(res >= next_interop_root_id)
         };
 

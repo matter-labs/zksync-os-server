@@ -94,7 +94,7 @@ alloy::sol! {
 
         function addInteropRootsInBatch(InteropRoot[] calldata interopRootsInput);
 
-        uint256 public totalPublishedInteropRoots;
+        uint256 public interopRootLogId;
 
         function getChainTree(uint256 chainId) public view returns (Bytes32PushTree);
 
@@ -470,14 +470,14 @@ impl<P: Provider> MessageRoot<P> {
         self.instance.provider()
     }
 
-    pub async fn total_published_interop_roots(&self, block_id: BlockId) -> Result<u64> {
+    pub async fn interop_root_log_id(&self, block_id: BlockId) -> Result<u64> {
         self.instance
-            .totalPublishedInteropRoots()
+            .interopRootLogId()
             .block(block_id)
             .call()
             .await
             .map(|n| n.saturating_to())
-            .enrich("totalPublishedInteropRoots", Some(block_id))
+            .enrich("interopRootLogId", Some(block_id))
     }
 
     pub async fn code_exists_at_block(&self, block_id: BlockId) -> alloy::contract::Result<bool> {
