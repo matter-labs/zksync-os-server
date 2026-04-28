@@ -1,5 +1,4 @@
 use alloy::rpc::types::Filter;
-use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::spawn;
@@ -174,71 +173,49 @@ pub enum TxRejectionReason {
     PoolOther,
 }
 
-/// RPC methods to instrument with per-handler task metrics.
-/// Add any method suspected of blocking worker threads.
-const MONITORED_METHODS: &[&str] = &[
-    "eth_call",
-    "eth_estimateGas",
-    "eth_feeHistory",
-    "eth_getLogs",
-    "eth_sendRawTransaction",
-    "eth_sendRawTransactionSync",
-    "debug_traceCall",
-    "debug_traceTransaction",
-    "debug_traceBlockByHash",
-    "debug_traceBlockByNumber",
-];
-
-/// Map from RPC method name to its `TaskMonitor`. Populated once at startup from
-/// `MONITORED_METHODS`. The middleware uses this to instrument matching requests.
-pub static TASK_MONITORS: LazyLock<HashMap<&'static str, TaskMonitor>> = LazyLock::new(|| {
-    MONITORED_METHODS
-        .iter()
-        .map(|&m| (m, TaskMonitor::new()))
-        .collect()
-});
+/// Single task monitor covering all RPC request futures.
+/// Tracks worker-thread scheduling lag and poll behaviour across the entire RPC surface,
+/// giving a global health signal for the tokio worker pool.
+pub static RPC_TASK_MONITOR: LazyLock<TaskMonitor> = LazyLock::new(TaskMonitor::new);
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "rpc_task")]
 struct RpcTaskMetrics {
     /// Mean time a handler task waits in the scheduler queue before a worker thread picks it up.
     /// Rising values indicate worker saturation — tasks are ready but no thread is free.
-    #[metrics(unit = Unit::Seconds, labels = ["method"])]
-    mean_scheduled_duration: LabeledFamily<String, Gauge<f64>>,
-    /// Mean handler execution time (time actually spent on-CPU or blocked on RocksDB).
+    #[metrics(unit = Unit::Seconds)]
+    mean_scheduled_duration: Gauge<f64>,
+    /// Mean handler execution time (time actually spent on-CPU or blocked on I/O).
     /// Together with `mean_scheduled_duration` this decomposes `api_response_time_seconds`
-    /// into queue-wait vs. actual work, pinpointing whether latency comes from starvation
-    /// or from slow handlers.
-    #[metrics(unit = Unit::Seconds, labels = ["method"])]
-    mean_poll_duration: LabeledFamily<String, Gauge<f64>>,
+    /// into queue-wait vs. actual work.
+    #[metrics(unit = Unit::Seconds)]
+    mean_poll_duration: Gauge<f64>,
     /// Number of polls exceeding the 10µs threshold in the last sample interval.
-    #[metrics(labels = ["method"])]
-    slow_polls_count: LabeledFamily<String, Gauge<u64>>,
+    slow_polls_count: Gauge<u64>,
 }
 
 #[vise::register]
 static RPC_TASK_METRICS: Global<RpcTaskMetrics> = Global::new();
 
-/// Spawns a background task that samples per-handler task metrics once per second.
+/// Spawns a background task that samples global RPC task metrics once per second.
 ///
 /// Must be called from within a Tokio runtime context.
-pub fn spawn_task_monitors() {
-    let mut intervals: Vec<(&'static str, _)> = TASK_MONITORS
-        .iter()
-        .map(|(&method, monitor)| (method, monitor.intervals()))
-        .collect();
+pub fn spawn_task_monitor() {
+    let mut intervals = RPC_TASK_MONITOR.intervals();
 
     spawn(async move {
         loop {
             sleep(Duration::from_secs(1)).await;
-            for (method, iter) in &mut intervals {
-                let metrics = iter.next().expect("infinite iterator");
-                RPC_TASK_METRICS.mean_scheduled_duration[*method]
-                    .set(metrics.mean_scheduled_duration().as_secs_f64());
-                RPC_TASK_METRICS.mean_poll_duration[*method]
-                    .set(metrics.mean_poll_duration().as_secs_f64());
-                RPC_TASK_METRICS.slow_polls_count[*method].set(metrics.total_slow_poll_count);
-            }
+            let metrics = intervals.next().expect("infinite iterator");
+            RPC_TASK_METRICS
+                .mean_scheduled_duration
+                .set(metrics.mean_scheduled_duration().as_secs_f64());
+            RPC_TASK_METRICS
+                .mean_poll_duration
+                .set(metrics.mean_poll_duration().as_secs_f64());
+            RPC_TASK_METRICS
+                .slow_polls_count
+                .set(metrics.total_slow_poll_count);
         }
     });
 }
