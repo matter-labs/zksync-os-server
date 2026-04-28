@@ -23,9 +23,6 @@ impl<T: HasBlockRangeEnd> SendAndRecordExt<T> for mpsc::UnboundedSender<T> {
         let block_number = value.block_number();
         let block_timestamp = value.block_timestamp();
         let batch_number = value.batch_number();
-        // Send first so we only record successful hand-offs. The downstream consumer
-        // may record its picked/processed watermark before we record ours, producing a
-        // transient negative adjacent lag — the gauge saturates at 0.
         self.send(value)?;
         reporter.record_processed(block_number, block_timestamp, batch_number);
         Ok(())

@@ -242,8 +242,6 @@ async fn check_block_production_limit(
             NotAcceptingReason::BlockProductionDisabled,
         ]));
 
-        // Idle: component is parked (not processing). Using Active here would
-        // be misleading — the executor is idle by design, not actively doing work.
         state_reporter.enter_state(SequencerState::WaitingForCommand);
         std::future::pending::<()>().await;
     }

@@ -243,9 +243,7 @@ impl<T: Clone> ProverJobMap<T> {
             .map(|entry| entry.batch_envelope.batch.clone())
     }
 
-    /// Returns the current in-flight range as (first, last) BatchTrackingCoordinates,
-    /// or None if the queue is empty.
-    /// First = oldest batch (lowest batch_number), Last = newest batch (highest batch_number).
+    /// Returns the current in-flight range as (first, last) BatchTrackingCoordinates.
     pub async fn in_flight_range(
         &self,
     ) -> Option<(

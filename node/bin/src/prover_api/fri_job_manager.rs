@@ -129,22 +129,13 @@ impl FriJobManager {
     /// Adds a pending job to the queue.
     /// Awaits if the queue is full (ProverJobMap.max_assigned_batch_range).
     pub async fn add_job(&self, batch_envelope: SignedBatchEnvelope<ProverInput>) {
-        // Capture coordinates before moving into jobs
         let last_block = batch_envelope.batch.last_block_number;
         let timestamp = Some(batch_envelope.batch.batch_info.last_block_timestamp);
         let batch_number = batch_envelope.batch_number();
 
         self.reporter()
             .enter_state(ProverJobManagerState::ProcessingSubmission);
-        tracing::debug!(
-            batch_number,
-            "FriJobManager: queuing FRI job for batch {batch_number}, last_block={last_block}"
-        );
         self.jobs.add_job(batch_envelope).await;
-        tracing::debug!(
-            batch_number,
-            "FriJobManager: FRI job {batch_number} accepted into queue, last_block={last_block}"
-        );
 
         self.reporter()
             .record_picked(last_block, timestamp, Some(batch_number));
@@ -155,19 +146,11 @@ impl FriJobManager {
         let range = self.jobs.in_flight_range().await;
         let (first, last) = match range {
             Some((f, l)) => {
-                tracing::debug!(
-                    "FriJobManager: in-flight range updated: batches {}-{}, blocks {}-{}",
-                    f.batch_number,
-                    l.batch_number,
-                    f.last_block_number,
-                    l.last_block_number,
-                );
                 self.reporter()
                     .enter_state(ProverJobManagerState::WaitingForProver);
                 (Some(f), Some(l))
             }
             None => {
-                tracing::debug!("FriJobManager: in-flight range cleared (queue empty)");
                 self.reporter().enter_state(ProverJobManagerState::Idle);
                 (None, None)
             }
@@ -179,7 +162,7 @@ impl FriJobManager {
     pub async fn peek_batch_data(&self, batch_number: u64) -> Option<(&str, ProverInput)> {
         match self.jobs.get_prover_input(batch_number).await {
             Some((vk_hash, prover_input)) => {
-                tracing::debug!("Batch data is peeked for batch number {batch_number}");
+                tracing::info!("Batch data is peeked for batch number {batch_number}");
                 Some((vk_hash, prover_input))
             }
             None => {
@@ -259,8 +242,6 @@ impl FriJobManager {
         };
 
         // Prepare the envelope and send it downstream.
-        let last_block = removed_job.batch.last_block_number;
-        let last_block_timestamp = removed_job.batch.batch_info.last_block_timestamp;
         let proof = RealFriProof::V2 {
             proof: proof_bytes,
             proving_execution_version: proving_version as u32,
@@ -272,15 +253,6 @@ impl FriJobManager {
         self.batches_with_proof_sender
             .send(envelope)
             .map_err(|_| SubmitError::ShuttingDown)?;
-        tracing::debug!(
-            batch_number,
-            "FriJobManager: real FRI proof accepted for batch {batch_number}, last_block={last_block}, prover={prover_id}"
-        );
-        self.reporter().record_processed(
-            last_block,
-            Some(last_block_timestamp),
-            Some(batch_number),
-        );
         self.update_in_flight_state().await;
 
         Ok(())
@@ -315,7 +287,7 @@ impl FriJobManager {
                 let program_proof =
                     bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
                         .map_err(|err| {
-                            tracing::warn!(batch_number, "FriJobManager: failed to deserialize proof for batch {batch_number}: {err:?}");
+                            tracing::warn!(batch_number, ?err, "Failed to deserialize proof");
                             SubmitError::DeserializationFailed(err)
                         })?
                         .0;
@@ -337,7 +309,9 @@ impl FriJobManager {
         {
             tracing::warn!(
                 batch_number,
-                "FriJobManager: proof verification failed for batch {batch_number}: expected={expected_hash_u32s:?}, actual={proof_final_register_values:?}"
+                expected = ?expected_hash_u32s,
+                actual = ?proof_final_register_values,
+                "Proof verification failed",
             );
 
             // Persist the failed proof with some information about the batch for debugging
@@ -356,13 +330,11 @@ impl FriJobManager {
             if let Err(save_err) = self.proof_storage.save_failed_proof(&failed_proof).await {
                 tracing::error!(
                     batch_number,
-                    "FriJobManager: failed to persist failed proof for batch {batch_number}: {save_err:?}"
+                    ?save_err,
+                    "Failed to persist failed proof for debugging",
                 );
             } else {
-                tracing::info!(
-                    batch_number,
-                    "FriJobManager: failed proof saved for batch {batch_number}, prover={prover_id}"
-                );
+                tracing::info!(batch_number, prover_id, "Failed proof saved for debugging",);
             }
 
             return Err(SubmitError::FriProofVerificationError {
@@ -396,8 +368,6 @@ impl FriJobManager {
             }
         };
 
-        let last_block = assigned.batch.last_block_number;
-        let last_block_timestamp = assigned.batch.batch_info.last_block_timestamp;
         let envelope = assigned
             .with_data(FriProof::Fake)
             .with_stage(BatchExecutionStage::FriProvedFake);
@@ -405,15 +375,6 @@ impl FriJobManager {
         self.batches_with_proof_sender
             .send(envelope)
             .map_err(|_| SubmitError::ShuttingDown)?;
-        tracing::debug!(
-            batch_number,
-            "FriJobManager: fake FRI proof accepted for batch {batch_number}, last_block={last_block}, prover={prover_id}"
-        );
-        self.reporter().record_processed(
-            last_block,
-            Some(last_block_timestamp),
-            Some(batch_number),
-        );
         self.update_in_flight_state().await;
         Ok(())
     }

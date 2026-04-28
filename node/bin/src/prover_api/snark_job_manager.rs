@@ -23,12 +23,6 @@ use zksync_os_types::ProvingVersion;
 ///
 /// `SnarkJobManager` aims to assign real prover jobs to real SNARK provers -
 ///     but if jobs are not picked within a timeout (`max_batch_age`), it releases it to a fake prover
-///
-///
-/// State model: see `ProverJobManagerState`. `Idle` when queue is empty,
-/// `WaitingForProver` while jobs are out with external provers (the steady
-/// state under normal load), `ProcessingSubmission` during brief
-/// add_job/submit/send windows.
 pub struct SnarkJobManager {
     // == state ==
     jobs: ProverJobMap<FriProof>,
@@ -79,22 +73,13 @@ impl SnarkJobManager {
     /// Adds a pending job to the queue.
     /// Awaits if queue is full (ProverJobMap.max_assigned_batch_range).
     pub async fn add_job(&self, batch_envelope: SignedBatchEnvelope<FriProof>) {
-        // Capture coordinates before moving into jobs
         let last_block = batch_envelope.batch.last_block_number;
         let timestamp = Some(batch_envelope.batch.batch_info.last_block_timestamp);
         let batch_number = batch_envelope.batch_number();
 
         self.reporter()
             .enter_state(ProverJobManagerState::ProcessingSubmission);
-        tracing::debug!(
-            batch_number,
-            "SnarkJobManager: queuing SNARK job for batch {batch_number}, last_block={last_block}"
-        );
         self.jobs.add_job(batch_envelope).await;
-        tracing::debug!(
-            batch_number,
-            "SnarkJobManager: SNARK job {batch_number} accepted into queue, last_block={last_block}"
-        );
 
         self.reporter()
             .record_picked(last_block, timestamp, Some(batch_number));
@@ -105,19 +90,11 @@ impl SnarkJobManager {
         let range = self.jobs.in_flight_range().await;
         let (first, last) = match range {
             Some((f, l)) => {
-                tracing::debug!(
-                    "SnarkJobManager: in-flight range updated: batches {}-{}, blocks {}-{}",
-                    f.batch_number,
-                    l.batch_number,
-                    f.last_block_number,
-                    l.last_block_number,
-                );
                 self.reporter()
                     .enter_state(ProverJobManagerState::WaitingForProver);
                 (Some(f), Some(l))
             }
             None => {
-                tracing::debug!("SnarkJobManager: in-flight range cleared (queue empty)");
                 self.reporter().enter_state(ProverJobManagerState::Idle);
                 (None, None)
             }
@@ -141,7 +118,7 @@ impl SnarkJobManager {
             .await;
 
         if batches_with_real_proofs.is_empty() {
-            tracing::trace!("no SNARK prove jobs are available for pick up, prover={prover_id}");
+            tracing::trace!(prover_id, "no SNARK prove jobs are available for pick up",);
             return Ok(None);
         }
 
@@ -233,7 +210,7 @@ impl SnarkJobManager {
                 .iter()
                 .filter(|(_, proof)| !proof.is_fake())
                 .count();
-            tracing::debug!(
+            tracing::info!(
                 "consuming fake proofs for SNARKing for batches {}-{} ({} real proofs; {} fake proofs)",
                 assigned.first().unwrap().0.batch_number,
                 assigned.last().unwrap().0.batch_number,
@@ -267,21 +244,9 @@ impl SnarkJobManager {
     }
 
     async fn send_downstream(&self, proof_command: ProofCommand) -> anyhow::Result<()> {
-        // Use last_block_number (not batch_number): the monitor lag computation is block-based.
-        let last = proof_command.as_ref().last().unwrap();
-        let seq = last.batch.last_block_number;
-        let last_block_timestamp = last.batch.batch_info.last_block_timestamp;
-        let batch_number = last.batch_number();
-        let batch_count = proof_command.as_ref().len();
         self.reporter()
             .enter_state(ProverJobManagerState::ProcessingSubmission);
-        tracing::debug!(
-            batch_number,
-            "SnarkJobManager: sending SNARK proof downstream for batch {batch_number}, batch_count={batch_count}, last_block={seq}"
-        );
         self.prove_batches_sender.send(proof_command)?;
-        self.reporter()
-            .record_processed(seq, Some(last_block_timestamp), Some(batch_number));
         self.update_in_flight_state().await;
         Ok(())
     }

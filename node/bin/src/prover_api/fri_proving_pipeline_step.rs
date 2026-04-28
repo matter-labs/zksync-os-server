@@ -74,10 +74,6 @@ impl PipelineComponent for FriProvingPipelineStep {
         // before any of those paths can fire. The manager's reporter() panics if unset.
         self.fri_job_manager.set_reporter(state_reporter);
 
-        // State reporting for queued jobs is delegated to FriJobManager: FRI proving is
-        // asynchronous (input → add_job → later proof on batches_with_proof_receiver), so
-        // the manager calls record_processed when a proof is submitted. The passthrough
-        // branch below records directly since those batches are already proved upstream.
         tokio::select! {
             result = async {
                 while let Some(batch) = input.recv().await {
@@ -109,7 +105,12 @@ impl PipelineComponent for FriProvingPipelineStep {
                         "Received batch after FRI proving: {:?}",
                         proof.batch_number()
                     );
-                    let _ = output.send(proof);
+                    if output
+                        .send_and_record(proof, self.fri_job_manager.reporter())
+                        .is_err()
+                    {
+                        return;
+                    }
                 }
             } => {
                 tracing::info!("outbound channel closed");

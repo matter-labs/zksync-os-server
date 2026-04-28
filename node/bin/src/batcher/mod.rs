@@ -18,7 +18,7 @@ use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::PubdataMode;
 
@@ -193,18 +193,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     .send(sidecar)
                     .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
             }
-            let last_block_number = batch_envelope.batch.last_block_number;
-            let last_block_timestamp = batch_envelope.batch.batch_info.last_block_timestamp;
-            let batch_number = batch_envelope.batch_number();
-            if output.send(batch_envelope).is_err() {
+            if output
+                .send_and_record(batch_envelope, &state_reporter)
+                .is_err()
+            {
                 tracing::info!("outbound channel closed");
                 return Ok(());
             }
-            state_reporter.record_processed(
-                last_block_number,
-                Some(last_block_timestamp),
-                Some(batch_number),
-            );
         }
     }
 }

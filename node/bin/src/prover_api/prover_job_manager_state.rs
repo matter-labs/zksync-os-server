@@ -1,10 +1,6 @@
 use zksync_os_observability::{GenericComponentState, StateLabel};
 
 /// Component-specific state shared by `FriJobManager` and `SnarkJobManager`.
-///
-/// These managers have no run loop — they're driven by HTTP handlers, fake
-/// provers, and `add_job`. `WaitingForProver` captures the dominant steady
-/// state: jobs queued, blocked on an external prover submission.
 pub enum ProverJobManagerState {
     /// Queue empty — no work in flight.
     Idle,

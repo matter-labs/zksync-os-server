@@ -185,7 +185,6 @@ impl BatchVerificationRunner {
 
         'runner: loop {
             self.state_reporter.enter_state(GenericComponentState::Idle);
-            // We process the batches one by one. Consider adding concurrency here when we need it.
             let Some(batch_envelope) = batch_for_signing_receiver
                 .recv_and_record_picked(&self.state_reporter)
                 .await

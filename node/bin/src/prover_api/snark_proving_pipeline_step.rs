@@ -33,9 +33,6 @@ impl SnarkProvingPipelineStep {
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> (Self, Arc<SnarkJobManager>) {
-        // Internal channel from SnarkJobManager submissions to the forwarding select-arm below.
-        // Unbounded: the sole in-flight bound for this stage is ProverJobMap::max_assigned_batch_range,
-        // which blocks add_job. A bounded buffer here would only stall HTTP handlers on submit.
         let (proof_commands_sender, proof_commands_receiver) =
             mpsc::unbounded_channel::<ProofCommand>();
 
@@ -74,10 +71,6 @@ impl PipelineComponent for SnarkProvingPipelineStep {
         // before any record_* path fires. The manager's reporter() panics if unset.
         self.snark_job_manager.set_reporter(state_reporter);
 
-        // State reporting for queued jobs is delegated to SnarkJobManager: SNARK proving
-        // is asynchronous (input → add_job → later proof on proof_commands_receiver), so
-        // the manager calls record_processed when a proof is submitted. The passthrough
-        // branch below records directly since those batches are already proved upstream.
         tokio::select! {
             _ = async {
                 while let Some(batch) = input.recv().await {
@@ -99,7 +92,15 @@ impl PipelineComponent for SnarkProvingPipelineStep {
             },
             _ = async {
                 while let Some(proof_command) = self.proof_commands_receiver.recv().await {
-                    let _ = output.send(L1SenderCommand::SendToL1(proof_command));
+                    if output
+                        .send_and_record(
+                            L1SenderCommand::SendToL1(proof_command),
+                            self.snark_job_manager.reporter(),
+                        )
+                        .is_err()
+                    {
+                        return;
+                    }
                 }
             } => {
                 tracing::info!("outbound channel closed");
