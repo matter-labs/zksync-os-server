@@ -222,7 +222,6 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
                                 block_number,
                                 (block_output, replay_record, tree_data),
                             )?;
-                            state_reporter.record_picked(block_number, Some(block_timestamp), None);
                             state_reporter.record_processed(block_number, Some(block_timestamp), None);
                         }
                         None => return Ok(()),

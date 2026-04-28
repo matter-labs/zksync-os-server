@@ -298,14 +298,14 @@ impl BackpressureMonitor {
                 continue;
             }
             let (first, last, count) =
-                if let Some(&(first_bn, last_bn)) = in_flight_snapshot.get(&id) {
+                if let Some(&(first_bn, last_bn)) = in_flight_snapshot.get(id) {
                     (first_bn, last_bn, last_bn.saturating_sub(first_bn) + 1)
                 } else {
                     (0, 0, 0)
                 };
-            MONITOR_METRICS.in_flight_first_batch[&id].set(first);
-            MONITOR_METRICS.in_flight_last_batch[&id].set(last);
-            MONITOR_METRICS.in_flight_batch_count[&id].set(count);
+            MONITOR_METRICS.in_flight_first_batch[id].set(first);
+            MONITOR_METRICS.in_flight_last_batch[id].set(last);
+            MONITOR_METRICS.in_flight_batch_count[id].set(count);
         }
     }
 

@@ -20,10 +20,6 @@ impl ExecuteCommand {
         priority_ops: Vec<PriorityOpsBatchInfo>,
         interop_roots: Vec<Vec<InteropRoot>>,
     ) -> Self {
-        assert!(
-            !batches.is_empty(),
-            "ExecuteCommand must contain at least one batch"
-        );
         assert_eq!(batches.len(), priority_ops.len());
         Self {
             batches,

@@ -679,10 +679,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (pubdata_price_sender, pubdata_price_receiver) = watch::channel(None);
     let (blob_fill_ratio_sender, blob_fill_ratio_receiver) = watch::channel(None);
     // Channel for Batcher->GasAdjuster communication. Batcher send sidecar to gas adjuster to estimate blob fill ratio.
-    // Unbounded to match the pipeline-wide channel convention (see lib/pipeline/src/builder.rs):
-    // a bounded channel here would silently stall the Batcher if the GasAdjuster hangs, with no
-    // distinct state exposed to the backpressure monitor. Staying unbounded keeps the failure mode
-    // visible (growing sidecar queue → memory) rather than masquerading as a stuck Batcher.
     let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::unbounded_channel();
     if node_role.is_main() {
         let pubdata_mode = config
