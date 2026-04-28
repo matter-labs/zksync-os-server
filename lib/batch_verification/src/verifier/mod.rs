@@ -205,7 +205,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
-        _output: mpsc::UnboundedSender<Self::Output>,
+        _output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         tracing::info!("starting batch verification responder");

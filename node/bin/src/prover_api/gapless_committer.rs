@@ -36,7 +36,7 @@ impl PipelineComponent for GaplessCommitter {
     async fn run(
         self,
         mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::UnboundedSender<Self::Output>,
+        output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         let mut buffer: BTreeMap<u64, SignedBatchEnvelope<FriProof>> = BTreeMap::new();

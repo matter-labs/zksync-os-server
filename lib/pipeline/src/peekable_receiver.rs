@@ -1,7 +1,7 @@
 use crate::has_block_range_end::HasBlockRangeEnd;
 use tokio::sync::mpsc;
 
-/// A wrapper around `tokio::sync::mpsc::UnboundedReceiver<T>` that adds
+/// A wrapper around `tokio::sync::mpsc::Receiver<T>` that adds
 /// non-consuming peeks while preserving the original receiver semantics.
 ///
 /// Consuming ops (`recv`, `try_recv`, `recv_many`) first drain any item previously
@@ -11,12 +11,12 @@ use tokio::sync::mpsc;
 /// item is released by the next consuming call or via `pop_buffer`.
 /// `close` / `is_closed` forward to the inner receiver.
 pub struct PeekableReceiver<T> {
-    inner: mpsc::UnboundedReceiver<T>,
+    inner: mpsc::Receiver<T>,
     buf: std::collections::VecDeque<T>,
 }
 
 impl<T> PeekableReceiver<T> {
-    pub fn new(rx: mpsc::UnboundedReceiver<T>) -> Self {
+    pub fn new(rx: mpsc::Receiver<T>) -> Self {
         Self {
             inner: rx,
             buf: Default::default(),
@@ -133,16 +133,16 @@ impl<T: HasBlockRangeEnd> PeekableReceiver<T> {
 mod tests {
     use super::*;
 
-    fn channel<T>() -> (mpsc::UnboundedSender<T>, PeekableReceiver<T>) {
-        let (tx, rx) = mpsc::unbounded_channel();
+    fn channel<T>() -> (mpsc::Sender<T>, PeekableReceiver<T>) {
+        let (tx, rx) = mpsc::channel(128);
         (tx, PeekableReceiver::new(rx))
     }
 
     #[tokio::test]
     async fn send_and_recv() {
         let (tx, mut rx) = channel::<u32>();
-        tx.send(1).unwrap();
-        tx.send(2).unwrap();
+        tx.try_send(1).unwrap();
+        tx.try_send(2).unwrap();
         assert_eq!(rx.recv().await, Some(1));
         assert_eq!(rx.recv().await, Some(2));
     }
@@ -150,7 +150,7 @@ mod tests {
     #[tokio::test]
     async fn try_recv_works() {
         let (tx, mut rx) = channel::<u32>();
-        tx.send(42).unwrap();
+        tx.try_send(42).unwrap();
         let v = rx.try_recv().unwrap();
         assert_eq!(v, 42);
     }
@@ -158,9 +158,9 @@ mod tests {
     #[tokio::test]
     async fn recv_many_collects_items() {
         let (tx, mut rx) = channel::<u32>();
-        tx.send(1).unwrap();
-        tx.send(2).unwrap();
-        tx.send(3).unwrap();
+        tx.try_send(1).unwrap();
+        tx.try_send(2).unwrap();
+        tx.try_send(3).unwrap();
         let mut buf = vec![];
         let n = rx.recv_many(&mut buf, 10).await;
         assert_eq!(n, 3);
@@ -170,7 +170,7 @@ mod tests {
     #[tokio::test]
     async fn peek_does_not_consume() {
         let (tx, mut rx) = channel::<u32>();
-        tx.send(99).unwrap();
+        tx.try_send(99).unwrap();
         let peeked = rx.peek_with(|v| *v);
         assert_eq!(peeked, Some(99));
         assert_eq!(rx.recv().await, Some(99));
@@ -181,7 +181,7 @@ mod tests {
     #[tokio::test]
     async fn peek_recv_blocks_then_buffers() {
         let (tx, mut rx) = channel::<u32>();
-        tx.send(7).unwrap();
+        tx.try_send(7).unwrap();
         let a = rx.peek_recv(|v| *v).await;
         assert_eq!(a, Some(7));
         let b = rx.peek_recv(|v| *v).await;
@@ -203,10 +203,10 @@ mod tests {
         // AND greedily consume additional items from the channel (up to `limit`)
         // in the same call.
         let (tx, mut rx) = channel::<u32>();
-        tx.send(1).unwrap();
+        tx.try_send(1).unwrap();
         assert_eq!(rx.peek_with(|v| *v), Some(1));
-        tx.send(2).unwrap();
-        tx.send(3).unwrap();
+        tx.try_send(2).unwrap();
+        tx.try_send(3).unwrap();
         let mut buf = vec![];
         let n = rx.recv_many(&mut buf, 10).await;
         assert_eq!(n, 3);
@@ -216,10 +216,10 @@ mod tests {
     #[tokio::test]
     async fn recv_many_respects_limit_with_peeked_buffer() {
         let (tx, mut rx) = channel::<u32>();
-        tx.send(1).unwrap();
-        tx.send(2).unwrap();
+        tx.try_send(1).unwrap();
+        tx.try_send(2).unwrap();
         assert_eq!(rx.peek_with(|v| *v), Some(1));
-        tx.send(3).unwrap();
+        tx.try_send(3).unwrap();
         let mut buf = vec![];
         let n = rx.recv_many(&mut buf, 2).await;
         assert_eq!(n, 2);
@@ -231,9 +231,9 @@ mod tests {
     async fn close_and_is_closed() {
         let (tx, mut rx) = channel::<u32>();
         assert!(!rx.is_closed());
-        tx.send(5).unwrap();
+        tx.try_send(5).unwrap();
         rx.close();
-        assert!(tx.send(6).is_err());
+        assert!(tx.try_send(6).is_err());
         assert_eq!(rx.recv().await, Some(5));
         assert_eq!(rx.recv().await, None);
         assert!(rx.is_closed());
@@ -258,7 +258,7 @@ mod tests {
         }
 
         let (tx, mut rx) = channel::<Msg>();
-        tx.send(Msg { seq: 10, ts: 1000 }).unwrap();
+        tx.try_send(Msg { seq: 10, ts: 1000 }).unwrap();
 
         let (reporter, state_rx) = ComponentStateReporter::new("test");
         let item = rx.recv_and_record_picked(&reporter).await.unwrap();

@@ -23,7 +23,7 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 pub struct FriProvingPipelineStep {
     last_proved_batch_number: u64,
     fri_job_manager: Arc<FriJobManager>,
-    batches_with_proof_receiver: mpsc::UnboundedReceiver<SignedBatchEnvelope<FriProof>>,
+    batches_with_proof_receiver: mpsc::Receiver<SignedBatchEnvelope<FriProof>>,
 }
 
 impl FriProvingPipelineStep {
@@ -33,11 +33,8 @@ impl FriProvingPipelineStep {
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> (Self, Arc<FriJobManager>) {
-        // Internal channel from FriJobManager submissions to the forwarding select-arm below.
-        // Unbounded: the sole in-flight bound for this stage is ProverJobMap::max_assigned_batch_range,
-        // which blocks add_job. A bounded buffer here would only create spurious 500s at submit.
         let (batches_with_proof_sender, batches_with_proof_receiver) =
-            mpsc::unbounded_channel::<SignedBatchEnvelope<FriProof>>();
+            mpsc::channel::<SignedBatchEnvelope<FriProof>>(4096);
 
         let fri_job_manager = Arc::new(FriJobManager::new(
             batches_with_proof_sender,
@@ -67,7 +64,7 @@ impl PipelineComponent for FriProvingPipelineStep {
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::UnboundedSender<Self::Output>,
+        output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         // Hand the reporter to FriJobManager — which is driven by HTTP handlers and add_job —

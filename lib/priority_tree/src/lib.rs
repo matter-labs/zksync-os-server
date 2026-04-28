@@ -19,7 +19,7 @@ use zksync_os_storage_api::{ReadFinality, ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
 
 type InputChannel = PeekableReceiver<SignedBatchEnvelope<FriProof>>;
-type OutputChannel = mpsc::UnboundedSender<L1SenderCommand<ExecuteCommand>>;
+type OutputChannel = mpsc::Sender<L1SenderCommand<ExecuteCommand>>;
 
 mod db;
 
@@ -68,11 +68,10 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
     ) -> anyhow::Result<()> {
         self.init().await.expect("init");
 
-        // Internal channels for priority tree manager. Unbounded to match the
-        // pipeline-wide channel convention (see lib/pipeline/src/builder.rs): pipeline-shape
-        // channels are unbounded and backpressure is detected by the monitor via adjacent lag,
-        // not by channel fill. Payload here is 24 bytes per batch, so growth during a prolonged
-        // L1 execute stall is negligible.
+        // Internal channel between prepare_execute_commands and keep_caching within this
+        // component. Intentionally unbounded: producer and consumer share the same select!
+        // loop so there is no independent consumer lag to measure, and the 24-byte payload
+        // is negligible even during a prolonged L1 execute stall.
         let (priority_txs_internal_sender, priority_txs_internal_receiver) =
             mpsc::unbounded_channel::<(u64, u64, Option<usize>)>();
 
@@ -181,11 +180,18 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                             "Passing through batch that was already executed"
                         );
                         if let Some(sender) = &execute_batches_sender {
-                            sender
-                                .send(L1SenderCommand::Passthrough(Box::new(envelope)))
-                                .map_err(|e| {
-                                    anyhow::anyhow!("execute_batches channel closed: {e}")
-                                })?;
+                            match sender.try_send(L1SenderCommand::Passthrough(Box::new(envelope)))
+                            {
+                                Ok(()) => {}
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    return Err(anyhow::anyhow!("execute_batches channel closed"));
+                                }
+                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                    panic!(
+                                        "pipeline channel unexpectedly full — consumer is catastrophically behind"
+                                    )
+                                }
+                            }
                         }
 
                         continue;
@@ -315,12 +321,22 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
             }
             drop(merkle_tree);
             if let Some(s) = &execute_batches_sender {
-                s.send(L1SenderCommand::SendToL1(ExecuteCommand::new(
+                let cmd = L1SenderCommand::SendToL1(ExecuteCommand::new(
                     batch_envelopes.unwrap(),
                     priority_ops,
                     interop_roots,
-                )))
-                .map_err(|e| anyhow::anyhow!("execute_batches channel closed: {e}"))?;
+                ));
+                match s.try_send(cmd) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        return Err(anyhow::anyhow!("execute_batches channel closed"));
+                    }
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        panic!(
+                            "pipeline channel unexpectedly full — consumer is catastrophically behind"
+                        )
+                    }
+                }
             }
             state_reporter.record_processed(
                 last_block,

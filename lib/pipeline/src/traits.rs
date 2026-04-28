@@ -21,11 +21,15 @@ pub trait PipelineComponent: Send + 'static {
     /// Used as the task name for logging, shutdown tracking, and state-monitor adjacency.
     const COMPONENT_ID: ComponentId;
 
+    /// Capacity of the output channel for this component.
+    /// Default is 4096 messages; override for components with specific backpressure needs.
+    const OUTPUT_CHANNEL_CAPACITY: usize = 4096;
+
     /// Run the component, receiving from input and sending to output.
     async fn run(
         self,
         input: PeekableReceiver<Self::Input>,
-        output: mpsc::UnboundedSender<Self::Output>,
+        output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> Result<()>;
 }

@@ -50,7 +50,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     async fn run(
         self,
         mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::UnboundedSender<Self::Output>,
+        output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> Result<()> {
         if self.disabled {
@@ -66,9 +66,17 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 let block_number = block_output.header.number;
                 let block_ts = replay_record.block_context.timestamp;
                 state_reporter.record_picked(block_number, Some(block_ts), None);
-                output
-                    .send((block_output, replay_record, ProverInput::Fake, tree))
-                    .map_err(|e| anyhow::anyhow!("outbound channel closed: {e}"))?;
+                match output.try_send((block_output, replay_record, ProverInput::Fake, tree)) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        anyhow::bail!("Outbound channel closed")
+                    }
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        panic!(
+                            "pipeline channel unexpectedly full — consumer is catastrophically behind"
+                        )
+                    }
+                }
                 state_reporter.record_processed(block_number, Some(block_ts), None);
             }
         }
@@ -92,9 +100,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             block_number = first_block_number,
             "sending block with prover input to batcher",
         );
-        output
-            .send(result)
-            .map_err(|e| anyhow::anyhow!("outbound channel closed: {e}"))?;
+        match output.try_send(result) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Closed(_)) => anyhow::bail!("Outbound channel closed"),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                panic!("pipeline channel unexpectedly full — consumer is catastrophically behind")
+            }
+        }
         state_reporter.record_processed(first_block_number, Some(first_block_ts), None);
 
         // Process remaining items with up to `maximum_in_flight_blocks` in parallel.
@@ -132,7 +144,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                         block_number,
                         "sending block with prover input to batcher",
                     );
-                    output.send(item).map_err(|e| anyhow::anyhow!("outbound channel closed: {e}"))?;
+                    match output.try_send(item) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Closed(_)) => anyhow::bail!("Outbound channel closed"),
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            panic!("pipeline channel unexpectedly full — consumer is catastrophically behind")
+                        }
+                    }
                     state_reporter.record_processed(block_number, Some(block_ts), None);
                 }
             }

@@ -49,7 +49,7 @@ pub struct Batcher<ReadState> {
     pub pubdata_limit_bytes: u64,
     pub batcher_config: BatcherConfig,
     pub pubdata_mode: PubdataMode,
-    pub sidecar_sender: mpsc::UnboundedSender<BlobTransactionSidecar>,
+    pub sidecar_sender: mpsc::Sender<BlobTransactionSidecar>,
     pub committed_batch_provider: CommittedBatchProvider,
     pub read_state: ReadState,
 }
@@ -66,7 +66,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::UnboundedSender<Self::Output>,
+        output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         // We use last executed batch as the starting point. Next immediate batch we process will be
@@ -189,9 +189,17 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             );
 
             if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone() {
-                self.sidecar_sender
-                    .send(sidecar)
-                    .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
+                match self.sidecar_sender.try_send(sidecar) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Closed(e)) => {
+                        return Err(anyhow::anyhow!("channel closed: {e:?}"));
+                    }
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        panic!(
+                            "pipeline channel unexpectedly full — consumer is catastrophically behind"
+                        )
+                    }
+                }
             }
             if output
                 .send_and_record(batch_envelope, &state_reporter)

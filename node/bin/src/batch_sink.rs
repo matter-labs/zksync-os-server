@@ -31,7 +31,7 @@ impl PipelineComponent for BatchSink {
     async fn run(
         self,
         mut input: PeekableReceiver<Self::Input>,
-        _output: mpsc::UnboundedSender<Self::Output>,
+        _output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         let mut internal_config = self.internal_config_manager.read_config()?;
@@ -102,7 +102,7 @@ impl<T: Send + 'static> PipelineComponent for NoOpSink<T> {
     async fn run(
         self,
         mut input: PeekableReceiver<Self::Input>,
-        _output: mpsc::UnboundedSender<Self::Output>,
+        _output: mpsc::Sender<Self::Output>,
         _state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         while input.recv().await.is_some() {

@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use std::collections::HashSet;
-use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::time::MissedTickBehavior;
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_raft::{ConsensusRole, LeadershipSignal};
@@ -25,8 +23,6 @@ pub struct ConsensusNodeCommandSource<Replay> {
     pub replays_to_execute: mpsc::Receiver<ReplayRecord>,
     /// Current leadership status from consensus.
     pub leadership: LeadershipSignal,
-    /// How frequently to emit produce commands while leading.
-    pub produce_interval: Duration,
 }
 
 #[derive(Debug)]
@@ -50,11 +46,12 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 
     const COMPONENT_ID: zksync_os_pipeline::ComponentId =
         zksync_os_pipeline::ComponentId::ConsensusNodeCommandSource;
+    const OUTPUT_CHANNEL_CAPACITY: usize = 1;
 
     async fn run(
         mut self,
         _input: PeekableReceiver<()>,
-        output: mpsc::UnboundedSender<BlockCommand>,
+        output: mpsc::Sender<BlockCommand>,
         _state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         let last_block_in_wal = self.block_replay_storage.latest_record();
@@ -87,7 +84,11 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
             let Some(record) = self.block_replay_storage.get_replay_record(block_number) else {
                 anyhow::bail!("Missing replay record for block {block_number}");
             };
-            if output.send(BlockCommand::Replay(Box::new(record))).is_err() {
+            if output
+                .send(BlockCommand::Replay(Box::new(record)))
+                .await
+                .is_err()
+            {
                 tracing::warn!("Command output channel closed, stopping replay forwarder");
                 return Ok(());
             }
@@ -107,11 +108,9 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
     /// This method kicks in after all local canonized Replayed Records (WAL) are replayed.
     /// Produces `Produce` commands only when the node is the leader.
-    async fn run_loop(mut self, output: mpsc::UnboundedSender<BlockCommand>) -> anyhow::Result<()> {
+    async fn run_loop(mut self, output: mpsc::Sender<BlockCommand>) -> anyhow::Result<()> {
         let mut leadership = self.leadership.clone();
         let mut role = leadership.current_role();
-        let mut produce_tick = tokio::time::interval(self.produce_interval);
-        produce_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         tracing::info!(?role, "Consensus role initialized");
 
         loop {
@@ -138,14 +137,15 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                     );
                     if output
                         .send(BlockCommand::Replay(Box::new(record)))
+                        .await
                         .is_err()
                     {
                         tracing::info!("Command output channel closed, stopping source");
                         break;
                     }
                 }
-                _ = produce_tick.tick(), if role == ConsensusRole::Leader => {
-                    if output.send(BlockCommand::Produce(ProduceCommand)).is_err() {
+                send_res = output.send(BlockCommand::Produce(ProduceCommand)), if role == ConsensusRole::Leader => {
+                    if send_res.is_err() {
                         tracing::info!("Command output channel closed, stopping source");
                         break;
                     }
@@ -160,7 +160,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
         &self,
         rebuild_options: &RebuildOptions,
         last_block_in_wal: u64,
-        output: &mpsc::UnboundedSender<BlockCommand>,
+        output: &mpsc::Sender<BlockCommand>,
     ) -> anyhow::Result<()> {
         tracing::warn!(
             "Starting block rebuilds! {rebuild_options:?}, last_block_in_wal: {last_block_in_wal}"
@@ -183,7 +183,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                 make_empty,
                 reset_timestamp: rebuild_options.reset_timestamps,
             }));
-            if output.send(command).is_err() {
+            if output.send(command).await.is_err() {
                 tracing::info!("Command output channel closed, stopping source");
                 break;
             }
@@ -199,11 +199,12 @@ impl PipelineComponent for ExternalNodeCommandSource {
 
     const COMPONENT_ID: zksync_os_pipeline::ComponentId =
         zksync_os_pipeline::ComponentId::ExternalNodeCommandSource;
+    const OUTPUT_CHANNEL_CAPACITY: usize = 5;
 
     async fn run(
         mut self,
         _input: PeekableReceiver<()>,
-        output: mpsc::UnboundedSender<BlockCommand>,
+        output: mpsc::Sender<BlockCommand>,
         _state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         while let Some(record) = self.replays_for_sequencer.recv().await {
@@ -221,7 +222,7 @@ impl PipelineComponent for ExternalNodeCommandSource {
                 futures::future::pending::<()>().await;
             }
 
-            if output.send(command).is_err() {
+            if output.send(command).await.is_err() {
                 tracing::info!("Command output channel closed, stopping source");
                 break;
             }

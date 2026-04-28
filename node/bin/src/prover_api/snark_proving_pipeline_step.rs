@@ -23,7 +23,7 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 pub struct SnarkProvingPipelineStep {
     last_proved_batch_number: u64,
     snark_job_manager: Arc<SnarkJobManager>,
-    proof_commands_receiver: mpsc::UnboundedReceiver<ProofCommand>,
+    proof_commands_receiver: mpsc::Receiver<ProofCommand>,
 }
 
 impl SnarkProvingPipelineStep {
@@ -33,8 +33,7 @@ impl SnarkProvingPipelineStep {
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> (Self, Arc<SnarkJobManager>) {
-        let (proof_commands_sender, proof_commands_receiver) =
-            mpsc::unbounded_channel::<ProofCommand>();
+        let (proof_commands_sender, proof_commands_receiver) = mpsc::channel::<ProofCommand>(4096);
 
         let snark_job_manager = Arc::new(SnarkJobManager::new(
             proof_commands_sender,
@@ -64,7 +63,7 @@ impl PipelineComponent for SnarkProvingPipelineStep {
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::UnboundedSender<Self::Output>,
+        output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         // Hand the reporter to SnarkJobManager — driven by HTTP handlers and add_job —

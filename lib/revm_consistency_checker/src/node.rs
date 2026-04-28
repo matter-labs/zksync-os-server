@@ -106,7 +106,7 @@ where
     async fn run(
         self,
         mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::UnboundedSender<Self::Output>,
+        output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         // Remember unsupported execution versions to log only one warning for it.

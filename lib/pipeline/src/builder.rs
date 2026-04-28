@@ -29,7 +29,7 @@ impl<Output: Send + 'static> Pipeline<Output> {
 
 impl Pipeline<()> {
     pub fn new(runtime: Runtime) -> Self {
-        let (_sender, receiver) = mpsc::unbounded_channel::<()>();
+        let (_sender, receiver) = mpsc::channel::<()>(1);
         let receiver = PeekableReceiver::new(receiver);
         let (shutdown_sender, shutdown_receiver) = mpsc::channel(16);
         Self {
@@ -95,7 +95,8 @@ impl<Output: Send + 'static> Pipeline<Output> {
         let (reporter, rx) = ComponentStateReporter::new(name);
         self.components.push((id, rx));
 
-        let (output_sender, output_receiver) = mpsc::unbounded_channel::<C::Output>();
+        let (output_sender, output_receiver) =
+            mpsc::channel::<C::Output>(C::OUTPUT_CHANNEL_CAPACITY);
         let output_receiver = PeekableReceiver::new(output_receiver);
         let input_receiver = self.receiver;
 

@@ -1,11 +1,13 @@
 use crate::has_block_range_end::HasBlockRangeEnd;
 use tokio::sync::mpsc;
 
-/// Extension trait on `mpsc::UnboundedSender<T>` that combines sending an item
+/// Extension trait on `mpsc::Sender<T>` that combines sending an item
 /// with recording it as processed on a `ComponentStateReporter`.
 ///
 /// Recording happens only if the send succeeds — if the receiver has been
-/// dropped, the error is returned and nothing is recorded.
+/// dropped, the error is returned and nothing is recorded. If the channel is
+/// full, this method panics; it assumes a large-capacity channel
+/// (`OUTPUT_CHANNEL_CAPACITY`) that should never fill under normal operation.
 pub trait SendAndRecordExt<T: HasBlockRangeEnd> {
     fn send_and_record(
         &self,
@@ -14,7 +16,7 @@ pub trait SendAndRecordExt<T: HasBlockRangeEnd> {
     ) -> Result<(), mpsc::error::SendError<T>>;
 }
 
-impl<T: HasBlockRangeEnd> SendAndRecordExt<T> for mpsc::UnboundedSender<T> {
+impl<T: HasBlockRangeEnd> SendAndRecordExt<T> for mpsc::Sender<T> {
     fn send_and_record(
         &self,
         value: T,
@@ -23,7 +25,13 @@ impl<T: HasBlockRangeEnd> SendAndRecordExt<T> for mpsc::UnboundedSender<T> {
         let block_number = value.block_number();
         let block_timestamp = value.block_timestamp();
         let batch_number = value.batch_number();
-        self.send(value)?;
+        match self.try_send(value) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Closed(v)) => return Err(mpsc::error::SendError(v)),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                panic!("pipeline channel unexpectedly full — consumer is catastrophically behind")
+            }
+        }
         reporter.record_processed(block_number, block_timestamp, batch_number);
         Ok(())
     }
@@ -49,7 +57,7 @@ mod tests {
 
     #[tokio::test]
     async fn records_on_success() {
-        let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
+        let (tx, mut rx) = mpsc::channel::<Msg>(16);
         let (reporter, state_rx) = ComponentStateReporter::new("test");
 
         assert!(
@@ -86,7 +94,7 @@ mod tests {
             }
         }
 
-        let (tx, rx) = mpsc::unbounded_channel::<MsgNoTs>();
+        let (tx, rx) = mpsc::channel::<MsgNoTs>(1);
         drop(rx);
         let (reporter, state_rx) = ComponentStateReporter::new("test");
 

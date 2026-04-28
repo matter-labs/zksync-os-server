@@ -83,7 +83,7 @@ pub struct FriJobManager {
     // == state ==
     jobs: ProverJobMap<ProverInput>,
     // outbound
-    batches_with_proof_sender: mpsc::UnboundedSender<SignedBatchEnvelope<FriProof>>,
+    batches_with_proof_sender: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
     // == storage ==
     proof_storage: ProofStorage,
     // == metrics ==
@@ -92,7 +92,7 @@ pub struct FriJobManager {
 
 impl FriJobManager {
     pub fn new(
-        batches_with_proof_sender: mpsc::UnboundedSender<SignedBatchEnvelope<FriProof>>,
+        batches_with_proof_sender: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
         proof_storage: ProofStorage,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
@@ -250,9 +250,13 @@ impl FriJobManager {
             .with_data(FriProof::Real(proof))
             .with_stage(BatchExecutionStage::FriProvedReal);
 
-        self.batches_with_proof_sender
-            .send(envelope)
-            .map_err(|_| SubmitError::ShuttingDown)?;
+        match self.batches_with_proof_sender.try_send(envelope) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Closed(_)) => return Err(SubmitError::ShuttingDown),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                panic!("pipeline channel unexpectedly full — consumer is catastrophically behind")
+            }
+        }
         self.update_in_flight_state().await;
 
         Ok(())
@@ -372,9 +376,13 @@ impl FriJobManager {
             .with_data(FriProof::Fake)
             .with_stage(BatchExecutionStage::FriProvedFake);
 
-        self.batches_with_proof_sender
-            .send(envelope)
-            .map_err(|_| SubmitError::ShuttingDown)?;
+        match self.batches_with_proof_sender.try_send(envelope) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Closed(_)) => return Err(SubmitError::ShuttingDown),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                panic!("pipeline channel unexpectedly full — consumer is catastrophically behind")
+            }
+        }
         self.update_in_flight_state().await;
         Ok(())
     }

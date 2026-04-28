@@ -90,7 +90,7 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
     async fn run(
         self,
         mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::UnboundedSender<Self::Output>,
+        output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         tracing::info!(
@@ -179,7 +179,7 @@ impl BatchVerificationRunner {
     async fn run<E: Send + Sync + 'static>(
         mut self,
         mut batch_for_signing_receiver: PeekableReceiver<BatchForSigning<E>>,
-        signed_batch_sender: mpsc::UnboundedSender<SignedBatchEnvelope<E>>,
+        signed_batch_sender: mpsc::Sender<SignedBatchEnvelope<E>>,
     ) -> anyhow::Result<()> {
         let metrics = &*BATCH_VERIFICATION_SEQUENCER_METRICS;
 
@@ -599,12 +599,12 @@ mod tests {
     async fn run_skips_already_committed_batches_and_forwards_them() {
         let (verifier, _verify_request_rx, _verify_result_tx) = make_verifier(Vec::new(), 10);
 
-        let (input_tx, input_rx) = mpsc::unbounded_channel::<BatchForSigning<()>>();
+        let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
         let input_rx = PeekableReceiver::new(input_rx);
-        let (output_tx, mut output_rx) = mpsc::unbounded_channel::<SignedBatchEnvelope<()>>();
+        let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
 
         let batch = dummy_batch_envelope(5, 30, 35);
-        input_tx.send(batch).expect("failed to send batch");
+        input_tx.try_send(batch).expect("failed to send batch");
         drop(input_tx);
 
         let run_handle = tokio::spawn(async move {
@@ -649,11 +649,11 @@ mod tests {
                 .expect("failed to send verification response");
         });
 
-        let (input_tx, input_rx) = mpsc::unbounded_channel::<BatchForSigning<()>>();
+        let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
         let input_rx = PeekableReceiver::new(input_rx);
-        let (output_tx, mut output_rx) = mpsc::unbounded_channel::<SignedBatchEnvelope<()>>();
+        let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
 
-        input_tx.send(batch).expect("failed to send batch");
+        input_tx.try_send(batch).expect("failed to send batch");
         drop(input_tx);
 
         let run_handle = tokio::spawn(async move {
@@ -681,11 +681,11 @@ mod tests {
         let (verifier, verify_request_rx, _verify_result_tx) = make_verifier(Vec::new(), 0);
         drop(verify_request_rx);
 
-        let (input_tx, input_rx) = mpsc::unbounded_channel::<BatchForSigning<()>>();
-        let (output_tx, mut output_rx) = mpsc::unbounded_channel::<SignedBatchEnvelope<()>>();
+        let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
+        let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
         let peekable = zksync_os_pipeline::PeekableReceiver::new(input_rx);
 
-        input_tx.send(batch).expect("failed to send batch");
+        input_tx.try_send(batch).expect("failed to send batch");
         drop(input_tx);
 
         let run_handle = tokio::spawn(async move { verifier.run(peekable, output_tx).await });

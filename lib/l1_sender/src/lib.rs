@@ -92,7 +92,7 @@ const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
 pub async fn run_l1_sender<Input: SendToL1>(
     // == plumbing ==
     mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
-    outbound: mpsc::UnboundedSender<SignedBatchEnvelope<FriProof>>,
+    outbound: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
 
     // == command-specific settings ==
     to_address: Address,
@@ -342,7 +342,7 @@ async fn wait_for_txs_and_forward<F, P, Input>(
     operator_address: Address,
     command_name: &'static str,
     state_reporter: &ComponentStateReporter,
-    outbound: &mpsc::UnboundedSender<SignedBatchEnvelope<FriProof>>,
+    outbound: &mpsc::Sender<SignedBatchEnvelope<FriProof>>,
 ) -> anyhow::Result<()>
 where
     F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
@@ -424,9 +424,17 @@ where
         let last_batch = command.as_ref().last().map(|e| e.batch_number());
         for mut output_envelope in command.into() {
             output_envelope.set_stage(Input::MINED_STAGE);
-            outbound
-                .send(output_envelope)
-                .map_err(|e| anyhow::anyhow!("outbound channel closed: {e}"))?;
+            match outbound.try_send(output_envelope) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Closed(e)) => {
+                    return Err(anyhow::anyhow!("outbound channel closed: {e:?}"));
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    panic!(
+                        "pipeline channel unexpectedly full — consumer is catastrophically behind"
+                    )
+                }
+            }
         }
         if let Some(lb) = last_block {
             state_reporter.record_processed(lb, last_block_timestamp, last_batch);
@@ -635,7 +643,7 @@ where
 
 async fn process_prepending_passthrough_commands<Input: SendToL1>(
     inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
-    outbound: &mpsc::UnboundedSender<SignedBatchEnvelope<FriProof>>,
+    outbound: &mpsc::Sender<SignedBatchEnvelope<FriProof>>,
     state_reporter: &ComponentStateReporter,
     command_name: &str,
 ) -> anyhow::Result<Option<()>> {

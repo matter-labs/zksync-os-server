@@ -4,7 +4,7 @@ use crate::prover_api::prover_job_manager_state::ProverJobManagerState;
 use crate::prover_api::prover_job_map::ProverJobMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{
     FriProof, RealSnarkProof, SignedBatchEnvelope, SnarkProof,
 };
@@ -27,7 +27,7 @@ pub struct SnarkJobManager {
     // == state ==
     jobs: ProverJobMap<FriProof>,
     // outbound
-    prove_batches_sender: UnboundedSender<ProofCommand>,
+    prove_batches_sender: mpsc::Sender<ProofCommand>,
     // config
     max_fris_per_snark: usize,
     // metrics
@@ -36,7 +36,7 @@ pub struct SnarkJobManager {
 
 impl SnarkJobManager {
     pub fn new(
-        prove_batches_sender: UnboundedSender<ProofCommand>,
+        prove_batches_sender: mpsc::Sender<ProofCommand>,
         max_fris_per_snark: usize,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
@@ -246,7 +246,15 @@ impl SnarkJobManager {
     async fn send_downstream(&self, proof_command: ProofCommand) -> anyhow::Result<()> {
         self.reporter()
             .enter_state(ProverJobManagerState::ProcessingSubmission);
-        self.prove_batches_sender.send(proof_command)?;
+        match self.prove_batches_sender.try_send(proof_command) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Closed(e)) => {
+                return Err(anyhow::anyhow!("channel closed: {e:?}"));
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                panic!("pipeline channel unexpectedly full — consumer is catastrophically behind")
+            }
+        }
         self.update_in_flight_state().await;
         Ok(())
     }

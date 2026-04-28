@@ -31,11 +31,12 @@ impl PipelineComponent for TreeManager {
     );
     const COMPONENT_ID: zksync_os_pipeline::ComponentId =
         zksync_os_pipeline::ComponentId::TreeManager;
+    const OUTPUT_CHANNEL_CAPACITY: usize = 10;
 
     async fn run(
         self,
         mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::UnboundedSender<Self::Output>,
+        output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         // only used to skip blocks that were already processed by the tree -
@@ -119,11 +120,16 @@ impl PipelineComponent for TreeManager {
                 },
             };
             let block_timestamp = replay_record.block_context.timestamp;
-            if output
-                .send((block_output, replay_record, tree_block))
-                .is_err()
-            {
-                anyhow::bail!("Outbound channel closed");
+            match output.try_send((block_output, replay_record, tree_block)) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    anyhow::bail!("Outbound channel closed")
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    panic!(
+                        "pipeline channel unexpectedly full — consumer is catastrophically behind"
+                    )
+                }
             }
             state_reporter.record_processed(block_number, Some(block_timestamp), None);
         }

@@ -679,7 +679,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (pubdata_price_sender, pubdata_price_receiver) = watch::channel(None);
     let (blob_fill_ratio_sender, blob_fill_ratio_receiver) = watch::channel(None);
     // Channel for Batcher->GasAdjuster communication. Batcher send sidecar to gas adjuster to estimate blob fill ratio.
-    let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::channel(4096);
     if node_role.is_main() {
         let pubdata_mode = config
             .l1_sender_config
@@ -1014,7 +1014,7 @@ async fn run_main_node_pipeline(
     finality: impl ReadFinality + Clone,
     chain_id: u64,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
-    sidecar_sender: tokio::sync::mpsc::UnboundedSender<BlobTransactionSidecar>,
+    sidecar_sender: tokio::sync::mpsc::Sender<BlobTransactionSidecar>,
     committed_batch_provider: CommittedBatchProvider,
     canonization_engine: BlockCanonizationEngine,
     leadership: LeadershipSignal,
@@ -1056,7 +1056,6 @@ async fn run_main_node_pipeline(
                 .map(Into::into),
             replays_to_execute,
             leadership,
-            produce_interval: config.sequencer_config.block_time,
         })
         .pipe(BlockExecutor {
             block_context_provider,

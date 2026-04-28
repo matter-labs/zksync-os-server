@@ -58,7 +58,7 @@ where
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
-        output: mpsc::UnboundedSender<Self::Output>,
+        output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         // Track how many Produce commands we've processed (for `sequencer_max_blocks_to_produce` config)
