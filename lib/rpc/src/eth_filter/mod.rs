@@ -13,7 +13,6 @@ use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
     Transaction,
 };
-use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use scan::scan_logs;
 use zksync_os_mempool::subpools::l2::L2Subpool;
@@ -49,7 +48,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         Ok(self.registry.install(kind, latest_block))
     }
 
-    async fn filter_changes_impl(
+    fn filter_changes_impl(
         &self,
         id: FilterId,
     ) -> EthFilterResult<FilterChanges<Transaction<L2Envelope>>> {
@@ -63,7 +62,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
         };
 
         match kind {
-            FilterKind::PendingTransaction(filter) => Ok(filter.drain().await),
+            FilterKind::PendingTransaction(filter) => Ok(filter.drain()),
             FilterKind::Block => {
                 let mut block_hashes = Vec::new();
                 for block_number in start_block..=latest_block {
@@ -169,19 +168,18 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
     }
 }
 
-#[async_trait]
 impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterApiServer
     for EthFilterNamespace<RpcStorage, Mempool>
 {
-    async fn new_filter(&self, filter: Filter) -> RpcResult<FilterId> {
+    fn new_filter(&self, filter: Filter) -> RpcResult<FilterId> {
         self.install_filter(FilterKind::Log(Box::new(filter)))
     }
 
-    async fn new_block_filter(&self) -> RpcResult<FilterId> {
+    fn new_block_filter(&self) -> RpcResult<FilterId> {
         self.install_filter(FilterKind::Block)
     }
 
-    async fn new_pending_transaction_filter(
+    fn new_pending_transaction_filter(
         &self,
         kind: Option<PendingTransactionFilterKind>,
     ) -> RpcResult<FilterId> {
@@ -203,23 +201,20 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterApiServer
         self.install_filter(transaction_kind)
     }
 
-    async fn filter_changes(
-        &self,
-        id: FilterId,
-    ) -> RpcResult<FilterChanges<Transaction<L2Envelope>>> {
-        self.filter_changes_impl(id).await.to_rpc_result()
+    fn filter_changes(&self, id: FilterId) -> RpcResult<FilterChanges<Transaction<L2Envelope>>> {
+        self.filter_changes_impl(id).to_rpc_result()
     }
 
-    async fn filter_logs(&self, id: FilterId) -> RpcResult<Vec<Log>> {
+    fn filter_logs(&self, id: FilterId) -> RpcResult<Vec<Log>> {
         self.filter_logs_impl(id).to_rpc_result()
     }
 
-    async fn uninstall_filter(&self, id: FilterId) -> RpcResult<bool> {
+    fn uninstall_filter(&self, id: FilterId) -> RpcResult<bool> {
         Ok(self.registry.uninstall(&id))
     }
 
-    async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
-        Ok(self.logs_impl(filter).to_rpc_result()?)
+    fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
+        self.logs_impl(filter).to_rpc_result()
     }
 }
 

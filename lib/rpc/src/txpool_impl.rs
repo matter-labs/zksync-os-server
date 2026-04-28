@@ -1,7 +1,6 @@
 use crate::eth_impl::build_api_tx;
 use alloy::primitives::Address;
 use alloy::rpc::types::txpool::{TxpoolContent, TxpoolInspect, TxpoolInspectSummary, TxpoolStatus};
-use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -42,9 +41,8 @@ fn insert_by_sender<T>(
         .insert(pool_tx.nonce().to_string(), value);
 }
 
-#[async_trait]
 impl<Mempool: L2Subpool> TxpoolApiServer for TxpoolNamespace<Mempool> {
-    async fn inspect(&self) -> RpcResult<TxpoolInspect> {
+    fn inspect(&self) -> RpcResult<TxpoolInspect> {
         let mut result = TxpoolInspect::default();
         let all = self.mempool.all_transactions();
         for pool_tx in &all.pending {
@@ -56,7 +54,7 @@ impl<Mempool: L2Subpool> TxpoolApiServer for TxpoolNamespace<Mempool> {
         Ok(result)
     }
 
-    async fn content(&self) -> RpcResult<TxpoolContent<ZkApiTransaction>> {
+    fn content(&self) -> RpcResult<TxpoolContent<ZkApiTransaction>> {
         let mut result: TxpoolContent<ZkApiTransaction> = TxpoolContent::default();
         let all = self.mempool.all_transactions();
         for pool_tx in &all.pending {
@@ -68,7 +66,7 @@ impl<Mempool: L2Subpool> TxpoolApiServer for TxpoolNamespace<Mempool> {
         Ok(result)
     }
 
-    async fn status(&self) -> RpcResult<TxpoolStatus> {
+    fn status(&self) -> RpcResult<TxpoolStatus> {
         let (pending, queued) = self.mempool.pending_and_queued_txn_count();
         Ok(TxpoolStatus {
             pending: pending as u64,

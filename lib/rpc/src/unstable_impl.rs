@@ -1,7 +1,6 @@
 use crate::ReadRpcStorage;
 use crate::result::ToRpcResult;
 use alloy::primitives::{B256, BlockNumber, TxHash};
-use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_rpc_api::unstable::UnstableApiServer;
@@ -61,14 +60,13 @@ impl<RpcStorage: ReadRpcStorage> UnstableNamespace<RpcStorage> {
     }
 }
 
-#[async_trait]
 impl<RpcStorage: ReadRpcStorage> UnstableApiServer for UnstableNamespace<RpcStorage> {
-    async fn get_batch_by_block_number(&self, block_number: u64) -> RpcResult<PersistedBatch> {
+    fn get_batch_by_block_number(&self, block_number: u64) -> RpcResult<PersistedBatch> {
         self.get_batch_by_block_number_impl(block_number)
             .to_rpc_result()
     }
 
-    async fn get_local_root(&self, batch_number: u64) -> RpcResult<B256> {
+    fn get_local_root(&self, batch_number: u64) -> RpcResult<B256> {
         self.get_local_root_impl(batch_number).to_rpc_result()
     }
 }

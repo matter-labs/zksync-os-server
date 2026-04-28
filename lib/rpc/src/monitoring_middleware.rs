@@ -1,7 +1,6 @@
-use crate::metrics::{API_METRICS, TASK_MONITORS};
+use crate::metrics::{API_METRICS, RPC_TASK_MONITOR};
 use crate::result::internal_rpc_err;
 use futures::FutureExt as _;
-use futures::future::Either;
 use jsonrpsee::core::middleware::{Batch, BatchEntry, Notification};
 use jsonrpsee::server::middleware::rpc::{RpcService, RpcServiceT};
 use jsonrpsee::types::Request;
@@ -165,20 +164,14 @@ impl RpcServiceT for Monitoring {
         &self,
         request: Request<'a>,
     ) -> impl Future<Output = Self::MethodResponse> + Send + 'a {
-        let method_name = request.method_name();
-        let monitor = TASK_MONITORS.get(method_name);
-        let method = method_name.to_owned();
+        let method = request.method_name().to_owned();
         let request_size = request.params.as_ref().map_or(0, |p| p.get().len());
         let inner = self.inner.clone();
 
         async move {
             let id = request.id.clone().into_owned();
-            let handler = async move { inner.call(request).await };
+            let handler = RPC_TASK_MONITOR.instrument(async move { inner.call(request).await });
             let on_panic = || MethodResponse::error(id, internal_rpc_err("Internal error"));
-            let handler = match monitor {
-                Some(m) => Either::Left(m.instrument(handler)),
-                None => Either::Right(handler),
-            };
             CallGuard::new(CallKind::Call, method, request_size)
                 .handle_result(handler, on_panic)
                 .await
