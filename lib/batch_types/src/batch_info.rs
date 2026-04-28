@@ -19,7 +19,7 @@ const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 /// Contains enough data to construct public input hash.
 /// todo: these fields should be a part of `CommitBatchInfo` but needs to be changed on L1 contracts' side first
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct CommitBatchInfoExt {
+pub struct ExtendedCommitBatchInfo {
     #[serde(flatten)]
     pub commit_info: CommitBatchInfo,
     /// L1 protocol upgrade transaction that was finalized in this batch. Missing for the vast
@@ -28,7 +28,7 @@ pub struct CommitBatchInfoExt {
     pub protocol_version: ProtocolSemanticVersion,
 }
 
-impl CommitBatchInfoExt {
+impl ExtendedCommitBatchInfo {
     #[allow(clippy::too_many_arguments)]
     pub fn build(
         blocks: Vec<(
@@ -246,7 +246,7 @@ impl CommitBatchInfoExt {
     }
 }
 
-impl Deref for CommitBatchInfoExt {
+impl Deref for ExtendedCommitBatchInfo {
     type Target = CommitBatchInfo;
 
     fn deref(&self) -> &Self::Target {
@@ -254,7 +254,7 @@ impl Deref for CommitBatchInfoExt {
     }
 }
 
-impl DerefMut for CommitBatchInfoExt {
+impl DerefMut for ExtendedCommitBatchInfo {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.commit_info
     }

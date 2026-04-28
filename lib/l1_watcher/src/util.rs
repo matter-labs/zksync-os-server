@@ -10,7 +10,7 @@ use backon::{ConstantBuilder, Retryable};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
-use zksync_os_batch_types::{CommitBatchInfoExt, DiscoveredCommittedBatch};
+use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
 use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
@@ -377,7 +377,7 @@ pub async fn fetch_stored_batch_data(
 pub async fn fetch_committed_batch_data(
     zk_chain: &ZkChain<DynProvider>,
     tx_hash: TxHash,
-) -> Result<CommitBatchInfoExt, L1WatcherError> {
+) -> Result<ExtendedCommitBatchInfo, L1WatcherError> {
     let tx = (|| async {
         let tx = zk_chain
             .provider()
@@ -436,7 +436,7 @@ pub async fn fetch_committed_batch_data(
     // but after batch was committed.
     let packed_protocol_version = zk_chain.get_raw_protocol_version(l1_block_id).await?;
 
-    Ok(CommitBatchInfoExt {
+    Ok(ExtendedCommitBatchInfo {
         commit_info: commit_batch_info,
         upgrade_tx_hash,
         protocol_version: ProtocolSemanticVersion::try_from(packed_protocol_version)

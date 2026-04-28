@@ -1,4 +1,4 @@
-use crate::{BatchSignatureSet, CommitBatchInfoExt};
+use crate::{BatchSignatureSet, ExtendedCommitBatchInfo};
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{Address, B256, Bytes};
 use anyhow::Context as _;
@@ -30,7 +30,7 @@ pub struct BatchMetadata {
     // This is not purely commitment information, but we keep old serialization name for
     // backwards-compatibility.
     #[serde(rename = "commit_batch_info")]
-    pub batch_info: CommitBatchInfoExt,
+    pub batch_info: ExtendedCommitBatchInfo,
     pub chain_address: Address,
     pub blob_sidecar: Option<BlobTransactionSidecar>,
     pub first_block_number: u64,
