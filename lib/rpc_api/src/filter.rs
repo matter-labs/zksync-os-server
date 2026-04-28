@@ -28,8 +28,8 @@ pub trait EthFilterApi {
     ) -> RpcResult<FilterId>;
 
     /// Returns all filter changes since last poll.
-    #[method(name = "getFilterChanges")]
-    async fn filter_changes(
+    #[method(name = "getFilterChanges", blocking)]
+    fn filter_changes(
         &self,
         id: FilterId,
     ) -> RpcResult<FilterChanges<Transaction<L2Envelope>>>;
