@@ -16,25 +16,25 @@ use jsonrpsee::proc_macros::rpc;
 pub trait DebugApi {
     /// Returns an RLP-encoded header.
     #[method(name = "getRawHeader")]
-    async fn raw_header(&self, block_id: BlockId) -> RpcResult<Bytes>;
+    fn raw_header(&self, block_id: BlockId) -> RpcResult<Bytes>;
 
     /// Returns an RLP-encoded block.
     #[method(name = "getRawBlock")]
-    async fn raw_block(&self, block_id: BlockId) -> RpcResult<Bytes>;
+    fn raw_block(&self, block_id: BlockId) -> RpcResult<Bytes>;
 
     /// Returns a EIP-2718 binary-encoded transaction.
     ///
     /// If this is a pooled EIP-4844 transaction, the blob sidecar is included.
     #[method(name = "getRawTransaction")]
-    async fn raw_transaction(&self, hash: TxHash) -> RpcResult<Option<Bytes>>;
+    fn raw_transaction(&self, hash: TxHash) -> RpcResult<Option<Bytes>>;
 
     /// Returns an array of EIP-2718 binary-encoded transactions for the given [`BlockId`].
     #[method(name = "getRawTransactions")]
-    async fn raw_transactions(&self, block_id: BlockId) -> RpcResult<Vec<Bytes>>;
+    fn raw_transactions(&self, block_id: BlockId) -> RpcResult<Vec<Bytes>>;
 
     /// Returns an array of EIP-2718 binary-encoded receipts.
     #[method(name = "getRawReceipts")]
-    async fn raw_receipts(&self, block_id: BlockId) -> RpcResult<Vec<Bytes>>;
+    fn raw_receipts(&self, block_id: BlockId) -> RpcResult<Vec<Bytes>>;
 
     /// The `debug_traceBlock` method will return a full stack trace of all invoked opcodes of all
     /// transaction that were included in this block.
@@ -44,7 +44,7 @@ pub trait DebugApi {
     /// Note, the parent of this block must be present, or it will fail. For the second parameter
     /// see [`GethDebugTracingOptions`] reference.
     #[method(name = "traceBlock")]
-    async fn debug_trace_block(
+    fn debug_trace_block(
         &self,
         rlp_block: Bytes,
         opts: Option<GethDebugTracingOptions>,
@@ -54,7 +54,7 @@ pub trait DebugApi {
     /// the block that is already present in the database. For the second parameter see
     /// [`GethDebugTracingOptions`].
     #[method(name = "traceBlockByHash")]
-    async fn debug_trace_block_by_hash(
+    fn debug_trace_block_by_hash(
         &self,
         block: BlockHash,
         opts: Option<GethDebugTracingOptions>,
@@ -64,7 +64,7 @@ pub trait DebugApi {
     /// [`BlockNumberOrTag`] and will replay the block that is already present in the database.
     /// For the second parameter see [`GethDebugTracingOptions`].
     #[method(name = "traceBlockByNumber")]
-    async fn debug_trace_block_by_number(
+    fn debug_trace_block_by_number(
         &self,
         block: BlockNumberOrTag,
         opts: Option<GethDebugTracingOptions>,
@@ -75,7 +75,7 @@ pub trait DebugApi {
     /// may have been executed prior to this one before it will finally attempt to execute the
     /// transaction that corresponds to the given hash.
     #[method(name = "traceTransaction")]
-    async fn debug_trace_transaction(
+    fn debug_trace_transaction(
         &self,
         tx_hash: TxHash,
         opts: Option<GethDebugTracingOptions>,
@@ -91,7 +91,7 @@ pub trait DebugApi {
     /// see [`GethDebugTracingOptions`]. The method returns the same output as
     /// `debug_traceTransaction`.
     #[method(name = "traceCall")]
-    async fn debug_trace_call(
+    fn debug_trace_call(
         &self,
         request: TransactionRequest,
         block_id: Option<BlockId>,
@@ -114,7 +114,7 @@ pub trait DebugApi {
     /// Where the length of the outer list is the number of bundles and the length of the inner list
     /// (`Vec<GethTrace>`) is the number of transactions in the bundle.
     #[method(name = "traceCallMany")]
-    async fn debug_trace_call_many(
+    fn debug_trace_call_many(
         &self,
         bundles: Vec<Bundle>,
         state_context: Option<StateContext>,
@@ -123,12 +123,12 @@ pub trait DebugApi {
 
     /// Returns the current chain config.
     #[method(name = "chainConfig")]
-    async fn debug_chain_config(&self) -> RpcResult<ChainConfig>;
+    fn debug_chain_config(&self) -> RpcResult<ChainConfig>;
 
     /// Returns the code associated with a given hash at the specified block ID.
     /// If no block ID is provided, it defaults to the latest block.
     #[method(name = "codeByHash")]
-    async fn debug_code_by_hash(
+    fn debug_code_by_hash(
         &self,
         hash: B256,
         block_id: Option<BlockId>,

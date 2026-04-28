@@ -173,15 +173,15 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStora
 impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterApiServer
     for EthFilterNamespace<RpcStorage, Mempool>
 {
-    async fn new_filter(&self, filter: Filter) -> RpcResult<FilterId> {
+    fn new_filter(&self, filter: Filter) -> RpcResult<FilterId> {
         self.install_filter(FilterKind::Log(Box::new(filter)))
     }
 
-    async fn new_block_filter(&self) -> RpcResult<FilterId> {
+    fn new_block_filter(&self) -> RpcResult<FilterId> {
         self.install_filter(FilterKind::Block)
     }
 
-    async fn new_pending_transaction_filter(
+    fn new_pending_transaction_filter(
         &self,
         kind: Option<PendingTransactionFilterKind>,
     ) -> RpcResult<FilterId> {
@@ -210,16 +210,16 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterApiServer
         self.filter_changes_impl(id).await.to_rpc_result()
     }
 
-    async fn filter_logs(&self, id: FilterId) -> RpcResult<Vec<Log>> {
+    fn filter_logs(&self, id: FilterId) -> RpcResult<Vec<Log>> {
         self.filter_logs_impl(id).to_rpc_result()
     }
 
-    async fn uninstall_filter(&self, id: FilterId) -> RpcResult<bool> {
+    fn uninstall_filter(&self, id: FilterId) -> RpcResult<bool> {
         Ok(self.registry.uninstall(&id))
     }
 
-    async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
-        Ok(self.logs_impl(filter).to_rpc_result()?)
+    fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
+        self.logs_impl(filter).to_rpc_result()
     }
 }
 
