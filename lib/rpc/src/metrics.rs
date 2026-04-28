@@ -1,8 +1,13 @@
 use alloy::rpc::types::Filter;
+use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::time::Duration;
+use tokio::spawn;
+use tokio::time::sleep;
+use tokio_metrics::TaskMonitor;
 use vise::{
-    Buckets, Counter, EncodeLabelSet, EncodeLabelValue, Family, Histogram, LabeledFamily, Metrics,
-    Unit,
+    Buckets, Counter, EncodeLabelSet, EncodeLabelValue, Family, Gauge, Global, Histogram,
+    LabeledFamily, Metrics, Unit,
 };
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.000001..=32.0, 2.0);
@@ -92,7 +97,7 @@ pub struct Api {
 }
 
 #[vise::register]
-pub static API_METRICS: vise::Global<Api> = vise::Global::new();
+pub static API_METRICS: Global<Api> = Global::new();
 
 /// Metrics for the transaction submission pipeline.
 #[derive(Debug, Metrics)]
@@ -109,7 +114,7 @@ pub struct TxSubmission {
 }
 
 #[vise::register]
-pub static TX_SUBMISSION: vise::Global<TxSubmission> = vise::Global::new();
+pub static TX_SUBMISSION: Global<TxSubmission> = Global::new();
 
 /// Reason why an `eth_sendRawTransaction` was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue, EncodeLabelSet)]
@@ -167,4 +172,73 @@ pub enum TxRejectionReason {
     PoolEip7702Error,
     /// Other pool error.
     PoolOther,
+}
+
+/// RPC methods to instrument with per-handler task metrics.
+/// Add any method suspected of blocking worker threads.
+const MONITORED_METHODS: &[&str] = &[
+    "eth_call",
+    "eth_estimateGas",
+    "eth_feeHistory",
+    "eth_getLogs",
+    "eth_sendRawTransaction",
+    "eth_sendRawTransactionSync",
+    "debug_traceCall",
+    "debug_traceTransaction",
+    "debug_traceBlockByHash",
+    "debug_traceBlockByNumber",
+];
+
+/// Map from RPC method name to its `TaskMonitor`. Populated once at startup from
+/// `MONITORED_METHODS`. The middleware uses this to instrument matching requests.
+pub static TASK_MONITORS: LazyLock<HashMap<&'static str, TaskMonitor>> = LazyLock::new(|| {
+    MONITORED_METHODS
+        .iter()
+        .map(|&m| (m, TaskMonitor::new()))
+        .collect()
+});
+
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "rpc_task")]
+struct RpcTaskMetrics {
+    /// Mean time a handler task waits in the scheduler queue before a worker thread picks it up.
+    /// Rising values indicate worker saturation — tasks are ready but no thread is free.
+    #[metrics(unit = Unit::Seconds, labels = ["method"])]
+    mean_scheduled_duration: LabeledFamily<String, Gauge<f64>>,
+    /// Mean handler execution time (time actually spent on-CPU or blocked on RocksDB).
+    /// Together with `mean_scheduled_duration` this decomposes `api_response_time_seconds`
+    /// into queue-wait vs. actual work, pinpointing whether latency comes from starvation
+    /// or from slow handlers.
+    #[metrics(unit = Unit::Seconds, labels = ["method"])]
+    mean_poll_duration: LabeledFamily<String, Gauge<f64>>,
+    /// Number of polls exceeding the 10µs threshold in the last sample interval.
+    #[metrics(labels = ["method"])]
+    slow_polls_count: LabeledFamily<String, Gauge<u64>>,
+}
+
+#[vise::register]
+static RPC_TASK_METRICS: Global<RpcTaskMetrics> = Global::new();
+
+/// Spawns a background task that samples per-handler task metrics once per second.
+///
+/// Must be called from within a Tokio runtime context.
+pub fn spawn_task_monitors() {
+    let mut intervals: Vec<(&'static str, _)> = TASK_MONITORS
+        .iter()
+        .map(|(&method, monitor)| (method, monitor.intervals()))
+        .collect();
+
+    spawn(async move {
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            for (method, iter) in &mut intervals {
+                let metrics = iter.next().expect("infinite iterator");
+                RPC_TASK_METRICS.mean_scheduled_duration[*method]
+                    .set(metrics.mean_scheduled_duration().as_secs_f64());
+                RPC_TASK_METRICS.mean_poll_duration[*method]
+                    .set(metrics.mean_poll_duration().as_secs_f64());
+                RPC_TASK_METRICS.slow_polls_count[*method].set(metrics.total_slow_poll_count);
+            }
+        }
+    });
 }

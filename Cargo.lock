@@ -14263,7 +14263,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_consensus_types"
-version = "0.19.1"
+version = "0.19.2"
 dependencies = [
  "openraft",
  "reth-network-peers",
@@ -14832,6 +14832,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "tokio",
+ "tokio-metrics",
  "tokio-stream",
  "tower",
  "tower-http",

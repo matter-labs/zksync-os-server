@@ -8,6 +8,8 @@
 use std::time::Duration;
 
 use tokio::runtime::Handle;
+use tokio::spawn;
+use tokio::time::sleep;
 use tokio_metrics::RuntimeMonitor;
 use vise::{Gauge, Global, Metrics, Unit};
 
@@ -44,7 +46,7 @@ static METRICS: Global<TokioRuntimeMetrics> = Global::new();
 /// Must be called from within a Tokio runtime context.
 pub fn spawn_monitor() {
     let handle = Handle::current();
-    tokio::spawn(async move {
+    spawn(async move {
         let monitor = RuntimeMonitor::new(&handle);
         for interval in monitor.intervals() {
             METRICS.worker_busy_ratio.set(interval.busy_ratio());
@@ -70,7 +72,7 @@ pub fn spawn_monitor() {
             METRICS
                 .mean_poll_duration
                 .set(interval.mean_poll_duration.as_secs_f64());
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(1)).await;
         }
     });
 }
