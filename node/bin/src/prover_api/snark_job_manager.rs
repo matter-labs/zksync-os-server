@@ -4,7 +4,7 @@ use crate::prover_api::prover_job_map::ProverJobMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
-use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
+use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     FriProof, RealSnarkProof, SignedBatchEnvelope, SnarkProof,
 };

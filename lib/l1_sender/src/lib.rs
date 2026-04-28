@@ -1,4 +1,3 @@
-pub mod batcher_metrics;
 pub mod batcher_model;
 pub mod commands;
 pub mod config;

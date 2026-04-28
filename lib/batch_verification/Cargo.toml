@@ -18,6 +18,7 @@ zksync_os_merkle_tree.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_pipeline.workspace = true
 zksync_os_batch_types.workspace = true
+zksync_os_batcher_metrics.workspace = true
 zksync_os_network.workspace = true
 
 zksync_os_interface.workspace = true

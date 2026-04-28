@@ -10,9 +10,9 @@ use tokio::sync::mpsc;
 use tokio::time::{Instant, Sleep};
 use tracing;
 use zksync_os_batch_types::{BlockMerkleTreeData, DiscoveredCommittedBatch};
+use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;
-use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{
     BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
 };

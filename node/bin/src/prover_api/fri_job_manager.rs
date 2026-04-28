@@ -25,7 +25,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Permit;
 use tokio::sync::mpsc::error::TrySendError;
-use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
+use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     BatchMetadata, FriProof, ProverInput, RealFriProof, SignedBatchEnvelope,
 };

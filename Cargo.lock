@@ -13993,6 +13993,7 @@ dependencies = [
  "tracing",
  "vise",
  "zksync_os_batch_types",
+ "zksync_os_batcher_metrics",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_l1_sender",
@@ -14002,6 +14003,13 @@ dependencies = [
  "zksync_os_pipeline",
  "zksync_os_storage_api",
  "zksync_os_types",
+]
+
+[[package]]
+name = "zksync_os_batcher_metrics"
+version = "0.19.0"
+dependencies = [
+ "vise",
 ]
 
 [[package]]
@@ -14219,6 +14227,7 @@ dependencies = [
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.14)",
  "zksync_os_batch_types",
+ "zksync_os_batcher_metrics",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_merkle_tree",
@@ -14741,6 +14750,7 @@ dependencies = [
  "zksync_os_base_token_adjuster",
  "zksync_os_batch_types",
  "zksync_os_batch_verification",
+ "zksync_os_batcher_metrics",
  "zksync_os_config_validation_macros",
  "zksync_os_contract_interface",
  "zksync_os_external_price_api",
