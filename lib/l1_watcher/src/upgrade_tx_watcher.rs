@@ -5,7 +5,7 @@ use crate::util::ANVIL_L1_CHAIN_ID;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
-use alloy::primitives::{Address, B256, BlockNumber, U256};
+use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
@@ -13,8 +13,8 @@ use blake2::{Blake2s256, Digest};
 use zksync_os_contract_interface::IBytecodeSupplier::EVMBytecodePublished;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
-use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::is_method_missing;
+use zksync_os_contract_interface::{Bridgehub, ZkChain};
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_types::{
     L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
@@ -22,6 +22,7 @@ use zksync_os_types::{
 };
 
 use zksync_os_contract_interface::IChainTypeManager::IChainTypeManagerInstance;
+use zksync_os_contract_interface::ISettlementLayerV31Upgrade::ISettlementLayerV31UpgradeInstance;
 
 /// Limit the number of L1 blocks to scan when looking for the set timestamp transaction.
 const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
@@ -43,8 +44,10 @@ const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 pub struct L1UpgradeTxWatcher {
     admin_contract_l1: Address,
 
+    l2_chain_id: ChainId,
     provider_l1: DynProvider,
     provider_sl: DynProvider,
+    bridgehub_l1: Address,
     /// Address of the bytecode supplier contract on L1 (used to scan EVMBytecodePublished events)
     bytecode_supplier_address: Address,
     /// Address of the CTM contract on L1 (used to resolve the canonical bytecode supplier)
@@ -59,8 +62,11 @@ pub struct L1UpgradeTxWatcher {
 }
 
 impl L1UpgradeTxWatcher {
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
         config: L1WatcherConfig,
+        l2_chain_id: ChainId,
+        bridgehub_l1: Bridgehub<DynProvider>,
         zk_chain_l1: ZkChain<DynProvider>,
         zk_chain_sl: ZkChain<DynProvider>,
         bytecode_supplier_address: Address,
@@ -115,8 +121,10 @@ impl L1UpgradeTxWatcher {
 
         let this = Self {
             admin_contract_l1: admin_l1,
+            l2_chain_id,
             provider_l1: zk_chain_l1.provider().clone(),
             provider_sl: zk_chain_sl.provider().clone(),
+            bridgehub_l1: *bridgehub_l1.address(),
             bytecode_supplier_address,
             ctm_l1,
             ctm_sl,
@@ -148,13 +156,66 @@ impl L1UpgradeTxWatcher {
         let upgrade_cut_data_log = self.find_upgrade_cut_log(*raw_protocol_version).await?;
         let raw_diamond_cut: Log<NewUpgradeCutData> = upgrade_cut_data_log.log_decode()?;
         let diamond_cut_data = raw_diamond_cut.inner.data.diamondCutData;
-        let proposed_upgrade =
+        let mut proposed_upgrade =
             ProposedUpgrade::abi_decode(&diamond_cut_data.initCalldata[4..]).unwrap(); // TODO: we're in fact parsing `upgrade(..)` signature here
 
         let patch_only = protocol_version.minor == self.current_protocol_version.minor;
         let (l2_upgrade_tx, force_preimages) = if patch_only {
             (None, Vec::new())
         } else {
+            // `NewUpgradeCutData` carries a placeholder `additionalForceDeploymentsData`
+            // (`""`) that `upgradeChainFromVersion` rewrites per-chain when the
+            // diamond-cut init runs on L1 — see
+            // `SettlementLayerV31UpgradeBase.upgrade()` which replaces
+            // `l2ProtocolUpgradeTx.data` via `getL2UpgradeTxData(bridgehub, chainId, existingTxData)`.
+            // Call that same function off-chain so the tx we inject into the
+            // mempool matches what L1 actually wrote into the priority queue.
+            //
+            // Route through the upgrade facet's deployed address, which is
+            // `diamond_cut_data.initAddress`. Only "method missing" reverts (pre-v31
+            // init contracts that don't expose this function) fall back to the
+            // original tx data; any other error — RPC failure, decode error, or a
+            // genuine revert like `UnexpectedZKsyncOSFlag` / `UnexpectedUpgradeSelector`
+            // — is propagated, because silently using the placeholder would inject
+            // a tx whose hash diverges from what L1 wrote into the priority queue.
+            let upgrade_init_address = diamond_cut_data.initAddress;
+            let original_tx_data = proposed_upgrade.l2ProtocolUpgradeTx.data.clone();
+            match ISettlementLayerV31UpgradeInstance::new(
+                upgrade_init_address,
+                self.provider_l1.clone(),
+            )
+            .getL2UpgradeTxData(
+                self.bridgehub_l1,
+                U256::from(self.l2_chain_id),
+                true,
+                original_tx_data,
+            )
+            .call()
+            .await
+            {
+                Ok(rewritten) => {
+                    tracing::info!(
+                        init_address = ?upgrade_init_address,
+                        bridgehub = ?self.bridgehub_l1,
+                        l2_chain_id = self.l2_chain_id,
+                        rewritten_len = rewritten.len(),
+                        "rewrote L2 upgrade tx data via getL2UpgradeTxData"
+                    );
+                    proposed_upgrade.l2ProtocolUpgradeTx.data = rewritten;
+                }
+                Err(e) if is_method_missing(&e) => {
+                    tracing::info!(
+                        init_address = ?upgrade_init_address,
+                        "init contract does not expose getL2UpgradeTxData (pre-v31); using original tx data"
+                    );
+                }
+                Err(e) => {
+                    return Err(anyhow::Error::new(e).context(format!(
+                        "getL2UpgradeTxData call failed at init address {upgrade_init_address}"
+                    )));
+                }
+            }
+
             let tx = L1UpgradeEnvelope::try_from(proposed_upgrade.l2ProtocolUpgradeTx).unwrap();
             let force_preimages = self.fetch_force_preimages(&tx.inner.factory_deps).await?;
 
@@ -294,8 +355,7 @@ impl L1UpgradeTxWatcher {
     ///    set_bytecode_on_address.rs:178` → `account_cache.rs:933`), with
     ///    `expected_preimage_len_in_bytes = observable_len`. The corresponding
     ///    preimage body the cache must return is exactly the raw bytes (length =
-    ///    observable len). This is also what each entry in `factory_deps` of the
-    ///    upgrade tx must equal so that we can fetch the matching preimage here.
+    ///    observable len).
     ///
     /// 3. **`Blake2s256(raw + padding + artifacts)`** — the "padded blake hash",
     ///    a.k.a. `account_properties.bytecode_hash`. This is what `set_properties_code`
@@ -327,107 +387,144 @@ impl L1UpgradeTxWatcher {
     /// That's a deliberate design choice — it keeps `BytecodesSupplier` publication
     /// cost proportional to the raw bytecode length, and removes any cross-node
     /// disagreement risk on artifact format.
-    ///
-    /// # Why we scan instead of filtering
-    ///
-    /// `EVMBytecodePublished` is indexed by hash (1) (`keccak256`), not hash (2)
-    /// (`Blake2s256`). Our `factory_deps` carries hash (2). We can't translate
-    /// between them without the bytecode itself, so we have to scan all events in
-    /// range and recompute Blake2s on each payload. If the supplier ever gains a
-    /// second event indexed by hash (2), this can become a topic-filtered lookup.
     async fn fetch_force_preimages(&self, hashes: &[B256]) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
         if hashes.is_empty() {
             return Ok(Vec::new());
         }
 
         let active_supplier = self.resolve_active_bytecode_supplier().await?;
+        let tip = self.provider_l1.get_block_number().await?;
+        let start_block = tip.saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS).max(1u64);
+        tracing::info!(
+            supplier = ?active_supplier,
+            num_requested = hashes.len(),
+            tip_block = tip,
+            start_block,
+            "fetch_force_preimages: starting scan"
+        );
+        for (i, h) in hashes.iter().enumerate() {
+            tracing::debug!(idx = i, hash = ?h, "fetch_force_preimages: requested keccak");
+        }
 
-        let mut current_block = self.provider_l1.get_block_number().await?;
-        let start_block = current_block
-            .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS)
-            .max(1u64);
+        let requested_keccak: Vec<B256> = hashes.to_vec();
+        let requested_set: std::collections::HashSet<B256> =
+            requested_keccak.iter().copied().collect();
+        let mut by_keccak: HashMap<B256, Vec<u8>> = HashMap::new();
 
-        // `requested` and the `factory_deps` slice both contain hash (2) values —
-        // the Blake2s-of-raw lookup keys the system hook will use on L2.
-        let requested: std::collections::HashSet<B256> = hashes.iter().copied().collect();
-        let mut by_hash: HashMap<B256, Vec<u8>> = HashMap::new();
-
+        // First pass: filter by topic1 for efficiency. This is the fast path
+        // when the contracts side publishes bytecodes and emits events with
+        // keccak256 as topic1 (which `BytecodesSupplier` does).
+        let mut current_block = tip;
         while current_block >= start_block {
             let from_block = current_block
                 .saturating_sub(self.max_blocks_to_process - 1)
                 .max(start_block);
-            // The `EVMBytecodePublished` event is indexed by hash (1) (keccak256
-            // of the raw bytes), which is **not** the hash we're filtering by, so
-            // we don't add a topic1 filter — we'd have to translate from hash (2)
-            // to hash (1) which requires the bytecode itself. Instead we pull all
-            // events in the range and discard non-matches inside the loop.
             let filter = Filter::new()
                 .from_block(from_block)
                 .to_block(current_block)
                 .address(active_supplier)
-                .event_signature(EVMBytecodePublished::SIGNATURE_HASH);
+                .event_signature(EVMBytecodePublished::SIGNATURE_HASH)
+                .topic1(requested_keccak.clone());
             let logs = self.provider_l1.get_logs(&filter).await?;
+            tracing::info!(
+                from_block,
+                to_block = current_block,
+                log_count = logs.len(),
+                "fetch_force_preimages: topic1-filtered query"
+            );
 
             for log in logs {
                 let published = EVMBytecodePublished::decode_log(&log.inner)?.data;
-                let raw_bytecode = published.bytecode.to_vec();
-
-                // Compute hash (2) from the event payload so we can match against
-                // `requested`. We deliberately do NOT use `set_properties_code`
-                // here — that would produce hash (3), which would silently fail to
-                // match anything in `factory_deps` (or, worse, match it via a
-                // misconfigured upgrade tx and then panic the VM on length).
-                let zkos_hash = B256::from_slice(Blake2s256::digest(&raw_bytecode).as_slice());
-
-                // Drop events that publish bytecodes the upgrade tx doesn't ask for.
-                if !requested.contains(&zkos_hash) {
+                let keccak_hash = B256::from(published.bytecodeHash);
+                if !requested_set.contains(&keccak_hash) {
                     continue;
                 }
-
-                if let Some(existing) = by_hash.get(&zkos_hash) {
-                    if existing != &raw_bytecode {
-                        // Two different payloads producing the same Blake2s would
-                        // be a Blake2s collision (or a bug in the supplier). The
-                        // first occurrence wins so we stay deterministic.
-                        tracing::warn!(
-                            hash = ?zkos_hash,
-                            "bytecode supplier emitted duplicate hash with different data; keeping first occurrence"
-                        );
-                    }
-                } else {
-                    // Insert the **raw** bytecode (shape A — length = observable
-                    // len). The system hook will derive the padded shape B
-                    // internally and key it by hash (3) on the account.
-                    by_hash.insert(zkos_hash, raw_bytecode);
-                }
+                let raw_bytecode = published.bytecode.to_vec();
+                by_keccak.entry(keccak_hash).or_insert(raw_bytecode);
             }
 
-            // Stop early once all requested hashes are found.
-            if by_hash.len() == requested.len() {
+            if by_keccak.len() == requested_set.len() {
+                break;
+            }
+            if from_block == start_block {
                 break;
             }
             current_block = from_block.saturating_sub(1);
         }
 
-        // Verify all requested hashes were found.
+        // Diagnostic fallback: if the topic1-filtered scan missed anything, do
+        // an un-filtered scan over the same window and report what's on the
+        // supplier. That'll distinguish "bytecode not published" (supplier has
+        // no event for that hash) from "querying the wrong supplier" (event
+        // is on a different address) from "topic-filter bug" (event is on
+        // this supplier but topic1 doesn't match).
+        if by_keccak.len() != requested_set.len() {
+            tracing::warn!(
+                found = by_keccak.len(),
+                requested = requested_set.len(),
+                "fetch_force_preimages: topic1-filtered scan incomplete, running diagnostic unfiltered scan"
+            );
+            let mut current_block = tip;
+            let mut events_seen = 0usize;
+            while current_block >= start_block {
+                let from_block = current_block
+                    .saturating_sub(self.max_blocks_to_process - 1)
+                    .max(start_block);
+                let filter = Filter::new()
+                    .from_block(from_block)
+                    .to_block(current_block)
+                    .address(active_supplier)
+                    .event_signature(EVMBytecodePublished::SIGNATURE_HASH);
+                let logs = self.provider_l1.get_logs(&filter).await?;
+                for log in logs {
+                    let published = EVMBytecodePublished::decode_log(&log.inner)?.data;
+                    let keccak_hash = B256::from(published.bytecodeHash);
+                    let matches = requested_set.contains(&keccak_hash);
+                    tracing::info!(
+                        hash = ?keccak_hash,
+                        bytecode_len = published.bytecode.len(),
+                        in_requested = matches,
+                        l1_block = log.block_number,
+                        "fetch_force_preimages: [diag] supplier event seen"
+                    );
+                    events_seen += 1;
+                }
+                if from_block == start_block {
+                    break;
+                }
+                current_block = from_block.saturating_sub(1);
+            }
+            tracing::warn!(
+                events_seen,
+                "fetch_force_preimages: [diag] unfiltered scan complete"
+            );
+        }
+
         let missing: Vec<_> = hashes
             .iter()
-            .filter(|h| !by_hash.contains_key(*h))
+            .filter(|h| !by_keccak.contains_key(*h))
             .collect();
         anyhow::ensure!(
             missing.is_empty(),
-            "missing {} factory dep preimage(s) from bytecode supplier: {:?}",
+            "missing {} factory dep preimage(s) from bytecode supplier {:?}: {:?}",
             missing.len(),
+            active_supplier,
             missing
         );
 
+        let mut preimages: Vec<(B256, Vec<u8>)> = Vec::with_capacity(by_keccak.len());
+        for (_, raw_bytecode) in by_keccak {
+            let blake_hash = B256::from_slice(Blake2s256::digest(&raw_bytecode).as_slice());
+            preimages.push((blake_hash, raw_bytecode));
+        }
+
         tracing::info!(
             supplier = ?active_supplier,
-            num_preimages = by_hash.len(),
+            num_preimages = preimages.len(),
             "fetched force deployment preimages from bytecode supplier"
         );
 
-        Ok(by_hash.into_iter().collect())
+        Ok(preimages)
     }
 
     /// Queries the CTM on L1 for the canonical `BytecodesSupplier` address.

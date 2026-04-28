@@ -750,6 +750,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 upgrade transaction watcher",
         L1UpgradeTxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
+            chain_id,
+            node_startup_state.l1_state.bridgehub_l1.clone(),
             node_startup_state.l1_state.diamond_proxy_l1.clone(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             bytecode_supplier_address,
