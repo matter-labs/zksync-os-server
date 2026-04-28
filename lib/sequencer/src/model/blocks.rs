@@ -52,8 +52,6 @@ impl HasBlockRangeEnd for BlockPayload {
 }
 
 /// Message flowing from `BlockApplier` → `TreeManager`.
-///
-/// A named struct so that `HasBlockRangeEnd` can be implemented.
 #[derive(Clone, Debug)]
 pub struct AppliedBlock {
     pub output: BlockOutput,

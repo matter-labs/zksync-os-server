@@ -68,12 +68,8 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
     ) -> anyhow::Result<()> {
         self.init().await.expect("init");
 
-        // Internal channel between prepare_execute_commands and keep_caching within this
-        // component. Intentionally unbounded: producer and consumer share the same select!
-        // loop so there is no independent consumer lag to measure, and the 24-byte payload
-        // is negligible even during a prolonged L1 execute stall.
         let (priority_txs_internal_sender, priority_txs_internal_receiver) =
-            mpsc::unbounded_channel::<(u64, u64, Option<usize>)>();
+            mpsc::channel::<(u64, u64, Option<usize>)>(4096);
 
         // Clone what we need before moving into async blocks
         let priority_tree_manager_for_prepare = self.clone();
@@ -140,7 +136,7 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
     async fn prepare_execute_commands(
         self,
         main_node_channels: Option<(InputChannel, OutputChannel)>,
-        priority_ops_internal_sender: mpsc::UnboundedSender<(u64, u64, Option<usize>)>,
+        priority_ops_internal_sender: mpsc::Sender<(u64, u64, Option<usize>)>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         let (mut proved_batch_envelopes_receiver, execute_batches_sender) =
@@ -281,6 +277,7 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                         last_block_number,
                         first_priority_op_id_in_batch.map(|id| id + priority_op_count - 1),
                     ))
+                    .await
                     .map_err(|e| anyhow::anyhow!("failed to send priority ops count: {e}"))?;
                 state_reporter.enter_state(GenericComponentState::Active);
 
@@ -350,7 +347,7 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
     /// Keeps caching the priority tree after each batch execution.
     async fn keep_caching(
         self,
-        mut priority_ops_internal_receiver: mpsc::UnboundedReceiver<(u64, u64, Option<usize>)>,
+        mut priority_ops_internal_receiver: mpsc::Receiver<(u64, u64, Option<usize>)>,
     ) -> anyhow::Result<()> {
         let (state_reporter, _rx) = ComponentStateReporter::new("priority_tree_keep_caching");
         let mut finality_receiver = self.finality.subscribe();

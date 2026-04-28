@@ -120,17 +120,9 @@ impl PipelineComponent for TreeManager {
                 },
             };
             let block_timestamp = replay_record.block_context.timestamp;
-            match output.try_send((block_output, replay_record, tree_block)) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    anyhow::bail!("Outbound channel closed")
-                }
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    panic!(
-                        "pipeline channel unexpectedly full — consumer is catastrophically behind"
-                    )
-                }
-            }
+            output
+                .send((block_output, replay_record, tree_block))
+                .await?;
             state_reporter.record_processed(block_number, Some(block_timestamp), None);
         }
     }
