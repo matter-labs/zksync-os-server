@@ -42,7 +42,10 @@ impl PendingTransactionsReceiver {
     /// Returns all new pending transactions received since the last poll.
     fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
         let mut pending_txs = Vec::new();
-        let mut prepared_stream = self.receiver.lock().expect("pending tx receiver lock poisoned");
+        let mut prepared_stream = self
+            .receiver
+            .lock()
+            .expect("pending tx receiver lock poisoned");
 
         while let Ok(tx_hash) = prepared_stream.try_recv() {
             pending_txs.push(tx_hash);

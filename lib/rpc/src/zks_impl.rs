@@ -446,10 +446,7 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
             .to_rpc_result()
     }
 
-    fn get_block_metadata_by_number(
-        &self,
-        block_number: u64,
-    ) -> RpcResult<Option<BlockMetadata>> {
+    fn get_block_metadata_by_number(&self, block_number: u64) -> RpcResult<Option<BlockMetadata>> {
         self.get_block_metadata_by_number_impl(block_number)
             .to_rpc_result()
     }

@@ -201,10 +201,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterApiServer
         self.install_filter(transaction_kind)
     }
 
-    fn filter_changes(
-        &self,
-        id: FilterId,
-    ) -> RpcResult<FilterChanges<Transaction<L2Envelope>>> {
+    fn filter_changes(&self, id: FilterId) -> RpcResult<FilterChanges<Transaction<L2Envelope>>> {
         self.filter_changes_impl(id).to_rpc_result()
     }
 

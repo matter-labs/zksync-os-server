@@ -30,10 +30,7 @@ pub trait ZksApi {
     async fn get_genesis(&self) -> RpcResult<GenesisInput>;
 
     #[method(name = "getBlockMetadataByNumber")]
-    fn get_block_metadata_by_number(
-        &self,
-        block_number: u64,
-    ) -> RpcResult<Option<BlockMetadata>>;
+    fn get_block_metadata_by_number(&self, block_number: u64) -> RpcResult<Option<BlockMetadata>>;
 
     #[method(name = "getProof", blocking)]
     fn get_proof(

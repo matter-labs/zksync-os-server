@@ -558,10 +558,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
             .to_rpc_result()
     }
 
-    fn block_uncles_count_by_number(
-        &self,
-        number: BlockNumberOrTag,
-    ) -> RpcResult<Option<U256>> {
+    fn block_uncles_count_by_number(&self, number: BlockNumberOrTag) -> RpcResult<Option<U256>> {
         self.block_uncles_count_by_id_impl(number.into())
             .to_rpc_result()
     }
@@ -658,11 +655,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         self.storage_at_impl(address, key, block_id).to_rpc_result()
     }
 
-    fn transaction_count(
-        &self,
-        address: Address,
-        block_id: Option<BlockId>,
-    ) -> RpcResult<U256> {
+    fn transaction_count(&self, address: Address, block_id: Option<BlockId>) -> RpcResult<U256> {
         self.transaction_count_impl(address, block_id)
             .to_rpc_result()
     }
@@ -671,10 +664,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         self.get_code_impl(address, block_id).to_rpc_result()
     }
 
-    fn header_by_number(
-        &self,
-        block_number: BlockNumberOrTag,
-    ) -> RpcResult<Option<ZkHeader>> {
+    fn header_by_number(&self, block_number: BlockNumberOrTag) -> RpcResult<Option<ZkHeader>> {
         Ok(self
             .block_by_id_impl(Some(block_number.into()), false)
             .to_rpc_result()?
@@ -744,11 +734,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         self.gas_price_impl().to_rpc_result()
     }
 
-    fn get_account(
-        &self,
-        _address: Address,
-        _block: BlockId,
-    ) -> RpcResult<Option<TrieAccount>> {
+    fn get_account(&self, _address: Address, _block: BlockId) -> RpcResult<Option<TrieAccount>> {
         // todo(#36): implement
         Err(unimplemented_rpc_err())
     }

@@ -58,10 +58,7 @@ pub trait OtsApi {
     /// Tailor-made and expanded version of `eth_getBlockByNumber` for block details page in
     /// Otterscan.
     #[method(name = "getBlockDetails", blocking)]
-    fn get_block_details(
-        &self,
-        block_number: LenientBlockNumberOrTag,
-    ) -> RpcResult<BlockDetails>;
+    fn get_block_details(&self, block_number: LenientBlockNumberOrTag) -> RpcResult<BlockDetails>;
 
     /// Tailor-made and expanded version of `eth_getBlockByHash` for block details page in
     /// Otterscan.

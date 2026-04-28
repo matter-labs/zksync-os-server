@@ -128,9 +128,6 @@ pub trait DebugApi {
     /// Returns the code associated with a given hash at the specified block ID.
     /// If no block ID is provided, it defaults to the latest block.
     #[method(name = "codeByHash")]
-    fn debug_code_by_hash(
-        &self,
-        hash: B256,
-        block_id: Option<BlockId>,
-    ) -> RpcResult<Option<Bytes>>;
+    fn debug_code_by_hash(&self, hash: B256, block_id: Option<BlockId>)
+    -> RpcResult<Option<Bytes>>;
 }

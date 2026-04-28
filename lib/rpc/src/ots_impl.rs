@@ -331,10 +331,7 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
         Ok(Some(vec![]))
     }
 
-    fn get_block_details(
-        &self,
-        block_number: LenientBlockNumberOrTag,
-    ) -> RpcResult<BlockDetails> {
+    fn get_block_details(&self, block_number: LenientBlockNumberOrTag) -> RpcResult<BlockDetails> {
         self.get_block_details_by_id_impl(block_number.into())
             .to_rpc_result()
     }

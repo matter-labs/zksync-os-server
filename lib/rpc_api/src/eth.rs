@@ -73,10 +73,7 @@ pub trait EthApi {
 
     /// Returns the number of uncles in a block with given block number.
     #[method(name = "getUncleCountByBlockNumber")]
-    fn block_uncles_count_by_number(
-        &self,
-        number: BlockNumberOrTag,
-    ) -> RpcResult<Option<U256>>;
+    fn block_uncles_count_by_number(&self, number: BlockNumberOrTag) -> RpcResult<Option<U256>>;
 
     /// Returns all transaction receipts for a given block.
     #[method(name = "getBlockReceipts", blocking)]
@@ -168,11 +165,7 @@ pub trait EthApi {
 
     /// Returns the number of transactions sent from an address at given block number.
     #[method(name = "getTransactionCount")]
-    fn transaction_count(
-        &self,
-        address: Address,
-        block_id: Option<BlockId>,
-    ) -> RpcResult<U256>;
+    fn transaction_count(&self, address: Address, block_id: Option<BlockId>) -> RpcResult<U256>;
 
     /// Returns code at a given address at given block number.
     #[method(name = "getCode")]

@@ -29,10 +29,7 @@ pub trait EthFilterApi {
 
     /// Returns all filter changes since last poll.
     #[method(name = "getFilterChanges", blocking)]
-    fn filter_changes(
-        &self,
-        id: FilterId,
-    ) -> RpcResult<FilterChanges<Transaction<L2Envelope>>>;
+    fn filter_changes(&self, id: FilterId) -> RpcResult<FilterChanges<Transaction<L2Envelope>>>;
 
     /// Returns all logs matching given filter (in a range 'from' - 'to').
     #[method(name = "getFilterLogs", blocking)]
