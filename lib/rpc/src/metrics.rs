@@ -197,7 +197,7 @@ struct RpcTaskMetrics {
 #[vise::register]
 static RPC_TASK_METRICS: Global<RpcTaskMetrics> = Global::new();
 
-/// Spawns a background task that samples global RPC task metrics once per second.
+/// Spawns a background task that samples global RPC task metrics once per scrape interval.
 ///
 /// Must be called from within a Tokio runtime context.
 pub fn spawn_task_monitor() {
@@ -205,7 +205,7 @@ pub fn spawn_task_monitor() {
 
     spawn(async move {
         loop {
-            sleep(Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(30)).await;
             let metrics = intervals.next().expect("infinite iterator");
             RPC_TASK_METRICS
                 .mean_scheduled_duration

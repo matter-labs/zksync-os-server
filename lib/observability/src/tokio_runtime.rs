@@ -41,7 +41,7 @@ struct TokioRuntimeMetrics {
 #[vise::register]
 static METRICS: Global<TokioRuntimeMetrics> = Global::new();
 
-/// Spawns a background task that samples Tokio runtime metrics once per second.
+/// Spawns a background task that samples Tokio runtime metrics once per scrape interval.
 ///
 /// Must be called from within a Tokio runtime context.
 pub fn spawn_monitor() {
@@ -72,7 +72,7 @@ pub fn spawn_monitor() {
             METRICS
                 .mean_poll_duration
                 .set(interval.mean_poll_duration.as_secs_f64());
-            sleep(Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(30)).await;
         }
     });
 }
