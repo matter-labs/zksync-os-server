@@ -282,25 +282,12 @@ impl L1State {
 async fn fetch_finalized_executed_batch(
     zk_chain_sl: &ZkChain<DynProvider>,
 ) -> anyhow::Result<(u64, u64)> {
-    let finalized_sl_block_number = {
-        let Some(finalized_sl_block_number) = zk_chain_sl
-            .provider()
-            .get_block_number_by_id(BlockId::finalized())
-            .await
-            .context("failed to fetch finalized SL block number")?
-        else {
-            return Ok((0, 0));
-        };
-        finalized_sl_block_number
-    };
-
-    if !zk_chain_sl
-        .code_exists_at_block(finalized_sl_block_number.into())
+    let finalized_sl_block_number = zk_chain_sl
+        .provider()
+        .get_block_number_by_id(BlockId::finalized())
         .await
-        .context("failed to check ZK chain contract code at finalized SL block")?
-    {
-        return Ok((finalized_sl_block_number, 0));
-    }
+        .context("failed to fetch finalized SL block number")?
+        .context("failed to fetch finalized SL block number (`None` returned)")?;
 
     let last_finalized_executed_batch = zk_chain_sl
         .get_total_batches_executed(finalized_sl_block_number.into())
