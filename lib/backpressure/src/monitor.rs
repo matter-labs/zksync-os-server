@@ -4,7 +4,7 @@ use reth_tasks::Runtime;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::watch;
-use zksync_os_observability::{ComponentState, GENERAL_METRICS};
+use zksync_os_observability::ComponentState;
 use zksync_os_types::{
     BackpressureCause, BackpressureTrigger, NotAcceptingReason, TransactionAcceptanceState,
 };
@@ -91,21 +91,15 @@ impl BackpressureMonitor {
 
         // Snapshot current state immediately so operators see accurate lag at monitor startup.
         self.evaluate_and_update(&snapshot);
-        let mut last_snapshot = snapshot;
 
-        /// How long the monitor waits for a pipeline event before re-emitting age metrics.
-        /// Must be well below the Prometheus scrape interval (typically 15–30 s).
-        const IDLE_TICK: Duration = Duration::from_secs(5);
         loop {
             tokio::select! {
-                result = tokio::time::timeout(IDLE_TICK, snapshot_rx.changed()) => {
+                result = snapshot_rx.changed() => {
                     match result {
-                        Ok(Ok(())) => {
-                            last_snapshot = snapshot_rx.borrow_and_update().clone();
-                            self.evaluate_and_update(&last_snapshot);
+                        Ok(()) => {
+                            self.evaluate_and_update(&snapshot_rx.borrow_and_update());
                         }
-                        Ok(Err(_)) => return,
-                        Err(_elapsed) => self.emit_age_metrics(&last_snapshot),
+                        Err(_) => return,
                     }
                 }
                 _ = self.stop_receiver.changed() => {
@@ -303,19 +297,6 @@ impl BackpressureMonitor {
             if let Some(batch_diff) = snap.batch_diff {
                 MONITOR_METRICS.component_batch_diff_to_upstream[&id].set(batch_diff);
             }
-        }
-
-        self.emit_age_metrics(snapshot);
-    }
-
-    fn emit_age_metrics(&self, snapshot: &PipelineSnapshot) {
-        let now = tokio::time::Instant::now();
-        for (id, h) in snapshot {
-            let age = now
-                .saturating_duration_since(h.state_entered_at)
-                .as_secs_f64();
-            GENERAL_METRICS.component_state_age_seconds[&(id.as_str(), h.state, h.specific_state)]
-                .set(age);
         }
     }
 

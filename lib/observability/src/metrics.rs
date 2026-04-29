@@ -5,22 +5,10 @@ use vise::{Counter, Gauge, LabeledFamily, Metrics};
 pub struct GeneralMetrics {
     /// Counts the number of seconds spent in each state.
     /// `specific_state` tracks component-specific state -
-    /// the set of values may be different for different components.
-    /// Credited on state transitions only; components that never transition
-    /// contribute no rate here — see `component_state_age_seconds` for the
-    /// age of the current state.
+    /// the set of values may be different for different components
     #[metrics(labels = ["component", "generic_state", "specific_state"])]
     pub component_time_spent_in_state:
         LabeledFamily<(&'static str, GenericComponentState, &'static str), Counter<f64>, 3>,
-
-    /// Seconds since the component entered its current state. Emitted by the
-    /// pipeline monitor on every tick, so long-idle components remain
-    /// observable even when `component_time_spent_in_state` sees no increments.
-    /// Series for the prior state stops updating on transition and ages out
-    /// via Prometheus staleness.
-    #[metrics(labels = ["component", "generic_state", "specific_state"])]
-    pub component_state_age_seconds:
-        LabeledFamily<(&'static str, GenericComponentState, &'static str), Gauge<f64>, 3>,
 
     /// Unix timestamp for when the process was started.
     /// Additionally, labels are used to track the version and role (main node / external node)

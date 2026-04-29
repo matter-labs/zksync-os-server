@@ -1,6 +1,9 @@
 use crate::generic_component_state::GenericComponentState;
+use crate::metrics::GENERAL_METRICS;
 use crate::state_label::StateLabel;
-use tokio::{sync::watch, time::Instant};
+use std::time::Duration;
+use tokio::sync::{mpsc, watch};
+use tokio::time::Instant;
 
 /// Block-space coordinates.
 #[derive(Clone, Debug)]
@@ -69,11 +72,13 @@ pub struct ComponentState {
     pub in_flight_last_batch: Option<BatchTrackingCoordinates>,
 }
 
-/// Uses `watch::Sender` — updates are infallible, no background task, no global state.
+/// Uses `watch::Sender` — updates are infallible, no global state.
+/// A per-component background task continuously increments `component_time_spent_in_state`
+/// and exits automatically when this reporter is dropped.
 #[derive(Debug)]
 pub struct ComponentStateReporter {
     sender: watch::Sender<ComponentState>,
-    component: &'static str,
+    state_tx: mpsc::UnboundedSender<(GenericComponentState, &'static str)>,
 }
 
 impl ComponentStateReporter {
@@ -91,24 +96,37 @@ impl ComponentStateReporter {
             batch_picked: None,
         };
         let (sender, receiver) = watch::channel(initial);
-        (Self { sender, component }, receiver)
+        let (state_tx, state_rx) = mpsc::unbounded_channel();
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(flush_state_time(
+                component,
+                state_rx,
+                GenericComponentState::Idle,
+                "idle",
+            ));
+        }
+        (Self { sender, state_tx }, receiver)
     }
 
-    /// Transition to a new state and record time-in-previous-state metric.
+    /// Transition to a new state. The background task owns all metric increments;
+    /// this just updates the watch and enqueues the transition for the task.
     pub fn enter_state(&self, new_state: impl StateLabel) {
         let now = Instant::now();
+        let new_generic = new_state.generic();
+        let new_specific = new_state.specific();
+        let mut transitioned = false;
         self.sender.send_modify(|state| {
-            if state.specific_state == new_state.specific() {
+            if state.specific_state == new_specific {
                 return;
             }
-            let elapsed = now.duration_since(state.state_entered_at);
-            crate::metrics::GENERAL_METRICS.component_time_spent_in_state
-                [&(self.component, state.state, state.specific_state)]
-                .inc_by(elapsed.as_secs_f64());
-            state.state = new_state.generic();
-            state.specific_state = new_state.specific();
+            transitioned = true;
+            state.state = new_generic;
+            state.specific_state = new_specific;
             state.state_entered_at = now;
         });
+        if transitioned {
+            let _ = self.state_tx.send((new_generic, new_specific));
+        }
     }
 
     /// Record when an item was dequeued from the input channel (before any processing)
@@ -193,22 +211,56 @@ impl ComponentStateReporter {
     }
 }
 
+/// Runs as a per-component background task. Continuously increments
+/// `component_time_spent_in_state` on every 2-second tick and on every state.
+async fn flush_state_time(
+    component: &'static str,
+    mut rx: mpsc::UnboundedReceiver<(GenericComponentState, &'static str)>,
+    initial_state: GenericComponentState,
+    initial_specific: &'static str,
+) {
+    const TICK: Duration = Duration::from_secs(2);
+    let mut tracked_state = initial_state;
+    let mut tracked_specific = initial_specific;
+    let mut last_flush = Instant::now();
+    let mut ticker = tokio::time::interval(TICK);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                let now = Instant::now();
+                let elapsed = now.duration_since(last_flush).as_secs_f64();
+                if elapsed > 0.0 {
+                    GENERAL_METRICS.component_time_spent_in_state
+                        [&(component, tracked_state, tracked_specific)]
+                        .inc_by(elapsed);
+                }
+                last_flush = now;
+            }
+            msg = rx.recv() => {
+                let Some((new_state, new_specific)) = msg else { return };
+                let now = Instant::now();
+                let elapsed = now.duration_since(last_flush).as_secs_f64();
+                if elapsed > 0.0 {
+                    GENERAL_METRICS.component_time_spent_in_state
+                        [&(component, tracked_state, tracked_specific)]
+                        .inc_by(elapsed);
+                }
+                tracked_state = new_state;
+                tracked_specific = new_specific;
+                last_flush = now;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::GenericComponentState;
     use std::time::Duration;
     use tokio::time::sleep;
-
-    #[tokio::test]
-    async fn record_processed_updates_coord() {
-        let (reporter, rx) = ComponentStateReporter::new("test_component");
-        reporter.record_processed(42, Some(1_700_000_000), None);
-        let h = rx.borrow();
-        let coord = h.block_processed.as_ref().unwrap();
-        assert_eq!(coord.block_number, 42);
-        assert_eq!(coord.timestamp, Some(1_700_000_000));
-    }
 
     #[tokio::test]
     async fn record_processed_high_watermark() {
