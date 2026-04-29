@@ -3,6 +3,7 @@ mod call;
 mod debug;
 mod deployment_filter;
 mod filter;
+mod policy_client;
 mod pubsub;
 mod simulate;
 mod storage_proof;
