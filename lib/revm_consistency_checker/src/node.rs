@@ -114,12 +114,10 @@ where
 
         loop {
             state_reporter.enter_state(GenericComponentState::Idle);
-            // Plain recv: state is recorded via send_and_record after the check completes.
-            // Recording on recv would advance the watermark before the block is validated.
             let Some(AppliedBlock {
                 output: block_output,
                 record: replay_record,
-            }) = input.recv().await
+            }) = input.recv_and_record_picked(&state_reporter).await
             else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
