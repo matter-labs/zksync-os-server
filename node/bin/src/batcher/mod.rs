@@ -96,10 +96,15 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 block_number = next_block_number,
                 "skipping already executed on L1 block {next_block_number} (first unexecuted on L1 block is {first_expected_block})"
             );
-            input
-                .recv()
+            let skipped = input
+                .recv_and_record_picked(&state_reporter)
                 .await
                 .expect("impossible: missing an already peeked batch");
+            state_reporter.record_processed(
+                skipped.record.block_context.block_number,
+                Some(skipped.record.block_context.timestamp),
+                None,
+            );
         }
 
         // Only used for metrics/logs

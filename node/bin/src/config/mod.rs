@@ -1273,7 +1273,8 @@ pub struct FeeConfig {
 /// Backpressure configuration.
 ///
 /// Each field caps the number of unprocessed batches between a pipeline stage and its
-/// upstream neighbour. Leave a field unset to impose no limit on that stage.
+/// upstream neighbour. Leave a field unset to use the built-in default threshold for
+/// that stage (1000 batches for batch-level stages, 100 blocks for block-level stages).
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct BackpressureConfig {

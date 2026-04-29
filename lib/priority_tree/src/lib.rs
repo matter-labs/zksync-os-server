@@ -175,6 +175,15 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                             batch_number = envelope.batch_number(),
                             "Passing through batch that was already executed"
                         );
+                        let passthrough_last_block = envelope.batch.last_block_number;
+                        let passthrough_last_ts =
+                            Some(envelope.batch.batch_info.last_block_timestamp);
+                        let passthrough_batch_num = envelope.batch_number();
+                        state_reporter.record_picked(
+                            passthrough_last_block,
+                            passthrough_last_ts,
+                            Some(passthrough_batch_num),
+                        );
                         if let Some(sender) = &execute_batches_sender {
                             match sender.try_send(L1SenderCommand::Passthrough(Box::new(envelope)))
                             {
@@ -189,6 +198,11 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                                 }
                             }
                         }
+                        state_reporter.record_processed(
+                            passthrough_last_block,
+                            passthrough_last_ts,
+                            Some(passthrough_batch_num),
+                        );
 
                         continue;
                     }
