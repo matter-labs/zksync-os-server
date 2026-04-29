@@ -32,7 +32,7 @@ use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
 use zksync_os_server::config::Config;
-pub use zksync_os_server::config::DeploymentFilterConfig;
+pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::{
     NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
 };
@@ -1042,6 +1042,7 @@ pub struct GatewayTesterBuilder {
     protocol_version: &'static str,
     num_chains: Option<usize>,
     deployment_filter: Option<DeploymentFilterConfig>,
+    policy_service: Option<PolicyServiceConfig>,
 }
 
 impl Default for GatewayTesterBuilder {
@@ -1050,6 +1051,7 @@ impl Default for GatewayTesterBuilder {
             protocol_version: PROTOCOL_VERSION_V31_0,
             num_chains: None,
             deployment_filter: None,
+            policy_service: None,
         }
     }
 }
@@ -1068,6 +1070,12 @@ impl GatewayTesterBuilder {
     /// Set the deployment filter config for all chains.
     pub fn deployment_filter(mut self, config: DeploymentFilterConfig) -> Self {
         self.deployment_filter = Some(config);
+        self
+    }
+
+    /// Set the policy-service client config for all chains.
+    pub fn policy_service(mut self, config: PolicyServiceConfig) -> Self {
+        self.policy_service = Some(config);
         self
     }
 
@@ -1103,6 +1111,7 @@ impl GatewayTesterBuilder {
             wait_for_gateway_readiness(&l1, gateway.l2_rpc_url(), &chain_config).await?;
             let gateway_rpc_url = gateway_rpc_url.clone();
             let deployment_filter = self.deployment_filter.clone();
+            let policy_service = self.policy_service.clone();
 
             let mut tester_config = build_node_config(&l1, chain_layout).await?;
             if !prover_input_generation_enabled() {
@@ -1114,6 +1123,9 @@ impl GatewayTesterBuilder {
                     .sequencer_config
                     .tx_validator
                     .deployment_filter = deployment_filter;
+            }
+            if let Some(policy_service) = policy_service {
+                tester_config.sequencer_config.tx_validator.policy_service = policy_service;
             }
 
             let tester =
