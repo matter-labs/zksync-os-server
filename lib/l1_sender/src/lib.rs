@@ -382,24 +382,35 @@ where
 
     state_reporter.enter_state(L1SenderState::WaitingL1Inclusion);
 
-    let mut completed_commands = Vec::with_capacity(pending_txs.len());
-    for (idx, (receipt_fut, command, submitted_at)) in pending_txs.into_iter().enumerate() {
-        let receipt = receipt_fut.await;
-        // Observe latency before propagating errors so timeout cases are recorded.
-        L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
-            .observe(submitted_at.elapsed().as_secs_f64());
-        let receipt = receipt?;
-        validate_tx_receipt(provider, &command, receipt).await?;
-        completed_commands.push(command);
+    let completed_commands: Vec<Input> = match async {
+        let mut completed = Vec::with_capacity(pending_txs.len());
+        for (idx, (receipt_fut, command, submitted_at)) in pending_txs.into_iter().enumerate() {
+            let receipt = receipt_fut.await;
+            // Observe latency before propagating errors so timeout cases are recorded.
+            L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
+                .observe(submitted_at.elapsed().as_secs_f64());
+            let receipt = receipt?;
+            validate_tx_receipt(provider, &command, receipt).await?;
+            completed.push(command);
 
-        let next_first = first_batch_coords.get(idx + 1).cloned();
-        let next_last = if next_first.is_some() {
-            in_flight_last_coord.clone()
-        } else {
-            None
-        };
-        state_reporter.record_in_flight_range(next_first, next_last);
+            let next_first = first_batch_coords.get(idx + 1).cloned();
+            let next_last = if next_first.is_some() {
+                in_flight_last_coord.clone()
+            } else {
+                None
+            };
+            state_reporter.record_in_flight_range(next_first, next_last);
+        }
+        anyhow::Ok(completed)
     }
+    .await
+    {
+        Ok(cmds) => cmds,
+        Err(e) => {
+            state_reporter.record_in_flight_range(None, None);
+            return Err(e);
+        }
+    };
 
     let range = Input::display_range(&completed_commands);
     let balance = format_ether(provider.get_balance(operator_address).await?);
