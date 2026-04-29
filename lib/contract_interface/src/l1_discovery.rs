@@ -289,6 +289,14 @@ async fn fetch_finalized_executed_batch(
         .context("failed to fetch finalized SL block number")?
         .context("failed to fetch finalized SL block number (`None` returned)")?;
 
+    if !zk_chain_sl
+        .code_exists_at_block(finalized_sl_block_number.into())
+        .await
+        .context("failed to check ZK chain contract code at finalized SL block")?
+    {
+        return Ok((finalized_sl_block_number, 0));
+    }
+
     let last_finalized_executed_batch = zk_chain_sl
         .get_total_batches_executed(finalized_sl_block_number.into())
         .await?;
