@@ -70,7 +70,7 @@ use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
-    L1TxWatcher, L1UpgradeTxWatcher,
+    L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
@@ -528,7 +528,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     runtime.spawn_critical_task(
         "l1 finalized execute watcher",
-        L1ExecuteWatcher::create_finalized_watcher(
+        L1FinalizedExecuteWatcher::create_finalized_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),

@@ -21,17 +21,18 @@ use zksync_os_storage_api::WriteFinality;
 /// - startup / replay code that reads executed finality to decide where block processing resumes;
 /// - RPC-facing storage initialization, which uses executed progress as part of node recovery.
 pub struct L1ExecuteWatcher<Finality> {
+    inner: ExecuteWatcherState<Finality>,
+}
+
+pub struct L1FinalizedExecuteWatcher<Finality> {
+    inner: ExecuteWatcherState<Finality>,
+}
+
+struct ExecuteWatcherState<Finality> {
     contract_address: Address,
     next_batch_number: u64,
     committed_batch_provider: CommittedBatchProvider,
     finality: Finality,
-    frontier: ExecuteFrontier,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ExecuteFrontier {
-    Operational,
-    Finalized,
 }
 
 impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
@@ -58,11 +59,12 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         tracing::info!(last_l1_block, "resolved on L1");
 
         let this = Self {
-            contract_address: *zk_chain.address(),
-            next_batch_number: last_executed_batch + 1,
-            committed_batch_provider,
-            finality,
-            frontier: ExecuteFrontier::Operational,
+            inner: ExecuteWatcherState {
+                contract_address: *zk_chain.address(),
+                next_batch_number: last_executed_batch + 1,
+                committed_batch_provider,
+                finality,
+            },
         };
         let l1_watcher = L1Watcher::new(
             zk_chain.provider().clone(),
@@ -79,7 +81,9 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
 
         Ok(l1_watcher)
     }
+}
 
+impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
     pub async fn create_finalized_watcher(
         config: L1WatcherConfig,
         zk_chain: ZkChain<DynProvider>,
@@ -105,11 +109,12 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         tracing::info!(last_l1_block, "resolved on L1");
 
         let this = Self {
-            contract_address: *zk_chain.address(),
-            next_batch_number: last_finalized_executed_batch + 1,
-            committed_batch_provider,
-            finality,
-            frontier: ExecuteFrontier::Finalized,
+            inner: ExecuteWatcherState {
+                contract_address: *zk_chain.address(),
+                next_batch_number: last_finalized_executed_batch + 1,
+                committed_batch_provider,
+                finality,
+            },
         };
         Ok(L1Watcher::new_finalized(
             zk_chain.provider().clone(),
@@ -121,21 +126,12 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
     }
 }
 
-#[async_trait::async_trait]
-impl<Finality: WriteFinality> ProcessL1Event for L1ExecuteWatcher<Finality> {
-    const NAME: &'static str = "block_execution";
-
-    type SolEvent = BlockExecution;
-    type WatchedEvent = BlockExecution;
-
-    fn contract_address(&self) -> Address {
-        self.contract_address
-    }
-
-    async fn process_event(
+impl<Finality: WriteFinality> ExecuteWatcherState<Finality> {
+    async fn process_execution(
         &mut self,
         batch_execute: BlockExecution,
-        _log: Log,
+        update_finality: impl FnOnce(&Finality, u64, u64),
+        frontier: &'static str,
     ) -> Result<(), L1WatcherError> {
         let batch_number = batch_execute.batchNumber.to::<u64>();
         let batch_hash = batch_execute.batchHash;
@@ -145,6 +141,7 @@ impl<Finality: WriteFinality> ProcessL1Event for L1ExecuteWatcher<Finality> {
                 batch_number,
                 ?batch_hash,
                 ?batch_commitment,
+                frontier,
                 "skipping already processed executed batch",
             );
         } else {
@@ -153,42 +150,98 @@ impl<Finality: WriteFinality> ProcessL1Event for L1ExecuteWatcher<Finality> {
                 .wait_for_batch(batch_number)
                 .await;
             let last_executed_block = discovered_batch.last_block_number();
-            match self.frontier {
-                ExecuteFrontier::Operational => {
-                    self.finality.update_finality_status(|finality| {
-                        assert!(
-                            batch_number > finality.last_executed_batch,
-                            "non-monotonous executed batch"
-                        );
-                        assert!(
-                            last_executed_block > finality.last_executed_block,
-                            "non-monotonous executed block"
-                        );
-                        finality.last_executed_batch = batch_number;
-                        finality.last_executed_block = last_executed_block;
-                    });
-                }
-                ExecuteFrontier::Finalized => {
-                    self.finality.update_finality_status(|finality| {
-                        assert!(
-                            batch_number > finality.last_finalized_executed_batch,
-                            "non-monotonous finalized executed batch"
-                        );
-                        assert!(
-                            last_executed_block > finality.last_finalized_executed_block,
-                            "non-monotonous finalized executed block"
-                        );
-                        finality.last_finalized_executed_batch = batch_number;
-                        finality.last_finalized_executed_block = last_executed_block;
-                    });
-                }
-            }
+            update_finality(&self.finality, batch_number, last_executed_block);
             tracing::info!(
                 "discovered executed batch {batch_number}, hash {batch_hash:?}, commitment {batch_commitment:?},\
-                last_executed_block {last_executed_block}, frontier {:?}",
-                self.frontier
+                last_executed_block {last_executed_block}, frontier {frontier}",
             );
         }
         Ok(())
+    }
+}
+
+fn update_executed_finality<Finality: WriteFinality>(
+    finality: &Finality,
+    batch_number: u64,
+    last_executed_block: u64,
+) {
+    finality.update_finality_status(|finality| {
+        assert!(
+            batch_number > finality.last_executed_batch,
+            "non-monotonous executed batch"
+        );
+        assert!(
+            last_executed_block > finality.last_executed_block,
+            "non-monotonous executed block"
+        );
+        finality.last_executed_batch = batch_number;
+        finality.last_executed_block = last_executed_block;
+    });
+}
+
+fn update_finalized_executed_finality<Finality: WriteFinality>(
+    finality: &Finality,
+    batch_number: u64,
+    last_executed_block: u64,
+) {
+    finality.update_finality_status(|finality| {
+        assert!(
+            batch_number > finality.last_finalized_executed_batch,
+            "non-monotonous finalized executed batch"
+        );
+        assert!(
+            last_executed_block > finality.last_finalized_executed_block,
+            "non-monotonous finalized executed block"
+        );
+        finality.last_finalized_executed_batch = batch_number;
+        finality.last_finalized_executed_block = last_executed_block;
+    });
+}
+
+#[async_trait::async_trait]
+impl<Finality: WriteFinality> ProcessL1Event for L1ExecuteWatcher<Finality> {
+    const NAME: &'static str = "block_execution";
+
+    type SolEvent = BlockExecution;
+    type WatchedEvent = BlockExecution;
+
+    fn contract_address(&self) -> Address {
+        self.inner.contract_address
+    }
+
+    async fn process_event(
+        &mut self,
+        batch_execute: BlockExecution,
+        _log: Log,
+    ) -> Result<(), L1WatcherError> {
+        self.inner
+            .process_execution(batch_execute, update_executed_finality, "normal")
+            .await
+    }
+}
+
+#[async_trait::async_trait]
+impl<Finality: WriteFinality> ProcessL1Event for L1FinalizedExecuteWatcher<Finality> {
+    const NAME: &'static str = "finalized_block_execution";
+
+    type SolEvent = BlockExecution;
+    type WatchedEvent = BlockExecution;
+
+    fn contract_address(&self) -> Address {
+        self.inner.contract_address
+    }
+
+    async fn process_event(
+        &mut self,
+        batch_execute: BlockExecution,
+        _log: Log,
+    ) -> Result<(), L1WatcherError> {
+        self.inner
+            .process_execution(
+                batch_execute,
+                update_finalized_executed_finality,
+                "finalized",
+            )
+            .await
     }
 }
