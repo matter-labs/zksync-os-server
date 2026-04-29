@@ -332,8 +332,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.tx_validator_config.clone().into(),
     );
 
-    let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
-        commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider).await;
+    let (
+        last_l1_committed_block,
+        last_l1_proved_block,
+        last_l1_executed_block,
+        last_l1_finalized_executed_block,
+    ) = commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider).await;
 
     let node_startup_state = NodeStateOnStartup {
         node_role,
@@ -370,6 +374,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_committed_batch: l1_state.last_committed_batch,
         last_executed_block: last_l1_executed_block,
         last_executed_batch: l1_state.last_executed_batch,
+        last_finalized_executed_block: last_l1_finalized_executed_block,
+        last_finalized_executed_batch: l1_state.last_finalized_executed_batch,
     });
 
     // `starting_block` - the block number to go through the pipeline.
@@ -517,6 +523,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .await
         .expect("failed to start L1 execute watcher")
+        .run(),
+    );
+
+    runtime.spawn_critical_task(
+        "l1 finalized execute watcher",
+        L1ExecuteWatcher::create_finalized_watcher(
+            config.l1_watcher_config.clone().into(),
+            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            committed_batch_provider.clone(),
+            finality_storage.clone(),
+        )
+        .await
+        .expect("failed to start finalized L1 execute watcher")
         .run(),
     );
 
@@ -781,7 +800,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             persistent_batch_storage.clone(),
-            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 batch persist watcher")
@@ -1366,7 +1384,7 @@ fn check_batch_verification_mismatch(
 async fn commit_proof_execute_block_numbers(
     l1_state: &L1State,
     committed_batch_provider: &CommittedBatchProvider,
-) -> (u64, u64, u64) {
+) -> (u64, u64, u64, u64) {
     let last_committed_block = if l1_state.last_committed_batch == 0 {
         0
     } else {
@@ -1394,7 +1412,20 @@ async fn commit_proof_execute_block_numbers(
             .expect("last_executed_batch is expected to be loaded")
             .last_block_number()
     };
-    (last_committed_block, last_proved_block, last_executed_block)
+    let last_finalized_executed_block = if l1_state.last_finalized_executed_batch == 0 {
+        0
+    } else {
+        committed_batch_provider
+            .get(l1_state.last_finalized_executed_batch)
+            .expect("last_finalized_executed_batch is expected to be loaded")
+            .last_block_number()
+    };
+    (
+        last_committed_block,
+        last_proved_block,
+        last_executed_block,
+        last_finalized_executed_block,
+    )
 }
 
 fn run_fake_snark_provers(

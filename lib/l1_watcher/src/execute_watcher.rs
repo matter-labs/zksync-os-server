@@ -25,6 +25,13 @@ pub struct L1ExecuteWatcher<Finality> {
     next_batch_number: u64,
     committed_batch_provider: CommittedBatchProvider,
     finality: Finality,
+    frontier: ExecuteFrontier,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ExecuteFrontier {
+    Operational,
+    Finalized,
 }
 
 impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
@@ -55,6 +62,7 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
             next_batch_number: last_executed_batch + 1,
             committed_batch_provider,
             finality,
+            frontier: ExecuteFrontier::Operational,
         };
         let l1_watcher = L1Watcher::new(
             zk_chain.provider().clone(),
@@ -70,6 +78,46 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         .await?;
 
         Ok(l1_watcher)
+    }
+
+    pub async fn create_finalized_watcher(
+        config: L1WatcherConfig,
+        zk_chain: ZkChain<DynProvider>,
+        committed_batch_provider: CommittedBatchProvider,
+        finality: Finality,
+    ) -> anyhow::Result<L1Watcher> {
+        let current_l1_block = zk_chain.provider().get_block_number().await?;
+        let last_finalized_executed_batch =
+            finality.get_finality_status().last_finalized_executed_batch;
+        tracing::info!(
+            current_l1_block,
+            last_finalized_executed_batch,
+            config.max_blocks_to_process,
+            ?config.poll_interval,
+            zk_chain_address = ?zk_chain.address(),
+            "initializing finalized L1 execute watcher"
+        );
+        let last_l1_block = util::find_l1_execute_block_by_batch_number(
+            zk_chain.clone(),
+            last_finalized_executed_batch,
+        )
+        .await?;
+        tracing::info!(last_l1_block, "resolved on L1");
+
+        let this = Self {
+            contract_address: *zk_chain.address(),
+            next_batch_number: last_finalized_executed_batch + 1,
+            committed_batch_provider,
+            finality,
+            frontier: ExecuteFrontier::Finalized,
+        };
+        Ok(L1Watcher::new_finalized(
+            zk_chain.provider().clone(),
+            last_l1_block,
+            config.max_blocks_to_process,
+            config.poll_interval,
+            this.into(),
+        ))
     }
 }
 
@@ -105,24 +153,40 @@ impl<Finality: WriteFinality> ProcessL1Event for L1ExecuteWatcher<Finality> {
                 .wait_for_batch(batch_number)
                 .await;
             let last_executed_block = discovered_batch.last_block_number();
-            self.finality.update_finality_status(|finality| {
-                assert!(
-                    batch_number > finality.last_executed_batch,
-                    "non-monotonous executed batch"
-                );
-                assert!(
-                    last_executed_block > finality.last_executed_block,
-                    "non-monotonous executed block"
-                );
-                finality.last_executed_batch = batch_number;
-                finality.last_executed_block = last_executed_block;
-            });
-            tracing::debug!(
-                batch_number,
-                ?batch_hash,
-                ?batch_commitment,
-                last_executed_block,
-                "discovered executed batch"
+            match self.frontier {
+                ExecuteFrontier::Operational => {
+                    self.finality.update_finality_status(|finality| {
+                        assert!(
+                            batch_number > finality.last_executed_batch,
+                            "non-monotonous executed batch"
+                        );
+                        assert!(
+                            last_executed_block > finality.last_executed_block,
+                            "non-monotonous executed block"
+                        );
+                        finality.last_executed_batch = batch_number;
+                        finality.last_executed_block = last_executed_block;
+                    });
+                }
+                ExecuteFrontier::Finalized => {
+                    self.finality.update_finality_status(|finality| {
+                        assert!(
+                            batch_number > finality.last_finalized_executed_batch,
+                            "non-monotonous finalized executed batch"
+                        );
+                        assert!(
+                            last_executed_block > finality.last_finalized_executed_block,
+                            "non-monotonous finalized executed block"
+                        );
+                        finality.last_finalized_executed_batch = batch_number;
+                        finality.last_finalized_executed_block = last_executed_block;
+                    });
+                }
+            }
+            tracing::info!(
+                "discovered executed batch {batch_number}, hash {batch_hash:?}, commitment {batch_commitment:?},\
+                last_executed_block {last_executed_block}, frontier {:?}",
+                self.frontier
             );
         }
         Ok(())

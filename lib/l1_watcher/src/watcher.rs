@@ -1,5 +1,6 @@
 use crate::ProcessRawEvents;
 use crate::metrics::METRICS;
+use alloy::eips::BlockId;
 use alloy::primitives::BlockNumber;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
@@ -12,9 +13,14 @@ pub struct L1Watcher {
     provider: DynProvider,
     next_block: BlockNumber,
     max_blocks_to_process: u64,
-    confirmations: BlockNumber,
+    block_boundary: BlockBoundary,
     poll_interval: Duration,
     processor: Box<dyn ProcessRawEvents>,
+}
+
+enum BlockBoundary {
+    Confirmed { confirmations: BlockNumber },
+    Finalized,
 }
 
 impl L1Watcher {
@@ -36,10 +42,27 @@ impl L1Watcher {
             provider,
             next_block,
             max_blocks_to_process,
-            confirmations,
+            block_boundary: BlockBoundary::Confirmed { confirmations },
             poll_interval,
             processor,
         })
+    }
+
+    pub(crate) fn new_finalized(
+        provider: DynProvider,
+        next_block: BlockNumber,
+        max_blocks_to_process: u64,
+        poll_interval: Duration,
+        processor: Box<dyn ProcessRawEvents>,
+    ) -> Self {
+        Self {
+            provider,
+            next_block,
+            max_blocks_to_process,
+            block_boundary: BlockBoundary::Finalized,
+            poll_interval,
+            processor,
+        }
     }
 }
 
@@ -56,8 +79,27 @@ impl L1Watcher {
     }
 
     async fn poll(&mut self) -> Result<(), L1WatcherError> {
-        let latest_block = self.provider.get_block_number().await?;
-        let latest_confirmed_block = latest_block.saturating_sub(self.confirmations);
+        let latest_confirmed_block = match self.block_boundary {
+            BlockBoundary::Confirmed { confirmations } => self
+                .provider
+                .get_block_number()
+                .await?
+                .saturating_sub(confirmations),
+            BlockBoundary::Finalized => {
+                let Some(finalized_block) = self
+                    .provider
+                    .get_block_number_by_id(BlockId::finalized())
+                    .await?
+                else {
+                    tracing::debug!(
+                        event_name = &self.processor.name(),
+                        "no finalized L1 block available yet"
+                    );
+                    return Ok(());
+                };
+                finalized_block
+            }
+        };
 
         while self.next_block <= latest_confirmed_block {
             let from_block = self.next_block;

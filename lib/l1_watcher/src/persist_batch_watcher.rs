@@ -11,11 +11,13 @@ use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBat
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
-/// Watches commit and execute events together and persists only irreversibly executed batches.
+/// Watches finalized commit and execute events together and persists only irreversibly executed
+/// batches.
 ///
 /// This component keeps committed batches in memory until the matching `BlockExecution` event
-/// arrives, and only then writes a `PersistedBatch` through `WriteBatch`. That split avoids having
-/// to roll back persistent storage for batches that were committed but later reverted on L1.
+/// arrives in a finalized settlement-layer block, and only then writes a `PersistedBatch` through
+/// `WriteBatch`. That split avoids having to roll back persistent storage for batches that were
+/// committed or executed but later reverted on L1.
 ///
 /// Depended on by:
 /// - `ExecutedBatchStorage`, which is the concrete persistent store typically passed into this
@@ -35,7 +37,6 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         config: L1WatcherConfig,
         zk_chain: ZkChain<DynProvider>,
         batch_storage: BatchStorage,
-        l1_chain_id: u64,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_persisted_batch = batch_storage.latest_batch();
@@ -62,18 +63,15 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             last_processed_commit_batch: last_persisted_batch,
             last_persisted_batch_on_start: last_persisted_batch,
         };
-        let l1_watcher = L1Watcher::new(
+        let l1_watcher = L1Watcher::new_finalized(
             zk_chain.provider().clone(),
             // We start from last L1 block as it may contain more committed batches apart from the last
             // one.
             last_l1_block,
             config.max_blocks_to_process,
-            config.confirmations,
-            l1_chain_id,
             config.poll_interval,
             Box::new(this),
-        )
-        .await?;
+        );
 
         Ok(l1_watcher)
     }
@@ -196,13 +194,6 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                 self.process_commit(report, log).await?;
             }
             s if s == BlockExecution::SIGNATURE_HASH => {
-                // This logic is not totally resistant to reorgs. If `executeBatches` is reverted + the
-                // batch itself is reverted then the storage will persist an incorrect batch. The
-                // situation should be extremely rare but still possible. Two options here:
-                // 1. Trim batches that are no longer executed from the storage on start-up.
-                // 2. Track **finalized** executions along with regular (latest) ones. They cannot
-                //    be reorged and hence would be safe to depend on here.
-
                 let execute = BlockExecution::decode_log(&log.inner)?.data;
                 let batch_number = execute.batchNumber.to::<u64>();
                 if batch_number > self.last_persisted_batch_on_start {

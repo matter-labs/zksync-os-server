@@ -337,7 +337,7 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                 return Ok(());
             };
             finality_receiver
-                .wait_for(|f| last_block_number <= f.last_executed_block)
+                .wait_for(|f| last_block_number <= f.last_finalized_executed_block)
                 .await
                 .context("failed to wait for executed block number")?;
 

@@ -110,4 +110,6 @@ pub struct FinalityStatus {
     pub last_committed_batch: u64,
     pub last_executed_block: u64,
     pub last_executed_batch: u64,
+    pub last_finalized_executed_block: u64,
+    pub last_finalized_executed_batch: u64,
 }

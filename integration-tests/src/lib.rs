@@ -1209,6 +1209,8 @@ impl AnvilL1 {
                 .arg("--mixed-mining")
                 .arg("--load-state")
                 .arg(l1_state_path)
+                .arg("--slots-in-an-epoch")
+                .arg("10")
         })?;
 
         let wallet = provider.wallet().clone();

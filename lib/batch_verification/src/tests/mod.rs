@@ -19,6 +19,8 @@ impl DummyFinality {
             last_committed_batch: 0,
             last_executed_block: 0,
             last_executed_batch: 0,
+            last_finalized_executed_block: 0,
+            last_finalized_executed_batch: 0,
         };
         let (tx, rx) = watch::channel(status.clone());
         let _ = tx;
