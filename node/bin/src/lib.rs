@@ -553,6 +553,22 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
+    if config
+        .sequencer_config
+        .tx_validator
+        .policy_service
+        .url
+        .is_some()
+    {
+        let exec_version = ExecutionVersion::try_from(current_protocol_version)
+            .expect("Cannot determine execution version");
+        assert!(
+            exec_version >= ExecutionVersion::V6,
+            "Policy service requires execution version V6 or later (protocol >= v31.0), \
+             but current protocol version {current_protocol_version} uses {exec_version:?}"
+        );
+    }
+
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
     let interop_fee_subpool = InteropFeeSubpool::new(next_cursors.interop_fee_number);
