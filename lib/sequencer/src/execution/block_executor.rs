@@ -249,7 +249,7 @@ async fn check_block_production_limit(
             NotAcceptingReason::BlockProductionDisabled,
         ]));
 
-        state_reporter.enter_state(SequencerState::WaitingForCommand);
+        state_reporter.enter_state(SequencerState::ConfiguredBlockLimitReached);
         std::future::pending::<()>().await;
     }
 }

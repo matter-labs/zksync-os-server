@@ -6,6 +6,8 @@ use zksync_os_storage_api::StateAccessLabel;
 pub enum SequencerState {
     /// Waiting for the next block command from the command source.
     WaitingForCommand,
+    /// `max_blocks_to_produce` limit reached — component is permanently halted.
+    ConfiguredBlockLimitReached,
     /// Command dequeued, waiting for BlockApplier to finish applying the
     /// previous block.
     WaitingForApplier,
@@ -26,7 +28,9 @@ pub enum SequencerState {
 impl StateLabel for SequencerState {
     fn generic(&self) -> GenericComponentState {
         match self {
-            Self::WaitingForCommand => GenericComponentState::Idle,
+            Self::WaitingForCommand | Self::ConfiguredBlockLimitReached => {
+                GenericComponentState::Idle
+            }
             Self::WaitingForApplier | Self::WaitingForTx => GenericComponentState::Idle,
             Self::InitializingVm
             | Self::Execution
@@ -38,6 +42,7 @@ impl StateLabel for SequencerState {
     fn specific(&self) -> &'static str {
         match self {
             Self::WaitingForCommand => "waiting_for_command",
+            Self::ConfiguredBlockLimitReached => "configured_block_limit_reached",
             Self::WaitingForApplier => "waiting_for_applier",
             Self::InitializingVm => "initializing_vm",
             Self::WaitingForTx => "waiting_for_tx",

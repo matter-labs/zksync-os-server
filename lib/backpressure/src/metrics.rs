@@ -12,17 +12,16 @@ pub struct MonitorMetrics {
     pub component_time_diff_to_head_seconds: Family<ComponentId, Gauge<f64>>,
     /// Last block number successfully processed by this component.
     pub component_last_processed_block: Family<ComponentId, Gauge<u64>>,
-    /// Blocks queued between this component and its upstream neighbour.
-    /// Computed as upstream.block_processed.block_number − this.block_picked.block_number.
-    /// (Pure channel occupancy: blocks forwarded by upstream not yet dequeued by this component.)
+    /// Processing lag in blocks between this component and its upstream neighbour.
+    /// Computed as upstream.block_processed.block_number − this.block_processed.block_number.
     pub component_block_diff_to_upstream: Family<ComponentId, Gauge<u64>>,
-    /// Block-timestamp lag in seconds between this component and its upstream neighbour.
-    /// Computed as upstream.block_processed.timestamp − this.block_picked.timestamp.
-    /// (Channel occupancy in time units.) 0 if either timestamp is unavailable.
+    /// Processing lag in seconds between this component and its upstream neighbour.
+    /// Computed as upstream.block_processed.timestamp − this.block_processed.timestamp.
+    /// 0 if either timestamp is unavailable.
     pub component_time_diff_to_upstream_seconds: Family<ComponentId, Gauge<f64>>,
-    /// Batches queued between this component and its upstream neighbour.
-    /// Computed as upstream.batch_processed − this.batch_picked.
-    /// Only non-zero for batch-pipeline components with batch tracking.
+    /// Processing lag in batches between this component and its upstream neighbour.
+    /// Computed as upstream.batch_processed − this.batch_processed.
+    /// Only set for batch-pipeline components with batch tracking.
     pub component_batch_diff_to_upstream: Family<ComponentId, Gauge<u64>>,
     /// Last batch number fully processed by this component (high-watermark).
     /// Only set for batch-pipeline components that call `record_processed` with a batch arg.

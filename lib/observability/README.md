@@ -102,8 +102,7 @@ for as long as you need instrumentation.
 Track how long asynchronous components spend in each state:
 
 ```rust
-use zksync_os_observability::component_state_reporter::{ComponentStateReporter, StateLabel};
-use zksync_os_observability::GenericComponentState;
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState, StateLabel};
 
 #[derive(Clone)]
 enum MyState {
@@ -114,8 +113,8 @@ enum MyState {
 impl StateLabel for MyState {
     fn generic(&self) -> GenericComponentState {
         match self {
-            MyState::Idle => GenericComponentState::WaitingRecv,
-            MyState::Working => GenericComponentState::Processing,
+            MyState::Idle => GenericComponentState::Idle,
+            MyState::Working => GenericComponentState::Active,
         }
     }
     fn specific(&self) -> &'static str {
@@ -134,17 +133,13 @@ reporter.enter_state(MyState::Working);
 `enter_state` credits the time spent in the *previous* state to the
 `GENERAL_METRICS.component_time_spent_in_state` counter, so the counter is
 transition-accurate: a component that never leaves a state does not contribute
-to its own counter rate. For current-state visibility,
-`GENERAL_METRICS.component_state_age_seconds` is a gauge of `now −
-state_entered_at` emitted on every monitor tick — useful for detecting
-components stuck in a state.
+to its own counter rate.
 
 ## Built-in Metrics
 
 metrics::GENERAL_METRICS exposes:
 
 - component_time_spent_in_state (counter in seconds by component / generic state / specific state; credited on transition),
-- component_state_age_seconds (gauge in seconds for the current state; updated by the pipeline monitor on every tick),
 - process_started_at (timestamp gauge with version + role),
 - startup_time (startup stage durations),
 - fee_collector_address and chain_id.

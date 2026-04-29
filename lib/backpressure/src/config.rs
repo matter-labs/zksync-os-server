@@ -27,6 +27,7 @@ fn is_block_level_stage(id: ComponentId) -> bool {
         id,
         ComponentId::BlockCanonizer
             | ComponentId::BlockApplier
+            | ComponentId::RevmConsistencyChecker
             | ComponentId::TreeManager
             | ComponentId::ProverInputGenerator
             | ComponentId::Batcher

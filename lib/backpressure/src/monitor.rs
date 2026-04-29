@@ -237,15 +237,11 @@ impl BackpressureMonitor {
         active_ids: &HashSet<ComponentId>,
     ) {
         let (head_block, head_ts) = snapshot
-            .first()
-            .map(|(_, h)| {
-                (
-                    h.block_processed
-                        .as_ref()
-                        .map(|c| c.block_number)
-                        .unwrap_or(0),
-                    h.block_processed.as_ref().and_then(|c| c.timestamp),
-                )
+            .iter()
+            .find_map(|(_, h)| {
+                h.block_processed
+                    .as_ref()
+                    .map(|c| (c.block_number, c.timestamp))
             })
             .unwrap_or((0, None));
 
