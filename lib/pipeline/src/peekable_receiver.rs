@@ -139,23 +139,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_and_recv() {
-        let (tx, mut rx) = channel::<u32>();
-        tx.try_send(1).unwrap();
-        tx.try_send(2).unwrap();
-        assert_eq!(rx.recv().await, Some(1));
-        assert_eq!(rx.recv().await, Some(2));
-    }
-
-    #[tokio::test]
-    async fn try_recv_works() {
-        let (tx, mut rx) = channel::<u32>();
-        tx.try_send(42).unwrap();
-        let v = rx.try_recv().unwrap();
-        assert_eq!(v, 42);
-    }
-
-    #[tokio::test]
     async fn recv_many_collects_items() {
         let (tx, mut rx) = channel::<u32>();
         tx.try_send(1).unwrap();

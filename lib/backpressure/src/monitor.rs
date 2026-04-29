@@ -12,9 +12,13 @@ use zksync_os_types::{
 /// Ordered list of pipeline component states (pipeline order).
 pub type PipelineSnapshot = Vec<(ComponentId, ComponentState)>;
 
+/// Lag between two adjacent pipeline stages: how far the downstream component is behind its upstream neighbor.
 pub struct AdjacentSnapshot {
+    /// Number of blocks the downstream stage is behind the upstream stage.
     pub block_diff: u64,
+    /// Diff between the last processed block timestamps of the two stages.
     pub time_diff: Option<Duration>,
+    /// Number of batches the downstream stage is behind the upstream stage.
     pub batch_diff: Option<u64>,
 }
 

@@ -426,29 +426,11 @@ where
     L1_SENDER_METRICS.nonce[&command_name].set(nonce);
 
     for command in completed_commands {
-        let last_block = command.as_ref().last().map(|e| e.batch.last_block_number);
-        let last_block_timestamp = command
-            .as_ref()
-            .last()
-            .map(|e| e.batch.batch_info.last_block_timestamp);
-        // Capture batch number before command.into() moves the command.
-        let last_batch = command.as_ref().last().map(|e| e.batch_number());
         for mut output_envelope in command.into() {
             output_envelope.set_stage(Input::MINED_STAGE);
-            match outbound.try_send(output_envelope) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Closed(e)) => {
-                    return Err(anyhow::anyhow!("outbound channel closed: {e:?}"));
-                }
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    panic!(
-                        "pipeline channel unexpectedly full — consumer is catastrophically behind"
-                    )
-                }
-            }
-        }
-        if let Some(lb) = last_block {
-            state_reporter.record_processed(lb, last_block_timestamp, last_batch);
+            outbound
+                .send_and_record(output_envelope, state_reporter)
+                .map_err(|e| anyhow::anyhow!("outbound channel closed: {e:?}"))?;
         }
     }
     Ok(())

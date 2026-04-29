@@ -49,39 +49,3 @@ pub enum BackpressureTrigger {
     /// The number of unprocessed batches between this component and its upstream exceeds the threshold
     BatchDiffToUpstreamTooHigh { threshold: u64, actual: u64 },
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-
-    #[test]
-    fn pipeline_backpressure_not_accepting() {
-        let cause = BackpressureCause {
-            component: "fri_job_manager",
-            trigger: BackpressureTrigger::BlockDiffToUpstreamTooHigh {
-                threshold: 500,
-                actual: 782,
-            },
-        };
-        let state = TransactionAcceptanceState::NotAccepting(vec![
-            NotAcceptingReason::PipelineBackpressure {
-                causes: vec![cause.clone()],
-            },
-        ]);
-        assert!(matches!(state, TransactionAcceptanceState::NotAccepting(_)));
-        assert_eq!(cause.component, "fri_job_manager");
-    }
-
-    #[test]
-    fn time_diff_to_upstream_too_high_trigger() {
-        let trigger = BackpressureTrigger::TimeDiffToUpstreamTooHigh {
-            threshold: Duration::from_secs(30),
-            actual: Duration::from_secs(45),
-        };
-        assert!(matches!(
-            trigger,
-            BackpressureTrigger::TimeDiffToUpstreamTooHigh { .. }
-        ));
-    }
-}

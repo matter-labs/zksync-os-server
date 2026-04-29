@@ -67,8 +67,6 @@ impl PipelineComponent for FriProvingPipelineStep {
         output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        // Hand the reporter to FriJobManager — which is driven by HTTP handlers and add_job —
-        // before any of those paths can fire. The manager's reporter() panics if unset.
         self.fri_job_manager.set_reporter(state_reporter);
 
         tokio::select! {
