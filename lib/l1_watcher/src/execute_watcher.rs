@@ -1,6 +1,5 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{CommittedBatchProvider, L1WatcherConfig, ProcessL1Event, util};
-use alloy::primitives::Address;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
 use zksync_os_contract_interface::IExecutor::BlockExecution;
@@ -21,7 +20,6 @@ use zksync_os_storage_api::WriteFinality;
 /// - startup / replay code that reads executed finality to decide where block processing resumes;
 /// - RPC-facing storage initialization, which uses executed progress as part of node recovery.
 pub struct L1ExecuteWatcher<Finality> {
-    contract_address: Address,
     next_batch_number: u64,
     committed_batch_provider: CommittedBatchProvider,
     finality: Finality,
@@ -51,25 +49,22 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         tracing::info!(last_l1_block, "resolved on L1");
 
         let this = Self {
-            contract_address: *zk_chain.address(),
             next_batch_number: last_executed_batch + 1,
             committed_batch_provider,
             finality,
         };
-        let l1_watcher = L1Watcher::new(
+        L1Watcher::new(
+            config,
             zk_chain.provider().clone(),
+            (*zk_chain.address()).into(),
             // We start from last L1 block as it may contain more executed batches apart from the last
             // one.
             last_l1_block,
-            config.max_blocks_to_process,
-            config.confirmations,
+            None,
             l1_chain_id,
-            config.poll_interval,
-            this.into(),
+            Box::new(this),
         )
-        .await?;
-
-        Ok(l1_watcher)
+        .await
     }
 }
 
@@ -80,12 +75,9 @@ impl<Finality: WriteFinality> ProcessL1Event for L1ExecuteWatcher<Finality> {
     type SolEvent = BlockExecution;
     type WatchedEvent = BlockExecution;
 
-    fn contract_address(&self) -> Address {
-        self.contract_address
-    }
-
     async fn process_event(
         &mut self,
+        _provider: &DynProvider,
         batch_execute: BlockExecution,
         _log: Log,
     ) -> Result<(), L1WatcherError> {

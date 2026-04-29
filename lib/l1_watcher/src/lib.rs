@@ -21,6 +21,9 @@ pub use interop_watcher::InteropWatcher;
 pub mod util;
 mod watcher;
 
+mod sl_aware_watcher;
+pub use sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};
+
 mod traits;
 pub(crate) use traits::{ProcessL1Event, ProcessRawEvents};
 
