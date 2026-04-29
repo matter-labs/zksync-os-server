@@ -48,7 +48,10 @@ pub fn spawn_monitor() {
     let handle = Handle::current();
     spawn(async move {
         let monitor = RuntimeMonitor::new(&handle);
-        for interval in monitor.intervals() {
+        let mut intervals = monitor.intervals();
+        loop {
+            sleep(Duration::from_secs(30)).await;
+            let interval = intervals.next().expect("infinite iterator");
             METRICS.worker_busy_ratio.set(interval.busy_ratio());
             METRICS.workers_count.set(interval.workers_count as u64);
             METRICS
@@ -72,7 +75,6 @@ pub fn spawn_monitor() {
             METRICS
                 .mean_poll_duration
                 .set(interval.mean_poll_duration.as_secs_f64());
-            sleep(Duration::from_secs(30)).await;
         }
     });
 }
