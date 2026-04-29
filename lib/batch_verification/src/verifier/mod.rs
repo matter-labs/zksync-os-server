@@ -40,8 +40,6 @@ pub struct BatchVerificationResponder<Finality, ReadState> {
 enum BatchVerificationError {
     #[error("Missing records for block {0}")]
     MissingBlock(u64),
-    #[error("Tree error")]
-    TreeError,
     #[error("Batch data mismatch")]
     BatchDataMismatch,
     #[error("State error: {0}")]
@@ -104,17 +102,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                         .block_cache
                         .get(block_number)
                         .ok_or(BatchVerificationError::MissingBlock(block_number))?;
-
-                    let (root_hash, leaf_count) = tree_data
-                        .block_end
-                        .clone()
-                        .root_info()
-                        .map_err(|_| BatchVerificationError::TreeError)?;
-
-                    let tree_output = TreeBatchOutput {
-                        root_hash,
-                        leaf_count,
-                    };
+                    let tree_output = tree_data.output;
                     Ok((block_output, replay_record, tree_output))
                 })
                 .collect::<Result<Vec<_>, BatchVerificationError>>()?;

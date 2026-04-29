@@ -29,7 +29,6 @@ reth-execution-types = { workspace = true }
 reth-revm = { workspace = true, features = ["optional-balance-check"] }
 zksync-os-revm.workspace = true
 thiserror.workspace = true
-zksync_os_merkle_tree.workspace = true
 blake2.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc"] }

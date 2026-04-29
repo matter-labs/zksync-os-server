@@ -279,12 +279,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                                 "Adding block to a pending batch."
                             );
 
-                            let (root_hash, leaf_count) = tree.block_end.root_info()?;
-
-                            let tree_output = TreeBatchOutput {
-                                root_hash,
-                                leaf_count,
-                            };
+                            let tree_output = tree.output;
 
                             // Always record the first block's timestamp as the stable deadline
                             // anchor. This must happen before the last_persisted_block check so
@@ -385,11 +380,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
             };
             latency_tracker.enter_state(GenericComponentState::Processing);
 
-            let (root_hash, leaf_count) = tree.block_end.root_info()?;
-            let tree_output = TreeBatchOutput {
-                root_hash,
-                leaf_count,
-            };
+            let tree_output = tree.output;
 
             tracing::debug!(
                 batch_number,

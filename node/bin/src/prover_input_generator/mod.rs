@@ -13,12 +13,15 @@ use zksync_os_contract_interface::models::DACommitmentScheme;
 use zksync_os_interface::traits::TxListSource;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
-use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_pipeline::PipelineComponent;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
+
+use self::tree_adapter::TreeAdapter;
+
+mod tree_adapter;
 
 /// This component generates prover input from batch replay data.
 ///
@@ -164,7 +167,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             let prover_input = ProverInput::Real(compute_prover_input(
                 &replay_record,
                 read_state,
-                tree.block_start.clone(),
+                tree.clone(),
                 da_commitment_scheme,
                 enable_logging,
             ));
@@ -193,13 +196,14 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
 fn compute_prover_input(
     replay_record: &ReplayRecord,
     state_handle: impl ReadStateHistory,
-    tree_view: MerkleTreeVersion<RocksDBWrapper>,
+    tree_view: BlockMerkleTreeData,
     da_commitment_scheme: DACommitmentScheme,
     enable_logging: bool,
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
     let state_view = state_handle.state_view_at(block_number - 1).unwrap();
-    let (root_hash, leaf_count) = tree_view.root_info().unwrap();
+    let root_hash = tree_view.output.root_hash;
+    let leaf_count = tree_view.output.leaf_count;
     let transactions = replay_record
         .transactions
         .iter()
@@ -227,7 +231,7 @@ fn compute_prover_input(
             };
 
             let initial_storage_commitment = StorageCommitment {
-                root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
+                root: root_hash.0.into(),
                 next_free_slot: leaf_count,
             };
 
@@ -250,7 +254,7 @@ fn compute_prover_input(
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                tree_view,
+                TreeAdapter::new(tree_view),
                 state_view,
                 list_source,
             )
@@ -265,7 +269,7 @@ fn compute_prover_input(
             };
 
             let initial_storage_commitment = StorageCommitment {
-                root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
+                root: root_hash.0.into(),
                 next_free_slot: leaf_count,
             };
 
@@ -288,7 +292,7 @@ fn compute_prover_input(
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                tree_view,
+                TreeAdapter::new(tree_view),
                 state_view,
                 list_source,
             )

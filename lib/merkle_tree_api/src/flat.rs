@@ -132,6 +132,27 @@ impl<K> StorageSlotProof<K> {
 }
 
 impl BatchTreeProof {
+    pub fn sibling_hashes(
+        &self,
+        tree_depth: u8,
+        leaf_count: u64,
+    ) -> impl Iterator<Item = ((u8, u64), B256)> {
+        let mut sibling_hashes = vec![];
+        Self::zip_leaves(
+            &Blake2Hasher,
+            tree_depth,
+            leaf_count,
+            self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
+            self.hashes.iter(),
+            Some(&mut sibling_hashes),
+        )
+        .expect("invalid batch tree proof");
+
+        sibling_hashes
+            .into_iter()
+            .map(|hash| (hash.location, hash.value))
+    }
+
     /// Converts this proof to the flat format by filling Merkle paths that are implicitly present
     /// in the proof.
     pub(crate) fn to_flat(

@@ -9,9 +9,7 @@ use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::BlockOutput;
-use zksync_os_merkle_tree::{
-    MerkleTree, MerkleTreeColumnFamily, MerkleTreeVersion, RocksDBWrapper, TreeEntry,
-};
+use zksync_os_merkle_tree::{MerkleTree, MerkleTreeColumnFamily, RocksDBWrapper, TreeEntry};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
@@ -78,11 +76,19 @@ impl PipelineComponent for TreeManager {
                     value: write.value,
                 })
                 .collect::<Vec<_>>();
+            let written_keys: Vec<_> = tree_entries
+                .iter()
+                .map(|write| write.key.0.into())
+                .collect();
+            // FIXME: get read keys from somewhere
+            let read_keys = vec![];
 
             let count = tree_entries.len();
             let mut tree_clone = tree.clone();
-            let tree_batch_output =
-                tokio::task::spawn_blocking(move || tree_clone.extend(&tree_entries)).await??;
+            let (tree_batch_output, tree_proof) = tokio::task::spawn_blocking(move || {
+                tree_clone.extend_with_proof(&tree_entries, &[])
+            })
+            .await??;
             last_processed_block = tree
                 .latest_version()?
                 .expect("uninitialized tree after applying a block");
@@ -105,14 +111,10 @@ impl PipelineComponent for TreeManager {
             TREE_METRICS.processing_range.observe(count.max(1) as u64);
             TREE_METRICS.block_number.set(block_number);
             let tree_block = BlockMerkleTreeData {
-                block_start: MerkleTreeVersion {
-                    tree: tree.clone(),
-                    block: block_number - 1,
-                },
-                block_end: MerkleTreeVersion {
-                    tree: tree.clone(),
-                    block: block_number,
-                },
+                output: tree_batch_output,
+                proof: tree_proof,
+                read_keys,
+                written_keys,
             };
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
             output
