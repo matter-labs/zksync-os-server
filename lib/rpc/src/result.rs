@@ -86,6 +86,12 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionError> for Result<Ok, EthSendRawTr
             EthSendRawTransactionError::ForwardError(ref rpc_err) => {
                 forward_error_to_rpc_err(rpc_err, &err)
             }
+            EthSendRawTransactionError::PolicyDenied(_) => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
+            ),
+            EthSendRawTransactionError::JudgeSimFailed(_) => internal_rpc_err(err.to_string()),
         })
     }
 }
@@ -111,6 +117,11 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
                 EthRpcErrorCode::ExecutionError.code(),
                 revert.to_string(),
                 revert.output.as_ref().map(|out| out.as_ref()),
+            ),
+            EthCallError::PolicyDenied(_) => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
             ),
             err => internal_rpc_err(err.to_string()),
         })
