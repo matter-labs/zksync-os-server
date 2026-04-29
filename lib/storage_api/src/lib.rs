@@ -1,3 +1,6 @@
+mod metered_state;
+pub use metered_state::{MeteredViewState, StateAccessLabel};
+
 mod model;
 pub use model::{FinalityStatus, ReplayRecord, StoredTxData, TxMeta};
 

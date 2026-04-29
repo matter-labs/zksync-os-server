@@ -21,7 +21,7 @@ impl BlockTrackingCoordinates {
     }
 }
 
-/// Batch-space coordinates for range-processing components.
+/// Batch-space coordinates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchTrackingCoordinates {
     pub batch_number: u64,
@@ -72,10 +72,7 @@ pub struct ComponentState {
     pub in_flight_last_batch: Option<BatchTrackingCoordinates>,
 }
 
-/// Uses `watch::Sender` — updates are infallible, no global state.
-/// A per-component background task continuously increments `component_time_spent_in_state`
-/// and exits automatically when this reporter is dropped.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ComponentStateReporter {
     sender: watch::Sender<ComponentState>,
     state_tx: mpsc::UnboundedSender<(GenericComponentState, &'static str)>,
@@ -108,8 +105,7 @@ impl ComponentStateReporter {
         (Self { sender, state_tx }, receiver)
     }
 
-    /// Transition to a new state. The background task owns all metric increments;
-    /// this just updates the watch and enqueues the transition for the task.
+    /// Transition to a new state.
     pub fn enter_state(&self, new_state: impl StateLabel) {
         let now = Instant::now();
         let new_generic = new_state.generic();

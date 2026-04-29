@@ -1,5 +1,6 @@
 use crate::execution::execute_block_in_vm::SealReason;
 use zksync_os_observability::{GenericComponentState, StateLabel};
+use zksync_os_storage_api::StateAccessLabel;
 
 /// Component-specific state for the block executor / sequencer execution loop.
 pub enum SequencerState {
@@ -10,8 +11,14 @@ pub enum SequencerState {
     WaitingForApplier,
     /// Setting up the VM for block execution.
     InitializingVm,
+    /// Waiting for the next transaction from the tx stream.
+    WaitingForTx,
     /// Running the VM to execute transactions.
     Execution,
+    /// VM is performing a storage read.
+    ReadStorage,
+    /// VM is performing a preimage read.
+    ReadPreimage,
     /// Updating the mempool after block execution.
     UpdatingMempool,
 }
@@ -20,10 +27,12 @@ impl StateLabel for SequencerState {
     fn generic(&self) -> GenericComponentState {
         match self {
             Self::WaitingForCommand => GenericComponentState::Idle,
-            Self::WaitingForApplier => GenericComponentState::Active,
-            Self::InitializingVm | Self::Execution | Self::UpdatingMempool => {
-                GenericComponentState::Active
-            }
+            Self::WaitingForApplier | Self::WaitingForTx => GenericComponentState::Idle,
+            Self::InitializingVm
+            | Self::Execution
+            | Self::ReadStorage
+            | Self::ReadPreimage
+            | Self::UpdatingMempool => GenericComponentState::Active,
         }
     }
     fn specific(&self) -> &'static str {
@@ -31,9 +40,24 @@ impl StateLabel for SequencerState {
             Self::WaitingForCommand => "waiting_for_command",
             Self::WaitingForApplier => "waiting_for_applier",
             Self::InitializingVm => "initializing_vm",
+            Self::WaitingForTx => "waiting_for_tx",
             Self::Execution => "execution",
+            Self::ReadStorage => "read_storage",
+            Self::ReadPreimage => "read_preimage",
             Self::UpdatingMempool => "updating_mempool",
         }
+    }
+}
+
+impl StateAccessLabel for SequencerState {
+    fn read_storage_state() -> Self {
+        Self::ReadStorage
+    }
+    fn read_preimage_state() -> Self {
+        Self::ReadPreimage
+    }
+    fn default_execution_state() -> Self {
+        Self::Execution
     }
 }
 
