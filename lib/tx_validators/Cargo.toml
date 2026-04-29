@@ -16,3 +16,24 @@ tracing.workspace = true
 alloy = { workspace = true, default-features = false, features = [
     "consensus",
 ] }
+bytes.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-rustls = { workspace = true }
+hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "tokio"] }
+rustls = { workspace = true }
+rustls-pemfile.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "time", "sync"] }
+tokio-rustls.workspace = true
+url.workspace = true
+vise.workspace = true
+
+[dev-dependencies]
+hyper = { workspace = true, features = ["server"] }
+rcgen.workspace = true
+tempfile.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["full"] }
