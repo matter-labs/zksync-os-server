@@ -18,12 +18,12 @@ use zksync_os_network::{
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
-use zksync_os_storage_api::{ReplayRecord, StateError, read_multichain_root};
+use zksync_os_storage_api::{ReplayRecord, StateError, TreeBlock, read_multichain_root};
 
 mod block_cache;
 mod metrics;
 
-type VerificationInput = (BlockOutput, ReplayRecord, BlockMerkleTreeData);
+type VerificationInput = TreeBlock;
 
 /// Batch verification responder that consumes requests from the network.
 pub struct BatchVerificationResponder<Finality, ReadState> {
@@ -31,7 +31,7 @@ pub struct BatchVerificationResponder<Finality, ReadState> {
     diamond_proxy_sl: Address,
     l1_state: L1State,
     signer: PrivateKeySigner,
-    block_cache: BlockCache<Finality, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
+    block_cache: BlockCache<Finality, TreeBlock>,
     read_state: ReadState,
     verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
@@ -101,10 +101,12 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
         let blocks: Vec<(&BlockOutput, &ReplayRecord, TreeBatchOutput)> =
             (request.first_block_number..=request.last_block_number)
                 .map(|block_number| {
-                    let (block_output, replay_record, tree_data) = self
+                    let cached = self
                         .block_cache
                         .get(block_number)
                         .ok_or(BatchVerificationError::MissingBlock(block_number))?;
+                    let (block_output, replay_record, tree_data) =
+                        (&cached.output, &cached.record, &cached.tree);
 
                     let (root_hash, leaf_count) = tree_data
                         .block_end
@@ -214,14 +216,11 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
             tokio::select! {
                 block = input.recv() => {
                     match block {
-                        Some((block_output, replay_record, tree_data)) => {
+                        Some(tree_block) => {
                             state_reporter.enter_state(GenericComponentState::Active);
-                            let block_number = replay_record.block_context.block_number;
-                            let block_timestamp = replay_record.block_context.timestamp;
-                            self.block_cache.insert(
-                                block_number,
-                                (block_output, replay_record, tree_data),
-                            )?;
+                            let block_number = tree_block.record.block_context.block_number;
+                            let block_timestamp = tree_block.record.block_context.timestamp;
+                            self.block_cache.insert(block_number, tree_block)?;
                             state_reporter.record_processed(block_number, Some(block_timestamp), None);
                         }
                         None => return Ok(()),

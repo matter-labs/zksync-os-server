@@ -1,6 +1,7 @@
 use crate::batcher::batch_deadline_policy::deadline_from_block_timestamp;
 use crate::batcher::seal_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
+use crate::prover_block::ProverBlock;
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::Address;
 use async_trait::async_trait;
@@ -58,7 +59,7 @@ pub struct Batcher<ReadState> {
 impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     for Batcher<ReadState>
 {
-    type Input = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
+    type Input = ProverBlock;
     type Output = BatchEnvelope<ProverInput, MissingSignature>;
 
     const COMPONENT_ID: zksync_os_pipeline::ComponentId = zksync_os_pipeline::ComponentId::Batcher;
@@ -82,7 +83,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         // as there is no need to perform any L1 operations on them.
         loop {
             let Some(next_block_number) = input
-                .peek_recv(|(_, replay_record, _, _)| replay_record.block_context.block_number)
+                .peek_recv(|item| item.record.block_context.block_number)
                 .await
             else {
                 tracing::info!("inbound channel closed");
@@ -109,7 +110,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 
             // Peek at the next block to decide whether to recreate or create anew.
             let Some(next_block_number) = input
-                .peek_recv(|(_, replay_record, _, _)| replay_record.block_context.block_number)
+                .peek_recv(|item| item.record.block_context.block_number)
                 .await
             else {
                 tracing::info!("inbound channel closed");
@@ -213,12 +214,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
     async fn create_batch(
         &mut self,
-        block_receiver: &mut PeekableReceiver<(
-            BlockOutput,
-            ReplayRecord,
-            ProverInput,
-            BlockMerkleTreeData,
-        )>,
+        block_receiver: &mut PeekableReceiver<ProverBlock>,
         prev_batch_info: &StoredBatchInfo,
         state_reporter: &ComponentStateReporter,
     ) -> anyhow::Result<Option<BatchForSigning<ProverInput>>> {
@@ -251,9 +247,9 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 }
 
                 /* ---------- collect blocks ---------- */
-               should_seal = block_receiver.peek_recv(|(block_output, replay_record, _, _)| {
+               should_seal = block_receiver.peek_recv(|item| {
                     // determine if the block fits into the current batch
-                    accumulator.clone().add(block_output, replay_record).should_seal()
+                    accumulator.clone().add(&item.output, &item.record).should_seal()
                 }) => {
                     state_reporter.enter_state(GenericComponentState::Active);
                     match should_seal {
@@ -262,7 +258,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                             break;
                         }
                         Some(false) => {
-                            let Some((block_output, replay_record, prover_input, tree)) = block_receiver.pop_buffer() else {
+                            let Some(ProverBlock { output: block_output, record: replay_record, prover_input, tree }) = block_receiver.pop_buffer() else {
                                 anyhow::bail!("No block received in buffer after peeking")
                             };
 
@@ -353,12 +349,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
 
     async fn recreate_existing_batch(
         &mut self,
-        block_receiver: &mut PeekableReceiver<(
-            BlockOutput,
-            ReplayRecord,
-            ProverInput,
-            BlockMerkleTreeData,
-        )>,
+        block_receiver: &mut PeekableReceiver<ProverBlock>,
         prev_batch_info: &StoredBatchInfo,
         existing_batch: DiscoveredCommittedBatch,
         state_reporter: &ComponentStateReporter,
@@ -378,8 +369,12 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         // Collect all blocks in this batch
         while blocks.len() < expected_block_count as usize {
             state_reporter.enter_state(GenericComponentState::Idle);
-            let Some((block_output, replay_record, prover_input, tree)) =
-                block_receiver.recv().await
+            let Some(ProverBlock {
+                output: block_output,
+                record: replay_record,
+                prover_input,
+                tree,
+            }) = block_receiver.recv().await
             else {
                 tracing::info!("inbound channel closed");
                 return Ok(None);

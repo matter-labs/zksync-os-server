@@ -11,6 +11,7 @@ mod en_remote_config;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
 pub mod prover_api;
+mod prover_block;
 mod prover_input_generator;
 mod provider;
 mod state_initializer;

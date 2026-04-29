@@ -8,14 +8,14 @@ use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_genesis::Genesis;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeVersion, RocksDBWrapper, TreeEntry,
 };
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
 use zksync_os_sequencer::model::blocks::AppliedBlock;
+use zksync_os_storage_api::TreeBlock;
 
 pub(crate) struct TreeManager {
     pub tree: MerkleTree<RocksDBWrapper>,
@@ -24,14 +24,10 @@ pub(crate) struct TreeManager {
 #[async_trait]
 impl PipelineComponent for TreeManager {
     type Input = AppliedBlock;
-    type Output = (
-        BlockOutput,
-        zksync_os_storage_api::ReplayRecord,
-        BlockMerkleTreeData,
-    );
+    type Output = TreeBlock;
+
     const COMPONENT_ID: zksync_os_pipeline::ComponentId =
         zksync_os_pipeline::ComponentId::TreeManager;
-    const OUTPUT_CHANNEL_CAPACITY: usize = 10;
 
     async fn run(
         self,
@@ -109,7 +105,7 @@ impl PipelineComponent for TreeManager {
 
             TREE_METRICS.processing_range.observe(count.max(1) as u64);
             TREE_METRICS.block_number.set(block_number);
-            let tree_block = BlockMerkleTreeData {
+            let tree_data = BlockMerkleTreeData {
                 block_start: MerkleTreeVersion {
                     tree: self.tree.clone(),
                     block: block_number - 1,
@@ -119,11 +115,14 @@ impl PipelineComponent for TreeManager {
                     block: block_number,
                 },
             };
-            let block_timestamp = replay_record.block_context.timestamp;
-            output
-                .send((block_output, replay_record, tree_block))
-                .await?;
-            state_reporter.record_processed(block_number, Some(block_timestamp), None);
+            output.send_and_record(
+                TreeBlock {
+                    output: block_output,
+                    record: replay_record,
+                    tree: tree_data,
+                },
+                &state_reporter,
+            )?;
         }
     }
 }
