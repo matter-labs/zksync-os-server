@@ -30,6 +30,7 @@ backpressure:
   fri_prover: 100
   snark_prover: 100
   l1_senders: 100
+  batch_verification: 100
 
 external_price_api_client:
   source: Forced

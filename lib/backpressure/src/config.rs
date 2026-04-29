@@ -3,6 +3,8 @@ use std::time::Duration;
 
 pub use zksync_os_pipeline::ComponentId;
 
+const DEFAULT_BLOCK_DIFF: u64 = 100;
+
 /// Backpressure thresholds for a single component.
 #[derive(Default, Clone, Debug)]
 pub struct PipelineCondition {
@@ -20,15 +22,50 @@ pub struct BackpressureConfig {
     conditions: HashMap<ComponentId, PipelineCondition>,
 }
 
+fn is_block_level_stage(id: ComponentId) -> bool {
+    matches!(
+        id,
+        ComponentId::BlockCanonizer
+            | ComponentId::BlockApplier
+            | ComponentId::TreeManager
+            | ComponentId::ProverInputGenerator
+            | ComponentId::Batcher
+    )
+}
+
 impl BackpressureConfig {
     pub fn set(&mut self, id: ComponentId, condition: PipelineCondition) {
         self.conditions.insert(id, condition);
     }
 
-    /// Returns the effective condition for `id`, or a no-threshold default if absent.
+    /// Returns the effective condition for `id`.
+    ///
+    /// Block-level pipeline stages default to `max_block_diff_to_upstream = 100` when not
+    /// explicitly configured. All other components default to no threshold.
     pub fn condition_for(&self, id: ComponentId) -> PipelineCondition {
-        self.conditions.get(&id).cloned().unwrap_or_default()
+        self.conditions.get(&id).cloned().unwrap_or_else(|| {
+            if is_block_level_stage(id) {
+                PipelineCondition {
+                    max_block_diff_to_upstream: Some(DEFAULT_BLOCK_DIFF),
+                    ..Default::default()
+                }
+            } else {
+                PipelineCondition::default()
+            }
+        })
     }
+}
+
+/// Returns whether a component holds multiple items concurrently and reports an in-flight range.
+pub fn is_in_flight_component(id: ComponentId) -> bool {
+    matches!(
+        id,
+        ComponentId::FriJobManager
+            | ComponentId::SnarkJobManager
+            | ComponentId::L1SenderCommit
+            | ComponentId::L1SenderProve
+            | ComponentId::L1SenderExecute
+    )
 }
 
 /// Returns whether a component participates in the adjacency window.
