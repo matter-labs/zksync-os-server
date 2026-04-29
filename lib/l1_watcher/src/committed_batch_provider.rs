@@ -208,7 +208,12 @@ fn startup_batch_numbers(
     last_executed_batch: u64,
     last_finalized_executed_batch: u64,
 ) -> (Vec<u64>, Vec<u64>) {
-    let prioritized = [last_committed_batch, last_proved_batch, last_executed_batch, last_finalized_executed_batch];
+    let prioritized = [
+        last_committed_batch,
+        last_proved_batch,
+        last_executed_batch,
+        last_finalized_executed_batch,
+    ];
     let (prioritized_in_range, remaining_batch_numbers): (Vec<_>, Vec<_>) =
         (last_finalized_executed_batch.max(1)..=last_committed_batch)
             .partition(|batch_number| prioritized.contains(batch_number));
