@@ -218,6 +218,11 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     execution_version: execution_version as u32,
                     blob_fee: U256::ONE,
                 };
+                // Updated only on the Produce path. Replay/Rebuild leave
+                // the watch at `None`, which means EN nodes never publish
+                // a block context. Downstream consumers that gate work on
+                // `Some(...)` (e.g. the RPC-side policy sim) effectively
+                // become Produce-only as a result.
                 self.last_constructed_block_ctx_sender
                     .send_replace(Some(block_context));
                 PreparedBlockCommand {

@@ -851,12 +851,28 @@ pub struct SequencerConfig {
 }
 
 /// Configuration for all transaction validators applied during block production.
+///
+/// At most one of `deployment_filter` and `policy_service` may be active at a
+/// time — the policy service can express the same allow-list the deployment
+/// filter does, and the block-build-side dispatch picks the policy client
+/// when configured. Enabling both is a misconfiguration the node refuses
+/// to start with.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct TxValidatorConfig {
     /// Deployment filter configuration.
     #[config(nest)]
+    #[config_validate(custom(
+        |root: &Config, value: &DeploymentFilterConfig|
+            !value.enabled
+                || root.sequencer_config.tx_validator.policy_service.url.is_none(),
+        "cannot be enabled at the same time as `sequencer.tx_validator.policy_service.url` — express the allow-list via the policy service"
+    ))]
     pub deployment_filter: DeploymentFilterConfig,
+
+    /// Prividium policy-service client configuration.
+    #[config(nest)]
+    pub policy_service: PolicyServiceConfig,
 }
 
 /// Configuration for the deployment filter.
@@ -871,6 +887,83 @@ pub struct DeploymentFilterConfig {
     /// List of addresses allowed to deploy contracts.
     #[config(default, with = Serde![*])]
     pub allowed_deployers: Vec<Address>,
+}
+
+/// Policy-service client configuration. A `None` `url` means no client is
+/// wired (preserves today's behaviour for chains that don't run a policy
+/// service).
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+pub struct PolicyServiceConfig {
+    /// `https://host:port` (mTLS) or `unix:///path/to/socket` (kernel
+    /// perms). Plain `http://` is rejected.
+    #[config_validate(custom(
+        |_root: &Config, value: &Option<String>|
+            value.as_deref().is_none_or(|u| {
+                url::Url::parse(u)
+                    .ok()
+                    .is_some_and(|p| matches!(p.scheme(), "https" | "unix"))
+            }),
+        "must be a valid URL with scheme `https://` or `unix:///`; plain `http://` is not accepted"
+    ))]
+    pub url: Option<String>,
+
+    /// Per-request timeout. Fail-closed on exceed.
+    #[config(default_t = Duration::from_millis(50))]
+    pub request_timeout: Duration,
+
+    /// Sent on every request. Opaque to the server.
+    #[config(default_t = "1".into())]
+    pub protocol_version: String,
+
+    /// If set, responses whose `protocolVersion` is not exactly equal are
+    /// rejected.
+    pub expected_protocol_version: Option<String>,
+
+    /// Source addresses whose txs skip the policy service. Defaults to the
+    /// protocol-internal senders so the chain's own system txs can't be
+    /// denied by a misconfigured service.
+    #[config(default_t = vec![
+        zksync_os_types::BOOTLOADER_FORMAL_ADDRESS,
+        zksync_os_tx_validators::deployment_filter::FORCE_DEPLOYER_ADDRESS,
+    ])]
+    pub bypass_from: Vec<Address>,
+
+    /// mTLS material. Required when `url` is `https://`; forbidden when
+    /// `url` is `unix:///`.
+    #[config(nest)]
+    #[config_validate(custom(
+        |root: &Config, value: &Option<PolicyServiceTlsConfig>|
+            policy_service_tls_consistent(
+                root.sequencer_config.tx_validator.policy_service.url.as_deref(),
+                value.as_ref(),
+            ),
+        "the `tls` block is required when `url` is `https://` and forbidden when `url` is `unix:///`"
+    ))]
+    pub tls: Option<PolicyServiceTlsConfig>,
+}
+
+/// PEM-encoded mTLS material for the policy-service client.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+pub struct PolicyServiceTlsConfig {
+    /// Client cert chain (PEM, leaf first).
+    pub client_cert: PathBuf,
+    /// Private key (PEM, PKCS#8 or RSA) matching `client_cert`.
+    pub client_key: PathBuf,
+    /// CA bundle (PEM) the client trusts. System roots are not loaded.
+    pub server_ca: PathBuf,
+}
+
+fn policy_service_tls_consistent(url: Option<&str>, tls: Option<&PolicyServiceTlsConfig>) -> bool {
+    let scheme = url
+        .and_then(|u| url::Url::parse(u).ok())
+        .map(|p| p.scheme().to_string());
+    match scheme.as_deref() {
+        Some("https") => tls.is_some(),
+        // Default-deny: only `https` allows a `tls` block. Keeps this
+        // validator independent of the URL-scheme validator.
+        _ => tls.is_none(),
+    }
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1656,6 +1749,39 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
     }
 }
 
+impl PolicyServiceConfig {
+    /// Build a `PolicyClient`, or `None` when no service is configured.
+    /// Panics on invalid URL: config validation already ran at load time.
+    pub fn build_client(&self) -> Option<zksync_os_tx_validators::policy_client::PolicyClient> {
+        self.url.as_ref().map(|url| {
+            zksync_os_tx_validators::policy_client::PolicyClient::new(
+                zksync_os_tx_validators::policy_client::Config {
+                    url: url.clone(),
+                    request_timeout: self.request_timeout,
+                    protocol_version: self.protocol_version.clone(),
+                    expected_protocol_version: self.expected_protocol_version.clone(),
+                    bypass_from: self.bypass_from.iter().copied().collect(),
+                    tls: self.tls.clone().map(Into::into),
+                    // Block-build is always a write path. RPC paths fork
+                    // with the right intent per call.
+                    access_type: zksync_os_tx_validators::policy_client::AccessType::Write,
+                },
+            )
+            .expect("failed to build PolicyClient from `policy_service`")
+        })
+    }
+}
+
+impl From<PolicyServiceTlsConfig> for zksync_os_tx_validators::policy_client::TlsConfig {
+    fn from(c: PolicyServiceTlsConfig) -> Self {
+        Self {
+            client_cert: c.client_cert,
+            client_key: c.client_key,
+            server_ca: c.server_ca,
+        }
+    }
+}
+
 impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
     fn from(c: &Config) -> Self {
         Self {
@@ -1675,6 +1801,11 @@ impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
                     } else {
                         deployment_filter::Config::Unrestricted
                     },
+                    policy_client: c
+                        .sequencer_config
+                        .tx_validator
+                        .policy_service
+                        .build_client(),
                 }
             },
         }
@@ -2205,6 +2336,69 @@ mod tests {
         );
         assert!(
             err.contains("`batch_verification.client_enabled` requires `network.enabled=true`")
+        );
+    }
+
+    #[tokio::test]
+    async fn deployment_filter_and_policy_service_are_mutually_exclusive() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.sequencer_config.tx_validator.deployment_filter = DeploymentFilterConfig {
+            enabled: true,
+            allowed_deployers: vec![Address::with_last_byte(0xee)],
+        };
+        config.sequencer_config.tx_validator.policy_service.url =
+            Some("unix:///tmp/policy.sock".into());
+
+        let err = config.validate().await.unwrap_err().to_string();
+        assert!(
+            err.contains(
+                "cannot be enabled at the same time as `sequencer.tx_validator.policy_service.url`"
+            ),
+            "expected mutex error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn policy_service_rejects_plain_http_url() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.sequencer_config.tx_validator.policy_service.url =
+            Some("http://policy.local:9000".into());
+
+        let err = config.validate().await.unwrap_err().to_string();
+        assert!(
+            err.contains("must be a valid URL with scheme `https://` or `unix:///`"),
+            "expected scheme rejection, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn policy_service_https_requires_tls_material() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.sequencer_config.tx_validator.policy_service.url =
+            Some("https://policy.local:9000".into());
+
+        let err = config.validate().await.unwrap_err().to_string();
+        assert!(
+            err.contains("`tls` block is required when `url` is `https://`"),
+            "expected TLS-required error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn policy_service_unix_rejects_tls_material() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.sequencer_config.tx_validator.policy_service.url =
+            Some("unix:///tmp/policy.sock".into());
+        config.sequencer_config.tx_validator.policy_service.tls = Some(PolicyServiceTlsConfig {
+            client_cert: PathBuf::from("/dev/null"),
+            client_key: PathBuf::from("/dev/null"),
+            server_ca: PathBuf::from("/dev/null"),
+        });
+
+        let err = config.validate().await.unwrap_err().to_string();
+        assert!(
+            err.contains("forbidden when `url` is `unix:///`"),
+            "expected unix-rejects-tls error, got: {err}"
         );
     }
 }
