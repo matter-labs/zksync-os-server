@@ -978,6 +978,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             rpc_storage.clone(),
             chain_id,
             last_constructed_block_ctx_receiver.clone(),
+            // Interop fee updater runs inside the node and is not a user-facing
+            // RPC surface, so the admit boundary doesn't apply.
+            None,
         );
         let interop_fee_updater = InteropFeeUpdater::new(
             eth_call_handler,
@@ -1091,6 +1094,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .wait_for_db_ready_to_process_blocks()
             .await;
     };
+    let rpc_policy_client = config
+        .sequencer_config
+        .tx_validator
+        .policy_service
+        .build_client();
     zksync_os_rpc::spawn(
         config.rpc_config.into(),
         chain_id,
@@ -1103,6 +1111,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_constructed_block_ctx_receiver,
         main_node_provider,
         gateway_provider.map(|p| p.erased()),
+        rpc_policy_client,
         runtime,
         wait_for_db,
     )

@@ -8,11 +8,16 @@ use alloy::providers::{DynProvider, Provider};
 use alloy::transports::{RpcError, TransportErrorKind};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
+use zksync_os_interface::error::InvalidTransaction;
+use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::PoolError;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{InvalidPoolTransactionError, PoolErrorKind};
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
-use zksync_os_types::{L2Envelope, L2Transaction, NotAcceptingReason, TransactionAcceptanceState};
+use zksync_os_tx_validators::policy_client::{AccessType, PolicyClient};
+use zksync_os_types::{
+    L2Envelope, L2Transaction, NotAcceptingReason, TransactionAcceptanceState, ZkTransaction,
+};
 
 /// Maximum user provided timeout for `eth_sendRawTransactionSync`. Chosen liberally as waiting is
 /// inexpensive.
@@ -25,15 +30,27 @@ pub struct TxHandler<RpcStorage, Mempool> {
     mempool: Mempool,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     tx_forwarder: Option<DynProvider>,
+    /// Optional policy client. When set, each incoming tx is simulated
+    /// once with the validator wired in (admit + judge inline). Spares
+    /// clients a `pending → no receipt` poll loop on a stable deny.
+    /// Block-build remains authoritative.
+    policy_client: Option<PolicyClient>,
+    /// Latest block context constructed by the sequencer; used as the
+    /// simulation environment for the RPC-side judge call. `None` until
+    /// the sequencer has built at least one block.
+    last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
 }
 
 impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempool> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: RpcConfig,
         storage: RpcStorage,
         mempool: Mempool,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
         tx_forwarder: Option<DynProvider>,
+        policy_client: Option<PolicyClient>,
+        last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     ) -> Self {
         Self {
             config,
@@ -41,6 +58,8 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             mempool,
             acceptance_state,
             tx_forwarder,
+            policy_client,
+            last_constructed_block_context,
         }
     }
 
@@ -63,6 +82,47 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         let hash = *l2_tx.hash();
         if self.config.l2_signer_blacklist.contains(&l2_tx.signer()) {
             return Err(EthSendRawTransactionError::BlacklistedSigner);
+        }
+
+        if let Some(policy_client) = &self.policy_client {
+            // Skip the simulation until the sequencer has built at least
+            // one block. Block-build runs the policy authoritatively then.
+            // Copy the watch ref before await so the future stays `Send`.
+            let block_context = *self.last_constructed_block_context.borrow();
+            if let Some(block_context) = block_context {
+                let storage_view = self
+                    .storage
+                    .state_at_block_number_or_latest(block_context.block_number)
+                    .map_err(|err| EthSendRawTransactionError::JudgeSimFailed(err.into()))?;
+                let zk_tx: ZkTransaction = l2_tx.clone().into();
+                let policy_client = policy_client.clone();
+                // `spawn_blocking`: the sim is CPU-bound and the validator
+                // hooks call `Handle::block_on` internally, which would
+                // panic on a runtime worker thread. Note: dropping the
+                // outer future (RPC client disconnect) does not cancel
+                // this task; admit and judge fire to completion.
+                let sim = tokio::task::spawn_blocking(move || {
+                    let mut policy_session = policy_client.fork(AccessType::Write);
+                    let mut tracer = policy_session.paired_tracer();
+                    crate::sandbox::execute_with(
+                        zk_tx,
+                        block_context,
+                        storage_view,
+                        &mut tracer,
+                        &mut policy_session,
+                    )
+                })
+                .await
+                .map_err(|err| EthSendRawTransactionError::JudgeSimFailed(err.into()))?
+                .map_err(EthSendRawTransactionError::JudgeSimFailed)?;
+                if let Err(err) = sim
+                    && matches!(err, InvalidTransaction::FilteredByValidator)
+                {
+                    return Err(EthSendRawTransactionError::PolicyDenied(err));
+                }
+                // Other sim errors (nonce, gas, etc.) are handled by the
+                // mempool / block-build rejection paths.
+            }
         }
         {
             let _guard = MempoolLatencyGuard::new();
@@ -161,6 +221,14 @@ pub enum EthSendRawTransactionError {
     ForwardError(#[from] RpcError<TransportErrorKind>),
     #[error("Signer is blacklisted")]
     BlacklistedSigner,
+    /// Policy service rejected the transaction.
+    #[error("transaction denied by policy service: {0:?}")]
+    PolicyDenied(InvalidTransaction),
+    /// Local simulation for the RPC-side judge call failed for an internal
+    /// reason (storage error, etc.). Clean tx rejections fall through and
+    /// surface via the mempool / block-build paths instead.
+    #[error("failed to simulate transaction: {0}")]
+    JudgeSimFailed(#[source] anyhow::Error),
 }
 
 impl From<&EthSendRawTransactionError> for TxRejectionReason {
@@ -175,6 +243,8 @@ impl From<&EthSendRawTransactionError> for TxRejectionReason {
                 _ => Self::ForwardTransportError,
             },
             EthSendRawTransactionError::PoolError(pool_err) => Self::from(&pool_err.kind),
+            EthSendRawTransactionError::PolicyDenied(_) => Self::PolicyDenied,
+            EthSendRawTransactionError::JudgeSimFailed(_) => Self::JudgeSimFailed,
         }
     }
 }
