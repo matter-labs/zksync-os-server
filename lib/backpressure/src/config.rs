@@ -4,6 +4,7 @@ use std::time::Duration;
 pub use zksync_os_pipeline::ComponentId;
 
 const DEFAULT_BLOCK_DIFF: u64 = 100;
+const DEFAULT_BATCH_DIFF: u64 = 1000;
 
 /// Backpressure thresholds for a single component.
 #[derive(Default, Clone, Debug)]
@@ -34,6 +35,20 @@ fn is_block_level_stage(id: ComponentId) -> bool {
     )
 }
 
+fn is_batch_level_stage(id: ComponentId) -> bool {
+    matches!(
+        id,
+        ComponentId::BatchVerification
+            | ComponentId::GaplessCommitter
+            | ComponentId::UpgradeGatekeeper
+            | ComponentId::L1SenderCommit
+            | ComponentId::L1SenderProve
+            | ComponentId::L1SenderExecute
+            | ComponentId::GaplessL1ProofSender
+            | ComponentId::PriorityTree
+    )
+}
+
 impl BackpressureConfig {
     pub fn set(&mut self, id: ComponentId, condition: PipelineCondition) {
         self.conditions.insert(id, condition);
@@ -42,12 +57,18 @@ impl BackpressureConfig {
     /// Returns the effective condition for `id`.
     ///
     /// Block-level pipeline stages default to `max_block_diff_to_upstream = 100` when not
-    /// explicitly configured. All other components default to no threshold.
+    /// explicitly configured. Batch-level pipeline stages default to
+    /// `max_batch_diff_to_upstream = 1000`. All other components default to no threshold.
     pub fn condition_for(&self, id: ComponentId) -> PipelineCondition {
         self.conditions.get(&id).cloned().unwrap_or_else(|| {
             if is_block_level_stage(id) {
                 PipelineCondition {
                     max_block_diff_to_upstream: Some(DEFAULT_BLOCK_DIFF),
+                    ..Default::default()
+                }
+            } else if is_batch_level_stage(id) {
+                PipelineCondition {
+                    max_batch_diff_to_upstream: Some(DEFAULT_BATCH_DIFF),
                     ..Default::default()
                 }
             } else {

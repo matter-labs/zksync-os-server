@@ -441,13 +441,36 @@ mod tests {
     }
 
     #[test]
-    fn no_condition_set_never_triggers_for_batch_component() {
-        // Batch-level components with no explicit config have no thresholds and never trigger.
-        // (Block-level stages get a default block-diff threshold; use a batch component here.)
+    fn batch_component_default_threshold_triggers_above_1000() {
+        // Batch-level stages default to max_batch_diff_to_upstream = 1000.
+        let config = BackpressureConfig::default();
+        let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
+        let result = monitor.evaluate(ComponentId::BatchVerification, 0, None, Some(1001));
+        assert!(matches!(
+            result.into_iter().next().map(|c| c.trigger),
+            Some(BackpressureTrigger::BatchDiffToUpstreamTooHigh {
+                threshold: 1000,
+                actual: 1001
+            })
+        ));
+    }
+
+    #[test]
+    fn batch_component_at_default_threshold_no_trigger() {
+        let config = BackpressureConfig::default();
+        let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
+        let result = monitor.evaluate(ComponentId::BatchVerification, 0, None, Some(1000));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn no_condition_set_never_triggers_for_untracked_component() {
+        // Components that are neither block-level nor batch-level stages (e.g. BlockExecutor,
+        // which is the head of the block pipeline) have no default threshold.
         let config = BackpressureConfig::default();
         let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
         let result = monitor.evaluate(
-            ComponentId::BatchVerification,
+            ComponentId::BlockExecutor,
             10_000,
             Some(Duration::from_secs(999_999)),
             None,
