@@ -1,9 +1,8 @@
 use crate::config::SequencerConfig;
-use crate::model::blocks::BlockCommandType;
+use crate::model::blocks::{BlockCommandType, BlockOutputWithReads};
 use alloy::consensus::Sealed;
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReplayRecord, WriteReplay, WriteRepository, WriteState};
 
@@ -29,8 +28,8 @@ where
     Replay: WriteReplay + Send + 'static,
     Repo: WriteRepository + Send + 'static,
 {
-    type Input = (BlockOutput, ReplayRecord, BlockCommandType);
-    type Output = (BlockOutput, ReplayRecord);
+    type Input = (BlockOutputWithReads, ReplayRecord, BlockCommandType);
+    type Output = (BlockOutputWithReads, ReplayRecord);
 
     const NAME: &'static str = "block_applier";
     const OUTPUT_BUFFER_SIZE: usize = 5;
@@ -41,10 +40,12 @@ where
         output: mpsc::Sender<Self::Output>,
     ) -> anyhow::Result<()> {
         loop {
-            let Some((block_output, executed_replay, cmd_type)) = input.recv().await else {
+            let Some((block_output_with_reads, executed_replay, cmd_type)) = input.recv().await
+            else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
+            let block_output = &block_output_with_reads.inner;
 
             let block_number = executed_replay.block_context.block_number;
             let override_allowed = match cmd_type {
@@ -78,7 +79,11 @@ where
 
             self.applied_block_number_sender.send_replace(block_number);
 
-            if output.send((block_output, executed_replay)).await.is_err() {
+            if output
+                .send((block_output_with_reads, executed_replay))
+                .await
+                .is_err()
+            {
                 tracing::info!("outbound channel closed");
                 return Ok(());
             }

@@ -1,8 +1,7 @@
-use crate::model::blocks::BlockCommandType;
+use crate::model::blocks::{BlockCommandType, BlockOutputWithReads};
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use tokio::sync::mpsc;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::ReplayRecord;
 
@@ -73,9 +72,9 @@ where
     Consensus: BlockCanonization,
 {
     /// Input from BlockExecutor
-    type Input = (BlockOutput, ReplayRecord, BlockCommandType);
+    type Input = (BlockOutputWithReads, ReplayRecord, BlockCommandType);
     /// Output to BlockApplier
-    type Output = (BlockOutput, ReplayRecord, BlockCommandType);
+    type Output = (BlockOutputWithReads, ReplayRecord, BlockCommandType);
 
     const NAME: &'static str = "block_canonizer";
     /// The downstream (output) component is `BlockApplier`.
@@ -93,7 +92,7 @@ where
         /// When this limit is reached, backpressure is applied to the upstream BlockExecutor.
         const MAX_PRODUCED_QUEUE_SIZE: usize = 2;
 
-        let mut produced_queue: VecDeque<(BlockOutput, ReplayRecord, BlockCommandType)> =
+        let mut produced_queue: VecDeque<(BlockOutputWithReads, ReplayRecord, BlockCommandType)> =
             VecDeque::new();
 
         loop {

@@ -4,6 +4,7 @@ use reth_revm::ExecuteCommitEvm;
 use reth_revm::context::{Context, ContextTr};
 use reth_revm::db::CacheDB;
 use std::collections::HashSet;
+use std::marker::PhantomData;
 use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;
@@ -17,18 +18,17 @@ use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
 use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
 
-pub struct RevmConsistencyChecker<State>
-where
-    State: ReadStateHistory + Clone + Send + 'static,
-{
+pub struct RevmConsistencyChecker<State, Block> {
     state: State,
     internal_config_manager: InternalConfigManager,
     revert_enabled: bool,
+    _block: PhantomData<Block>,
 }
 
-impl<State> RevmConsistencyChecker<State>
+impl<State, Block> RevmConsistencyChecker<State, Block>
 where
     State: ReadStateHistory + Clone + Send + 'static,
+    Block: AsRef<BlockOutput>,
 {
     pub fn new(
         state: State,
@@ -39,6 +39,7 @@ where
             state,
             internal_config_manager,
             revert_enabled,
+            _block: PhantomData,
         }
     }
 
@@ -77,12 +78,13 @@ where
 }
 
 #[async_trait]
-impl<State> PipelineComponent for RevmConsistencyChecker<State>
+impl<State, Block> PipelineComponent for RevmConsistencyChecker<State, Block>
 where
     State: ReadStateHistory + Clone + Send + 'static,
+    Block: AsRef<BlockOutput> + Send + 'static,
 {
-    type Input = (BlockOutput, ReplayRecord);
-    type Output = (BlockOutput, ReplayRecord);
+    type Input = (Block, ReplayRecord);
+    type Output = (Block, ReplayRecord);
 
     const NAME: &'static str = "revm_consistency_checker";
     const OUTPUT_BUFFER_SIZE: usize = 5;
@@ -101,10 +103,12 @@ where
 
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
-            let Some((block_output, replay_record)) = input.recv().await else {
+            let Some((block, replay_record)) = input.recv().await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
+            let block_output = block.as_ref();
+
             let raw_exec_ver = replay_record.block_context.execution_version;
             let zk_spec = match ExecutionVersion::try_from(raw_exec_ver)
                 .ok()
@@ -183,15 +187,11 @@ where
                     &block_output.storage_writes,
                     &block_output.account_diffs,
                 )?;
-                self.handle_report(&block_output, &replay_record, &compare_report)?;
+                self.handle_report(block_output, &replay_record, &compare_report)?;
             }
 
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
-            if output
-                .send((block_output.clone(), replay_record.clone()))
-                .await
-                .is_err()
-            {
+            if output.send((block, replay_record.clone())).await.is_err() {
                 anyhow::bail!("Outbound channel closed");
             }
         }

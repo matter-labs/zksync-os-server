@@ -1,10 +1,24 @@
 use alloy::primitives::B256;
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::time::Duration;
-use zksync_os_interface::types::BlockContext;
+use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_mempool::MarkingTxStream;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
+
+#[derive(Debug)]
+pub struct BlockOutputWithReads {
+    pub inner: BlockOutput,
+    /// Keys read during block execution.
+    pub read_keys: HashSet<B256>,
+}
+
+impl AsRef<BlockOutput> for BlockOutputWithReads {
+    fn as_ref(&self) -> &BlockOutput {
+        &self.inner
+    }
+}
 
 /// `BlockCommand`s drive the sequencer execution.
 /// Produced by `CommandProducer` - first blocks are `Replay`ed from block replay storage

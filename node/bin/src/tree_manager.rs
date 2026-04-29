@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
+use zk_ee::utils::Bytes32;
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::BlockOutput;
@@ -13,6 +14,7 @@ use zksync_os_merkle_tree::{MerkleTree, MerkleTreeColumnFamily, RocksDBWrapper, 
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
+use zksync_os_sequencer::model::blocks::BlockOutputWithReads;
 
 #[derive(Debug)]
 pub(crate) struct TreeManager {
@@ -21,7 +23,7 @@ pub(crate) struct TreeManager {
 
 #[async_trait]
 impl PipelineComponent for TreeManager {
-    type Input = (BlockOutput, zksync_os_storage_api::ReplayRecord);
+    type Input = (BlockOutputWithReads, zksync_os_storage_api::ReplayRecord);
     type Output = (
         BlockOutput,
         zksync_os_storage_api::ReplayRecord,
@@ -46,10 +48,11 @@ impl PipelineComponent for TreeManager {
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
 
-            let Some((block_output, replay_record)) = input.recv().await else {
+            let Some((block_output_with_reads, replay_record)) = input.recv().await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
+            let block_output = block_output_with_reads.inner;
             latency_tracker.enter_state(GenericComponentState::Processing);
             let started_at = Instant::now();
             let block_number = block_output.header.number;
@@ -76,17 +79,21 @@ impl PipelineComponent for TreeManager {
                     value: write.value,
                 })
                 .collect::<Vec<_>>();
+            // Create `written_keys` from `tree_entries` to ensure that they have identical ordering.
             let written_keys: Vec<_> = tree_entries
                 .iter()
                 .map(|write| write.key.0.into())
                 .collect();
-            // FIXME: get read keys from somewhere
-            let read_keys = vec![];
+            let (read_keys_for_tree, read_keys): (Vec<_>, Vec<_>) = block_output_with_reads
+                .read_keys
+                .iter()
+                .map(|key| (*key, Bytes32::from(key.0)))
+                .unzip();
 
             let count = tree_entries.len();
             let mut tree_clone = tree.clone();
             let (tree_batch_output, tree_proof) = tokio::task::spawn_blocking(move || {
-                tree_clone.extend_with_proof(&tree_entries, &[])
+                tree_clone.extend_with_proof(&tree_entries, &read_keys_for_tree)
             })
             .await??;
             last_processed_block = tree

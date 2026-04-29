@@ -4,14 +4,13 @@ use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::execute_block_in_vm::execute_block_in_vm;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::save_dump;
-use crate::model::blocks::{BlockCommand, BlockCommandType};
+use crate::model::blocks::{BlockCommand, BlockCommandType, BlockOutputWithReads};
 use anyhow::Context;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
@@ -51,7 +50,7 @@ where
     /// Output to `BlockCanonizer`
     /// Outputs executed blocks. Passes along information whether it's a replayed or new block -
     ///  new blocks need to be canonized by network (enforced by `BlockCanonizer`)
-    type Output = (BlockOutput, ReplayRecord, BlockCommandType);
+    type Output = (BlockOutputWithReads, ReplayRecord, BlockCommandType);
 
     const NAME: &'static str = "block_executor";
 
@@ -157,7 +156,11 @@ where
             latency_tracker.enter_state(SequencerState::UpdatingMempool);
 
             self.block_context_provider
-                .on_canonical_state_change(&block_output, &replay_record, strict_subpool_cleanup)
+                .on_canonical_state_change(
+                    &block_output.inner,
+                    &replay_record,
+                    strict_subpool_cleanup,
+                )
                 .await;
             let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
             self.block_context_provider
@@ -165,8 +168,8 @@ where
 
             state_overlay_buffer.add_block(
                 block_number,
-                block_output.storage_writes.clone(),
-                block_output.published_preimages.clone(),
+                block_output.inner.storage_writes.clone(),
+                block_output.inner.published_preimages.clone(),
             )?;
 
             tracing::info!(
@@ -181,7 +184,7 @@ where
 
             latency_tracker.enter_state(SequencerState::WaitingSend);
             if output
-                .send((block_output.clone(), replay_record.clone(), cmd_type))
+                .send((block_output, replay_record.clone(), cmd_type))
                 .await
                 .is_err()
             {

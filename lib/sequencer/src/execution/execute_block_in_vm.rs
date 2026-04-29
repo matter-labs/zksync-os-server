@@ -1,7 +1,9 @@
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::{BlockDump, hash_block_output};
 use crate::execution::vm_wrapper::VmWrapper;
-use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
+use crate::model::blocks::{
+    BlockOutputWithReads, InvalidTxPolicy, PreparedBlockCommand, SealPolicy,
+};
 use crate::model::debug_formatting::BlockOutputDebug;
 use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
@@ -12,7 +14,7 @@ use vise::EncodeLabelValue;
 use zk_ee::memory::stack_trait::Stack;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
-use zksync_os_interface::types::{BlockContext, BlockOutput};
+use zksync_os_interface::types::BlockContext;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_observability::ComponentStateHandle;
 use zksync_os_storage_api::{MeteredViewState, OverriddenStateView, ReplayRecord, ViewState};
@@ -31,7 +33,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     validator: impl AnyTxValidator + Send + 'static,
 ) -> Result<
     (
-        BlockOutput,
+        BlockOutputWithReads,
         ReplayRecord,
         Vec<(TxHash, InvalidTransaction)>,
         bool,
@@ -349,11 +351,12 @@ pub async fn execute_block_in_vm<V: ViewState>(
     latency_tracker.enter_state(SequencerState::Sealing);
 
     /* ---------- seal & return ------------------------------------- */
-    let mut output = runner.seal_block().await.map_err(|e| BlockDump {
+    let mut output_with_reads = runner.seal_block().await.map_err(|e| BlockDump {
         ctx,
         txs: all_processed_txs.clone(),
         error: e.context("seal_block()").to_string(),
     })?;
+    let output = &mut output_with_reads.inner;
 
     // Since we've overridden the state, we need to insert any forced preimages into the output as well.
     // Note: the fact that we're doing it here, would also affect the block output hash,
@@ -385,7 +388,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         .computational_native_used_per_block
         .observe(output.computational_native_used);
 
-    let block_hash_output = hash_block_output(&output);
+    let block_hash_output = hash_block_output(output);
 
     tracing::info!(
         block_number = output.header.number,
@@ -405,7 +408,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     );
 
     tracing::info!(
-        output = ?BlockOutputDebug(&output),
+        output = ?BlockOutputDebug(output),
         block_number = output.header.number,
         "Full block {} output",
         output.header.number,
@@ -428,7 +431,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     }
 
     Ok((
-        output,
+        output_with_reads,
         ReplayRecord::new(
             ctx,
             executed_txs,
