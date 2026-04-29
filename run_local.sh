@@ -205,8 +205,12 @@ if [ -f "$SINGLE_CONFIG" ]; then
     PIDS+=($CHAIN_PID)
     echo -e "${GREEN}Chain started with PID $CHAIN_PID${NC}"
 else
-    # Multiple chains mode - look for chain_<chainid>.yaml files
-    CHAIN_CONFIGS=($(ls "$CONFIG_DIR"/chain_*.yaml 2>/dev/null | sort -V))
+    # Multiple chains mode - look for chain_<chainid>.yaml files.
+    # Exclude `.override.yaml` siblings: those are per-chain overrides
+    # auto-loaded inside the loop (below), not standalone chain configs.
+    # Without this filter the glob would treat e.g. `chain_6565.override.yaml`
+    # as its own chain config and panic on missing required fields.
+    CHAIN_CONFIGS=($(ls "$CONFIG_DIR"/chain_*.yaml 2>/dev/null | grep -v '\.override\.yaml$' | sort -V))
 
     if [ ${#CHAIN_CONFIGS[@]} -eq 0 ]; then
         echo -e "${RED}Error: No config.yaml or chain_*.yaml files found in '$CONFIG_DIR'${NC}"
@@ -217,14 +221,26 @@ else
 
     for config_file in "${CHAIN_CONFIGS[@]}"; do
         echo -e "${GREEN}Starting chain with config: $config_file${NC}"
+
+        # Optional per-chain override: if a sibling <config>.override.yaml
+        # exists, layer it on top. Lets settings (e.g. policy-service config)
+        # be scoped to a single chain instead of leaking into every chain via
+        # env vars.
+        OVERRIDE_FILE="${config_file%.yaml}.override.yaml"
+        EXTRA_CONFIG_ARGS=()
+        if [ -f "$OVERRIDE_FILE" ]; then
+            echo -e "${GREEN}Loading per-chain override: $OVERRIDE_FILE${NC}"
+            EXTRA_CONFIG_ARGS=(--config "$OVERRIDE_FILE")
+        fi
+
         if [ -n "$LOGS_DIR" ]; then
             # Extract config file name without extension for log file naming
             CONFIG_NAME=$(basename "$config_file" .yaml)
             CHAIN_LOG_FILE="$LOGS_DIR/${CONFIG_NAME}-$LOG_TIMESTAMP.log"
-            cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$REPO_ROOT/local-chains/local_dev.yaml" --config "$config_file" > "$CHAIN_LOG_FILE" 2>&1 &
+            cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$REPO_ROOT/local-chains/local_dev.yaml" --config "$config_file" "${EXTRA_CONFIG_ARGS[@]}" > "$CHAIN_LOG_FILE" 2>&1 &
             echo -e "${GREEN}Chain logs: $CHAIN_LOG_FILE${NC}"
         else
-            cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$REPO_ROOT/local-chains/local_dev.yaml" --config "$config_file" &
+            cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$REPO_ROOT/local-chains/local_dev.yaml" --config "$config_file" "${EXTRA_CONFIG_ARGS[@]}" &
         fi
         CHAIN_PID=$!
         PIDS+=($CHAIN_PID)

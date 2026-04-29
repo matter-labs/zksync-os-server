@@ -1,0 +1,10 @@
+general:
+  ephemeral: false
+  rocks_db_path: ./db/chain_6565
+
+sequencer:
+  tx_validator:
+    policy_service:
+      url: http://localhost:8000
+      protocol_version: '1'
+      min_protocol_version: '1'
