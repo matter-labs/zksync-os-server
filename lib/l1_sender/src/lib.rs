@@ -196,13 +196,14 @@ pub async fn run_l1_sender<Input: SendToL1>(
             tracing::info!("inbound channel closed");
             return Ok(());
         }
-        if let Some(last) = cmd_buffer.last() {
-            state_reporter.record_picked(
-                last.last_block_number(),
-                last.block_timestamp(),
-                Some(last.last_batch_number()),
-            );
-        }
+        let last = cmd_buffer
+            .last()
+            .context("recv_many returned non-zero count but cmd_buffer is empty")?;
+        state_reporter.record_picked(
+            last.last_block_number(),
+            last.block_timestamp(),
+            Some(last.last_batch_number()),
+        );
         let mut commands = cmd_buffer
             .drain(..)
             .map(|cmd| -> anyhow::Result<Input> {
