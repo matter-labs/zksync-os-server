@@ -66,10 +66,10 @@ impl PipelineComponent for SnarkProvingPipelineStep {
         output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        // Hand the reporter to SnarkJobManager — driven by HTTP handlers and add_job —
-        // before any record_* path fires. The manager's reporter() panics if unset.
         self.snark_job_manager.set_reporter(state_reporter);
 
+        // Forward batches: pipeline input → SnarkJobManager → pipeline output
+        // Two concurrent tasks handle the bidirectional flow
         tokio::select! {
             _ = async {
                 while let Some(batch) = input.recv_and_record_picked(self.snark_job_manager.reporter()).await {

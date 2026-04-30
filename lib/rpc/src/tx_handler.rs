@@ -50,10 +50,6 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
     ) -> Result<B256, EthSendRawTransactionError> {
         if let TransactionAcceptanceState::NotAccepting(reasons) = &*self.acceptance_state.borrow()
         {
-            tracing::warn!(
-                reasons = ?reasons,
-                "transaction rejected: not accepting transactions"
-            );
             return Err(EthSendRawTransactionError::NotAcceptingTransactions(
                 reasons.clone(),
             ));

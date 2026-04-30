@@ -1271,27 +1271,24 @@ pub struct FeeConfig {
 }
 
 /// Backpressure configuration.
-///
-/// Each field caps the number of unprocessed batches between a pipeline stage and its
-/// upstream neighbour. Leave a field unset to use the built-in default threshold for
-/// that stage (1000 batches for batch-level stages, 100 blocks for block-level stages).
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct BackpressureConfig {
-    /// Stop accepting transactions when the FRI-prover output queue grows beyond this
-    /// many batches (measured at `gapless_committer` vs `batch_verification`).
+    /// Stop accepting transactions when processed batch diff between FRI prover and its upstream
+    /// grows beyond this.
     pub fri_prover: Option<u64>,
-    /// Stop accepting transactions when the SNARK-prover output queue grows beyond this
-    /// many batches.
+    /// Stop accepting transactions when processed batch diff between SNARK prover and its upstream
+    /// grows beyond this.
     pub snark_prover: Option<u64>,
-    /// Stop accepting transactions when the batch verification queue grows beyond this
-    /// many batches.
+    /// Stop accepting transactions when processed batch diff between batch verifier and its upstream
+    /// grows beyond this.
     pub batch_verification: Option<u64>,
-    /// Stop accepting transactions when the upgrade gatekeeper queue grows beyond this many batches.
-    /// Defaults to 100.
+    /// Stop accepting transactions when processed batch diff between upgrade gatekeeper and its upstream
+    /// grows beyond this.
     #[config(default_t = Some(100_u64))]
     pub upgrade_gatekeeper: Option<u64>,
-    /// Stop accepting transactions when any L1-sender queue grows beyond this many batches.
+    /// Stop accepting transactions when processed batch diff between any L1 sender and its upstream
+    /// grows beyond this.
     pub l1_senders: Option<u64>,
 }
 

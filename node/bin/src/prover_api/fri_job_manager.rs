@@ -336,6 +336,7 @@ impl FriJobManager {
         // We want to ensure we can send the result downstream before we remove the job
         let permit = self.try_reserve_permit_downstream()?;
 
+        // Downstream has capacity - we remove the job from `assigned_jobs`.
         let assigned = match self
             .jobs
             .complete_job(batch_number, ProverType::Fake, prover_id)

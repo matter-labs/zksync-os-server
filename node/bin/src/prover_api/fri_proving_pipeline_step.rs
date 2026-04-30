@@ -70,6 +70,8 @@ impl PipelineComponent for FriProvingPipelineStep {
     ) -> anyhow::Result<()> {
         self.fri_job_manager.set_reporter(state_reporter);
 
+        // Forward batches: pipeline input → FriJobManager (add_job) → pipeline output (via proofs channel)
+        // Two concurrent tasks handle the bidirectional flow
         tokio::select! {
             result = async {
                 while let Some(batch) = input.recv_and_record_picked(self.fri_job_manager.reporter()).await {

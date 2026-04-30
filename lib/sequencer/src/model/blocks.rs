@@ -32,9 +32,6 @@ pub enum BlockCommandType {
 }
 
 /// Message flowing from `BlockExecutor` → `BlockCanonizer` → `BlockApplier`.
-///
-/// A named struct rather than a raw tuple so that `HasBlockRangeEnd` can be implemented
-/// (orphan rule prevents impls on tuples of foreign types).
 #[derive(Clone, Debug)]
 pub struct BlockPayload {
     pub output: BlockOutput,

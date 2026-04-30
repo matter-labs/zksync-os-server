@@ -117,9 +117,6 @@ pub struct FinalityStatus {
 }
 
 /// Message flowing from `TreeManager` → `ProverInputGenerator` / `BatchVerificationResponder`.
-///
-/// A named struct rather than a raw tuple so that `HasBlockRangeEnd` can be implemented
-/// (orphan rule prevents impls on tuples of foreign types).
 pub struct TreeBlock {
     pub output: BlockOutput,
     pub record: ReplayRecord,

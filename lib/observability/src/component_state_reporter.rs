@@ -52,11 +52,11 @@ pub struct ComponentState {
     pub state_entered_at: Instant,
 
     /// When this component last dequeued an item from its input channel.
-    /// Absent until the first item is received. High-watermark semantics.
+    /// Absent until the first item is received.
     pub block_picked: Option<BlockTrackingCoordinates>,
 
     /// When this component last fully handled/forwarded an item downstream.
-    /// Absent until the first item is fully processed. High-watermark semantics.
+    /// Absent until the first item is fully processed.
     pub block_processed: Option<BlockTrackingCoordinates>,
 
     /// Last batch number dequeued from the input channel by this component.
