@@ -680,7 +680,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (pubdata_price_sender, pubdata_price_receiver) = watch::channel(None);
     let (blob_fill_ratio_sender, blob_fill_ratio_receiver) = watch::channel(None);
     // Channel for Batcher->GasAdjuster communication. Batcher send sidecar to gas adjuster to estimate blob fill ratio.
-    let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::channel(4096);
+    let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::channel(10);
     if node_role.is_main() {
         let pubdata_mode = config
             .l1_sender_config

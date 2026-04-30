@@ -195,15 +195,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             );
 
             if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone() {
-                // Sidecar is a statistical sample for blob fill ratio pricing — dropping is safe.
-                // The GasAdjuster drains this channel on its L1 poll cadence (~13 s), so blocking
-                // here would stall the entire pipeline.
-                match self.sidecar_sender.try_send(sidecar) {
-                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        return Err(anyhow::anyhow!("sidecar channel closed"));
-                    }
-                }
+                self.sidecar_sender
+                    .send(sidecar)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
             }
             if output
                 .send_and_record(batch_envelope, &state_reporter)
