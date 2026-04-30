@@ -39,15 +39,13 @@ impl PipelineComponent for GaplessL1ProofSender {
 
         loop {
             state_reporter.enter_state(GenericComponentState::Idle);
-            match input.recv().await {
+            match input.recv_and_record_picked(&state_reporter).await {
                 Some(command) => {
                     let arrived_batch = command.first_batch_number();
                     state_reporter.enter_state(GenericComponentState::Active);
 
                     buffer.insert(arrived_batch, command);
 
-                    // No record_picked: proofs arrive out of order, so the high-watermark
-                    // picked coordinate has no meaningful value here.
                     while let Some(next_command) = buffer.remove(&next_expected_batch_number) {
                         next_expected_batch_number += next_command.batch_count() as u64;
                         output.send_and_record(next_command, &state_reporter)?;

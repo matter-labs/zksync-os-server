@@ -44,7 +44,7 @@ impl PipelineComponent for GaplessCommitter {
 
         loop {
             state_reporter.enter_state(GenericComponentState::Idle);
-            match input.recv().await {
+            match input.recv_and_record_picked(&state_reporter).await {
                 Some(batch) => {
                     state_reporter.enter_state(GenericComponentState::Active);
                     buffer.insert(batch.batch_number(), batch);
@@ -65,13 +65,6 @@ impl PipelineComponent for GaplessCommitter {
                             ready.last().unwrap().batch_number()
                         );
                         for batch in ready {
-                            // record_picked before the async save; the gap to record_processed
-                            // (via send_and_record) reflects proof_storage write latency.
-                            state_reporter.record_picked(
-                                batch.batch.last_block_number,
-                                Some(batch.batch.batch_info.last_block_timestamp),
-                                Some(batch.batch_number()),
-                            );
                             let batch = batch.with_stage(BatchExecutionStage::FriProofStored);
                             let stored_batch = StoredBatch::V1(batch);
                             self.proof_storage

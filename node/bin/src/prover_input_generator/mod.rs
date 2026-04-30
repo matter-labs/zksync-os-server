@@ -62,17 +62,11 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     output: block_output,
                     record: replay_record,
                     tree,
-                }) = input.recv().await
+                }) = input.recv_and_record_picked(&state_reporter).await
                 else {
                     return Ok(());
                 };
                 state_reporter.enter_state(GenericComponentState::Active);
-                let block_number = block_output.header.number;
-                state_reporter.record_picked(
-                    block_number,
-                    Some(replay_record.block_context.timestamp),
-                    None,
-                );
                 output.send_and_record(
                     ProverBlock {
                         output: block_output,
