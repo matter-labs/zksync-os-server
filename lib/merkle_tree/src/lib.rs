@@ -365,7 +365,8 @@ impl<DB: Database, P: TreeParams> MerkleTreeProver for MerkleTree<DB, P> {
             batch_output.leaf_count
         );
 
-        // Create a patch will error if `index` is missing at the specified `version`.
+        // Create a patch will panic if `index` is missing at the specified `version`,
+        // but we've checked for this case above.
         let patch = self.create_patch_for_single_read(version, index)?;
         let proof =
             patch.create_batch_proof(&self.hasher, vec![], vec![TreeOperation::Hit { index }]);

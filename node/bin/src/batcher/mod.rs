@@ -8,10 +8,10 @@ use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Sleep};
 use tracing;
+use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_batch_types::batcher_model::{
     BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
 };
-use zksync_os_batch_types::{BlockMerkleTreeData, DiscoveredCommittedBatch};
 use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;
@@ -42,6 +42,8 @@ pub struct BatcherStartupConfig {
     pub last_persisted_block: u64,
 }
 
+type BatcherInput = (BlockOutput, ReplayRecord, ProverInput, TreeBatchOutput);
+
 /// Batcher component - handles batching logic, receives blocks and prepares batch data
 pub struct Batcher<ReadState> {
     pub startup_config: BatcherStartupConfig,
@@ -60,7 +62,7 @@ pub struct Batcher<ReadState> {
 impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     for Batcher<ReadState>
 {
-    type Input = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
+    type Input = BatcherInput;
     type Output = BatchEnvelope<ProverInput, MissingSignature>;
 
     const NAME: &'static str = "batcher";
@@ -214,12 +216,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
     async fn create_batch(
         &mut self,
-        block_receiver: &mut PeekableReceiver<(
-            BlockOutput,
-            ReplayRecord,
-            ProverInput,
-            BlockMerkleTreeData,
-        )>,
+        block_receiver: &mut PeekableReceiver<BatcherInput>,
         latency_tracker: &ComponentStateHandle<GenericComponentState>,
         prev_batch_info: &StoredBatchInfo,
     ) -> anyhow::Result<Option<BatchForSigning<ProverInput>>> {
@@ -230,7 +227,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         let mut first_block_timestamp: Option<u64> = None;
 
         let batch_number = prev_batch_info.batch_number + 1;
-        let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
+        let mut blocks = vec![];
         let mut accumulator = BatchInfoAccumulator::new(
             self.batcher_config.tx_per_batch_limit,
             self.pubdata_limit_bytes,
@@ -263,7 +260,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                             break;
                         }
                         Some(false) => {
-                            let Some((block_output, replay_record, prover_input, tree)) = block_receiver.pop_buffer() else {
+                            let Some((block_output, replay_record, prover_input, tree_output)) = block_receiver.pop_buffer() else {
                                 anyhow::bail!("No block received in buffer after peeking")
                             };
 
@@ -274,8 +271,6 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                                 block_number,
                                 "Adding block to a pending batch."
                             );
-
-                            let tree_output = tree.output;
 
                             // Always record the first block's timestamp as the stable deadline
                             // anchor. This must happen before the last_persisted_block check so
@@ -343,12 +338,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
 
     async fn recreate_existing_batch(
         &mut self,
-        block_receiver: &mut PeekableReceiver<(
-            BlockOutput,
-            ReplayRecord,
-            ProverInput,
-            BlockMerkleTreeData,
-        )>,
+        block_receiver: &mut PeekableReceiver<BatcherInput>,
         latency_tracker: &ComponentStateHandle<GenericComponentState>,
         prev_batch_info: &StoredBatchInfo,
         existing_batch: DiscoveredCommittedBatch,
@@ -362,21 +352,19 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
             "Recreating existing batch"
         );
 
-        let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
+        let mut blocks = vec![];
 
         let expected_block_count = existing_batch.block_count();
         // Collect all blocks in this batch
         while blocks.len() < expected_block_count as usize {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
-            let Some((block_output, replay_record, prover_input, tree)) =
+            let Some((block_output, replay_record, prover_input, tree_output)) =
                 block_receiver.recv().await
             else {
                 tracing::info!("inbound channel closed");
                 return Ok(None);
             };
             latency_tracker.enter_state(GenericComponentState::Processing);
-
-            let tree_output = tree.output;
 
             tracing::debug!(
                 batch_number,

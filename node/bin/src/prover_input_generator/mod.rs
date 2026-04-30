@@ -15,7 +15,7 @@ use zksync_os_batch_types::batcher_model::ProverInput;
 use zksync_os_contract_interface::models::DACommitmentScheme;
 use zksync_os_interface::traits::TxListSource;
 use zksync_os_interface::types::BlockOutput;
-use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
+use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper, TreeBatchOutput};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_pipeline::PipelineComponent;
@@ -45,14 +45,14 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     for ProverInputGenerator<ReadState>
 {
     type Input = (BlockOutput, ReplayRecord, BlockMerkleTreeData);
-    type Output = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
+    type Output = (BlockOutput, ReplayRecord, ProverInput, TreeBatchOutput);
 
     const NAME: &'static str = "prover_input_generator";
     const OUTPUT_BUFFER_SIZE: usize = 5;
 
     /// Works on multiple blocks in parallel, up to [Self::maximum_in_flight_blocks].
     /// Each computation runs on the blocking pool and is tracked as a graceful task so
-    /// the RocksDB tree lock held by [BlockMerkleTreeData] is always released before
+    /// the RocksDB tree lock held by [`VersionedMerkleTree`] is always released before
     /// [graceful_shutdown_with_timeout] returns.
     async fn run(
         self,
@@ -65,7 +65,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             );
             while let Some((block_output, replay_record, tree)) = input.recv().await {
                 if output
-                    .send((block_output, replay_record, ProverInput::Fake, tree))
+                    .send((block_output, replay_record, ProverInput::Fake, tree.output))
                     .await
                     .is_err()
                 {
@@ -103,9 +103,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 
         // Process remaining items with up to `maximum_in_flight_blocks` in parallel.
         // Results are delivered in arrival order via FuturesOrdered.
-        let mut pending: FuturesOrdered<
-            oneshot::Receiver<(BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData)>,
-        > = FuturesOrdered::new();
+        let mut pending: FuturesOrdered<oneshot::Receiver<_>> = FuturesOrdered::new();
         let mut input_done = false;
 
         loop {
@@ -145,12 +143,12 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<ReadState> {
     /// Submits one block's prover-input computation to the blocking CPU pool and returns
     /// a receiver for the result. The computation is tracked as a graceful task so its
-    /// [BlockMerkleTreeData] (holding the tree RocksDB lock) is guaranteed to be dropped
+    /// [`VersionedMerkleTree`] (holding the tree RocksDB lock) is guaranteed to be dropped
     /// before [graceful_shutdown_with_timeout] returns.
     fn spawn_computation(
         &self,
         (block_output, replay_record, tree): (BlockOutput, ReplayRecord, BlockMerkleTreeData),
-    ) -> oneshot::Receiver<(BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData)> {
+    ) -> oneshot::Receiver<(BlockOutput, ReplayRecord, ProverInput, TreeBatchOutput)> {
         let (result_tx, result_rx) = oneshot::channel();
         let read_state = self.read_state.clone();
         let enable_logging = self.enable_logging;
@@ -168,15 +166,16 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
         let versioned_tree = VersionedMerkleTree::new(self.merkle_tree.clone(), block_number - 1);
 
         let mut handle = tokio::task::spawn_blocking(move || {
+            let tree_output = tree.output;
             let prover_input = ProverInput::Real(compute_prover_input(
                 &replay_record,
                 read_state,
-                tree.clone(),
+                tree,
                 versioned_tree,
                 da_commitment_scheme,
                 enable_logging,
             ));
-            (block_output, replay_record, prover_input, tree)
+            (block_output, replay_record, prover_input, tree_output)
         });
         self.runtime.spawn_critical_with_graceful_shutdown_signal(
             "prover input computation",

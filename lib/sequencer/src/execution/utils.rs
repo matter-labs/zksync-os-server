@@ -49,7 +49,7 @@ impl<S> Drop for ReadRecordingState<S> {
 pub(super) struct ReadRecordingHandle(Rc<OnceCell<HashSet<B256>>>);
 
 impl ReadRecordingHandle {
-    pub fn into_read_keys(self) -> HashSet<B256> {
+    pub(super) fn into_read_keys(self) -> HashSet<B256> {
         Rc::try_unwrap(self.0)
             .expect("`into_read_keys()` called before the recording state is dropped")
             .into_inner()
