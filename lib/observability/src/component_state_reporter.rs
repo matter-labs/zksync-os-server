@@ -50,14 +50,12 @@ impl ComponentStateReporter {
         };
         let (sender, receiver) = watch::channel(initial);
         let (state_tx, state_rx) = mpsc::unbounded_channel();
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::spawn(flush_state_time(
-                component,
-                state_rx,
-                GenericComponentState::Idle,
-                "idle",
-            ));
-        }
+        tokio::spawn(flush_state_time(
+            component,
+            state_rx,
+            GenericComponentState::Idle,
+            "idle",
+        ));
         (Self { sender, state_tx }, receiver)
     }
 
