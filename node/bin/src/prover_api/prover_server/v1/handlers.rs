@@ -163,6 +163,10 @@ pub(super) async fn submit_fri_proof(
             StatusCode::SERVICE_UNAVAILABLE,
             "server is shutting down".to_string(),
         )),
+        Err(SubmitError::Other(e)) => {
+            tracing::error!("internal error: {e}");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, e))
+        }
     }
 }
 

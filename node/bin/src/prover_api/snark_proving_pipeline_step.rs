@@ -33,7 +33,7 @@ impl SnarkProvingPipelineStep {
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> (Self, Arc<SnarkJobManager>) {
-        let (proof_commands_sender, proof_commands_receiver) = mpsc::channel::<ProofCommand>(4096);
+        let (proof_commands_sender, proof_commands_receiver) = mpsc::channel::<ProofCommand>(1);
 
         let snark_job_manager = Arc::new(SnarkJobManager::new(
             proof_commands_sender,

@@ -246,15 +246,7 @@ impl SnarkJobManager {
     async fn send_downstream(&self, proof_command: ProofCommand) -> anyhow::Result<()> {
         self.reporter()
             .enter_state(ProverJobManagerState::ProcessingSubmission);
-        match self.prove_batches_sender.try_send(proof_command) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Closed(e)) => {
-                return Err(anyhow::anyhow!("channel closed: {e:?}"));
-            }
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                panic!("pipeline channel unexpectedly full — consumer is catastrophically behind")
-            }
-        }
+        self.prove_batches_sender.send(proof_command).await?;
         self.update_in_flight_state().await;
         Ok(())
     }

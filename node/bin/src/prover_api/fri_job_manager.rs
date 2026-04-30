@@ -50,6 +50,8 @@ pub enum SubmitError {
     ProvingVersionMismatch(ProvingVersion, ProvingVersion),
     #[error("server is shutting down")]
     ShuttingDown,
+    #[error("{0}")]
+    Other(String),
 }
 
 /// A FRI proof that failed verification, stored for debugging purposes.
@@ -225,6 +227,9 @@ impl FriJobManager {
         self.reporter()
             .enter_state(ProverJobManagerState::ProcessingSubmission);
 
+        // We want to ensure we can send the result downstream before we remove the job from queue
+        let permit = self.try_reserve_permit_downstream()?;
+
         // Remove the job from the assigned map.
         let Some(removed_job) = self
             .jobs
@@ -250,13 +255,7 @@ impl FriJobManager {
             .with_data(FriProof::Real(proof))
             .with_stage(BatchExecutionStage::FriProvedReal);
 
-        match self.batches_with_proof_sender.try_send(envelope) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Closed(_)) => return Err(SubmitError::ShuttingDown),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                panic!("pipeline channel unexpectedly full — consumer is catastrophically behind")
-            }
-        }
+        permit.send(envelope);
         self.update_in_flight_state().await;
 
         Ok(())
@@ -360,6 +359,9 @@ impl FriJobManager {
         self.reporter()
             .enter_state(ProverJobManagerState::ProcessingSubmission);
 
+        // We want to ensure we can send the result downstream before we remove the job
+        let permit = self.try_reserve_permit_downstream()?;
+
         let assigned = match self
             .jobs
             .complete_job(batch_number, ProverType::Fake, prover_id)
@@ -376,18 +378,24 @@ impl FriJobManager {
             .with_data(FriProof::Fake)
             .with_stage(BatchExecutionStage::FriProvedFake);
 
-        match self.batches_with_proof_sender.try_send(envelope) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Closed(_)) => return Err(SubmitError::ShuttingDown),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                panic!("pipeline channel unexpectedly full — consumer is catastrophically behind")
-            }
-        }
+        permit.send(envelope);
         self.update_in_flight_state().await;
         Ok(())
     }
 
     pub async fn status(&self) -> Vec<JobState> {
         self.jobs.status().await
+    }
+
+    fn try_reserve_permit_downstream(
+        &self,
+    ) -> Result<mpsc::Permit<'_, SignedBatchEnvelope<FriProof>>, SubmitError> {
+        match self.batches_with_proof_sender.try_reserve() {
+            Ok(permit) => Ok(permit),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                Err(SubmitError::Other("downstream backpressure".to_string()))
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(SubmitError::ShuttingDown),
+        }
     }
 }
