@@ -50,7 +50,7 @@ pub trait ReadRpcStorage: ReadStateHistory + Clone {
             BlockId::Number(BlockNumberOrTag::Finalized) => self
                 .finality()
                 .get_finality_status()
-                .last_executed_block
+                .last_finalized_executed_block
                 .into(),
             BlockId::Number(BlockNumberOrTag::Earliest) => {
                 self.repository().get_earliest_block().into()

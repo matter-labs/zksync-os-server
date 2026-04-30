@@ -8,13 +8,13 @@ use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Sleep};
 use tracing;
-use zksync_os_batch_types::{BlockMerkleTreeData, DiscoveredCommittedBatch};
-use zksync_os_contract_interface::models::StoredBatchInfo;
-use zksync_os_interface::types::BlockOutput;
-use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
-use zksync_os_l1_sender::batcher_model::{
+use zksync_os_batch_types::batcher_model::{
     BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
 };
+use zksync_os_batch_types::{BlockMerkleTreeData, DiscoveredCommittedBatch};
+use zksync_os_batcher_metrics::BATCHER_METRICS;
+use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{
@@ -175,11 +175,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             last_created_batch_at = Some(Instant::now());
 
             // Update prev_batch_info for the next iteration
-            prev_batch_info = batch_envelope
-                .batch
-                .batch_info
-                .clone()
-                .into_stored(&batch_envelope.batch.protocol_version);
+            prev_batch_info = batch_envelope.batch.batch_info.clone().into_stored();
 
             BATCHER_METRICS
                 .transactions_per_batch
@@ -201,7 +197,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             );
 
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
-            if let Some(sidecar) = batch_envelope.batch.batch_info.blob_sidecar.clone() {
+            if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone() {
                 self.sidecar_sender
                     .send(sidecar)
                     .await
@@ -421,11 +417,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
 
         // Verify that the rebuilt batch matches the stored batch by comparing hashes
         if self.batcher_config.assert_rebuilt_batch_hashes {
-            let rebuilt_stored_batch_info = rebuilt_batch
-                .batch
-                .batch_info
-                .clone()
-                .into_stored(&rebuilt_batch.batch.protocol_version);
+            let rebuilt_stored_batch_info = rebuilt_batch.batch.batch_info.clone().into_stored();
 
             anyhow::ensure!(
                 rebuilt_stored_batch_info.hash() == existing_batch.batch_info.hash(),

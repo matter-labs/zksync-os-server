@@ -14216,15 +14216,18 @@ name = "zksync_os_batch_types"
 version = "0.19.2"
 dependencies = [
  "alloy",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "anyhow",
  "blake2",
  "serde",
+ "serde_json",
  "thiserror 2.0.17",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
+ "time",
+ "zksync_os_batcher_metrics",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_merkle_tree",
  "zksync_os_mini_merkle_tree",
+ "zksync_os_observability",
  "zksync_os_types",
 ]
 
@@ -14241,15 +14244,22 @@ dependencies = [
  "tracing",
  "vise",
  "zksync_os_batch_types",
+ "zksync_os_batcher_metrics",
  "zksync_os_contract_interface",
  "zksync_os_interface",
- "zksync_os_l1_sender",
  "zksync_os_merkle_tree",
  "zksync_os_network",
  "zksync_os_observability",
  "zksync_os_pipeline",
  "zksync_os_storage_api",
  "zksync_os_types",
+]
+
+[[package]]
+name = "zksync_os_batcher_metrics"
+version = "0.19.2"
+dependencies = [
+ "vise",
 ]
 
 [[package]]
@@ -14462,25 +14472,15 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
- "blake2",
  "futures",
  "itertools 0.14.0",
- "ruint",
- "secrecy",
- "serde",
- "serde_json",
  "thiserror 2.0.17",
- "time",
  "tokio",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_batch_types",
+ "zksync_os_batcher_metrics",
  "zksync_os_contract_interface",
- "zksync_os_interface",
- "zksync_os_merkle_tree",
- "zksync_os_mini_merkle_tree",
  "zksync_os_observability",
  "zksync_os_operator_signer",
  "zksync_os_pipeline",
@@ -14717,6 +14717,7 @@ dependencies = [
  "bincode 2.0.1",
  "tokio",
  "tracing",
+ "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_crypto",
  "zksync_os_l1_sender",
@@ -15010,6 +15011,7 @@ dependencies = [
  "zksync_os_base_token_adjuster",
  "zksync_os_batch_types",
  "zksync_os_batch_verification",
+ "zksync_os_batcher_metrics",
  "zksync_os_config_validation_macros",
  "zksync_os_contract_interface",
  "zksync_os_external_price_api",

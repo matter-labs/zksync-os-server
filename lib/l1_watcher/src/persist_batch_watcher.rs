@@ -5,17 +5,19 @@ use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use std::collections::HashMap;
-use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
+use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
-/// Watches commit and execute events together and persists only irreversibly executed batches.
+/// Watches finalized commit and execute events together and persists only irreversibly executed
+/// batches.
 ///
 /// This component keeps committed batches in memory until the matching `BlockExecution` event
-/// arrives, and only then writes a `PersistedBatch` through `WriteBatch`. That split avoids having
-/// to roll back persistent storage for batches that were committed but later reverted on L1.
+/// arrives in a finalized settlement-layer block, and only then writes a `PersistedBatch` through
+/// `WriteBatch`. That split avoids having to roll back persistent storage for batches that were
+/// committed or executed but later reverted on L1.
 ///
 /// Depended on by:
 /// - `ExecutedBatchStorage`, which is the concrete persistent store typically passed into this
@@ -42,7 +44,6 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         config: L1WatcherConfig,
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
-        l1_chain_id: u64,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(
@@ -103,7 +104,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             last_persisted_batch_on_start: last_persisted_batch,
         };
 
-        SlAwareL1Watcher::new(config, segments, l1_chain_id, Box::new(this))
+        SlAwareL1Watcher::new(config, segments, Box::new(this))
     }
 
     async fn parse_committed_batch(
@@ -114,16 +115,10 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     ) -> Result<DiscoveredCommittedBatch, L1WatcherError> {
         let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
         let zk_chain = ZkChain::new(log.address(), provider.clone());
-        let committed_batch = util::fetch_commit_calldata(&zk_chain, tx_hash).await?;
+        let batch_info = util::fetch_committed_batch_data(&zk_chain, tx_hash)
+            .await?
+            .into_stored();
 
-        // todo: stop using this struct once fully migrated from S3
-        let last_executed_batch_info = BatchInfo {
-            commit_info: committed_batch.commit_info,
-            chain_address: Default::default(),
-            upgrade_tx_hash: committed_batch.upgrade_tx_hash,
-            blob_sidecar: None,
-        };
-        let batch_info = last_executed_batch_info.into_stored(&committed_batch.protocol_version);
         Ok(DiscoveredCommittedBatch {
             batch_info,
             block_range: report.firstBlockNumber..=report.lastBlockNumber,
@@ -227,13 +222,6 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                 self.process_commit(provider, report, log).await?;
             }
             s if s == BlockExecution::SIGNATURE_HASH => {
-                // This logic is not totally resistant to reorgs. If `executeBatches` is reverted + the
-                // batch itself is reverted then the storage will persist an incorrect batch. The
-                // situation should be extremely rare but still possible. Two options here:
-                // 1. Trim batches that are no longer executed from the storage on start-up.
-                // 2. Track **finalized** executions along with regular (latest) ones. They cannot
-                //    be reorged and hence would be safe to depend on here.
-
                 let execute = BlockExecution::decode_log(&log.inner)?.data;
                 let batch_number = execute.batchNumber.to::<u64>();
                 if batch_number > self.last_persisted_batch_on_start {

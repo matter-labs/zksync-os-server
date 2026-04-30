@@ -20,11 +20,12 @@ pub struct SegmentSpec {
 
 /// Settlement-layer-aware variant of [`L1Watcher`] that walks a chain of SL segments
 /// (L1 → Gateway → L1 → …) in order. Historical segments are scanned to completion once their
-/// commit and execute blocks resolve; the final open-ended segment is tailed live.
+/// commit and execute blocks resolve; the final open-ended segment is tailed live against the
+/// finalized boundary so events that haven't yet been irreversibly observed on-chain are not
+/// processed.
 pub struct SlAwareL1Watcher {
     config: L1WatcherConfig,
     segments: VecDeque<SegmentSpec>,
-    l1_chain_id: u64,
     processor: Box<dyn ProcessRawEvents>,
 }
 
@@ -32,7 +33,6 @@ impl SlAwareL1Watcher {
     pub fn new(
         config: L1WatcherConfig,
         segments: Vec<SegmentSpec>,
-        l1_chain_id: u64,
         processor: Box<dyn ProcessRawEvents>,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
@@ -53,7 +53,6 @@ impl SlAwareL1Watcher {
         Ok(Self {
             config,
             segments: segments.into(),
-            l1_chain_id,
             processor,
         })
     }
@@ -62,11 +61,10 @@ impl SlAwareL1Watcher {
         let Self {
             config,
             mut segments,
-            l1_chain_id,
             mut processor,
         } = self;
         while let Some(segment) = segments.pop_front() {
-            processor = match run_segment(config.clone(), segment, l1_chain_id, processor).await {
+            processor = match run_segment(config.clone(), segment, processor).await {
                 Ok(processor) => processor,
                 Err(e) => {
                     tracing::error!("sl-aware l1 watcher fatal error: {e}");
@@ -82,7 +80,6 @@ impl SlAwareL1Watcher {
 async fn run_segment(
     config: L1WatcherConfig,
     segment: SegmentSpec,
-    l1_chain_id: u64,
     processor: Box<dyn ProcessRawEvents>,
 ) -> anyhow::Result<Box<dyn ProcessRawEvents>> {
     let zk_chain = segment.zk_chain.clone();
@@ -108,16 +105,17 @@ async fn run_segment(
         end_block.unwrap_or(u64::MAX),
     );
 
-    let mut watcher = L1Watcher::new(
+    // Closed segments are bounded by an executed batch on-chain, so the boundary mode does not
+    // matter — `end_block` dominates the cap. The open-ended segment uses the finalized boundary
+    // so persistence-style processors only react to irreversibly observed events.
+    let mut watcher = L1Watcher::new_finalized(
         config,
         zk_chain.provider().clone(),
         (*zk_chain.address()).into(),
         start_block,
         end_block,
-        l1_chain_id,
         processor,
-    )
-    .await?;
+    );
     watcher.run_inner().await;
     Ok(watcher.processor)
 }

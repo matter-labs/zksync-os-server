@@ -14,13 +14,17 @@ zksync_os_merkle_tree.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_mini_merkle_tree.workspace = true
 zksync_os_types.workspace = true
+zksync_os_batcher_metrics.workspace = true
+zksync_os_observability.workspace = true
 
 zksync_os_interface.workspace = true
-
-zk_os_basic_system.workspace = true
-zk_ee.workspace = true
 
 alloy.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 blake2.workspace = true
+time.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

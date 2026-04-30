@@ -1,12 +1,9 @@
-pub mod batcher_metrics;
-pub mod batcher_model;
 pub mod commands;
 pub mod config;
 mod metrics;
 pub mod pipeline_component;
 pub mod upgrade_gatekeeper;
 
-use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::metrics::{
@@ -34,6 +31,7 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Instant;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
+use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_pipeline::PeekableReceiver;

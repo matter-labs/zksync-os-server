@@ -1200,6 +1200,8 @@ impl AnvilL1 {
         let locked_port = LockedPort::acquire_unused().await?;
         let address = format!("http://localhost:{}", locked_port.port);
 
+        // --slots-in-an-epoch defines what blocks are "finalized" in Anvil, last finalized block is `latest - 2 * slots_in_an_epoch`
+        // so we set block time to 0.25s and slots in epoch set to 10 and finalization delays is about 10*0.25s*2=5s which is reasonable for tests.
         let provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
             anvil
                 .port(locked_port.port)
@@ -1209,6 +1211,8 @@ impl AnvilL1 {
                 .arg("--mixed-mining")
                 .arg("--load-state")
                 .arg(l1_state_path)
+                .arg("--slots-in-an-epoch")
+                .arg("10")
         })?;
 
         let wallet = provider.wallet().clone();

@@ -1,4 +1,3 @@
-use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::run_l1_sender;
@@ -9,6 +8,7 @@ use alloy::providers::{Provider, WalletProvider};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
 /// Generic L1 Sender pipeline component

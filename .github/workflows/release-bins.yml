@@ -152,7 +152,7 @@ jobs:
           anvil --load-state "${L1_STATE_JSON}" \
             --port 8545 \
             --block-time 0.25 \
-            --mixed-mining > anvil.log.txt 2>&1 &
+            --mixed-mining --slots-in-an-epoch 10 > anvil.log.txt 2>&1 &
           ./${ZKSYNC_OS_SERVER_BIN} > ${SERVER_LOGFILE} 2>&1 &
           elapsed=0
           while ! nc -z localhost ${PORT}; do

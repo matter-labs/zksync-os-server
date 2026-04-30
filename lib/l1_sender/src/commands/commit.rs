@@ -1,11 +1,11 @@
-use crate::batcher_metrics::BatchExecutionStage;
-use crate::batcher_model::{BatchSignatureData, FriProof, SignedBatchEnvelope};
 use crate::commands::SendToL1;
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{Address, Bytes, U256};
 use alloy::sol_types::SolCall;
 use std::fmt::Display;
 use zksync_os_batch_types::BatchSignatureSet;
+use zksync_os_batch_types::batcher_model::{BatchSignatureData, FriProof, SignedBatchEnvelope};
+use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::calldata::encode_commit_batch_data;
 use zksync_os_contract_interface::l1_discovery::BatchVerificationSL;
 use zksync_os_contract_interface::{IExecutor, IMultisigCommitter};
@@ -94,13 +94,13 @@ impl SendToL1 for CommitCommand {
                 .unzip();
 
             IMultisigCommitter::commitBatchesMultisigCall::new((
-                self.input.batch.batch_info.chain_address,
+                self.input.batch.chain_address,
                 U256::from(self.input.batch_number()),
                 U256::from(self.input.batch_number()),
                 encode_commit_batch_data(
                     &self.input.batch.previous_stored_batch_info,
                     self.input.batch.batch_info.commit_info.clone(),
-                    self.input.batch.protocol_version.minor,
+                    self.input.batch.batch_info.protocol_version.minor,
                 )
                 .into(),
                 signers,
@@ -111,13 +111,13 @@ impl SendToL1 for CommitCommand {
         } else {
             // todo: encode through `CommitCalldata` instead
             IExecutor::commitBatchesSharedBridgeCall::new((
-                self.input.batch.batch_info.chain_address,
+                self.input.batch.chain_address,
                 U256::from(self.input.batch_number()),
                 U256::from(self.input.batch_number()),
                 encode_commit_batch_data(
                     &self.input.batch.previous_stored_batch_info,
                     self.input.batch.batch_info.commit_info.clone(),
-                    self.input.batch.protocol_version.minor,
+                    self.input.batch.batch_info.protocol_version.minor,
                 )
                 .into(),
             ))
@@ -127,7 +127,7 @@ impl SendToL1 for CommitCommand {
     }
 
     fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
-        self.input.batch.batch_info.blob_sidecar.clone()
+        self.input.batch.blob_sidecar.clone()
     }
 }
 

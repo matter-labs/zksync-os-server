@@ -1,5 +1,6 @@
 use crate::metrics::METRICS;
 use crate::{L1WatcherConfig, ProcessRawEvents};
+use alloy::eips::BlockId;
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
@@ -18,9 +19,14 @@ pub struct L1Watcher {
     /// `Some(eb)` makes the watcher exit `run` once `next_block > eb`. `None` runs forever.
     end_block: Option<BlockNumber>,
     max_blocks_to_process: u64,
-    confirmations: BlockNumber,
+    block_boundary: BlockBoundary,
     poll_interval: Duration,
     pub(crate) processor: Box<dyn ProcessRawEvents>,
+}
+
+enum BlockBoundary {
+    Confirmed { confirmations: BlockNumber },
+    Finalized,
 }
 
 impl L1Watcher {
@@ -46,10 +52,30 @@ impl L1Watcher {
             next_block,
             end_block,
             max_blocks_to_process: config.max_blocks_to_process,
-            confirmations,
+            block_boundary: BlockBoundary::Confirmed { confirmations },
             poll_interval: config.poll_interval,
             processor,
         })
+    }
+
+    pub(crate) fn new_finalized(
+        config: L1WatcherConfig,
+        provider: DynProvider,
+        address: ValueOrArray<Address>,
+        next_block: BlockNumber,
+        end_block: Option<BlockNumber>,
+        processor: Box<dyn ProcessRawEvents>,
+    ) -> Self {
+        Self {
+            provider,
+            address,
+            next_block,
+            end_block,
+            max_blocks_to_process: config.max_blocks_to_process,
+            block_boundary: BlockBoundary::Finalized,
+            poll_interval: config.poll_interval,
+            processor,
+        }
     }
 }
 
@@ -80,13 +106,31 @@ impl L1Watcher {
 
     async fn poll(&mut self) -> Result<(), L1WatcherError> {
         let cap = match self.end_block {
-            // Closed segment: `end_block` was already resolved against a finalized block, so the
-            // confirmation window doesn't apply and we don't need a `latest_block` RPC.
+            // Closed segment: `end_block` was already resolved against a finalized/executed batch,
+            // so the confirmation/finalization window doesn't apply and we don't need an
+            // additional RPC.
             Some(eb) => eb,
-            None => {
-                let latest_block = self.provider.get_block_number().await?;
-                latest_block.saturating_sub(self.confirmations)
-            }
+            None => match self.block_boundary {
+                BlockBoundary::Confirmed { confirmations } => self
+                    .provider
+                    .get_block_number()
+                    .await?
+                    .saturating_sub(confirmations),
+                BlockBoundary::Finalized => {
+                    let Some(finalized_block) = self
+                        .provider
+                        .get_block_number_by_id(BlockId::finalized())
+                        .await?
+                    else {
+                        tracing::debug!(
+                            event_name = &self.processor.name(),
+                            "no finalized L1 block available yet"
+                        );
+                        return Ok(());
+                    };
+                    finalized_block
+                }
+            },
         };
 
         while self.next_block <= cap {
@@ -94,9 +138,6 @@ impl L1Watcher {
             // Inspect up to `self.max_blocks_to_process` blocks at a time
             let to_block = cap.min(from_block + self.max_blocks_to_process - 1);
 
-            // Hold the lock for the whole chunk: every method on the processor (filter, names,
-            // process) reads or writes its state, and the lock is uncontended in practice
-            // because SlAware activates segments serially.
             let events = self
                 .extract_logs_from_l1_blocks(from_block, to_block)
                 .await?;
