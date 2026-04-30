@@ -36,9 +36,11 @@ components (see below), and computes for each adjacent pair:
 
 | Signal | Formula | Used for |
 |---|---|---|
-| `block_diff` | `upstream.block_processed − downstream.block_processed` | Block-pipeline stages |
+| `block_diff` | `upstream.block_processed − downstream.(block_processed \| block_picked)` | Block-pipeline stages |
 | `time_diff` | `upstream.block_timestamp − downstream.block_timestamp` | Optional wall-clock lag |
-| `batch_diff` | `upstream.batch_processed − downstream.batch_processed` | Batch-pipeline stages |
+| `batch_diff` | `upstream.batch_processed − downstream.(batch_processed \| batch_picked)` | Batch-pipeline stages |
+
+For the downstream coordinate, `block_processed` / `batch_processed` is preferred. The `picked` fallback only applies before the very first item is fully processed — once any item completes, `block_processed` is set and never cleared (high-watermark), so the fallback is never used again after that point. A downstream component with neither set (nothing received yet) is skipped entirely.
 
 If any component's diff **strictly exceeds** its configured threshold it is
 marked as an active backpressure cause and
