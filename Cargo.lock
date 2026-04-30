@@ -14543,11 +14543,7 @@ version = "0.19.2"
 dependencies = [
  "alloy",
  "anyhow",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "clap",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "insta",
  "leb128",
  "once_cell",
@@ -14561,8 +14557,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.22",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
  "zksync_os_merkle_tree_api",
  "zksync_os_rocksdb",
 ]
