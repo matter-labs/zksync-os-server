@@ -1,4 +1,5 @@
 use alloy::primitives::BlockNumber;
+use anyhow::Context;
 use async_trait::async_trait;
 use std::ops::Div;
 use std::path::Path;
@@ -10,7 +11,9 @@ use zk_ee::utils::Bytes32;
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::BlockOutput;
-use zksync_os_merkle_tree::{MerkleTree, MerkleTreeColumnFamily, RocksDBWrapper, TreeEntry};
+use zksync_os_merkle_tree::{
+    MerkleTree, MerkleTreeColumnFamily, RocksDBWrapper, TreeBatchOutput, TreeEntry,
+};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
@@ -52,7 +55,7 @@ impl PipelineComponent for TreeManager {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
-            let block_output = block_output_with_reads.inner;
+            let (block_output, read_keys) = block_output_with_reads.into_parts();
             latency_tracker.enter_state(GenericComponentState::Processing);
             let started_at = Instant::now();
             let block_number = block_output.header.number;
@@ -84,16 +87,22 @@ impl PipelineComponent for TreeManager {
                 .iter()
                 .map(|write| write.key.0.into())
                 .collect();
-            let (read_keys_for_tree, read_keys): (Vec<_>, Vec<_>) = block_output_with_reads
-                .read_keys
-                .iter()
-                .map(|key| (*key, Bytes32::from(key.0)))
+            let (read_keys_for_tree, read_keys): (Vec<_>, Vec<_>) = read_keys
+                .into_iter()
+                .map(|key| (key, Bytes32::from(key.0)))
                 .unzip();
 
             let count = tree_entries.len();
             let mut tree_clone = tree.clone();
-            let (tree_batch_output, tree_proof) = tokio::task::spawn_blocking(move || {
-                tree_clone.extend_with_proof(&tree_entries, &read_keys_for_tree)
+            let (tree_input, (tree_output, update_proof)) = tokio::task::spawn_blocking(move || {
+                let (root_hash, leaf_count) = tree_clone
+                    .root_info(block_number - 1)?
+                    .with_context(|| {
+                        format!("Merkle tree missing previous block version for block {block_number}")
+                    })?;
+                let input = TreeBatchOutput { root_hash, leaf_count };
+                let output = tree_clone.extend_with_proof(&tree_entries, &read_keys_for_tree)?;
+                anyhow::Ok((input, output))
             })
             .await??;
             last_processed_block = tree
@@ -101,25 +110,27 @@ impl PipelineComponent for TreeManager {
                 .expect("uninitialized tree after applying a block");
             assert_eq!(last_processed_block, block_number);
 
-            tracing::debug!(
+            tracing::info!(
                 block_number = block_number,
                 written_keys.len = written_keys.len(),
                 read_keys.len = read_keys.len(),
-                output = ?tree_batch_output,
+                input = ?tree_input,
+                output = ?tree_output,
                 "Processed tree update"
             );
 
             TREE_METRICS
                 .entry_time
                 .observe(started_at.elapsed().div(count.max(1) as u32));
-            TREE_METRICS.unique_leafs.set(tree_batch_output.leaf_count);
+            TREE_METRICS.unique_leafs.set(tree_output.leaf_count);
             TREE_METRICS.block_time.observe(started_at.elapsed());
 
             TREE_METRICS.processing_range.observe(count.max(1) as u64);
             TREE_METRICS.block_number.set(block_number);
             let tree_block = BlockMerkleTreeData {
-                output: tree_batch_output,
-                proof: tree_proof,
+                input: tree_input,
+                output: tree_output,
+                proof: update_proof,
                 read_keys,
                 written_keys,
             };

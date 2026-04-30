@@ -52,10 +52,10 @@ impl VmWrapper {
                 &mut validator,
             )?;
 
-            Ok(BlockOutputWithReads {
-                inner: block_output,
-                read_keys: recording_handle.into_read_keys(),
-            })
+            Ok(BlockOutputWithReads::new(
+                block_output,
+                recording_handle.into_read_keys(),
+            ))
         });
 
         Self {

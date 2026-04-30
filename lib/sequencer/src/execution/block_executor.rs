@@ -157,7 +157,7 @@ where
 
             self.block_context_provider
                 .on_canonical_state_change(
-                    &block_output.inner,
+                    block_output.as_ref(),
                     &replay_record,
                     strict_subpool_cleanup,
                 )
@@ -168,8 +168,8 @@ where
 
             state_overlay_buffer.add_block(
                 block_number,
-                block_output.inner.storage_writes.clone(),
-                block_output.inner.published_preimages.clone(),
+                block_output.as_ref().storage_writes.clone(),
+                block_output.as_ref().published_preimages.clone(),
             )?;
 
             tracing::info!(

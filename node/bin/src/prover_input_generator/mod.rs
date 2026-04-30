@@ -208,8 +208,6 @@ fn compute_prover_input(
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
     let state_view = state_handle.state_view_at(block_number - 1).unwrap();
-    let root_hash = tree_view.output.root_hash;
-    let leaf_count = tree_view.output.leaf_count;
     let transactions = replay_record
         .transactions
         .iter()
@@ -237,8 +235,8 @@ fn compute_prover_input(
             };
 
             let initial_storage_commitment = StorageCommitment {
-                root: root_hash.0.into(),
-                next_free_slot: leaf_count,
+                root: tree_view.input.root_hash.0.into(),
+                next_free_slot: tree_view.input.leaf_count,
             };
 
             let list_source = TxListSource { transactions };
@@ -275,8 +273,8 @@ fn compute_prover_input(
             };
 
             let initial_storage_commitment = StorageCommitment {
-                root: root_hash.0.into(),
-                next_free_slot: leaf_count,
+                root: tree_view.input.root_hash.0.into(),
+                next_free_slot: tree_view.input.leaf_count,
             };
 
             let list_source = TxListSource { transactions };

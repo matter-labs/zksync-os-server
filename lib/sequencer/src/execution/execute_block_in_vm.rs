@@ -356,7 +356,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         txs: all_processed_txs.clone(),
         error: e.context("seal_block()").to_string(),
     })?;
-    let output = &mut output_with_reads.inner;
+    let output = output_with_reads.inner_mut();
 
     // Since we've overridden the state, we need to insert any forced preimages into the output as well.
     // Note: the fact that we're doing it here, would also affect the block output hash,

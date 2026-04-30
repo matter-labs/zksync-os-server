@@ -2,6 +2,7 @@
 
 use alloy::primitives::B256;
 use std::collections::{BTreeMap, HashMap};
+use std::thread;
 use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
 use zk_os_basic_system_dev::system_implementation::flat_storage_model::FlatStorageLeaf as FlatStorageLeafDev;
@@ -130,6 +131,9 @@ impl TreeAdapter {
     }
 }
 
+/// Storage adapter that reads data from the Merkle tree. This adapter is very inefficient in terms of I/O,
+/// but is universal as opposed to using a batch update proof (which will miss data for any keys
+/// not read / written in the batch).
 #[derive(Debug)]
 pub(super) struct VersionedMerkleTree {
     inner: MerkleTree<RocksDBWrapper>,
@@ -209,6 +213,7 @@ impl VersionedMerkleTree {
     }
 
     fn merkle_proof_inner(&mut self, tree_index: u64) -> LeafProof {
+        dbg!(tree_index);
         if !self.cached_proofs.contains_key(&tree_index) {
             let proof = self
                 .inner
@@ -231,7 +236,7 @@ impl VersionedMerkleTree {
         for (i, hash) in proof.inner.siblings.iter().enumerate() {
             merkle_path[i] = hash.0.into();
         }
-        // Fill in remaining Merkle path hashes from empty subtrees.
+        // Fill in remaining Merkle path hashes from empty subtree hashes.
         let merkle_path_len = proof.inner.siblings.len() as u8;
         for level in merkle_path_len..TREE_DEPTH {
             merkle_path[usize::from(level)] = Blake2Hasher.empty_subtree_hash(level).0.into();
@@ -245,6 +250,23 @@ impl VersionedMerkleTree {
             assert_eq!(self.read_inner(key), None);
         }
         self.cached_missing_key_to_prev_index[&key]
+    }
+}
+
+/// Reports storage-related metrics on drop.
+impl Drop for VersionedMerkleTree {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            return; // Do not report potentially incomplete data if generating prover input failed
+        }
+
+        tracing::info!(
+            version = self.version,
+            cached_key_to_index.len = self.cached_key_to_index.len(),
+            cached_missing_key_to_prev_index.len = self.cached_missing_key_to_prev_index.len(),
+            cached_proofs.len = self.cached_proofs.len(),
+            "finished providing storage via Merkle tree"
+        );
     }
 }
 

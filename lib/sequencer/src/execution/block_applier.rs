@@ -45,7 +45,7 @@ where
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
-            let block_output = &block_output_with_reads.inner;
+            let block_output = block_output_with_reads.as_ref();
 
             let block_number = executed_replay.block_context.block_number;
             let override_allowed = match cmd_type {

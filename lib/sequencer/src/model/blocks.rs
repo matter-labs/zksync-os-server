@@ -7,11 +7,33 @@ use zksync_os_mempool::MarkingTxStream;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
+/// Block output with additional information about storage slots read during execution.
 #[derive(Debug)]
 pub struct BlockOutputWithReads {
-    pub inner: BlockOutput,
-    /// Keys read during block execution.
-    pub read_keys: HashSet<B256>,
+    inner: BlockOutput,
+    /// Keys read, but not written during block execution.
+    read_keys: HashSet<B256>,
+}
+
+impl BlockOutputWithReads {
+    pub(crate) fn new(inner: BlockOutput, mut read_keys: HashSet<B256>) -> Self {
+        for write in &inner.storage_writes {
+            read_keys.remove(&write.key);
+        }
+        // Reclaim unnecessary capacity; the read keys are immutable after this point.
+        read_keys.shrink_to_fit();
+
+        Self { inner, read_keys }
+    }
+
+    /// Returns block output + keys read, but not written during block execution.
+    pub fn into_parts(self) -> (BlockOutput, HashSet<B256>) {
+        (self.inner, self.read_keys)
+    }
+
+    pub(crate) fn inner_mut(&mut self) -> &mut BlockOutput {
+        &mut self.inner
+    }
 }
 
 impl AsRef<BlockOutput> for BlockOutputWithReads {
