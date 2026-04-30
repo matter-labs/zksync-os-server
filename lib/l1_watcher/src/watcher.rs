@@ -88,6 +88,7 @@ impl L1Watcher {
         self.run_inner().await;
     }
 
+    /// Non-consuming version of `run`, intended for internal usage in this crate.
     pub(crate) async fn run_inner(&mut self) {
         let mut timer = tokio::time::interval(self.poll_interval);
         loop {

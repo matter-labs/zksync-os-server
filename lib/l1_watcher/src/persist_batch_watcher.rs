@@ -77,11 +77,12 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
             let zk_chain = intervals.resolve_proxy(interval.first_batch)?.clone();
             let first_batch = if segments.is_empty() {
-                if last_persisted_batch == 0 {
-                    0
-                } else {
-                    last_persisted_batch.max(interval.first_batch)
-                }
+                anyhow::ensure!(
+                    interval.first_batch <= last_persisted_batch + 1,
+                    "first SL interval ({interval}) must start at or before first non-persisted batch ({})",
+                    last_persisted_batch + 1
+                );
+                last_persisted_batch
             } else {
                 interval.first_batch
             };
