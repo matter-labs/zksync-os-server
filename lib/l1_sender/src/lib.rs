@@ -5,7 +5,7 @@ pub mod pipeline_component;
 pub mod upgrade_gatekeeper;
 
 use crate::commands::{L1SenderCommand, SendToL1};
-use crate::config::L1SenderConfig;
+use crate::config::{L1SenderConfig, L1SenderFeeConfig};
 use crate::metrics::{
     L1_SENDER_METRICS, L1SenderState, PriorityFeeEstimatePercentile, PriorityFeeEstimateWindow,
 };
@@ -46,6 +46,13 @@ const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 /// In case there's only one chain connected to gateway, it is very likely that there will be not enough block production
 /// to reach 3 confirmations for such transactions
 const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
+
+#[derive(Debug, Clone, Copy)]
+struct FeeParams {
+    max_fee_per_gas: u128,
+    max_priority_fee_per_gas: u128,
+    max_fee_per_blob_gas: u128,
+}
 
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
@@ -88,6 +95,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
     let command_name = Input::NAME;
+    let fee_config = config.fee_config;
+    let force_transaction_resubmission = config.force_transaction_resubmission;
 
     let operator_address =
         register_operator::<_, Input>(&mut provider, config.operator_signer).await?;
@@ -106,22 +115,26 @@ pub async fn run_l1_sender<Input: SendToL1>(
         return Ok(());
     }
 
-    // On startup, detect any L1 transactions that were submitted in a previous session
-    // but not yet mined, and pair them with the corresponding queued commands.
-    let recovered = match recover_in_flight_txs(
-        &provider,
-        operator_address,
-        gateway,
-        &mut inbound,
-        command_name,
-        sl_block_number,
-    )
-    .await
-    {
-        Ok(paired) => paired,
-        Err(err) => {
-            tracing::warn!("Error during in-flight transaction recovery: {err}");
-            vec![]
+    // On startup, either recover submitted transactions from a previous session or, when
+    // explicitly requested, skip recovery so the normal send path replaces them.
+    let recovered = if force_transaction_resubmission {
+        vec![]
+    } else {
+        match recover_in_flight_txs(
+            &provider,
+            operator_address,
+            gateway,
+            &mut inbound,
+            command_name,
+            sl_block_number,
+        )
+        .await
+        {
+            Ok(paired) => paired,
+            Err(err) => {
+                tracing::warn!("Error during in-flight transaction recovery: {err}");
+                vec![]
+            }
         }
     };
 
@@ -157,7 +170,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
         .await?;
     }
 
-    // At this point, all in-flight transactions from the previous session are confirmed.
+    // At this point, recovered in-flight transactions are confirmed. If force resubmission is
+    // enabled, the queued commands stay in `inbound` and the normal send path replaces them.
     // Only actual SendToL1 commands are expected from here on.
     loop {
         latency_tracker.enter_state(L1SenderState::WaitingRecv);
@@ -198,13 +212,13 @@ pub async fn run_l1_sender<Input: SendToL1>(
         let pending_txs: Vec<PendingTx<Input>> =
             futures::stream::iter(commands.drain(..))
                 .then(|mut cmd| async {
-                    let mut tx_request = tx_request_with_gas_fields(
+                    let fee_params = resolve_fee_params(
                         &provider,
-                        operator_address,
-                        config.max_fee_per_gas_wei,
-                        config.max_priority_fee_per_gas_wei,
+                        fee_config,
+                        force_transaction_resubmission,
                     )
-                    .await?
+                    .await?;
+                    let mut tx_request = tx_request_with_gas_fields(operator_address, fee_params)
                     .with_to(to_address)
                     .with_input(cmd.solidity_call(gateway, &operator_address));
 
@@ -212,7 +226,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                         let fee_per_blob_gas = provider.get_blob_base_fee().await?;
                         L1_SENDER_METRICS
                             .report_blob_base_fee(fee_per_blob_gas)?;
-                        let max_fee_per_blob_gas = config.max_fee_per_blob_gas_wei;
+                        let max_fee_per_blob_gas = fee_params.max_fee_per_blob_gas;
 
                         if fee_per_blob_gas > max_fee_per_blob_gas {
                             tracing::warn!(
@@ -596,12 +610,40 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
     }
 }
 
-async fn tx_request_with_gas_fields(
+impl L1SenderFeeConfig {
+    fn configured_fee_params(self) -> FeeParams {
+        FeeParams {
+            max_fee_per_gas: self.max_fee_per_gas_wei,
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas_wei,
+            max_fee_per_blob_gas: self.max_fee_per_blob_gas_wei,
+        }
+    }
+
+    fn replacement_fee_params(self) -> FeeParams {
+        FeeParams {
+            max_fee_per_gas: ((self.max_fee_per_gas_wei as f64)
+                * self.max_fee_per_gas_replacement_multiplier)
+                .ceil() as u128,
+            max_priority_fee_per_gas: ((self.max_priority_fee_per_gas_wei as f64)
+                * self.max_priority_fee_per_gas_replacement_multiplier)
+                .ceil() as u128,
+            max_fee_per_blob_gas: ((self.max_fee_per_blob_gas_wei as f64)
+                * self.max_fee_per_blob_gas_replacement_multiplier)
+                .ceil() as u128,
+        }
+    }
+}
+
+async fn resolve_fee_params(
     provider: &dyn Provider,
-    operator_address: Address,
-    max_fee_per_gas: u128,
-    max_priority_fee_per_gas: u128,
-) -> anyhow::Result<TransactionRequest> {
+    fee_config: L1SenderFeeConfig,
+    force_transaction_resubmission: bool,
+) -> anyhow::Result<FeeParams> {
+    if force_transaction_resubmission {
+        return Ok(fee_config.replacement_fee_params());
+    }
+
+    let configured_params = fee_config.configured_fee_params();
     let eip1559_est = provider.estimate_eip1559_fees().await?;
     L1_SENDER_METRICS.report_l1_eip_1559_estimation(eip1559_est)?;
     report_custom_priority_fee_metrics(provider).await?;
@@ -611,38 +653,51 @@ async fn tx_request_with_gas_fields(
         max_fee_per_gas_gwei = ?format_units(eip1559_est.max_fee_per_gas, "gwei"),
         "estimated priority and max fees"
     );
-    // Use the minimum of estimated and configured values for gas fields
-    let capped_max_fee_per_gas = if eip1559_est.max_fee_per_gas > max_fee_per_gas {
+
+    let max_fee_per_gas = if eip1559_est.max_fee_per_gas > configured_params.max_fee_per_gas {
         tracing::warn!(
-            "L1 sender's configured maxFeePerGas ({max_fee_per_gas}) \
+            "L1 sender's configured maxFeePerGas ({}) \
              is lower than the one estimated from network  ({}), \
-             using the configured base fee value ({max_fee_per_gas}) - this may result in inclusion delay.",
-            eip1559_est.max_fee_per_gas
+             using the configured base fee value ({}) - this may result in inclusion delay.",
+            configured_params.max_fee_per_gas,
+            eip1559_est.max_fee_per_gas,
+            configured_params.max_fee_per_gas,
         );
-        max_fee_per_gas
+        configured_params.max_fee_per_gas
     } else {
         eip1559_est.max_fee_per_gas
     };
-    let capped_max_priority_fee_per_gas = if eip1559_est.max_priority_fee_per_gas
-        > max_priority_fee_per_gas
-    {
-        tracing::warn!(
-            "L1 sender's configured max_priority_fee_per_gas ({max_priority_fee_per_gas}) \
+    let max_priority_fee_per_gas =
+        if eip1559_est.max_priority_fee_per_gas > configured_params.max_priority_fee_per_gas {
+            tracing::warn!(
+                "L1 sender's configured max_priority_fee_per_gas ({}) \
              is lower than the one estimated from network  ({}), \
-             using the configured priority fee value ({max_priority_fee_per_gas}) - this may result in inclusion delay.",
+             using the configured priority fee value ({}) - this may result in inclusion delay.",
+                configured_params.max_priority_fee_per_gas,
+                eip1559_est.max_priority_fee_per_gas,
+                configured_params.max_priority_fee_per_gas,
+            );
+            configured_params.max_priority_fee_per_gas
+        } else {
             eip1559_est.max_priority_fee_per_gas
-        );
-        max_priority_fee_per_gas
-    } else {
-        eip1559_est.max_priority_fee_per_gas
-    };
+        };
 
-    let tx = TransactionRequest::default()
+    Ok(FeeParams {
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+        max_fee_per_blob_gas: configured_params.max_fee_per_blob_gas,
+    })
+}
+
+fn tx_request_with_gas_fields(
+    operator_address: Address,
+    fee_params: FeeParams,
+) -> TransactionRequest {
+    TransactionRequest::default()
         .with_from(operator_address)
-        .with_max_fee_per_gas(capped_max_fee_per_gas)
-        .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas)
-        .with_gas_limit(15000000);
-    Ok(tx)
+        .with_max_fee_per_gas(fee_params.max_fee_per_gas)
+        .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
+        .with_gas_limit(15000000)
 }
 
 async fn report_custom_priority_fee_metrics(provider: &dyn Provider) -> anyhow::Result<()> {

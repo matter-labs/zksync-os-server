@@ -767,6 +767,22 @@ pub struct L1SenderConfig {
     #[config(default_t = 2 * EtherUnit::Gwei)]
     pub max_fee_per_blob_gas: EtherAmount,
 
+    /// Multiplier applied to `max_fee_per_gas` when `force_transaction_resubmission` is enabled.
+    #[config(default_t = 1.0)]
+    pub max_fee_per_gas_replacement_multiplier: f64,
+
+    /// Multiplier applied to `max_priority_fee_per_gas` when `force_transaction_resubmission` is enabled.
+    #[config(default_t = 1.0)]
+    pub max_priority_fee_per_gas_replacement_multiplier: f64,
+
+    /// Multiplier applied to `max_fee_per_blob_gas` when `force_transaction_resubmission` is enabled.
+    #[config(default_t = 1.0)]
+    pub max_fee_per_blob_gas_replacement_multiplier: f64,
+
+    /// Skips startup in-flight recovery and resubmits queued L1 transactions with replacement fee caps.
+    #[config(default_t = false)]
+    pub force_transaction_resubmission: bool,
+
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
     pub command_limit: usize,
@@ -1330,9 +1346,17 @@ impl L1SenderConfig {
     ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
         zksync_os_l1_sender::config::L1SenderConfig {
             operator_signer,
-            max_fee_per_gas_wei: self.max_fee_per_gas.0,
-            max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
-            max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
+            fee_config: zksync_os_l1_sender::config::L1SenderFeeConfig {
+                max_fee_per_gas_wei: self.max_fee_per_gas.0,
+                max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
+                max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
+                max_fee_per_gas_replacement_multiplier: self.max_fee_per_gas_replacement_multiplier,
+                max_priority_fee_per_gas_replacement_multiplier: self
+                    .max_priority_fee_per_gas_replacement_multiplier,
+                max_fee_per_blob_gas_replacement_multiplier: self
+                    .max_fee_per_blob_gas_replacement_multiplier,
+            },
+            force_transaction_resubmission: self.force_transaction_resubmission,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
@@ -1618,6 +1642,10 @@ mod tests {
                 max_fee_per_gas: 200 * EtherUnit::Gwei,
                 max_priority_fee_per_gas: 1 * EtherUnit::Gwei,
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
+                max_fee_per_gas_replacement_multiplier: 1.0,
+                max_priority_fee_per_gas_replacement_multiplier: 1.0,
+                max_fee_per_blob_gas_replacement_multiplier: 1.0,
+                force_transaction_resubmission: false,
                 command_limit: 16,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
