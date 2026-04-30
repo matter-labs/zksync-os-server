@@ -120,28 +120,5 @@ only one `gate.register(rx)` call — no other logic changes.
 
 ## Metrics
 
-All metrics are prefixed `pipeline_`:
-
-| Metric | Description |
-|---|---|
-| `backpressure_active{component}` | 1 if this component is currently an active cause |
-| `accepting` | 1 if the monitor is accepting, 0 if suspended |
-| `acceptance_state_changes` | Counter: Accepting → NotAccepting transitions |
-| `acceptance_state_clears` | Counter: NotAccepting → Accepting transitions |
-| `component_block_diff_to_upstream{component}` | Blocks behind upstream neighbour |
-| `component_batch_diff_to_upstream{component}` | Batches behind upstream neighbour |
-| `component_time_diff_to_upstream_seconds{component}` | Timestamp lag vs upstream |
-| `component_block_diff_to_head{component}` | Blocks behind pipeline head |
-| `component_last_processed_block{component}` | Last processed block number |
-| `component_last_processed_batch{component}` | Last processed batch number |
-| `component_last_picked_batch{component}` | Last dequeued batch number |
-| `in_flight_first_batch{component}` | Oldest in-flight batch (L1 senders, job managers) |
-| `in_flight_last_batch{component}` | Newest in-flight batch |
-| `in_flight_batch_count{component}` | Size of the in-flight window |
-| `backpressure_threshold_block_diff_to_upstream{component}` | Configured block threshold (emitted once at startup) |
-| `backpressure_threshold_batch_diff_to_upstream{component}` | Configured batch threshold (emitted once at startup) |
-| `component_order{component}` | Pipeline registration order (0 = head) |
-
-Thresholds are emitted once at startup so Grafana dashboards can show
-"configured vs actual" without hard-coding a component list that drifts as the
-pipeline evolves.
+All metrics are prefixed `pipeline_`. See [`src/metrics.rs`](src/metrics.rs) for
+the authoritative list with descriptions.
