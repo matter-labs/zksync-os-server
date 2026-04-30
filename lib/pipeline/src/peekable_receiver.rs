@@ -247,19 +247,11 @@ mod tests {
         let item = rx.recv_and_record_picked(&reporter).await.unwrap();
         assert_eq!(item.seq, 10);
         assert_eq!(
-            state_rx
-                .borrow()
-                .block_picked
-                .as_ref()
-                .map(|c| c.block_number),
+            state_rx.borrow().picked.as_ref().map(|c| c.block_number),
             Some(10)
         );
         assert_eq!(
-            state_rx
-                .borrow()
-                .block_picked
-                .as_ref()
-                .and_then(|c| c.timestamp),
+            state_rx.borrow().picked.as_ref().and_then(|c| c.timestamp),
             Some(1000)
         );
     }

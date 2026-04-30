@@ -32,23 +32,30 @@ fn compute_adjacent_snapshots(
         .windows(2)
         .filter_map(|w| {
             let (upstream, downstream) = (&w[0], &w[1]);
-            let up = upstream.1.block_processed.as_ref()?;
+            let up = upstream.1.processed.as_ref()?;
             // Fall back to picked if the downstream hasn't finished its first item yet —
             // otherwise the pair would be invisible until the first processed watermark is set.
             let down = downstream
                 .1
-                .block_processed
+                .processed
                 .as_ref()
-                .or(downstream.1.block_picked.as_ref())?;
+                .or(downstream.1.picked.as_ref())?;
             let block_diff = up.block_number.saturating_sub(down.block_number);
             let time_diff = match (up.timestamp, down.timestamp) {
                 (Some(u), Some(d)) => Some(Duration::from_secs(u.saturating_sub(d))),
                 _ => None,
             };
-            let down_batch = downstream.1.batch_processed.or(downstream.1.batch_picked);
+            let down_batch = downstream
+                .1
+                .processed
+                .as_ref()
+                .and_then(|c| c.batch_number)
+                .or(downstream.1.picked.as_ref().and_then(|c| c.batch_number));
             let batch_diff = upstream
                 .1
-                .batch_processed
+                .processed
+                .as_ref()
+                .and_then(|c| c.batch_number)
                 .zip(down_batch)
                 .map(|(u, d)| u.saturating_sub(d));
             Some((
@@ -254,20 +261,12 @@ impl BackpressureMonitor {
 
         let (head_block, head_ts) = snapshot
             .iter()
-            .find_map(|(_, h)| {
-                h.block_processed
-                    .as_ref()
-                    .map(|c| (c.block_number, c.timestamp))
-            })
+            .find_map(|(_, h)| h.processed.as_ref().map(|c| (c.block_number, c.timestamp)))
             .unwrap_or((0, None));
 
         for (index, (id, h)) in snapshot.iter().enumerate() {
-            let comp_block = h
-                .block_processed
-                .as_ref()
-                .map(|c| c.block_number)
-                .unwrap_or(0);
-            let comp_ts = h.block_processed.as_ref().and_then(|c| c.timestamp);
+            let comp_block = h.processed.as_ref().map(|c| c.block_number).unwrap_or(0);
+            let comp_ts = h.processed.as_ref().and_then(|c| c.timestamp);
             MONITOR_METRICS.component_order[id].set(index as u64);
             MONITOR_METRICS.backpressure_active[id]
                 .set(active_components.contains(id.as_str()) as u64);
@@ -280,10 +279,10 @@ impl BackpressureMonitor {
             };
             MONITOR_METRICS.component_time_diff_to_head_seconds[id].set(time_diff_to_head);
 
-            if let Some(bn) = h.batch_processed {
+            if let Some(bn) = h.processed.as_ref().and_then(|c| c.batch_number) {
                 MONITOR_METRICS.component_last_processed_batch[id].set(bn);
             }
-            if let Some(bp) = h.batch_picked {
+            if let Some(bp) = h.picked.as_ref().and_then(|c| c.batch_number) {
                 MONITOR_METRICS.component_last_picked_batch[id].set(bp);
             }
         }

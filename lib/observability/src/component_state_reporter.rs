@@ -5,38 +5,12 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
-/// Block-space coordinates.
+/// Coordinates for a pipeline item
 #[derive(Clone, Debug)]
-pub struct BlockTrackingCoordinates {
+pub struct TrackingCoordinates {
     pub block_number: u64,
     pub timestamp: Option<u64>,
-}
-
-impl BlockTrackingCoordinates {
-    pub fn new(block_number: u64, timestamp: Option<u64>) -> Self {
-        Self {
-            block_number,
-            timestamp,
-        }
-    }
-}
-
-/// Batch-space coordinates.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BatchTrackingCoordinates {
-    pub batch_number: u64,
-    pub last_block_number: u64,
-    pub timestamp: Option<u64>,
-}
-
-impl BatchTrackingCoordinates {
-    pub fn new(batch_number: u64, last_block_number: u64, timestamp: Option<u64>) -> Self {
-        Self {
-            batch_number,
-            last_block_number,
-            timestamp,
-        }
-    }
+    pub batch_number: Option<u64>,
 }
 
 /// State snapshot reported by a pipeline component on every state transition.
@@ -51,19 +25,11 @@ pub struct ComponentState {
     /// When the current state was entered.
     pub state_entered_at: Instant,
 
-    /// When this component last dequeued an item from its input channel.
-    /// Absent until the first item is received.
-    pub block_picked: Option<BlockTrackingCoordinates>,
+    /// Last item picked from the input channel.
+    pub picked: Option<TrackingCoordinates>,
 
-    /// When this component last fully handled/forwarded an item downstream.
-    /// Absent until the first item is fully processed.
-    pub block_processed: Option<BlockTrackingCoordinates>,
-
-    /// Last batch number dequeued from the input channel by this component.
-    pub batch_picked: Option<u64>,
-
-    /// Last batch number fully processed.
-    pub batch_processed: Option<u64>,
+    /// Last item fully handled/forwarded downstream.
+    pub processed: Option<TrackingCoordinates>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,10 +45,8 @@ impl ComponentStateReporter {
             state: GenericComponentState::Idle,
             specific_state: "idle",
             state_entered_at: Instant::now(),
-            block_picked: None,
-            block_processed: None,
-            batch_processed: None,
-            batch_picked: None,
+            picked: None,
+            processed: None,
         };
         let (sender, receiver) = watch::channel(initial);
         let (state_tx, state_rx) = mpsc::unbounded_channel();
@@ -117,7 +81,7 @@ impl ComponentStateReporter {
         }
     }
 
-    /// Record when an item was dequeued from the input channel (before any processing)
+    /// Record when an item was dequeued from the input channel (before any processing).
     pub fn record_picked(
         &self,
         block_number: u64,
@@ -125,23 +89,19 @@ impl ComponentStateReporter {
         batch_number: Option<u64>,
     ) {
         self.sender.send_if_modified(|state| {
-            let mut modified = false;
-            let block_stale = state
-                .block_picked
+            let stale = state
+                .picked
                 .as_ref()
                 .is_some_and(|c| block_number < c.block_number);
-            if !block_stale {
-                state.block_picked = Some(BlockTrackingCoordinates::new(block_number, timestamp));
-                modified = true;
+            if stale {
+                return false;
             }
-            if let Some(bn) = batch_number {
-                let batch_stale = state.batch_picked.is_some_and(|c| bn < c);
-                if !batch_stale {
-                    state.batch_picked = Some(bn);
-                    modified = true;
-                }
-            }
-            modified
+            state.picked = Some(TrackingCoordinates {
+                block_number,
+                timestamp,
+                batch_number,
+            });
+            true
         });
     }
 
@@ -153,24 +113,19 @@ impl ComponentStateReporter {
         batch_number: Option<u64>,
     ) {
         self.sender.send_if_modified(|state| {
-            let mut modified = false;
-            let block_stale = state
-                .block_processed
+            let stale = state
+                .processed
                 .as_ref()
                 .is_some_and(|c| block_number < c.block_number);
-            if !block_stale {
-                state.block_processed =
-                    Some(BlockTrackingCoordinates::new(block_number, timestamp));
-                modified = true;
+            if stale {
+                return false;
             }
-            if let Some(bn) = batch_number {
-                let batch_stale = state.batch_processed.is_some_and(|c| bn < c);
-                if !batch_stale {
-                    state.batch_processed = Some(bn);
-                    modified = true;
-                }
-            }
-            modified
+            state.processed = Some(TrackingCoordinates {
+                block_number,
+                timestamp,
+                batch_number,
+            });
+            true
         });
     }
 }
@@ -231,12 +186,9 @@ mod tests {
         let (reporter, rx) = ComponentStateReporter::new("test");
         reporter.record_processed(100, Some(1_000), None);
         reporter.record_processed(80, Some(800), None); // stale
+        assert_eq!(rx.borrow().processed.as_ref().unwrap().block_number, 100);
         assert_eq!(
-            rx.borrow().block_processed.as_ref().unwrap().block_number,
-            100
-        );
-        assert_eq!(
-            rx.borrow().block_processed.as_ref().unwrap().timestamp,
+            rx.borrow().processed.as_ref().unwrap().timestamp,
             Some(1_000)
         );
     }
@@ -246,10 +198,7 @@ mod tests {
         let (reporter, rx) = ComponentStateReporter::new("test");
         reporter.record_processed(50, Some(500), None);
         reporter.record_processed(50, Some(501), None);
-        assert_eq!(
-            rx.borrow().block_processed.as_ref().unwrap().timestamp,
-            Some(501)
-        );
+        assert_eq!(rx.borrow().processed.as_ref().unwrap().timestamp, Some(501));
     }
 
     #[tokio::test]
@@ -276,8 +225,8 @@ mod tests {
         reporter.record_picked(5, Some(500), None);
         reporter.record_processed(3, Some(300), None);
         let h = rx.borrow();
-        assert_eq!(h.block_picked.as_ref().unwrap().block_number, 5);
-        assert_eq!(h.block_processed.as_ref().unwrap().block_number, 3);
+        assert_eq!(h.picked.as_ref().unwrap().block_number, 5);
+        assert_eq!(h.processed.as_ref().unwrap().block_number, 3);
     }
 
     #[tokio::test]
@@ -285,14 +234,17 @@ mod tests {
         let (reporter, rx) = ComponentStateReporter::new("test");
         reporter.record_picked(10, None, None);
         reporter.record_picked(5, None, None);
-        assert_eq!(rx.borrow().block_picked.as_ref().unwrap().block_number, 10);
+        assert_eq!(rx.borrow().picked.as_ref().unwrap().block_number, 10);
     }
 
     #[tokio::test]
     async fn record_batch_number_high_watermark() {
         let (reporter, rx) = ComponentStateReporter::new("test");
-        reporter.record_processed(0, None, Some(10));
-        reporter.record_processed(0, None, Some(5));
-        assert_eq!(rx.borrow().batch_processed, Some(10));
+        reporter.record_processed(100, None, Some(10));
+        reporter.record_processed(50, None, Some(5)); // stale on block_number
+        assert_eq!(
+            rx.borrow().processed.as_ref().and_then(|c| c.batch_number),
+            Some(10)
+        );
     }
 }

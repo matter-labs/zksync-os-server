@@ -78,7 +78,7 @@ mod tests {
                 .borrow()
                 .iter()
                 .find(|(id, _)| *id == ComponentId::BlockExecutor)
-                .and_then(|(_, h)| h.block_processed.as_ref())
+                .and_then(|(_, h)| h.processed.as_ref())
                 .map(|c| c.block_number),
             Some(100)
         );

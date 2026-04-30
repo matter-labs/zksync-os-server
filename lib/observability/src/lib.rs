@@ -33,9 +33,7 @@ pub use metrics::GENERAL_METRICS;
 pub mod tokio_runtime;
 
 mod component_state_reporter;
-pub use component_state_reporter::{
-    BatchTrackingCoordinates, BlockTrackingCoordinates, ComponentState, ComponentStateReporter,
-};
+pub use component_state_reporter::{ComponentState, ComponentStateReporter, TrackingCoordinates};
 
 /// Internal trait used in `ObservabilityGuard::with_timeout()` to inspect action results.
 trait InspectResults {
