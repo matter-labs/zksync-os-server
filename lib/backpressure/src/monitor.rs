@@ -160,17 +160,16 @@ impl BackpressureMonitor {
 
     fn evaluate_and_update(&self, snapshot: &PipelineSnapshot) {
         let adjacent = compute_adjacent_snapshots(snapshot);
-        let (new_state, active_ids) = self.compute_acceptance_state(snapshot, &adjacent);
+        let new_state = self.compute_acceptance_state(snapshot, &adjacent);
+        self.emit_metrics(snapshot, &adjacent, &new_state);
         self.update_acceptance_state(new_state);
-        self.emit_metrics(snapshot, &adjacent, &active_ids);
     }
 
     fn compute_acceptance_state(
         &self,
         snapshot: &PipelineSnapshot,
         adjacent: &HashMap<ComponentId, AdjacentSnapshot>,
-    ) -> (TransactionAcceptanceState, HashSet<ComponentId>) {
-        let mut active_ids: HashSet<ComponentId> = HashSet::new();
+    ) -> TransactionAcceptanceState {
         let mut active_causes: Vec<BackpressureCause> = Vec::new();
 
         for (id, _) in snapshot {
@@ -178,16 +177,12 @@ impl BackpressureMonitor {
             let block_diff = adj.map(|s| s.block_diff).unwrap_or(0);
             let time_diff = adj.and_then(|s| s.time_diff);
             let batch_diff = adj.and_then(|s| s.batch_diff);
-            let causes = self.evaluate(*id, block_diff, time_diff, batch_diff);
-            if !causes.is_empty() {
-                active_ids.insert(*id);
-            }
-            active_causes.extend(causes);
+            active_causes.extend(self.evaluate(*id, block_diff, time_diff, batch_diff));
         }
 
         active_causes.sort_by_key(|c| c.component);
 
-        let state = if active_causes.is_empty() {
+        if active_causes.is_empty() {
             TransactionAcceptanceState::Accepting
         } else {
             TransactionAcceptanceState::NotAccepting(vec![
@@ -195,9 +190,7 @@ impl BackpressureMonitor {
                     causes: active_causes,
                 },
             ])
-        };
-
-        (state, active_ids)
+        }
     }
 
     fn update_acceptance_state(&self, new_state: TransactionAcceptanceState) {
@@ -245,8 +238,20 @@ impl BackpressureMonitor {
         &self,
         snapshot: &PipelineSnapshot,
         adjacent: &HashMap<ComponentId, AdjacentSnapshot>,
-        active_ids: &HashSet<ComponentId>,
+        state: &TransactionAcceptanceState,
     ) {
+        let active_components: HashSet<&str> = match state {
+            TransactionAcceptanceState::NotAccepting(reasons) => reasons
+                .iter()
+                .flat_map(|r| match r {
+                    NotAcceptingReason::PipelineBackpressure { causes } => causes.as_slice(),
+                    _ => &[],
+                })
+                .map(|c| c.component)
+                .collect(),
+            TransactionAcceptanceState::Accepting => HashSet::new(),
+        };
+
         let (head_block, head_ts) = snapshot
             .iter()
             .find_map(|(_, h)| {
@@ -264,7 +269,8 @@ impl BackpressureMonitor {
                 .unwrap_or(0);
             let comp_ts = h.block_processed.as_ref().and_then(|c| c.timestamp);
             MONITOR_METRICS.component_order[id].set(index as u64);
-            MONITOR_METRICS.backpressure_active[id].set(active_ids.contains(id) as u64);
+            MONITOR_METRICS.backpressure_active[id]
+                .set(active_components.contains(id.as_str()) as u64);
             MONITOR_METRICS.component_last_processed_block[id].set(comp_block);
             MONITOR_METRICS.component_block_diff_to_head[id]
                 .set(head_block.saturating_sub(comp_block));
