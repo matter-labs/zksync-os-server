@@ -314,14 +314,25 @@ fn compute_prover_input(
     prover_input
 }
 
+const LEN_BUCKETS: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
+
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "prover_input_generator")]
-pub struct ProverInputGeneratorMetrics {
+struct ProverInputGeneratorMetrics {
     #[metrics(unit = Unit::Seconds, labels = ["stage"], buckets = LATENCIES_FAST)]
-    pub prover_input_generation: LabeledFamily<&'static str, Histogram<Duration>>,
+    prover_input_generation: LabeledFamily<&'static str, Histogram<Duration>>,
+    /// Number of unexpected existing storage slots queried per block. Positive values are abnormal.
+    #[metrics(buckets = LEN_BUCKETS)]
+    unexpected_queried_keys: Histogram<usize>,
+    /// Number of unexpected missing storage slots queried per block. Positive values are abnormal.
+    #[metrics(buckets = LEN_BUCKETS)]
+    unexpected_queried_missing_keys: Histogram<usize>,
+    /// Number of unexpected Merkle proofs queried per block. Positive values are abnormal.
+    #[metrics(buckets = LEN_BUCKETS)]
+    unexpected_queried_proofs: Histogram<usize>,
 }
 
 #[vise::register]
-pub(crate) static PROVER_INPUT_GENERATOR_METRICS: vise::Global<ProverInputGeneratorMetrics> =
+static PROVER_INPUT_GENERATOR_METRICS: vise::Global<ProverInputGeneratorMetrics> =
     vise::Global::new();

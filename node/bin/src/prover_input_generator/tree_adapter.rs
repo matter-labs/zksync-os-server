@@ -1,3 +1,4 @@
+use super::PROVER_INPUT_GENERATOR_METRICS;
 use alloy::primitives::B256;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::thread;
@@ -49,6 +50,7 @@ impl Drop for TreeOutputAdapter {
                 "prover queried unexpected Merkle proofs"
             );
         }
+
         let not_queried_proofs: Vec<_> = expected_queried_proofs
             .difference(&self.queried_proofs)
             .take(DEBUG_COUNT)
@@ -282,6 +284,16 @@ impl Drop for VersionedMerkleTree {
         if thread::panicking() {
             return; // Do not report potentially incomplete data if generating prover input failed
         }
+
+        PROVER_INPUT_GENERATOR_METRICS
+            .unexpected_queried_keys
+            .observe(self.cached_key_to_index.len());
+        PROVER_INPUT_GENERATOR_METRICS
+            .unexpected_queried_missing_keys
+            .observe(self.cached_missing_key_to_prev_index.len());
+        PROVER_INPUT_GENERATOR_METRICS
+            .unexpected_queried_proofs
+            .observe(self.cached_proofs.len());
 
         tracing::info!(
             version = self.version,
