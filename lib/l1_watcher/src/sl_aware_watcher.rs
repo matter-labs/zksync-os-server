@@ -2,6 +2,7 @@ use crate::util;
 use crate::watcher::L1Watcher;
 use crate::{L1WatcherConfig, ProcessRawEvents};
 use alloy::providers::DynProvider;
+use anyhow::Context;
 use std::collections::VecDeque;
 use zksync_os_contract_interface::ZkChain;
 
@@ -89,10 +90,25 @@ async fn run_segment(
         segment.first_batch,
         config.max_blocks_to_process,
     )
-    .await?;
+    .await
+    .with_context(|| {
+        format!(
+            "failed to find L1 commit for batch #{} in segment {segment:?}",
+            segment.first_batch
+        )
+    })?;
 
     let end_block = match segment.last_batch {
-        Some(lb) => Some(util::find_l1_execute_block_by_batch_number(zk_chain.clone(), lb).await?),
+        Some(last_batch) => Some(
+            util::find_l1_execute_block_by_batch_number(zk_chain.clone(), last_batch)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to find L1 execute for batch #{} for segment {segment:?}",
+                        last_batch
+                    )
+                })?,
+        ),
         None => None,
     };
 

@@ -616,6 +616,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             GatewayMigrationWatcher::create_watcher(
                 node_startup_state.l1_state.diamond_proxy_l1.clone(),
                 node_startup_state.l1_state.bridgehub_l1.clone(),
+                node_startup_state
+                    .l1_state
+                    .settlement_layer_intervals
+                    .clone(),
                 chain_id,
                 node_startup_state.l1_state.l1_chain_id,
                 config.general_config.gateway_chain_id,

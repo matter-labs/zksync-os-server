@@ -84,7 +84,10 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 );
                 last_persisted_batch
             } else {
-                interval.first_batch
+                // First batch in the interval might not have been committed yet. We will find the
+                // canonical start of the segment instead where previous batch got imported during
+                // migration.
+                interval.first_batch - 1
             };
             segments.push(SegmentSpec {
                 zk_chain,
