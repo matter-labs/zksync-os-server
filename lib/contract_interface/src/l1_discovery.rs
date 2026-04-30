@@ -35,8 +35,11 @@ pub struct L1State {
     pub last_committed_batch: u64,
     pub last_proved_batch: u64,
     pub last_executed_batch: u64,
+    pub last_finalized_executed_batch: u64,
     /// Block number on SL that was used to query `last_committed_batch`, `last_proved_batch`, `last_executed_batch`.
     pub sl_block_number: u64,
+    /// Finalized SL block number that was used to query `last_finalized_executed_batch`.
+    pub finalized_sl_block_number: u64,
     pub da_input_mode: BatchDaInputMode,
     pub l1_chain_id: u64,
     pub sl_chain_id: u64,
@@ -111,6 +114,8 @@ impl L1State {
         let last_executed_batch = diamond_proxy_sl
             .get_total_batches_executed(latest_sl_block_number.into())
             .await?;
+        let (finalized_sl_block_number, last_finalized_executed_batch) =
+            fetch_finalized_executed_batch(&diamond_proxy_sl).await?;
 
         let pubdata_pricing_mode = diamond_proxy_sl.get_pubdata_pricing_mode().await?;
         let da_input_mode = match pubdata_pricing_mode {
@@ -172,7 +177,9 @@ impl L1State {
             last_committed_batch,
             last_proved_batch,
             last_executed_batch,
+            last_finalized_executed_batch,
             sl_block_number: latest_sl_block_number,
+            finalized_sl_block_number,
             da_input_mode,
             l1_chain_id,
             sl_chain_id,
@@ -229,6 +236,8 @@ impl L1State {
             })
             .await
             .context("failed to fetch finalized batch state")?;
+        let (finalized_sl_block_number, last_finalized_executed_batch) =
+            fetch_finalized_executed_batch(zk_chain_sl).await?;
         Ok(Self {
             bridgehub_l1: this.bridgehub_l1,
             bridgehub_sl: this.bridgehub_sl,
@@ -239,7 +248,9 @@ impl L1State {
             last_committed_batch: batch_finality.last_committed_batch,
             last_proved_batch: batch_finality.last_proved_batch,
             last_executed_batch: batch_finality.last_executed_batch,
+            last_finalized_executed_batch,
             sl_block_number,
+            finalized_sl_block_number,
             da_input_mode: this.da_input_mode,
             l1_chain_id: this.l1_chain_id,
             sl_chain_id: this.sl_chain_id,
@@ -266,6 +277,30 @@ impl L1State {
         };
         L1_STATE_METRICS.da_input_mode[&da_input_mode].set(1);
     }
+}
+
+async fn fetch_finalized_executed_batch(
+    zk_chain_sl: &ZkChain<DynProvider>,
+) -> anyhow::Result<(u64, u64)> {
+    let finalized_sl_block_number = zk_chain_sl
+        .provider()
+        .get_block_number_by_id(BlockId::finalized())
+        .await
+        .context("failed to fetch finalized SL block number")?
+        .context("failed to fetch finalized SL block number (`None` returned)")?;
+
+    if !zk_chain_sl
+        .code_exists_at_block(finalized_sl_block_number.into())
+        .await
+        .context("failed to check ZK chain contract code at finalized SL block")?
+    {
+        return Ok((finalized_sl_block_number, 0));
+    }
+
+    let last_finalized_executed_batch = zk_chain_sl
+        .get_total_batches_executed(finalized_sl_block_number.into())
+        .await?;
+    Ok((finalized_sl_block_number, last_finalized_executed_batch))
 }
 
 /// Waits until the pending SL state matches the latest finalized SL block.

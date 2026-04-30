@@ -5,13 +5,11 @@
 //! synchronous code running on async worker threads starves other tasks without necessarily
 //! saturating CPU (e.g. blocking storage reads block the thread but do no compute).
 
-use std::time::Duration;
+use std::sync::Mutex;
 
 use tokio::runtime::Handle;
-use tokio::spawn;
-use tokio::time::sleep;
 use tokio_metrics::RuntimeMonitor;
-use vise::{Gauge, Global, Metrics, Unit};
+use vise::{Collector, Gauge, Metrics, Unit};
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "tokio_runtime")]
@@ -39,40 +37,35 @@ struct TokioRuntimeMetrics {
 }
 
 #[vise::register]
-static METRICS: Global<TokioRuntimeMetrics> = Global::new();
+static METRICS: Collector<TokioRuntimeMetrics> = Collector::new();
 
-/// Spawns a background task that samples Tokio runtime metrics once per second.
+/// Registers a Prometheus collector that samples Tokio runtime metrics on each scrape.
 ///
+/// The sampling window exactly matches the scrape interval — no hardcoded sleep needed.
 /// Must be called from within a Tokio runtime context.
-pub fn spawn_monitor() {
+pub fn register_monitor() {
     let handle = Handle::current();
-    spawn(async move {
-        let monitor = RuntimeMonitor::new(&handle);
-        for interval in monitor.intervals() {
-            METRICS.worker_busy_ratio.set(interval.busy_ratio());
-            METRICS.workers_count.set(interval.workers_count as u64);
-            METRICS
-                .global_queue_depth
-                .set(interval.global_queue_depth as u64);
-            METRICS
-                .live_tasks_count
-                .set(interval.live_tasks_count as u64);
-            METRICS
-                .total_local_queue_depth
+    let intervals = Mutex::new(RuntimeMonitor::new(&handle).intervals());
+
+    METRICS
+        .before_scrape(move || {
+            let interval = intervals.lock().unwrap().next().expect("infinite iterator");
+            let m = TokioRuntimeMetrics::default();
+            m.worker_busy_ratio.set(interval.busy_ratio());
+            m.workers_count.set(interval.workers_count as u64);
+            m.global_queue_depth.set(interval.global_queue_depth as u64);
+            m.live_tasks_count.set(interval.live_tasks_count as u64);
+            m.total_local_queue_depth
                 .set(interval.total_local_queue_depth as u64);
-            METRICS
-                .blocking_queue_depth
+            m.blocking_queue_depth
                 .set(interval.blocking_queue_depth as u64);
-            METRICS
-                .blocking_threads_count
+            m.blocking_threads_count
                 .set(interval.blocking_threads_count as u64);
-            METRICS
-                .idle_blocking_threads_count
+            m.idle_blocking_threads_count
                 .set(interval.idle_blocking_threads_count as u64);
-            METRICS
-                .mean_poll_duration
+            m.mean_poll_duration
                 .set(interval.mean_poll_duration.as_secs_f64());
-            sleep(Duration::from_secs(1)).await;
-        }
-    });
+            m
+        })
+        .ok();
 }

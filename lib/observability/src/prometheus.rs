@@ -55,7 +55,7 @@ impl PrometheusExporterConfig {
 
     /// Runs the exporter. This future should be spawned in a separate Tokio task.
     pub async fn run(self, shutdown: GracefulShutdown) -> anyhow::Result<()> {
-        tokio_runtime::spawn_monitor();
+        tokio_runtime::register_monitor();
         let registry = MetricsCollection::lazy().collect();
         let metrics_exporter =
             MetricsExporter::new(registry.into()).with_graceful_shutdown(shutdown.ignore_guard());

@@ -1,12 +1,11 @@
 use alloy::rpc::types::Filter;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
-use tokio::spawn;
-use tokio::time::sleep;
+
 use tokio_metrics::TaskMonitor;
 use vise::{
-    Buckets, Counter, EncodeLabelSet, EncodeLabelValue, Family, Gauge, Global, Histogram,
-    LabeledFamily, Metrics, Unit,
+    Buckets, Collector, Counter, EncodeLabelSet, EncodeLabelValue, Family, Gauge, Global,
+    Histogram, LabeledFamily, Metrics, Unit,
 };
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.000001..=32.0, 2.0);
@@ -195,27 +194,24 @@ struct RpcTaskMetrics {
 }
 
 #[vise::register]
-static RPC_TASK_METRICS: Global<RpcTaskMetrics> = Global::new();
+static RPC_TASK_METRICS: Collector<RpcTaskMetrics> = Collector::new();
 
-/// Spawns a background task that samples global RPC task metrics once per second.
+/// Registers a Prometheus collector that samples RPC task metrics on each scrape.
 ///
-/// Must be called from within a Tokio runtime context.
-pub fn spawn_task_monitor() {
-    let mut intervals = RPC_TASK_MONITOR.intervals();
+/// The sampling window exactly matches the scrape interval — no hardcoded sleep needed.
+pub fn register_task_monitor() {
+    let intervals = Mutex::new(RPC_TASK_MONITOR.intervals());
 
-    spawn(async move {
-        loop {
-            sleep(Duration::from_secs(1)).await;
-            let metrics = intervals.next().expect("infinite iterator");
-            RPC_TASK_METRICS
-                .mean_scheduled_duration
+    RPC_TASK_METRICS
+        .before_scrape(move || {
+            let metrics = intervals.lock().unwrap().next().expect("infinite iterator");
+            let m = RpcTaskMetrics::default();
+            m.mean_scheduled_duration
                 .set(metrics.mean_scheduled_duration().as_secs_f64());
-            RPC_TASK_METRICS
-                .mean_poll_duration
+            m.mean_poll_duration
                 .set(metrics.mean_poll_duration().as_secs_f64());
-            RPC_TASK_METRICS
-                .slow_polls_count
-                .set(metrics.total_slow_poll_count);
-        }
-    });
+            m.slow_polls_count.set(metrics.total_slow_poll_count);
+            m
+        })
+        .ok();
 }

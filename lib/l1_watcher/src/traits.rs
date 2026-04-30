@@ -1,6 +1,7 @@
 use crate::watcher::L1WatcherError;
-use alloy::primitives::{Address, B256};
-use alloy::rpc::types::{Log, Topic, ValueOrArray};
+use alloy::primitives::B256;
+use alloy::providers::DynProvider;
+use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 
 /// A "raw" event processor that works with decoded logs.
@@ -23,10 +24,6 @@ pub trait ProcessRawEvents: Send + Sync + 'static {
     /// See [`alloy::rpc::types::Filter`] documentation for more details.
     fn event_signatures(&self) -> Topic;
 
-    /// Returns _all_ the addresses of contracts this processor is interested in.
-    /// See [`alloy::rpc::types::Filter`] documentation for more details.
-    fn contract_addresses(&self) -> ValueOrArray<Address>;
-
     fn filter_events(&self, logs: Vec<Log>) -> Vec<Log>;
 
     /// Optional filter on topic1 (the first indexed event parameter) to include in the
@@ -36,7 +33,16 @@ pub trait ProcessRawEvents: Send + Sync + 'static {
     }
 
     /// Invoked each time a new log matching the filter is found.
-    async fn process_raw_event(&mut self, event: Log) -> Result<(), L1WatcherError>;
+    ///
+    /// `provider` is the settlement-layer provider the [`L1Watcher`](crate::L1Watcher) used to
+    /// fetch the log. SL-aware processors that follow batches across L1 ↔ Gateway boundaries can
+    /// use it to fetch additional data (e.g. commit calldata) against the right SL without
+    /// storing a stale provider reference; single-SL processors can ignore it.
+    async fn process_raw_event(
+        &mut self,
+        provider: &DynProvider,
+        event: Log,
+    ) -> Result<(), L1WatcherError>;
 }
 
 /// Blanket implementation of `ProcessRawEvents` for any type implementing `ProcessL1Event`.
@@ -54,11 +60,6 @@ where
         T::SolEvent::SIGNATURE_HASH.into()
     }
 
-    fn contract_addresses(&self) -> ValueOrArray<Address> {
-        // A single contract per processor.
-        self.contract_address().into()
-    }
-
     fn filter_events(&self, logs: Vec<Log>) -> Vec<Log> {
         logs
     }
@@ -67,21 +68,16 @@ where
         ProcessL1Event::topic1_filter(self)
     }
 
-    async fn process_raw_event(&mut self, log: Log) -> Result<(), L1WatcherError> {
+    async fn process_raw_event(
+        &mut self,
+        provider: &DynProvider,
+        log: Log,
+    ) -> Result<(), L1WatcherError> {
         let sol_event = T::SolEvent::decode_log(&log.inner)?.data;
         let watched_event =
             T::WatchedEvent::erased_try_from(sol_event).map_err(L1WatcherError::Convert)?;
-        self.process_event(watched_event, log).await?;
+        self.process_event(provider, watched_event, log).await?;
         Ok(())
-    }
-}
-
-impl<T> From<T> for Box<dyn ProcessRawEvents>
-where
-    T: ProcessL1Event + Send + Sync + 'static,
-{
-    fn from(value: T) -> Self {
-        Box::new(value) as Box<dyn ProcessRawEvents>
     }
 }
 
@@ -97,9 +93,6 @@ pub trait ProcessL1Event {
     /// What do we want to process; must be convertible from `SolEvent`.
     type WatchedEvent: ErasedTryFrom<Self::SolEvent> + Send + Sync + 'static;
 
-    /// Returns the address of the contract this processor is interested in.
-    fn contract_address(&self) -> Address;
-
     /// Optional filter on topic1 (the first indexed event parameter). When `Some`, only logs
     /// where topic1 equals the given value are forwarded to [`Self::process_event`].
     fn topic1_filter(&self) -> Option<B256> {
@@ -107,8 +100,12 @@ pub trait ProcessL1Event {
     }
 
     /// Invoked each time a new event is found.
+    ///
+    /// `provider` is the settlement-layer provider that produced the log; see
+    /// [`ProcessRawEvents::process_raw_event`].
     async fn process_event(
         &mut self,
+        provider: &DynProvider,
         event: Self::WatchedEvent,
         log: Log,
     ) -> Result<(), L1WatcherError>;

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use tokio::sync::Mutex;
-use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
+use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 
 /// Persists FRI proofs to disk together with the batch if proof is successful
 #[derive(Clone, Debug)]

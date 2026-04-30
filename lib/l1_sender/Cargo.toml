@@ -15,6 +15,7 @@ zksync_os_observability.workspace = true
 zksync_os_pipeline.workspace = true
 zksync_os_types.workspace = true
 zksync_os_batch_types.workspace = true
+zksync_os_batcher_metrics.workspace = true
 zksync_os_operator_signer.workspace = true
 
 alloy = { workspace = true, default-features = false, features = [
@@ -25,17 +26,9 @@ alloy = { workspace = true, default-features = false, features = [
 ] }
 anyhow.workspace = true
 async-trait.workspace = true
-blake2.workspace = true
 futures.workspace = true
-ruint.workspace = true
-serde.workspace = true
-secrecy.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-time = { workspace = true, features = ["parsing", "formatting"] }
 itertools.workspace = true
 vise.workspace = true
 thiserror.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true

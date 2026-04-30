@@ -2,7 +2,7 @@ use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
 use alloy::providers::{DynProvider, Provider};
-use alloy::rpc::types::{Log, Topic, ValueOrArray};
+use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use std::sync::Arc;
 use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
@@ -21,7 +21,6 @@ const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
 /// - `MigrateToGateway` (L1 → GW): new SL = `gw_chain_id`.
 /// - `MigrateFromGateway` (GW → L1): new SL = `l1_chain_id`.
 pub struct GatewayMigrationWatcher {
-    server_notifier_contract: Address,
     /// The L2 chain ID this node belongs to. Passed as topic1 in `eth_getLogs` so only
     /// events for this chain are returned by the RPC node.
     l2_chain_id: ChainId,
@@ -76,7 +75,6 @@ impl GatewayMigrationWatcher {
         );
 
         let this = Self {
-            server_notifier_contract,
             l2_chain_id,
             l1_chain_id,
             gw_chain_id,
@@ -84,12 +82,12 @@ impl GatewayMigrationWatcher {
         };
 
         L1Watcher::new(
+            config,
             zk_chain.provider().clone(),
+            server_notifier_contract.into(),
             next_l1_block,
-            config.max_blocks_to_process,
-            config.confirmations,
+            None,
             l1_chain_id,
-            config.poll_interval,
             Box::new(this),
         )
         .await
@@ -108,10 +106,6 @@ impl ProcessRawEvents for GatewayMigrationWatcher {
             .extend(MigrateFromGateway::SIGNATURE_HASH)
     }
 
-    fn contract_addresses(&self) -> ValueOrArray<Address> {
-        self.server_notifier_contract.into()
-    }
-
     fn filter_events(&self, logs: Vec<Log>) -> Vec<Log> {
         logs
     }
@@ -121,7 +115,11 @@ impl ProcessRawEvents for GatewayMigrationWatcher {
         Some(B256::from(U256::from(self.l2_chain_id)))
     }
 
-    async fn process_raw_event(&mut self, log: Log) -> Result<(), L1WatcherError> {
+    async fn process_raw_event(
+        &mut self,
+        _provider: &DynProvider,
+        log: Log,
+    ) -> Result<(), L1WatcherError> {
         let Some(&topic0) = log.topic0() else {
             return Ok(());
         };

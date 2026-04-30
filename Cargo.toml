@@ -33,6 +33,7 @@ members = [
     "lib/gas_adjuster",
     "lib/batch_verification",
     "lib/batch_types",
+    "lib/batcher_metrics",
     "lib/internal_config",
     "lib/interop_fee_updater",
     "lib/network",
@@ -281,6 +282,7 @@ zksync_os_revm_consistency_checker = { version = "=0.19.2", path = "lib/revm_con
 zksync_os_gas_adjuster = { version = "=0.19.2", path = "lib/gas_adjuster" }
 zksync_os_batch_verification = { version = "=0.19.2", path = "lib/batch_verification" }
 zksync_os_batch_types = { version = "=0.19.2", path = "lib/batch_types" }
+zksync_os_batcher_metrics = { version = "=0.19.2", path = "lib/batcher_metrics" }
 zksync_os_internal_config = { version = "=0.19.2", path = "lib/internal_config" }
 zksync_os_interop_fee_updater = { version = "=0.19.2", path = "lib/interop_fee_updater" }
 zksync_os_network = { version = "=0.19.2", path = "lib/network" }

@@ -25,10 +25,10 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Permit;
 use tokio::sync::mpsc::error::TrySendError;
-use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::{
+use zksync_os_batch_types::batcher_model::{
     BatchMetadata, FriProof, ProverInput, RealFriProof, SignedBatchEnvelope,
 };
+use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
@@ -252,10 +252,7 @@ impl FriJobManager {
                         .0;
                 fri_proof_verifier::verify_fri_proof(
                     batch_metadata.previous_stored_batch_info.state_commitment,
-                    batch_metadata
-                        .batch_info
-                        .clone()
-                        .into_stored(&batch_metadata.protocol_version),
+                    batch_metadata.batch_info.clone().into_stored(),
                     program_proof,
                 )
             }

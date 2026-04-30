@@ -42,8 +42,6 @@ const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 /// - **L1**: The `BytecodesSupplier` publishes the factory dep bytecodes via
 ///   `EVMBytecodePublished` events — these live on L1 regardless of settlement layer.
 pub struct L1UpgradeTxWatcher {
-    admin_contract_l1: Address,
-
     l2_chain_id: ChainId,
     provider_l1: DynProvider,
     provider_sl: DynProvider,
@@ -120,7 +118,6 @@ impl L1UpgradeTxWatcher {
         tracing::info!(last_l1_block, "checking block starting from");
 
         let this = Self {
-            admin_contract_l1: admin_l1,
             l2_chain_id,
             provider_l1: zk_chain_l1.provider().clone(),
             provider_sl: zk_chain_sl.provider().clone(),
@@ -132,18 +129,16 @@ impl L1UpgradeTxWatcher {
             upgrade_subpool,
             max_blocks_to_process: config.max_blocks_to_process,
         };
-        let l1_watcher = L1Watcher::new(
+        L1Watcher::new(
+            config,
             zk_chain_l1.provider().clone(),
+            admin_l1.into(),
             last_l1_block,
-            config.max_blocks_to_process,
-            config.confirmations,
+            None,
             zk_chain_l1.provider().get_chain_id().await?,
-            config.poll_interval,
-            this.into(),
+            Box::new(this),
         )
-        .await?;
-
-        Ok(l1_watcher)
+        .await
     }
 
     async fn fetch_upgrade_info(&self, request: &L1UpgradeRequest) -> anyhow::Result<UpgradeInfo> {
@@ -562,12 +557,9 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
     type SolEvent = UpdateUpgradeTimestamp;
     type WatchedEvent = L1UpgradeRequest;
 
-    fn contract_address(&self) -> Address {
-        self.admin_contract_l1
-    }
-
     async fn process_event(
         &mut self,
+        _provider: &DynProvider,
         request: L1UpgradeRequest,
         _log: Log,
     ) -> Result<(), L1WatcherError> {
