@@ -1,4 +1,4 @@
-use crate::config::{BackpressureConfig, ComponentId, is_in_flight_component, is_pipeline_stage};
+use crate::config::{BackpressureConfig, ComponentId, is_pipeline_stage};
 use crate::metrics::MONITOR_METRICS;
 use reth_tasks::Runtime;
 use std::collections::{HashMap, HashSet};
@@ -285,21 +285,6 @@ impl BackpressureMonitor {
             }
             if let Some(bp) = h.batch_picked {
                 MONITOR_METRICS.component_last_picked_batch[id].set(bp);
-            }
-
-            if is_in_flight_component(*id) {
-                let (first, last, count) = match (&h.in_flight_first_batch, &h.in_flight_last_batch)
-                {
-                    (Some(f), Some(l)) => {
-                        let f = f.batch_number;
-                        let l = l.batch_number;
-                        (f, l, l.saturating_sub(f) + 1)
-                    }
-                    _ => (0, 0, 0),
-                };
-                MONITOR_METRICS.in_flight_first_batch[id].set(first);
-                MONITOR_METRICS.in_flight_last_batch[id].set(last);
-                MONITOR_METRICS.in_flight_batch_count[id].set(count);
             }
         }
 

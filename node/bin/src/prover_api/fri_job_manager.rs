@@ -129,33 +129,11 @@ impl FriJobManager {
     /// Adds a pending job to the queue.
     /// Awaits if the queue is full (ProverJobMap.max_assigned_batch_range).
     pub async fn add_job(&self, batch_envelope: SignedBatchEnvelope<ProverInput>) {
-        let last_block = batch_envelope.batch.last_block_number;
-        let timestamp = Some(batch_envelope.batch.batch_info.last_block_timestamp);
-        let batch_number = batch_envelope.batch_number();
-
         self.reporter()
             .enter_state(ProverJobManagerState::ProcessingSubmission);
         self.jobs.add_job(batch_envelope).await;
-
         self.reporter()
-            .record_picked(last_block, timestamp, Some(batch_number));
-        self.update_in_flight_state().await;
-    }
-
-    async fn update_in_flight_state(&self) {
-        let range = self.jobs.in_flight_range().await;
-        let (first, last) = match range {
-            Some((f, l)) => {
-                self.reporter()
-                    .enter_state(ProverJobManagerState::WaitingForProver);
-                (Some(f), Some(l))
-            }
-            None => {
-                self.reporter().enter_state(ProverJobManagerState::Idle);
-                (None, None)
-            }
-        };
-        self.reporter().record_in_flight_range(first, last);
+            .enter_state(ProverJobManagerState::WaitingForProver);
     }
 
     /// Peek batch data for a given batch number
@@ -240,7 +218,6 @@ impl FriJobManager {
                 batch_number,
                 "FriJobManager: batch {batch_number} job already removed (racing submit), prover={prover_id}"
             );
-            self.update_in_flight_state().await;
             return Ok(());
         };
 
@@ -254,7 +231,6 @@ impl FriJobManager {
             .with_stage(BatchExecutionStage::FriProvedReal);
 
         permit.send(envelope);
-        self.update_in_flight_state().await;
 
         Ok(())
     }
@@ -367,7 +343,6 @@ impl FriJobManager {
         {
             Some(e) => e,
             None => {
-                self.update_in_flight_state().await;
                 return Err(SubmitError::UnknownJob(batch_number));
             }
         };
@@ -377,7 +352,6 @@ impl FriJobManager {
             .with_stage(BatchExecutionStage::FriProvedFake);
 
         permit.send(envelope);
-        self.update_in_flight_state().await;
         Ok(())
     }
 

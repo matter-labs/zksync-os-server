@@ -72,7 +72,7 @@ impl PipelineComponent for SnarkProvingPipelineStep {
 
         tokio::select! {
             _ = async {
-                while let Some(batch) = input.recv().await {
+                while let Some(batch) = input.recv_and_record_picked(self.snark_job_manager.reporter()).await {
                     if batch.batch_number() > self.last_proved_batch_number {
                         self.snark_job_manager.add_job(batch).await;
                     } else {

@@ -17,8 +17,6 @@ Every pipeline component owns a `ComponentStateReporter` that publishes a
   of the last item fully processed or dequeued.
 - `batch_processed` / `batch_picked` — batch-number equivalent for batch-pipeline
   stages.
-- `in_flight_first_batch` / `in_flight_last_batch` — for components that hold
-  multiple batches concurrently (L1 senders, external job managers).
 
 Components record these watermarks via two helpers:
 

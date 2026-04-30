@@ -75,18 +75,6 @@ impl BackpressureConfig {
     }
 }
 
-/// Returns whether a component holds multiple items concurrently and reports an in-flight range.
-pub fn is_in_flight_component(id: ComponentId) -> bool {
-    matches!(
-        id,
-        ComponentId::FriJobManager
-            | ComponentId::SnarkJobManager
-            | ComponentId::L1SenderCommit
-            | ComponentId::L1SenderProve
-            | ComponentId::L1SenderExecute
-    )
-}
-
 /// Returns whether a component participates in the adjacency window.
 ///
 /// Window membership is topology-based. Excluded components are skipped

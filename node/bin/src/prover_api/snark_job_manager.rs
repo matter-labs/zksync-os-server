@@ -73,33 +73,11 @@ impl SnarkJobManager {
     /// Adds a pending job to the queue.
     /// Awaits if queue is full (ProverJobMap.max_assigned_batch_range).
     pub async fn add_job(&self, batch_envelope: SignedBatchEnvelope<FriProof>) {
-        let last_block = batch_envelope.batch.last_block_number;
-        let timestamp = Some(batch_envelope.batch.batch_info.last_block_timestamp);
-        let batch_number = batch_envelope.batch_number();
-
         self.reporter()
             .enter_state(ProverJobManagerState::ProcessingSubmission);
         self.jobs.add_job(batch_envelope).await;
-
         self.reporter()
-            .record_picked(last_block, timestamp, Some(batch_number));
-        self.update_in_flight_state().await;
-    }
-
-    async fn update_in_flight_state(&self) {
-        let range = self.jobs.in_flight_range().await;
-        let (first, last) = match range {
-            Some((f, l)) => {
-                self.reporter()
-                    .enter_state(ProverJobManagerState::WaitingForProver);
-                (Some(f), Some(l))
-            }
-            None => {
-                self.reporter().enter_state(ProverJobManagerState::Idle);
-                (None, None)
-            }
-        };
-        self.reporter().record_in_flight_range(first, last);
+            .enter_state(ProverJobManagerState::WaitingForProver);
     }
 
     // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `verification_key_hash`, `real_fri_proof`)
@@ -247,7 +225,6 @@ impl SnarkJobManager {
         self.reporter()
             .enter_state(ProverJobManagerState::ProcessingSubmission);
         self.prove_batches_sender.send(proof_command).await?;
-        self.update_in_flight_state().await;
         Ok(())
     }
 }

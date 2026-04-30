@@ -29,9 +29,7 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::Instant;
 use tokio::sync::{mpsc, watch};
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
-use zksync_os_observability::{
-    BatchTrackingCoordinates, ComponentStateReporter, GenericComponentState, StateLabel,
-};
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState, StateLabel};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_pipeline::{PeekableReceiver, SendAndRecordExt};
 
@@ -350,42 +348,11 @@ where
     P: Provider<Ethereum>,
     Input: SendToL1,
 {
-    let envelope_to_coord = |e: &SignedBatchEnvelope<FriProof>| {
-        BatchTrackingCoordinates::new(
-            e.batch_number(),
-            e.batch.last_block_number,
-            Some(e.batch.batch_info.last_block_timestamp),
-        )
-    };
-    let first_batch_coords: Vec<BatchTrackingCoordinates> = pending_txs
-        .iter()
-        .map(|(_, cmd, _)| {
-            envelope_to_coord(
-                cmd.as_ref()
-                    .first()
-                    .expect("command has at least one envelope"),
-            )
-        })
-        .collect();
-    // Last stays fixed throughout the wait loop: receipts are awaited in submission
-    // order, so the newest submitted batch is always the last to leave the in-flight set.
-    let in_flight_last_coord = pending_txs.last().map(|(_, cmd, _)| {
-        envelope_to_coord(
-            cmd.as_ref()
-                .last()
-                .expect("command has at least one envelope"),
-        )
-    });
-    state_reporter.record_in_flight_range(
-        first_batch_coords.first().cloned(),
-        in_flight_last_coord.clone(),
-    );
-
     state_reporter.enter_state(L1SenderState::WaitingL1Inclusion);
 
     let completed_commands: Vec<Input> = match async {
         let mut completed = Vec::with_capacity(pending_txs.len());
-        for (idx, (receipt_fut, command, submitted_at)) in pending_txs.into_iter().enumerate() {
+        for (receipt_fut, command, submitted_at) in pending_txs.into_iter() {
             let receipt = receipt_fut.await;
             // Observe latency before propagating errors so timeout cases are recorded.
             L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
@@ -393,14 +360,6 @@ where
             let receipt = receipt?;
             validate_tx_receipt(provider, &command, receipt).await?;
             completed.push(command);
-
-            let next_first = first_batch_coords.get(idx + 1).cloned();
-            let next_last = if next_first.is_some() {
-                in_flight_last_coord.clone()
-            } else {
-                None
-            };
-            state_reporter.record_in_flight_range(next_first, next_last);
         }
         anyhow::Ok(completed)
     }
@@ -408,7 +367,6 @@ where
     {
         Ok(cmds) => cmds,
         Err(e) => {
-            state_reporter.record_in_flight_range(None, None);
             return Err(e);
         }
     };

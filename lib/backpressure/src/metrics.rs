@@ -30,15 +30,6 @@ pub struct MonitorMetrics {
     /// Only set for batch-pipeline components that call `record_picked` with a batch arg:
     /// FriJobManager, SnarkJobManager, GaplessCommitter, GaplessL1ProofSender.
     pub component_last_picked_batch: Family<ComponentId, Gauge<u64>>,
-    /// Oldest batch number currently in-flight. Set by components that hold multiple
-    /// batches concurrently: FriJobManager, SnarkJobManager (external provers) and the
-    /// L1 senders (parallel L1 transactions awaiting inclusion). 0 when empty.
-    pub in_flight_first_batch: Family<ComponentId, Gauge<u64>>,
-    /// Newest batch number currently in-flight. See `in_flight_first_batch` for producers.
-    pub in_flight_last_batch: Family<ComponentId, Gauge<u64>>,
-    /// Number of batches currently in-flight (in_flight_last_batch − in_flight_first_batch + 1).
-    /// See `in_flight_first_batch` for producers. 0 when empty.
-    pub in_flight_batch_count: Family<ComponentId, Gauge<u64>>,
     /// Counts transitions from Accepting to NotAccepting (transaction acceptance suspended).
     pub acceptance_state_changes: Counter<u64>,
     /// Counts transitions from NotAccepting to Accepting (backpressure cleared).

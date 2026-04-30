@@ -64,12 +64,6 @@ pub struct ComponentState {
 
     /// Last batch number fully processed.
     pub batch_processed: Option<u64>,
-
-    /// Oldest batch currently in-flight.
-    pub in_flight_first_batch: Option<BatchTrackingCoordinates>,
-
-    /// Newest batch currently in-flight.
-    pub in_flight_last_batch: Option<BatchTrackingCoordinates>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,8 +81,6 @@ impl ComponentStateReporter {
             state_entered_at: Instant::now(),
             block_picked: None,
             block_processed: None,
-            in_flight_first_batch: None,
-            in_flight_last_batch: None,
             batch_processed: None,
             batch_picked: None,
         };
@@ -179,30 +171,6 @@ impl ComponentStateReporter {
                 }
             }
             modified
-        });
-    }
-
-    /// Record the current in-flight range for range-processing components.
-    pub fn record_in_flight_range(
-        &self,
-        first: Option<BatchTrackingCoordinates>,
-        last: Option<BatchTrackingCoordinates>,
-    ) {
-        if let (Some(f), Some(l)) = (first.as_ref(), last.as_ref()) {
-            debug_assert!(
-                f.batch_number <= l.batch_number,
-                "record_in_flight_range: first ({}) must be <= last ({})",
-                f.batch_number,
-                l.batch_number,
-            );
-        }
-        self.sender.send_if_modified(|state| {
-            if state.in_flight_first_batch == first && state.in_flight_last_batch == last {
-                return false;
-            }
-            state.in_flight_first_batch = first;
-            state.in_flight_last_batch = last;
-            true
         });
     }
 }
@@ -318,39 +286,6 @@ mod tests {
         reporter.record_picked(10, None, None);
         reporter.record_picked(5, None, None);
         assert_eq!(rx.borrow().block_picked.as_ref().unwrap().block_number, 10);
-    }
-
-    #[tokio::test]
-    async fn record_in_flight_range_stores_both_ends() {
-        let (reporter, rx) = ComponentStateReporter::new("test");
-        reporter.record_in_flight_range(
-            Some(BatchTrackingCoordinates::new(1, 100, Some(1000))),
-            Some(BatchTrackingCoordinates::new(5, 500, Some(5000))),
-        );
-        let h = rx.borrow();
-        assert_eq!(h.in_flight_first_batch.as_ref().unwrap().batch_number, 1);
-        assert_eq!(h.in_flight_last_batch.as_ref().unwrap().batch_number, 5);
-        assert_eq!(
-            h.in_flight_first_batch.as_ref().unwrap().last_block_number,
-            100
-        );
-        assert_eq!(
-            h.in_flight_last_batch.as_ref().unwrap().last_block_number,
-            500
-        );
-    }
-
-    #[tokio::test]
-    async fn record_in_flight_range_clears_with_none() {
-        let (reporter, rx) = ComponentStateReporter::new("test");
-        reporter.record_in_flight_range(
-            Some(BatchTrackingCoordinates::new(1, 100, None)),
-            Some(BatchTrackingCoordinates::new(5, 500, None)),
-        );
-        reporter.record_in_flight_range(None, None);
-        let h = rx.borrow();
-        assert!(h.in_flight_first_batch.is_none());
-        assert!(h.in_flight_last_batch.is_none());
     }
 
     #[tokio::test]

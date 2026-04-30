@@ -72,7 +72,7 @@ impl PipelineComponent for FriProvingPipelineStep {
 
         tokio::select! {
             result = async {
-                while let Some(batch) = input.recv().await {
+                while let Some(batch) = input.recv_and_record_picked(self.fri_job_manager.reporter()).await {
                     if batch.batch_number() > self.last_proved_batch_number {
                         tracing::info!(
                             "Received batch for FRI proving: {:?}",
