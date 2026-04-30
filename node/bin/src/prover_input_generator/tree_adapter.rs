@@ -23,9 +23,9 @@ struct NoData;
 pub(super) struct TreeAdapter {
     final_leaf_count: u64,
     sorted_leaves: BTreeMap<u64, Leaf>,
-    key_to_index: HashMap<Bytes32, u64>,
-    missing_key_to_prev_index: HashMap<Bytes32, u64>,
-    sibling_hashes: HashMap<(u8, u64), Bytes32>,
+    key_to_index: HashMap<B256, u64>,
+    missing_key_to_prev_index: HashMap<B256, u64>,
+    sibling_hashes: HashMap<(u8, u64), B256>,
 }
 
 impl TreeAdapter {
@@ -82,7 +82,7 @@ impl TreeAdapter {
                             "missing Merkle path for index {tree_index} at {sibling_location:?}"
                         );
                     });
-                hash.as_u8_array().into()
+                hash.0.into()
             };
 
             idx_on_level /= 2;
@@ -91,10 +91,10 @@ impl TreeAdapter {
         Box::new(path)
     }
 
-    fn read(&mut self, key: Bytes32) -> Result<Option<Bytes32>, NoData> {
+    fn read(&mut self, key: B256) -> Result<Option<B256>, NoData> {
         Ok(if let Some(idx) = self.key_to_index.get(&key) {
             let leaf = self.sorted_leaves.get(idx).ok_or(NoData)?;
-            Some(leaf.value.0.into())
+            Some(leaf.value)
         } else if self.missing_key_to_prev_index.contains_key(&key) {
             None
         } else {
@@ -102,7 +102,7 @@ impl TreeAdapter {
         })
     }
 
-    fn tree_index(&mut self, key: Bytes32) -> Result<Option<u64>, NoData> {
+    fn tree_index(&mut self, key: B256) -> Result<Option<u64>, NoData> {
         if let Some(idx) = self.key_to_index.get(&key) {
             Ok(Some(*idx))
         } else if self.missing_key_to_prev_index.contains_key(&key) {
@@ -123,7 +123,7 @@ impl TreeAdapter {
         Ok(LeafProof::new(tree_index, leaf, merkle_path))
     }
 
-    fn prev_tree_index(&mut self, key: Bytes32) -> Result<u64, NoData> {
+    fn prev_tree_index(&mut self, key: B256) -> Result<u64, NoData> {
         self.missing_key_to_prev_index
             .get(&key)
             .copied()

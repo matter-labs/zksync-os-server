@@ -7,7 +7,6 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
-use zk_ee::utils::Bytes32;
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::BlockOutput;
@@ -73,24 +72,20 @@ impl PipelineComponent for TreeManager {
                 block_number
             );
 
-            // Convert StorageWrite to TreeEntry
-            let tree_entries = block_output
+            // Convert storage writes to `TreeEntry`s
+            let (tree_entries, written_keys): (Vec<_>, Vec<_>) = block_output
                 .storage_writes
                 .iter()
-                .map(|write| TreeEntry {
-                    key: write.key,
-                    value: write.value,
+                .map(|write| {
+                    let entry = TreeEntry {
+                        key: write.key,
+                        value: write.value,
+                    };
+                    (entry, write.key)
                 })
-                .collect::<Vec<_>>();
-            // Create `written_keys` from `tree_entries` to ensure that they have identical ordering.
-            let written_keys: Vec<_> = tree_entries
-                .iter()
-                .map(|write| write.key.0.into())
-                .collect();
-            let (read_keys_for_tree, read_keys): (Vec<_>, Vec<_>) = read_keys
-                .into_iter()
-                .map(|key| (key, Bytes32::from(key.0)))
                 .unzip();
+            let read_keys: Vec<_> = read_keys.into_iter().collect();
+            let read_keys_for_tree = read_keys.clone();
 
             let count = tree_entries.len();
             let mut tree_clone = tree.clone();
