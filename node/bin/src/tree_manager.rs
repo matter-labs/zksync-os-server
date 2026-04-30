@@ -87,7 +87,6 @@ impl PipelineComponent for TreeManager {
             let read_keys: Vec<_> = read_keys.into_iter().collect();
             let read_keys_for_tree = read_keys.clone();
 
-            let count = tree_entries.len();
             let mut tree_clone = tree.clone();
             let (tree_input, (tree_output, update_proof)) = tokio::task::spawn_blocking(move || {
                 let (root_hash, leaf_count) = tree_clone
@@ -109,19 +108,35 @@ impl PipelineComponent for TreeManager {
                 block_number = block_number,
                 written_keys.len = written_keys.len(),
                 read_keys.len = read_keys.len(),
+                proof.sorted_leaves.len = update_proof.sorted_leaves.len(),
+                proof.hashes.len = update_proof.hashes.len(),
                 input = ?tree_input,
                 output = ?tree_output,
                 "Processed tree update"
             );
 
+            let write_count = written_keys.len();
+            let read_count = read_keys.len();
             TREE_METRICS
                 .entry_time
-                .observe(started_at.elapsed().div(count.max(1) as u32));
+                .observe(started_at.elapsed().div(write_count.max(1) as u32));
+            TREE_METRICS.entry_time_with_reads.observe(
+                started_at
+                    .elapsed()
+                    .div((write_count + read_count).max(1) as u32),
+            );
             TREE_METRICS.unique_leafs.set(tree_output.leaf_count);
             TREE_METRICS.block_time.observe(started_at.elapsed());
-
-            TREE_METRICS.processing_range.observe(count.max(1) as u64);
+            TREE_METRICS.processing_range.observe(write_count);
+            TREE_METRICS.processing_read_range.observe(read_count);
+            TREE_METRICS
+                .update_proof_sorted_leaves
+                .observe(update_proof.sorted_leaves.len());
+            TREE_METRICS
+                .update_proof_hashes
+                .observe(update_proof.hashes.len());
             TREE_METRICS.block_number.set(block_number);
+
             let tree_block = BlockMerkleTreeData {
                 input: tree_input,
                 output: tree_output,
@@ -185,15 +200,31 @@ const BLOCK_RANGE_SIZE: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "tree")]
 pub struct TreeMetrics {
+    /// Merkle tree update latency per written entry.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub entry_time: Histogram<Duration>,
+    /// Merkle tree update latency per read / written entry.
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub entry_time_with_reads: Histogram<Duration>,
+
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub block_time: Histogram<Duration>,
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub range_time: Histogram<Duration>,
     pub unique_leafs: Gauge<u64>,
+    /// Number of distinct tree entries written per block.
     #[metrics(buckets = BLOCK_RANGE_SIZE)]
-    pub processing_range: Histogram<u64>,
+    pub processing_range: Histogram<usize>,
+    /// Number of distinct tree entries read (but not written) per block.
+    #[metrics(buckets = BLOCK_RANGE_SIZE)]
+    pub processing_read_range: Histogram<usize>,
+    /// Number of sorted leaves included in the batch update proof for a single block.
+    #[metrics(buckets = BLOCK_RANGE_SIZE)]
+    pub update_proof_sorted_leaves: Histogram<usize>,
+    /// Number of intermediate (aka sibling) hashes included in the batch update proof for a single block.
+    #[metrics(buckets = BLOCK_RANGE_SIZE)]
+    pub update_proof_hashes: Histogram<usize>,
+
     pub block_number: Gauge<BlockNumber>,
 }
 
