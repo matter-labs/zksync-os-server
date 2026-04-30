@@ -11,7 +11,6 @@ use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_batch_types::{BatchInfo, BatchSignature};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_interface::types::BlockOutput;
-use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
 };
@@ -95,17 +94,16 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             request.last_block_number,
         );
 
-        let blocks: Vec<(&BlockOutput, &ReplayRecord, TreeBatchOutput)> =
-            (request.first_block_number..=request.last_block_number)
-                .map(|block_number| {
-                    let (block_output, replay_record, tree_data) = self
-                        .block_cache
+        let blocks = (request.first_block_number..=request.last_block_number)
+            .map(|block_number| {
+                let (block_output, replay_record, tree_data) =
+                    self.block_cache
                         .get(block_number)
                         .ok_or(BatchVerificationError::MissingBlock(block_number))?;
-                    let tree_output = tree_data.output;
-                    Ok((block_output, replay_record, tree_output))
-                })
-                .collect::<Result<Vec<_>, BatchVerificationError>>()?;
+                let tree_output = tree_data.output;
+                Ok((block_output, replay_record, tree_output))
+            })
+            .collect::<Result<Vec<_>, BatchVerificationError>>()?;
 
         let state_view = self.read_state.state_view_at(request.last_block_number)?;
         let multichain_root = read_multichain_root(state_view);
