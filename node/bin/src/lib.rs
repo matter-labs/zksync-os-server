@@ -1109,6 +1109,7 @@ async fn run_main_node_pipeline(
                 .maximum_in_flight_blocks,
             read_state: state.clone(),
             pubdata_mode,
+            merkle_tree: tree,
             runtime: runtime.clone(),
             disabled: !config.prover_input_generator_config.enable_input_generation,
         })

@@ -710,4 +710,19 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
             },
         ))
     }
+
+    /// The caller must ensure that `index` exists in the tree at `version`; otherwise, this method will panic.
+    pub(crate) fn create_patch_for_single_read(
+        &self,
+        version: u64,
+        index: u64,
+    ) -> anyhow::Result<WorkingPatchSet<P>> {
+        let root = self.db.try_root(version)?.ok_or_else(|| {
+            DeserializeError::from(DeserializeErrorKind::MissingNode)
+                .with_context(DeserializeContext::Node(NodeKey::root(version)))
+        })?;
+        let mut patch = WorkingPatchSet::new(root);
+        patch.load_nodes(&self.db, [index].into_iter())?;
+        Ok(patch)
+    }
 }

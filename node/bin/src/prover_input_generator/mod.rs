@@ -13,13 +13,14 @@ use zksync_os_contract_interface::models::DACommitmentScheme;
 use zksync_os_interface::traits::TxListSource;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
+use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_pipeline::PipelineComponent;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
 
-use self::tree_adapter::TreeAdapter;
+use self::tree_adapter::VersionedMerkleTree;
 
 mod tree_adapter;
 
@@ -34,6 +35,7 @@ pub struct ProverInputGenerator<ReadState> {
     pub read_state: ReadState,
     pub pubdata_mode: PubdataMode,
     pub runtime: Runtime,
+    pub merkle_tree: MerkleTree<RocksDBWrapper>,
     /// When true, skip all computation and emit `ProverInput::Fake` for every block.
     pub disabled: bool,
 }
@@ -163,11 +165,14 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             block_number,
             replay_record.transactions.len(),
         );
+        let versioned_tree = VersionedMerkleTree::new(self.merkle_tree.clone(), block_number - 1);
+
         let mut handle = tokio::task::spawn_blocking(move || {
             let prover_input = ProverInput::Real(compute_prover_input(
                 &replay_record,
                 read_state,
                 tree.clone(),
+                versioned_tree,
                 da_commitment_scheme,
                 enable_logging,
             ));
@@ -197,6 +202,7 @@ fn compute_prover_input(
     replay_record: &ReplayRecord,
     state_handle: impl ReadStateHistory,
     tree_view: BlockMerkleTreeData,
+    versioned_tree: VersionedMerkleTree,
     da_commitment_scheme: DACommitmentScheme,
     enable_logging: bool,
 ) -> Vec<u32> {
@@ -254,7 +260,7 @@ fn compute_prover_input(
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                TreeAdapter::new(tree_view),
+                versioned_tree,
                 state_view,
                 list_source,
             )
@@ -292,7 +298,7 @@ fn compute_prover_input(
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                TreeAdapter::new(tree_view),
+                versioned_tree,
                 state_view,
                 list_source,
             )

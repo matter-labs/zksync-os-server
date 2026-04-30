@@ -50,13 +50,13 @@ impl StorageSlotProofEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NeighborStorageSlotProofEntry {
+pub struct StorageSlotProofEntryWithKey {
     #[serde(flatten)]
     pub inner: StorageSlotProofEntry,
     pub leaf_key: B256,
 }
 
-impl NeighborStorageSlotProofEntry {
+impl StorageSlotProofEntryWithKey {
     fn hash(&self, tree_depth: u8) -> anyhow::Result<B256> {
         self.inner.hash(tree_depth, self.leaf_key)
     }
@@ -75,9 +75,9 @@ pub enum InnerStorageSlotProof {
     /// The slot is missing from the tree.
     NonExisting {
         /// Proof for the left neighbor of the slot present in the tree.
-        left_neighbor: NeighborStorageSlotProofEntry,
+        left_neighbor: StorageSlotProofEntryWithKey,
         /// Proof for the right neighbor of the slot present in the tree.
-        right_neighbor: NeighborStorageSlotProofEntry,
+        right_neighbor: StorageSlotProofEntryWithKey,
     },
 }
 
@@ -251,11 +251,11 @@ impl BatchTreeProof {
                     let next_entry = proof_entries[&prev_entry.next_index].clone();
                     let next_key = self.sorted_leaves[&prev_entry.next_index].key;
                     InnerStorageSlotProof::NonExisting {
-                        left_neighbor: NeighborStorageSlotProofEntry {
+                        left_neighbor: StorageSlotProofEntryWithKey {
                             inner: prev_entry,
                             leaf_key: prev_key,
                         },
-                        right_neighbor: NeighborStorageSlotProofEntry {
+                        right_neighbor: StorageSlotProofEntryWithKey {
                             inner: next_entry,
                             leaf_key: next_key,
                         },
@@ -304,11 +304,11 @@ mod tests {
         let proof = StorageSlotProof {
             key: B256::random_with(&mut rng),
             proof: InnerStorageSlotProof::NonExisting {
-                left_neighbor: NeighborStorageSlotProofEntry {
+                left_neighbor: StorageSlotProofEntryWithKey {
                     inner: random_entry(&mut rng),
                     leaf_key: B256::random_with(&mut rng),
                 },
-                right_neighbor: NeighborStorageSlotProofEntry {
+                right_neighbor: StorageSlotProofEntryWithKey {
                     inner: random_entry(&mut rng),
                     leaf_key: B256::random_with(&mut rng),
                 },
