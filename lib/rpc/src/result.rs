@@ -112,6 +112,28 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
                 revert.to_string(),
                 revert.output.as_ref().map(|out| out.as_ref()),
             ),
+            EthCallError::SimulateInvalidParams(_)
+            | EthCallError::SimulateInvalidBlockOverride(_) => {
+                invalid_params_rpc_err(err.to_string())
+            }
+            EthCallError::SimulateBlockNumberInvalid { .. } => {
+                rpc_error_with_code(-38020, err.to_string())
+            }
+            EthCallError::SimulateBlockTimestampInvalid { .. } => {
+                rpc_error_with_code(-38021, err.to_string())
+            }
+            EthCallError::SimulateBlockGasLimitExceeded => {
+                rpc_error_with_code(-38015, err.to_string())
+            }
+            EthCallError::SimulatePrecompileSelfReference => {
+                rpc_error_with_code(-38022, err.to_string())
+            }
+            EthCallError::SimulatePrecompileDuplicateAddress => {
+                rpc_error_with_code(-38023, err.to_string())
+            }
+            EthCallError::SimulateMovePrecompileNotSupported => {
+                invalid_params_rpc_err(err.to_string())
+            }
             err => internal_rpc_err(err.to_string()),
         })
     }

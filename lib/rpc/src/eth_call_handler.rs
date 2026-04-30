@@ -1,35 +1,48 @@
 use crate::call_fees::{CallFees, CallFeesError};
 use crate::config::RpcConfig;
+use crate::eth_impl::{build_api_log, build_api_tx};
 use crate::js_tracer;
 use crate::result::RevertError;
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
 use crate::sandbox::{call_trace_simulate, execute};
+use alloy::consensus::Transaction as _;
+use alloy::consensus::proofs::{calculate_receipt_root, calculate_transaction_root};
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
+use alloy::network::primitives::BlockTransactions;
+use alloy::primitives::{Address, B256, Bloom, Bytes, Log, Signature, TxKind, U256, keccak256};
+use alloy::rpc::types::simulate::{
+    MAX_SIMULATE_BLOCKS, SimCallResult, SimulateError, SimulatePayload, SimulatedBlock,
+};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use serde_json::Value as JsonValue;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zk_os_api::helpers::{get_balance, get_nonce};
-use zksync_os_interface::types::{BlockHashes, ExecutionOutput};
+use zksync_os_interface::tracing::{NopTracer, NopValidator};
+use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
+use zksync_os_interface::types::{BlockHashes, ExecutionOutput, TxOutput};
 use zksync_os_interface::{
     error::InvalidTransaction,
-    types::{BlockContext, ExecutionResult},
+    types::{BlockContext, BlockOutput, ExecutionResult},
 };
-use zksync_os_storage_api::ViewState;
+use zksync_os_multivm::run_block;
+use zksync_os_rpc_api::types::ZkApiBlock;
 use zksync_os_storage_api::{
-    RepositoryError, StateError, state_override_view::OverriddenStateView,
+    BlockOverlay, RepositoryError, StateError, ViewState,
+    state_override_view::{OverriddenStateView, build_state_override_maps},
 };
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
     L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
     REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, SYSTEM_TX_TYPE_ID, UpgradeTxType, ZkEnvelope,
-    ZkTransaction, ZkTxType,
+    ZkReceipt, ZkReceiptEnvelope, ZkTransaction, ZkTxType,
 };
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
@@ -420,6 +433,115 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         Ok(tracer_output.results.pop().unwrap_or(JsonValue::Null))
     }
 
+    pub fn simulate_v1_impl(
+        &self,
+        opts: SimulatePayload,
+        block: Option<BlockId>,
+    ) -> Result<Vec<SimulatedBlock<ZkApiBlock>>, EthCallError> {
+        if opts.block_state_calls.is_empty() {
+            return Err(EthCallError::SimulateInvalidParams(
+                "calls are empty".to_string(),
+            ));
+        }
+        if opts.block_state_calls.len() > MAX_SIMULATE_BLOCKS as usize {
+            return Err(EthCallError::SimulateInvalidParams(
+                "too many blocks".to_string(),
+            ));
+        }
+
+        let SimulatePayload {
+            block_state_calls,
+            trace_transfers,
+            validation,
+            return_full_transactions,
+        } = opts;
+
+        let (mut block_context, base_state_block) = self.resolve_simulation_start_context(block)?;
+        let base_state = self.storage.state_view_at(base_state_block)?;
+        let mut overlays = BTreeMap::new();
+        let mut simulated_blocks = Vec::with_capacity(block_state_calls.len());
+        let mut previous_block_number = block_context.block_number.saturating_sub(1);
+        let mut previous_timestamp = block_context.timestamp.saturating_sub(1);
+
+        for sim_block in block_state_calls {
+            block_context.mix_hash = U256::ZERO;
+            let header_overrides = match sim_block.block_overrides {
+                Some(block_overrides) => apply_simulate_block_overrides(
+                    &mut block_context,
+                    block_overrides,
+                    previous_block_number,
+                    previous_timestamp,
+                )?,
+                None => SimulateHeaderOverrides::default(),
+            };
+
+            let simulation_view =
+                OverriddenStateView::new(base_state.clone(), Arc::new(overlays.clone()));
+
+            let (state_override_overlay, block_output, txs) = match sim_block.state_overrides {
+                Some(state_overrides) => {
+                    validate_state_overrides_for_simulate(&state_overrides)?;
+                    let state_overrides =
+                        build_state_override_maps(&simulation_view, state_overrides);
+                    let (storage_writes, preimages) = state_overrides.clone().into_parts();
+                    let state_override_overlay = BlockOverlay {
+                        storage_writes,
+                        preimages,
+                    };
+                    let overridden_view =
+                        OverriddenStateView::new(simulation_view, state_overrides);
+                    let txs = self.create_simulation_txs(
+                        sim_block.calls,
+                        block_context,
+                        validation,
+                        overridden_view.clone(),
+                    )?;
+                    let block_output =
+                        run_simulation_block(block_context, overridden_view, txs.clone())?;
+                    (state_override_overlay, block_output, txs)
+                }
+                None => {
+                    let txs = self.create_simulation_txs(
+                        sim_block.calls,
+                        block_context,
+                        validation,
+                        simulation_view.clone(),
+                    )?;
+                    let block_output =
+                        run_simulation_block(block_context, simulation_view, txs.clone())?;
+                    (BlockOverlay::default(), block_output, txs)
+                }
+            };
+
+            let simulated_block = build_simulated_block_response(
+                block_context,
+                header_overrides,
+                txs,
+                block_output,
+                trace_transfers,
+                return_full_transactions,
+            )?;
+            let next_hash = simulated_block.inner.header.hash;
+
+            let mut overlay = state_override_overlay;
+            overlay
+                .storage_writes
+                .extend(simulated_block.overlay.storage_writes);
+            overlay.preimages.extend(simulated_block.overlay.preimages);
+            overlays.insert(block_context.block_number, overlay);
+            previous_block_number = block_context.block_number;
+            previous_timestamp = block_context.timestamp;
+            simulated_blocks.push(SimulatedBlock {
+                inner: simulated_block.inner,
+                calls: simulated_block.calls,
+            });
+
+            block_context = next_block_context(block_context, next_hash);
+        }
+
+        Ok(simulated_blocks)
+    }
+
     pub fn estimate_gas_impl(
         &self,
         request: TransactionRequest,
@@ -446,6 +568,93 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             ),
             None => self.estimate_gas_with_view(request, block_context, storage_view),
         }
+    }
+
+    fn resolve_simulation_start_context(
+        &self,
+        block: Option<BlockId>,
+    ) -> Result<(BlockContext, u64), EthCallError> {
+        let block = block.unwrap_or_default();
+        if block.is_latest() || block.is_pending() {
+            let parent_block = self.storage.replay_storage().latest_record();
+            return Ok((self.build_pending_block_context(), parent_block));
+        }
+
+        let Some(parent_block) = self.storage.resolve_block_number(block)? else {
+            return Err(RpcStorageError::BlockNotFound(block).into());
+        };
+        let parent_context = self
+            .storage
+            .replay_storage()
+            .get_context(parent_block)
+            .ok_or(RpcStorageError::BlockNotFound(block))?;
+        let parent = self
+            .storage
+            .get_block_by_id(block)?
+            .ok_or(RpcStorageError::BlockNotFound(block))?;
+        let block_context = next_block_context(parent_context, parent.hash());
+
+        Ok((block_context, parent_block))
+    }
+
+    fn create_simulation_txs<V: ViewState + Clone>(
+        &self,
+        mut calls: Vec<TransactionRequest>,
+        block_context: BlockContext,
+        validation: bool,
+        mut state_view: V,
+    ) -> Result<Vec<ZkTransaction>, EthCallError> {
+        let default_gas_limit = simulation_default_gas_limit(
+            &calls,
+            block_context.gas_limit,
+            self.config.eth_call_gas as u64,
+        )?;
+        let mut next_nonces = HashMap::new();
+        let mut tx_block_context = block_context;
+        if !validation {
+            tx_block_context.eip1559_basefee = U256::ZERO;
+        }
+
+        calls
+            .iter_mut()
+            .map(|request| {
+                if request.gas.is_none() {
+                    request.set_gas_limit(default_gas_limit);
+                }
+
+                let from = request.from.unwrap_or_default();
+                if request.nonce.is_none() {
+                    let nonce = *next_nonces.entry(from).or_insert_with(|| {
+                        state_view
+                            .get_account(from)
+                            .as_ref()
+                            .map(get_nonce)
+                            .unwrap_or_default()
+                    });
+                    request.set_nonce(nonce);
+                    let next_nonce =
+                        nonce
+                            .checked_add(1)
+                            .ok_or(EthCallError::SimulateInvalidParams(
+                                "nonce has max value".to_string(),
+                            ))?;
+                    next_nonces.insert(from, next_nonce);
+                } else if let Some(nonce) = request.nonce {
+                    let state_nonce = next_nonces.entry(from).or_insert_with(|| {
+                        state_view
+                            .get_account(from)
+                            .as_ref()
+                            .map(get_nonce)
+                            .unwrap_or_default()
+                    });
+                    if nonce >= *state_nonce {
+                        *state_nonce = nonce.saturating_add(1);
+                    }
+                }
+
+                self.create_tx_from_request(request.clone(), &tx_block_context, false)
+            })
+            .collect()
     }
 }
 
@@ -662,6 +871,439 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     }
 }
 
+fn run_simulation_block<State>(
+    block_context: BlockContext,
+    state_view: State,
+    txs: Vec<ZkTransaction>,
+) -> Result<BlockOutput, EthCallError>
+where
+    State: ViewState,
+{
+    let tx_source = TxListSource {
+        transactions: txs.into_iter().map(|tx| tx.encode()).collect(),
+    };
+
+    run_block(
+        block_context,
+        state_view.clone(),
+        state_view,
+        tx_source,
+        NoopTxCallback,
+        &mut NopTracer,
+        &mut NopValidator,
+    )
+    .map_err(EthCallError::ForwardSubsystemError)
+}
+
+#[derive(Debug)]
+struct SimulatedBlockResponse {
+    inner: ZkApiBlock,
+    calls: Vec<SimCallResult>,
+    overlay: BlockOverlay,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SimulateHeaderOverrides {
+    difficulty: Option<U256>,
+}
+
+fn build_simulated_block_response(
+    block_context: BlockContext,
+    header_overrides: SimulateHeaderOverrides,
+    txs: Vec<ZkTransaction>,
+    block_output: BlockOutput,
+    trace_transfers: bool,
+    return_full_transactions: bool,
+) -> Result<SimulatedBlockResponse, EthCallError> {
+    let BlockOutput {
+        header: sealed_header,
+        tx_results,
+        storage_writes,
+        account_diffs: _,
+        published_preimages,
+        pubdata: _,
+        computational_native_used: _,
+    } = block_output;
+
+    let mut block_bloom = Bloom::default();
+    let mut number_of_logs_before_this_tx = 0;
+    let mut cumulative_gas_used = 0;
+    let mut receipts = Vec::with_capacity(tx_results.len());
+    let mut simulated_txs = Vec::with_capacity(tx_results.len());
+
+    for (tx_index, (tx, result)) in txs.into_iter().zip(tx_results.into_iter()).enumerate() {
+        let simulated_tx = match result {
+            Ok(tx_output) => {
+                let receipt =
+                    build_simulated_receipt(&tx, &tx_output, cumulative_gas_used, trace_transfers);
+                block_bloom.accrue_bloom(receipt.logs_bloom());
+                cumulative_gas_used += tx_output.gas_used;
+                let simulated_tx = SimulatedTx {
+                    tx,
+                    tx_index_in_block: tx_index as u64,
+                    number_of_logs_before_this_tx,
+                    tx_output: Some(tx_output),
+                    receipt: Some(receipt.clone()),
+                    invalid_tx_error: None,
+                };
+                number_of_logs_before_this_tx += receipt.logs().len() as u64;
+                receipts.push(receipt);
+                simulated_tx
+            }
+            Err(err) => SimulatedTx {
+                tx,
+                tx_index_in_block: tx_index as u64,
+                number_of_logs_before_this_tx,
+                tx_output: None,
+                receipt: None,
+                invalid_tx_error: Some(err),
+            },
+        };
+        simulated_txs.push(simulated_tx);
+    }
+
+    let mut header = sealed_header.unseal();
+    header.logs_bloom = block_bloom;
+    header.gas_used = cumulative_gas_used;
+    header.transactions_root = calculate_transaction_root(
+        &simulated_txs
+            .iter()
+            .map(|tx| tx.tx.envelope().clone())
+            .collect::<Vec<_>>(),
+    );
+    header.receipts_root = calculate_receipt_root(&receipts);
+    if let Some(difficulty) = header_overrides.difficulty {
+        header.difficulty = difficulty;
+    }
+
+    let header = alloy::rpc::types::Header::new(header);
+    let block_hash = header.hash;
+    let calls = simulated_txs
+        .iter()
+        .map(|tx| tx.to_call_result(block_hash, block_context))
+        .collect();
+    let transactions = if return_full_transactions {
+        BlockTransactions::Full(
+            simulated_txs
+                .iter()
+                .map(|tx| tx.to_api_tx(block_hash, block_context))
+                .collect(),
+        )
+    } else {
+        BlockTransactions::Hashes(simulated_txs.iter().map(|tx| *tx.tx.hash()).collect())
+    };
+    let inner = ZkApiBlock::new(header, transactions);
+
+    Ok(SimulatedBlockResponse {
+        inner,
+        calls,
+        overlay: BlockOverlay {
+            storage_writes: storage_writes
+                .into_iter()
+                .map(|write| (write.key, write.value))
+                .collect(),
+            preimages: published_preimages.into_iter().collect(),
+        },
+    })
+}
+
+fn build_simulated_receipt(
+    tx: &ZkTransaction,
+    tx_output: &TxOutput,
+    cumulative_gas_used_before_this_tx: u64,
+    trace_transfers: bool,
+) -> ZkReceiptEnvelope {
+    let mut logs = tx_output.logs.clone();
+    if trace_transfers
+        && tx.value() > U256::ZERO
+        && matches!(tx_output.execution_result, ExecutionResult::Success(_))
+    {
+        logs.insert(
+            0,
+            native_transfer_log(tx.signer(), tx.to().unwrap_or_default(), tx.value()),
+        );
+    }
+    let l2_to_l1_logs = tx_output
+        .l2_to_l1_logs
+        .iter()
+        .map(|l2_to_l1_log| zksync_os_types::L2ToL1Log {
+            l2_shard_id: l2_to_l1_log.log.l2_shard_id,
+            is_service: l2_to_l1_log.log.is_service,
+            tx_number_in_block: l2_to_l1_log.log.tx_number_in_block,
+            sender: l2_to_l1_log.log.sender,
+            key: l2_to_l1_log.log.key,
+            value: l2_to_l1_log.log.value,
+        })
+        .collect();
+
+    ZkReceiptEnvelope::from_typed(
+        tx.tx_type(),
+        ZkReceipt {
+            status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
+            cumulative_gas_used: cumulative_gas_used_before_this_tx + tx_output.gas_used,
+            logs,
+            l2_to_l1_logs,
+        },
+    )
+}
+
+fn native_transfer_log(from: Address, to: Address, value: U256) -> Log {
+    let transfer_topic = keccak256("Transfer(address,address,uint256)");
+    let mut from_topic = B256::ZERO;
+    from_topic.0[12..].copy_from_slice(from.as_slice());
+    let mut to_topic = B256::ZERO;
+    to_topic.0[12..].copy_from_slice(to.as_slice());
+    let data = value.to_be_bytes::<32>();
+
+    Log::new_unchecked(
+        Address::repeat_byte(0xee),
+        vec![transfer_topic, from_topic, to_topic],
+        Bytes::copy_from_slice(&data),
+    )
+}
+
+fn next_block_context(mut block_context: BlockContext, parent_hash: B256) -> BlockContext {
+    block_context.block_number += 1;
+    block_context.timestamp += 1;
+    block_context.block_hashes.0.rotate_left(1);
+    block_context.block_hashes.0[255] = U256::from_be_bytes(parent_hash.0);
+    block_context
+}
+
+fn apply_simulate_block_overrides(
+    block_context: &mut BlockContext,
+    overrides: BlockOverrides,
+    previous_block_number: u64,
+    previous_timestamp: u64,
+) -> Result<SimulateHeaderOverrides, EthCallError> {
+    let mut header_overrides = SimulateHeaderOverrides::default();
+
+    if let Some(number) = overrides.number {
+        let number = u64::try_from(number)
+            .map_err(|_| EthCallError::SimulateInvalidBlockOverride("number"))?;
+        if number <= previous_block_number {
+            return Err(EthCallError::SimulateBlockNumberInvalid {
+                got: number,
+                parent: previous_block_number,
+            });
+        }
+        block_context.block_number = number;
+    }
+    if let Some(time) = overrides.time {
+        if time <= previous_timestamp {
+            return Err(EthCallError::SimulateBlockTimestampInvalid {
+                got: time,
+                parent: previous_timestamp,
+            });
+        }
+        block_context.timestamp = time;
+    }
+    if let Some(gas_limit) = overrides.gas_limit {
+        block_context.gas_limit = gas_limit;
+    }
+    if let Some(coinbase) = overrides.coinbase {
+        block_context.coinbase = coinbase;
+    }
+    if let Some(random) = overrides.random {
+        block_context.mix_hash = U256::from_be_bytes(random.0);
+    } else {
+        block_context.mix_hash = U256::ZERO;
+    }
+    if let Some(base_fee) = overrides.base_fee {
+        block_context.eip1559_basefee = base_fee;
+    }
+    if let Some(blob_base_fee) = overrides.blob_base_fee {
+        block_context.blob_fee = blob_base_fee;
+    }
+    if let Some(difficulty) = overrides.difficulty {
+        header_overrides.difficulty = Some(difficulty);
+    }
+    if let Some(block_hash_overrides) = overrides.block_hash {
+        for (block_number, block_hash) in block_hash_overrides {
+            if block_number >= block_context.block_number {
+                continue;
+            }
+            let distance = block_context.block_number - block_number;
+            if distance == 0 || distance > 256 {
+                continue;
+            }
+
+            let index = 256 - distance as usize;
+            block_context.block_hashes.0[index] = U256::from_be_bytes(block_hash.0);
+        }
+    }
+
+    Ok(header_overrides)
+}
+
+fn validate_state_overrides_for_simulate(
+    state_overrides: &StateOverride,
+) -> Result<(), EthCallError> {
+    let mut destinations = HashSet::new();
+    let mut has_precompile_move = false;
+    for (source, account) in state_overrides {
+        let Some(destination) = account.move_precompile_to else {
+            continue;
+        };
+        has_precompile_move = true;
+        if *source == destination {
+            return Err(EthCallError::SimulatePrecompileSelfReference);
+        }
+        if !destinations.insert(destination) {
+            return Err(EthCallError::SimulatePrecompileDuplicateAddress);
+        }
+    }
+    if has_precompile_move {
+        return Err(EthCallError::SimulateMovePrecompileNotSupported);
+    }
+    Ok(())
+}
+
+fn simulation_default_gas_limit(
+    calls: &[TransactionRequest],
+    block_gas_limit: u64,
+    call_gas_limit: u64,
+) -> Result<u64, EthCallError> {
+    let total_specified_gas =
+        calls
+            .iter()
+            .filter_map(|call| call.gas)
+            .try_fold(0_u64, |sum, gas| {
+                sum.checked_add(gas)
+                    .ok_or(EthCallError::SimulateBlockGasLimitExceeded)
+            })?;
+    if total_specified_gas > block_gas_limit {
+        return Err(EthCallError::SimulateBlockGasLimitExceeded);
+    }
+
+    let calls_without_gas = calls.iter().filter(|call| call.gas.is_none()).count() as u64;
+    if calls_without_gas == 0 {
+        return Ok(0);
+    }
+
+    let gas_per_call = (block_gas_limit - total_specified_gas) / calls_without_gas;
+    Ok(if call_gas_limit == 0 {
+        gas_per_call
+    } else {
+        gas_per_call.min(call_gas_limit)
+    })
+}
+
+struct SimulatedTx {
+    tx: ZkTransaction,
+    tx_index_in_block: u64,
+    number_of_logs_before_this_tx: u64,
+    tx_output: Option<TxOutput>,
+    receipt: Option<ZkReceiptEnvelope>,
+    invalid_tx_error: Option<InvalidTransaction>,
+}
+
+impl SimulatedTx {
+    fn to_call_result(&self, block_hash: B256, block_context: BlockContext) -> SimCallResult {
+        match (&self.tx_output, &self.receipt, &self.invalid_tx_error) {
+            (Some(tx_output), Some(receipt), None) => {
+                let logs = self.api_logs(block_hash, block_context, receipt);
+                match &tx_output.execution_result {
+                    ExecutionResult::Success(
+                        ExecutionOutput::Call(return_bytes)
+                        | ExecutionOutput::Create(return_bytes, _),
+                    ) => SimCallResult {
+                        return_data: Bytes::from(return_bytes.clone()),
+                        logs,
+                        gas_used: tx_output.gas_used,
+                        status: true,
+                        error: None,
+                    },
+                    ExecutionResult::Revert(return_bytes) => {
+                        let revert = RevertError::new(Bytes::from(return_bytes.clone()));
+                        SimCallResult {
+                            return_data: Bytes::from(return_bytes.clone()),
+                            logs,
+                            gas_used: tx_output.gas_used,
+                            status: false,
+                            error: Some(SimulateError {
+                                code: -32000,
+                                message: revert.to_string(),
+                            }),
+                        }
+                    }
+                }
+            }
+            (_, _, Some(err)) => SimCallResult {
+                return_data: Bytes::default(),
+                logs: vec![],
+                gas_used: 0,
+                status: false,
+                error: Some(SimulateError {
+                    code: -32015,
+                    message: format!("vm execution error: {err}"),
+                }),
+            },
+            _ => SimCallResult::default(),
+        }
+    }
+
+    fn to_api_tx(
+        &self,
+        block_hash: B256,
+        block_context: BlockContext,
+    ) -> zksync_os_rpc_api::types::ZkApiTransaction {
+        build_api_tx(
+            self.tx.clone(),
+            Some(&self.tx_meta(block_hash, block_context, 0)),
+        )
+    }
+
+    fn api_logs(
+        &self,
+        block_hash: B256,
+        block_context: BlockContext,
+        receipt: &ZkReceiptEnvelope,
+    ) -> Vec<alloy::rpc::types::Log> {
+        let tx_hash = *self.tx.hash();
+        let meta = self.tx_meta(
+            block_hash,
+            block_context,
+            self.tx_output
+                .as_ref()
+                .map(|output| output.gas_used)
+                .unwrap_or_default(),
+        );
+        receipt
+            .logs()
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, log)| build_api_log(tx_hash, log, meta.clone(), i as u64))
+            .collect()
+    }
+
+    fn tx_meta(
+        &self,
+        block_hash: B256,
+        block_context: BlockContext,
+        gas_used: u64,
+    ) -> zksync_os_storage_api::TxMeta {
+        zksync_os_storage_api::TxMeta {
+            block_hash,
+            block_number: block_context.block_number,
+            block_timestamp: block_context.timestamp,
+            tx_index_in_block: self.tx_index_in_block,
+            effective_gas_price: self
+                .tx
+                .inner
+                .inner()
+                .effective_gas_price(Some(block_context.eip1559_basefee.saturating_to())),
+            number_of_logs_before_this_tx: self.number_of_logs_before_this_tx,
+            gas_used,
+            contract_address: self
+                .tx_output
+                .as_ref()
+                .and_then(|output| output.contract_address),
+        }
+    }
+}
+
 fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
     match tx.inner.inner_mut() {
         ZkEnvelope::System(_) => {
@@ -715,6 +1357,22 @@ pub enum EthCallError {
     // todo: temporary, needs to be supported eventually
     #[error("block overrides are not supported in `eth_call`")]
     BlockOverridesNotSupported,
+    #[error("invalid `eth_simulateV1` params: {0}")]
+    SimulateInvalidParams(String),
+    #[error("invalid block override in `eth_simulateV1`: {0}")]
+    SimulateInvalidBlockOverride(&'static str),
+    #[error("block numbers must be in order: {got} <= {parent}")]
+    SimulateBlockNumberInvalid { got: u64, parent: u64 },
+    #[error("block timestamps must be in order: {got} <= {parent}")]
+    SimulateBlockTimestampInvalid { got: u64, parent: u64 },
+    #[error("block gas limit exceeded by the block's transactions")]
+    SimulateBlockGasLimitExceeded,
+    #[error("MovePrecompileToAddress referenced itself")]
+    SimulatePrecompileSelfReference,
+    #[error("multiple MovePrecompileToAddress values reference the same replacement address")]
+    SimulatePrecompileDuplicateAddress,
+    #[error("movePrecompileToAddress is not supported by this execution backend")]
+    SimulateMovePrecompileNotSupported,
     // todo(EIP-4844)
     #[error("EIP-4844 transactions are not supported")]
     Eip4844NotSupported,
@@ -757,4 +1415,114 @@ pub enum EthCallError {
     /// Error occurred during debug tracing
     #[error("Tracer error: {0:?}")]
     CallTracerError(anyhow::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::rpc::types::state::AccountOverride;
+
+    #[test]
+    fn simulation_default_gas_limit_splits_remaining_block_gas() {
+        let calls = vec![
+            TransactionRequest {
+                gas: Some(40),
+                ..Default::default()
+            },
+            TransactionRequest::default(),
+            TransactionRequest::default(),
+        ];
+
+        assert_eq!(simulation_default_gas_limit(&calls, 100, 0).unwrap(), 30);
+        assert_eq!(simulation_default_gas_limit(&calls, 100, 25).unwrap(), 25);
+    }
+
+    #[test]
+    fn simulation_default_gas_limit_rejects_block_gas_overflow() {
+        let calls = vec![TransactionRequest {
+            gas: Some(101),
+            ..Default::default()
+        }];
+
+        assert!(matches!(
+            simulation_default_gas_limit(&calls, 100, 0),
+            Err(EthCallError::SimulateBlockGasLimitExceeded)
+        ));
+    }
+
+    #[test]
+    fn simulate_block_overrides_reject_non_increasing_sequences() {
+        let mut context = BlockContext {
+            block_number: 11,
+            timestamp: 101,
+            ..Default::default()
+        };
+        let number_err = apply_simulate_block_overrides(
+            &mut context,
+            BlockOverrides {
+                number: Some(U256::from(10)),
+                ..Default::default()
+            },
+            10,
+            100,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            number_err,
+            EthCallError::SimulateBlockNumberInvalid { .. }
+        ));
+
+        let time_err = apply_simulate_block_overrides(
+            &mut context,
+            BlockOverrides {
+                time: Some(100),
+                ..Default::default()
+            },
+            10,
+            100,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            time_err,
+            EthCallError::SimulateBlockTimestampInvalid { .. }
+        ));
+    }
+
+    #[test]
+    fn simulate_state_overrides_validate_precompile_moves() {
+        let source = Address::from([1; 20]);
+        let destination = Address::from([2; 20]);
+        let mut overrides = StateOverride::default();
+        overrides.insert(
+            source,
+            AccountOverride {
+                move_precompile_to: Some(source),
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            validate_state_overrides_for_simulate(&overrides),
+            Err(EthCallError::SimulatePrecompileSelfReference)
+        ));
+
+        let mut overrides = StateOverride::default();
+        overrides.insert(
+            source,
+            AccountOverride {
+                move_precompile_to: Some(destination),
+                ..Default::default()
+            },
+        );
+        overrides.insert(
+            Address::from([3; 20]),
+            AccountOverride {
+                move_precompile_to: Some(destination),
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            validate_state_overrides_for_simulate(&overrides),
+            Err(EthCallError::SimulatePrecompileDuplicateAddress)
+        ));
+    }
 }

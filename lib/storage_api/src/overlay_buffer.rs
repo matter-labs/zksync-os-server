@@ -8,7 +8,7 @@ use zksync_os_interface::types::StorageWrite;
 use crate::state_override_view::OverrideProvider;
 use crate::{OverriddenStateView, ReadStateHistory, ViewState};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BlockOverlay {
     pub storage_writes: HashMap<B256, B256>,
     pub preimages: HashMap<B256, Vec<u8>>,

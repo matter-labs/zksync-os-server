@@ -186,7 +186,7 @@ pub trait EthApi {
         &self,
         opts: SimulatePayload,
         block_number: Option<BlockId>,
-    ) -> RpcResult<Vec<SimulatedBlock>>;
+    ) -> RpcResult<Vec<SimulatedBlock<ZkApiBlock>>>;
 
     /// Executes a new message call immediately without creating a transaction on the block chain.
     #[method(name = "call", blocking)]
