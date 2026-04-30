@@ -200,13 +200,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
             }
-            if output
-                .send_and_record(batch_envelope, &state_reporter)
-                .is_err()
-            {
-                tracing::info!("outbound channel closed");
-                return Ok(());
-            }
+            output.send_and_record(batch_envelope, &state_reporter)?;
         }
     }
 }

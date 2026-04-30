@@ -1,8 +1,7 @@
 use crate::prover_api::fri_job_manager::FriJob;
 use crate::prover_api::metrics::{ProverStage, ProverType};
-use crate::prover_api::prover_job_manager_state::ProverJobManagerState;
 use crate::prover_api::prover_job_map::ProverJobMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{
@@ -10,7 +9,6 @@ use zksync_os_batch_types::batcher_model::{
 };
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_observability::ComponentStateReporter;
 use zksync_os_types::ProvingVersion;
 
 /// Job manager for SNARK proving.
@@ -30,8 +28,6 @@ pub struct SnarkJobManager {
     prove_batches_sender: mpsc::Sender<ProofCommand>,
     // config
     max_fris_per_snark: usize,
-    // metrics
-    state_reporter: OnceLock<ComponentStateReporter>,
 }
 
 impl SnarkJobManager {
@@ -50,34 +46,11 @@ impl SnarkJobManager {
             jobs,
             prove_batches_sender,
             max_fris_per_snark,
-            state_reporter: OnceLock::new(),
         }
     }
 
-    /// Late-install the reporter. Called once from `SnarkProvingPipelineStep::run()` after
-    /// `Pipeline::pipe()` has auto-registered the component with the monitor.
-    pub fn set_reporter(&self, reporter: ComponentStateReporter) {
-        reporter.enter_state(ProverJobManagerState::Idle);
-        self.state_reporter
-            .set(reporter)
-            .expect("SnarkJobManager::set_reporter called more than once");
-    }
-
-    pub(crate) fn reporter(&self) -> &ComponentStateReporter {
-        self.state_reporter.get().expect(
-            "SnarkJobManager reporter not initialized — set_reporter must be called \
-             from SnarkProvingPipelineStep::run() before any record_* path",
-        )
-    }
-
-    /// Adds a pending job to the queue.
-    /// Awaits if queue is full (ProverJobMap.max_assigned_batch_range).
     pub async fn add_job(&self, batch_envelope: SignedBatchEnvelope<FriProof>) {
-        self.reporter()
-            .enter_state(ProverJobManagerState::ProcessingSubmission);
-        self.jobs.add_job(batch_envelope).await;
-        self.reporter()
-            .enter_state(ProverJobManagerState::WaitingForProver);
+        self.jobs.add_job(batch_envelope).await
     }
 
     // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `verification_key_hash`, `real_fri_proof`)
@@ -222,8 +195,6 @@ impl SnarkJobManager {
     }
 
     async fn send_downstream(&self, proof_command: ProofCommand) -> anyhow::Result<()> {
-        self.reporter()
-            .enter_state(ProverJobManagerState::ProcessingSubmission);
         self.prove_batches_sender.send(proof_command).await?;
         Ok(())
     }

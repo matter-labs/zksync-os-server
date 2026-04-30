@@ -6,7 +6,6 @@ pub mod gapless_committer;
 pub mod gapless_l1_proof_sender;
 mod metrics;
 pub mod proof_storage;
-mod prover_job_manager_state;
 mod prover_job_map;
 pub mod prover_server;
 pub mod snark_job_manager;

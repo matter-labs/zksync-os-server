@@ -66,19 +66,17 @@ impl PipelineComponent for SnarkProvingPipelineStep {
         output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        self.snark_job_manager.set_reporter(state_reporter);
-
         // Forward batches: pipeline input → SnarkJobManager → pipeline output
         // Two concurrent tasks handle the bidirectional flow
         tokio::select! {
             _ = async {
-                while let Some(batch) = input.recv_and_record_picked(self.snark_job_manager.reporter()).await {
+                while let Some(batch) = input.recv_and_record_picked(&state_reporter).await {
                     if batch.batch_number() > self.last_proved_batch_number {
                         self.snark_job_manager.add_job(batch).await;
                     } else {
                         let passthrough = L1SenderCommand::Passthrough(Box::new(batch));
                         if output
-                            .send_and_record(passthrough, self.snark_job_manager.reporter())
+                            .send_and_record(passthrough, &state_reporter)
                             .is_err()
                         {
                             return;
@@ -94,7 +92,7 @@ impl PipelineComponent for SnarkProvingPipelineStep {
                     if output
                         .send_and_record(
                             L1SenderCommand::SendToL1(proof_command),
-                            self.snark_job_manager.reporter(),
+                            &state_reporter,
                         )
                         .is_err()
                     {

@@ -68,13 +68,11 @@ impl PipelineComponent for FriProvingPipelineStep {
         output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        self.fri_job_manager.set_reporter(state_reporter);
-
         // Forward batches: pipeline input → FriJobManager (add_job) → pipeline output (via proofs channel)
         // Two concurrent tasks handle the bidirectional flow
         tokio::select! {
             result = async {
-                while let Some(batch) = input.recv_and_record_picked(self.fri_job_manager.reporter()).await {
+                while let Some(batch) = input.recv_and_record_picked(&state_reporter).await {
                     if batch.batch_number() > self.last_proved_batch_number {
                         tracing::info!(
                             "Received batch for FRI proving: {:?}",
@@ -83,12 +81,8 @@ impl PipelineComponent for FriProvingPipelineStep {
                         self.fri_job_manager.add_job(batch).await
                     } else {
                         let batch_with_fake_proof = batch.with_data(FriProof::AlreadySubmittedToL1);
-                        if output
-                            .send_and_record(batch_with_fake_proof, self.fri_job_manager.reporter())
-                            .is_err()
-                        {
-                            return Ok::<(), anyhow::Error>(());
-                        }
+                        output
+                            .send_and_record(batch_with_fake_proof, &state_reporter)?;
                     }
                 }
                 Ok::<(), anyhow::Error>(())
@@ -104,7 +98,7 @@ impl PipelineComponent for FriProvingPipelineStep {
                         proof.batch_number()
                     );
                     if output
-                        .send_and_record(proof, self.fri_job_manager.reporter())
+                        .send_and_record(proof, &state_reporter)
                         .is_err()
                     {
                         return;

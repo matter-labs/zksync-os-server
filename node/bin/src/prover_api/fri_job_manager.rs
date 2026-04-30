@@ -16,12 +16,10 @@
 use crate::prover_api::fri_proof_verifier;
 use crate::prover_api::metrics::{ProverStage, ProverType};
 use crate::prover_api::proof_storage::ProofStorage;
-use crate::prover_api::prover_job_manager_state::ProverJobManagerState;
 use crate::prover_api::prover_job_map::ProverJobMap;
 use alloy::primitives::Bytes;
 use jsonrpsee::core::Serialize;
 use serde::Deserialize;
-use std::sync::OnceLock;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -29,7 +27,6 @@ use zksync_os_batch_types::batcher_model::{
     BatchMetadata, FriProof, ProverInput, RealFriProof, SignedBatchEnvelope,
 };
 use zksync_os_batcher_metrics::BatchExecutionStage;
-use zksync_os_observability::ComponentStateReporter;
 use zksync_os_types::ProvingVersion;
 
 #[derive(Error, Debug)]
@@ -86,8 +83,6 @@ pub struct FriJobManager {
     batches_with_proof_sender: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
     // == storage ==
     proof_storage: ProofStorage,
-    // == metrics ==
-    state_reporter: OnceLock<ComponentStateReporter>,
 }
 
 impl FriJobManager {
@@ -106,34 +101,13 @@ impl FriJobManager {
             jobs,
             batches_with_proof_sender,
             proof_storage,
-            state_reporter: OnceLock::new(),
         }
-    }
-
-    /// Late-install the reporter. Called once from `FriProvingPipelineStep::run()` after
-    /// `Pipeline::pipe()` has auto-registered the component with the monitor.
-    pub fn set_reporter(&self, reporter: ComponentStateReporter) {
-        reporter.enter_state(ProverJobManagerState::Idle);
-        self.state_reporter
-            .set(reporter)
-            .expect("FriJobManager::set_reporter called more than once");
-    }
-
-    pub(crate) fn reporter(&self) -> &ComponentStateReporter {
-        self.state_reporter.get().expect(
-            "FriJobManager reporter not initialized — set_reporter must be called \
-                 from FriProvingPipelineStep::run() before any record_* path",
-        )
     }
 
     /// Adds a pending job to the queue.
     /// Awaits if the queue is full (ProverJobMap.max_assigned_batch_range).
     pub async fn add_job(&self, batch_envelope: SignedBatchEnvelope<ProverInput>) {
-        self.reporter()
-            .enter_state(ProverJobManagerState::ProcessingSubmission);
-        self.jobs.add_job(batch_envelope).await;
-        self.reporter()
-            .enter_state(ProverJobManagerState::WaitingForProver);
+        self.jobs.add_job(batch_envelope).await
     }
 
     /// Peek batch data for a given batch number
@@ -200,9 +174,6 @@ impl FriJobManager {
         self.verify_proof(&batch_metadata, &proof_bytes, batch_number, prover_id)
             .await?;
 
-        self.reporter()
-            .enter_state(ProverJobManagerState::ProcessingSubmission);
-
         // We want to ensure we can send the result downstream before we remove the job from queue
         let permit = self.try_reserve_permit_downstream()?;
 
@@ -216,7 +187,8 @@ impl FriJobManager {
             // (another submit won), we still return success to keep the API idempotent.
             tracing::warn!(
                 batch_number,
-                "FriJobManager: batch {batch_number} job already removed (racing submit), prover={prover_id}"
+                prover_id,
+                "Job already removed (racing submit)"
             );
             return Ok(());
         };
@@ -330,9 +302,6 @@ impl FriJobManager {
         batch_number: u64,
         prover_id: &'static str,
     ) -> Result<(), SubmitError> {
-        self.reporter()
-            .enter_state(ProverJobManagerState::ProcessingSubmission);
-
         // We want to ensure we can send the result downstream before we remove the job
         let permit = self.try_reserve_permit_downstream()?;
 
@@ -343,9 +312,7 @@ impl FriJobManager {
             .await
         {
             Some(e) => e,
-            None => {
-                return Err(SubmitError::UnknownJob(batch_number));
-            }
+            None => return Err(SubmitError::UnknownJob(batch_number)),
         };
 
         let envelope = assigned

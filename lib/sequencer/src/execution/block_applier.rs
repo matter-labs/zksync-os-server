@@ -85,19 +85,13 @@ where
 
             self.applied_block_number_sender.send_replace(block_number);
 
-            if output
-                .send_and_record(
-                    AppliedBlock {
-                        output: block_output,
-                        record: executed_replay,
-                    },
-                    &state_reporter,
-                )
-                .is_err()
-            {
-                tracing::info!("outbound channel closed");
-                return Ok(());
-            }
+            output.send_and_record(
+                AppliedBlock {
+                    output: block_output,
+                    record: executed_replay,
+                },
+                &state_reporter,
+            )?;
         }
     }
 }
