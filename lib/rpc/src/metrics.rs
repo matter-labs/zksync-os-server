@@ -213,5 +213,5 @@ pub fn register_task_monitor() {
             m.slow_polls_count.set(metrics.total_slow_poll_count);
             m
         })
-        .expect("RPC task monitor already registered");
+        .ok();
 }

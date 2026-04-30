@@ -67,5 +67,5 @@ pub fn register_monitor() {
                 .set(interval.mean_poll_duration.as_secs_f64());
             m
         })
-        .expect("tokio runtime monitor already registered");
+        .ok();
 }
