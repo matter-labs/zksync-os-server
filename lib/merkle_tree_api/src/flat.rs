@@ -132,16 +132,18 @@ impl<K> StorageSlotProof<K> {
 }
 
 impl BatchTreeProof {
+    /// Returns all sibling hashes involved in proving the update together with their locations.
+    /// The ordering of returned hashes is unspecified (it *mostly* ordered by location).
     pub fn sibling_hashes(
         &self,
         tree_depth: u8,
-        leaf_count: u64,
+        leaf_count_before_update: u64,
     ) -> impl Iterator<Item = ((u8, u64), B256)> {
         let mut sibling_hashes = vec![];
         Self::zip_leaves(
             &Blake2Hasher,
             tree_depth,
-            leaf_count,
+            leaf_count_before_update,
             self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
             self.hashes.iter(),
             Some(&mut sibling_hashes),

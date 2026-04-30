@@ -1,3 +1,5 @@
+use self::tree_adapter::VersionedMerkleTree;
+use crate::prover_input_generator::tree_adapter::TreeOutputAdapter;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -19,8 +21,6 @@ use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_pipeline::PipelineComponent;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
-
-use self::tree_adapter::VersionedMerkleTree;
 
 mod tree_adapter;
 
@@ -258,7 +258,7 @@ fn compute_prover_input(
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                versioned_tree,
+                TreeOutputAdapter::new(tree_view).with_fallback(versioned_tree),
                 state_view,
                 list_source,
             )
@@ -296,7 +296,7 @@ fn compute_prover_input(
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                versioned_tree,
+                TreeOutputAdapter::new(tree_view).with_fallback(versioned_tree),
                 state_view,
                 list_source,
             )

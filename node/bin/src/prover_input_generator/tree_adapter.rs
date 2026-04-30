@@ -1,5 +1,3 @@
-#![allow(dead_code)] // FIXME
-
 use alloy::primitives::B256;
 use std::collections::{BTreeMap, HashMap};
 use std::thread;
@@ -15,20 +13,23 @@ use zksync_os_merkle_tree::{
 
 const TREE_DEPTH: u8 = 64;
 
-/// Error returned by [`TreeAdapter`] when it contains no queried data.
+/// Error returned by [`TreeOutputAdapter`] when it contains no queried data.
 #[derive(Debug)]
 struct NoData;
 
+/// Very fast [`ReadStorage`] / [`ReadStorageTree`] implementation based on the data contained in a Merkle tree batch update proof.
+/// It requires zero I/O for all operations, but doesn't work for storage slots not read / written during block execution.
 #[derive(Debug)]
-pub(super) struct TreeAdapter {
-    final_leaf_count: u64,
+pub(super) struct TreeOutputAdapter {
+    leaf_count_before_update: u64,
     sorted_leaves: BTreeMap<u64, Leaf>,
     key_to_index: HashMap<B256, u64>,
     missing_key_to_prev_index: HashMap<B256, u64>,
     sibling_hashes: HashMap<(u8, u64), B256>,
+    // TODO: stats on actually queried keys
 }
 
-impl TreeAdapter {
+impl TreeOutputAdapter {
     pub(super) fn new(tree_data: BlockMerkleTreeData) -> Self {
         let key_to_index = tree_data
             .proof
@@ -49,16 +50,23 @@ impl TreeAdapter {
 
         let sibling_hashes = tree_data
             .proof
-            .sibling_hashes(TREE_DEPTH, tree_data.output.leaf_count)
+            .sibling_hashes(TREE_DEPTH, tree_data.input.leaf_count)
             .map(|(location, hash)| (location, hash.0.into()))
             .collect();
 
         Self {
-            final_leaf_count: tree_data.output.leaf_count,
+            leaf_count_before_update: tree_data.input.leaf_count,
             sorted_leaves: tree_data.proof.sorted_leaves,
             key_to_index,
             missing_key_to_prev_index,
             sibling_hashes,
+        }
+    }
+
+    pub(super) fn with_fallback(self, fallback: VersionedMerkleTree) -> EfficientTreeAdapter {
+        EfficientTreeAdapter {
+            main: self,
+            fallback,
         }
     }
 
@@ -68,22 +76,19 @@ impl TreeAdapter {
     {
         let mut path = [B::default(); TREE_DEPTH as usize];
         let mut idx_on_level = tree_index;
-        let mut last_idx_on_level = self.final_leaf_count - 1;
+        let mut last_idx_on_level = self.leaf_count_before_update - 1;
         for (depth, sibling_hash) in (0..TREE_DEPTH).zip(&mut path) {
-            *sibling_hash = if idx_on_level == last_idx_on_level {
-                Blake2Hasher.empty_subtree_hash(depth).0.into()
-            } else {
-                let sibling_location = (depth, idx_on_level ^ 1);
-                let hash = self
-                    .sibling_hashes
-                    .get(&sibling_location)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "missing Merkle path for index {tree_index} at {sibling_location:?}"
-                        );
-                    });
-                hash.0.into()
-            };
+            let sibling_location = (depth, idx_on_level ^ 1);
+            let hash = self.sibling_hashes.get(&sibling_location).copied();
+            let hash = hash.unwrap_or_else(|| {
+                // The hash may only be missing for the last index on the level.
+                assert!(
+                    sibling_location.1 > last_idx_on_level,
+                    "missing Merkle path for index {tree_index} at {sibling_location:?}"
+                );
+                Blake2Hasher.empty_subtree_hash(depth)
+            });
+            *sibling_hash = hash.0.into();
 
             idx_on_level /= 2;
             last_idx_on_level /= 2;
@@ -154,7 +159,7 @@ impl VersionedMerkleTree {
         }
     }
 
-    fn read_inner(&mut self, key: B256) -> Option<B256> {
+    fn read(&mut self, key: B256) -> Option<B256> {
         let (proof, _) = self
             .inner
             .prove_flat(self.version, &[key])
@@ -203,17 +208,16 @@ impl VersionedMerkleTree {
         );
     }
 
-    fn tree_index_inner(&mut self, key: B256) -> Option<u64> {
+    fn tree_index(&mut self, key: B256) -> Option<u64> {
         if !self.cached_key_to_index.contains_key(&key) {
             // Use proof API to get the necessary data. This is inefficient, but should (almost) never
             // be triggered in practice.
-            self.read_inner(key);
+            self.read(key);
         }
         self.cached_key_to_index[&key]
     }
 
-    fn merkle_proof_inner(&mut self, tree_index: u64) -> LeafProof {
-        dbg!(tree_index);
+    fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
         if !self.cached_proofs.contains_key(&tree_index) {
             let proof = self
                 .inner
@@ -245,9 +249,9 @@ impl VersionedMerkleTree {
         LeafProof::new(proof.inner.index, leaf, merkle_path)
     }
 
-    fn prev_tree_index_inner(&mut self, key: B256) -> u64 {
+    fn prev_tree_index(&mut self, key: B256) -> u64 {
         if !self.cached_missing_key_to_prev_index.contains_key(&key) {
-            assert_eq!(self.read_inner(key), None);
+            assert_eq!(self.read(key), None);
         }
         self.cached_missing_key_to_prev_index[&key]
     }
@@ -270,21 +274,55 @@ impl Drop for VersionedMerkleTree {
     }
 }
 
-impl ReadStorage for VersionedMerkleTree {
+/// Efficient tree adapter that takes most data from [`TreeOutputAdapter`] and uses [`VersionedMerkleTree`]
+/// as a fallback. During normal execution, the fallback shouldn't be used at all.
+#[derive(Debug)]
+pub(super) struct EfficientTreeAdapter {
+    main: TreeOutputAdapter,
+    fallback: VersionedMerkleTree,
+}
+
+impl EfficientTreeAdapter {
+    fn read_inner(&mut self, key: B256) -> Option<B256> {
+        self.main
+            .read(key)
+            .unwrap_or_else(|_| self.fallback.read(key))
+    }
+
+    fn tree_index_inner(&mut self, key: B256) -> Option<u64> {
+        self.main
+            .tree_index(key)
+            .unwrap_or_else(|_| self.fallback.tree_index(key))
+    }
+
+    fn merkle_proof_inner(&mut self, tree_index: u64) -> LeafProof {
+        self.main
+            .merkle_proof(tree_index)
+            .unwrap_or_else(|_| self.fallback.merkle_proof(tree_index))
+    }
+
+    fn prev_tree_index_inner(&mut self, key: B256) -> u64 {
+        self.main
+            .prev_tree_index(key)
+            .unwrap_or_else(|_| self.fallback.prev_tree_index(key))
+    }
+}
+
+impl ReadStorage for EfficientTreeAdapter {
     fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
         self.read_inner(key.as_u8_array().into())
             .map(|value| value.0.into())
     }
 }
 
-impl zk_os_forward_system_dev::run::ReadStorage for VersionedMerkleTree {
+impl zk_os_forward_system_dev::run::ReadStorage for EfficientTreeAdapter {
     fn read(&mut self, key: zk_ee_dev::utils::Bytes32) -> Option<zk_ee_dev::utils::Bytes32> {
         self.read_inner(key.as_u8_array().into())
             .map(|value| value.0.into())
     }
 }
 
-impl ReadStorageTree for VersionedMerkleTree {
+impl ReadStorageTree for EfficientTreeAdapter {
     fn tree_index(&mut self, key: Bytes32) -> Option<u64> {
         self.tree_index_inner(key.as_u8_array().into())
     }
@@ -298,7 +336,7 @@ impl ReadStorageTree for VersionedMerkleTree {
     }
 }
 
-impl zk_os_forward_system_dev::run::ReadStorageTree for VersionedMerkleTree {
+impl zk_os_forward_system_dev::run::ReadStorageTree for EfficientTreeAdapter {
     fn tree_index(&mut self, key: zk_ee_dev::utils::Bytes32) -> Option<u64> {
         self.tree_index_inner(key.as_u8_array().into())
     }
