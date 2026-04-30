@@ -12,7 +12,7 @@ use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxTy
 use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
 use alloy::network::primitives::BlockTransactions;
-use alloy::primitives::{Address, B256, Bloom, Bytes, Log, Signature, TxKind, U256, b256};
+use alloy::primitives::{Address, B256, Bloom, Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::simulate::{
     MAX_SIMULATE_BLOCKS, SimCallResult, SimulateError, SimulatePayload, SimulatedBlock,
 };
@@ -25,11 +25,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zk_os_api::helpers::{get_balance, get_nonce};
-use zksync_os_evm_errors::EvmError;
-use zksync_os_interface::tracing::{
-    AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer,
-    NopValidator,
-};
+use zksync_os_interface::tracing::{NopTracer, NopValidator};
 use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
 use zksync_os_interface::types::{BlockHashes, ExecutionOutput, TxOutput};
 use zksync_os_interface::{
@@ -40,7 +36,7 @@ use zksync_os_multivm::run_block;
 use zksync_os_rpc_api::types::ZkApiBlock;
 use zksync_os_storage_api::{
     BlockOverlay, RepositoryError, StateError, ViewState,
-    state_override_view::{OverriddenStateView, build_state_override_maps},
+    state_override_view::{OverriddenStateView, OwnedOverrides, build_state_override_maps},
 };
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
@@ -50,9 +46,6 @@ use zksync_os_types::{
 };
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
-const TRANSFER_EVENT_TOPIC: B256 =
-    b256!("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef");
-
 #[derive(Clone, Debug)]
 pub struct EthCallHandler<RpcStorage> {
     config: RpcConfig,
@@ -439,6 +432,15 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         Ok(tracer_output.results.pop().unwrap_or(JsonValue::Null))
     }
 
+    /// Implements `eth_simulateV1` using the same high-level model as reth: execute the requested
+    /// blocks linearly, carry an overlay of simulated writes into subsequent blocks, and use a
+    /// separate execution context when `validation=false` so fee validation does not leak into the
+    /// returned header.
+    ///
+    /// Spec limitations: this backend does not expose reth's `TransferInspector` equivalent, so
+    /// `traceTransfers=true` is rejected instead of returning partial transfer logs. The backend
+    /// also cannot remap precompiles for a single simulated block, so `movePrecompileToAddress` is
+    /// validated for self/duplicate references and then rejected as unsupported.
     pub fn simulate_v1_impl(
         &self,
         opts: SimulatePayload,
@@ -461,6 +463,15 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             validation,
             return_full_transactions,
         } = opts;
+        if trace_transfers {
+            // Reth implements this with `TransferInspector`, which records all native value moves,
+            // including internal CALL/CREATE/SELFDESTRUCT. The ZKsync OS VM path used here does not
+            // expose an equivalent transfer stream, so fail explicitly rather than returning a
+            // partial trace.
+            return Err(EthCallError::SimulateInvalidParams(
+                "traceTransfers is not implemented".to_string(),
+            ));
+        }
 
         let SimulationStartContext {
             mut block_context,
@@ -497,55 +508,35 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             let simulation_view =
                 OverriddenStateView::new(base_state.clone(), Arc::clone(&overlays));
 
-            let (state_override_overlay, block_output, trace_entries, txs) =
-                match sim_block.state_overrides {
-                    Some(state_overrides) => {
-                        validate_state_overrides_for_simulate(&state_overrides)?;
-                        let state_overrides =
-                            build_state_override_maps(&simulation_view, state_overrides);
-                        let (storage_writes, preimages) = state_overrides.clone().into_parts();
-                        let state_override_overlay = BlockOverlay {
+            let (state_override_overlay, state_overrides) = match sim_block.state_overrides {
+                Some(state_overrides) => {
+                    validate_state_overrides_for_simulate(&state_overrides)?;
+                    let state_overrides =
+                        build_state_override_maps(&simulation_view, state_overrides);
+                    let (storage_writes, preimages) = state_overrides.clone().into_parts();
+                    (
+                        BlockOverlay {
                             storage_writes,
                             preimages,
-                        };
-                        let overridden_view =
-                            OverriddenStateView::new(simulation_view, state_overrides);
-                        let txs = self.create_simulation_txs(
-                            sim_block.calls,
-                            execution_context,
-                            overridden_view.clone(),
-                        )?;
-                        let (block_output, trace_entries) = run_simulation_block(
-                            execution_context,
-                            overridden_view,
-                            &txs,
-                            trace_transfers,
-                        )?;
-                        (state_override_overlay, block_output, trace_entries, txs)
-                    }
-                    None => {
-                        let txs = self.create_simulation_txs(
-                            sim_block.calls,
-                            execution_context,
-                            simulation_view.clone(),
-                        )?;
-                        let (block_output, trace_entries) = run_simulation_block(
-                            execution_context,
-                            simulation_view,
-                            &txs,
-                            trace_transfers,
-                        )?;
-                        (BlockOverlay::default(), block_output, trace_entries, txs)
-                    }
-                };
+                        },
+                        state_overrides,
+                    )
+                }
+                None => (BlockOverlay::default(), OwnedOverrides::default()),
+            };
+            let overridden_view = OverriddenStateView::new(simulation_view, state_overrides);
+            let txs = self.create_simulation_txs(
+                sim_block.calls,
+                execution_context,
+                overridden_view.clone(),
+            )?;
+            let block_output = run_simulation_block(execution_context, overridden_view, &txs)?;
 
             let simulated_block = build_simulated_block_response(
                 response_context,
                 header_overrides,
                 txs,
                 block_output,
-                trace_entries,
-                trace_transfers,
                 return_full_transactions,
             )?;
             let next_hash = simulated_block.inner.header.hash;
@@ -914,35 +905,24 @@ fn run_simulation_block<State>(
     block_context: BlockContext,
     state_view: State,
     txs: &[ZkTransaction],
-    trace_transfers: bool,
-) -> Result<(BlockOutput, Vec<Vec<TraceEntry>>), EthCallError>
+) -> Result<BlockOutput, EthCallError>
 where
     State: ViewState,
 {
     let tx_source = TxListSource {
         transactions: txs.iter().cloned().map(|tx| tx.encode()).collect(),
     };
-    let mut tracer = TransferTrace::new(trace_transfers);
 
-    let block_output = run_block(
+    run_block(
         block_context,
         state_view.clone(),
         state_view,
         tx_source,
         NoopTxCallback,
-        &mut tracer,
+        &mut NopTracer,
         &mut NopValidator,
     )
-    .map_err(EthCallError::ForwardSubsystemError)?;
-
-    let mut trace_entries = if trace_transfers {
-        tracer.into_entries()
-    } else {
-        Vec::new()
-    };
-    trace_entries.resize_with(block_output.tx_results.len(), Vec::new);
-
-    Ok((block_output, trace_entries))
+    .map_err(EthCallError::ForwardSubsystemError)
 }
 
 #[derive(Debug)]
@@ -970,8 +950,6 @@ fn build_simulated_block_response(
     header_overrides: SimulateHeaderOverrides,
     txs: Vec<ZkTransaction>,
     block_output: BlockOutput,
-    tx_trace_entries: Vec<Vec<TraceEntry>>,
-    trace_transfers: bool,
     return_full_transactions: bool,
 ) -> Result<SimulatedBlockResponse, EthCallError> {
     let BlockOutput {
@@ -989,35 +967,33 @@ fn build_simulated_block_response(
     let mut cumulative_gas_used = 0;
     let mut receipts = Vec::with_capacity(tx_results.len());
     let mut simulated_txs = Vec::with_capacity(tx_results.len());
-    let mut tx_trace_entries = tx_trace_entries.into_iter();
+    let mut executed_tx_index = 0;
 
-    for (tx_index, (tx, result)) in txs.into_iter().zip(tx_results.into_iter()).enumerate() {
-        let trace_entries = trace_transfers.then(|| tx_trace_entries.next().unwrap_or_default());
+    for (call_index, (tx, result)) in txs.into_iter().zip(tx_results.into_iter()).enumerate() {
         let simulated_tx = match result {
             Ok(tx_output) => {
-                let receipt =
-                    build_simulated_receipt(&tx, &tx_output, cumulative_gas_used, trace_entries);
+                let receipt = build_simulated_receipt(&tx, &tx_output, cumulative_gas_used);
                 block_bloom.accrue_bloom(receipt.logs_bloom());
                 cumulative_gas_used += tx_output.gas_used;
                 let simulated_tx = SimulatedTx {
                     tx,
-                    tx_index_in_block: tx_index as u64,
+                    tx_index_in_block: executed_tx_index,
                     number_of_logs_before_this_tx,
-                    tx_output: Some(tx_output),
-                    receipt: Some(receipt.clone()),
-                    invalid_tx_error: None,
+                    result: SimulatedTxResult::Executed {
+                        output: tx_output,
+                        receipt: Box::new(receipt.clone()),
+                    },
                 };
+                executed_tx_index += 1;
                 number_of_logs_before_this_tx += receipt.logs().len() as u64;
                 receipts.push(receipt);
                 simulated_tx
             }
             Err(err) => SimulatedTx {
                 tx,
-                tx_index_in_block: tx_index as u64,
+                tx_index_in_block: call_index as u64,
                 number_of_logs_before_this_tx,
-                tx_output: None,
-                receipt: None,
-                invalid_tx_error: Some(err),
+                result: SimulatedTxResult::Invalid(err),
             },
         };
         simulated_txs.push(simulated_tx);
@@ -1030,6 +1006,7 @@ fn build_simulated_block_response(
     header.transactions_root = calculate_transaction_root(
         &simulated_txs
             .iter()
+            .filter(|tx| tx.is_executed())
             .map(|tx| tx.tx.envelope().clone())
             .collect::<Vec<_>>(),
     );
@@ -1048,11 +1025,18 @@ fn build_simulated_block_response(
         BlockTransactions::Full(
             simulated_txs
                 .iter()
+                .filter(|tx| tx.is_executed())
                 .map(|tx| tx.to_api_tx(block_hash, block_context))
                 .collect(),
         )
     } else {
-        BlockTransactions::Hashes(simulated_txs.iter().map(|tx| *tx.tx.hash()).collect())
+        BlockTransactions::Hashes(
+            simulated_txs
+                .iter()
+                .filter(|tx| tx.is_executed())
+                .map(|tx| *tx.tx.hash())
+                .collect(),
+        )
     };
     let inner = ZkApiBlock::new(header, transactions);
 
@@ -1073,12 +1057,7 @@ fn build_simulated_receipt(
     tx: &ZkTransaction,
     tx_output: &TxOutput,
     cumulative_gas_used_before_this_tx: u64,
-    trace_entries: Option<Vec<TraceEntry>>,
 ) -> ZkReceiptEnvelope {
-    let logs = match trace_entries {
-        Some(entries) => trace_transfer_logs(tx, tx_output, entries),
-        None => tx_output.logs.clone(),
-    };
     let l2_to_l1_logs = tx_output
         .l2_to_l1_logs
         .iter()
@@ -1097,277 +1076,10 @@ fn build_simulated_receipt(
         ZkReceipt {
             status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
             cumulative_gas_used: cumulative_gas_used_before_this_tx + tx_output.gas_used,
-            logs,
+            logs: tx_output.logs.clone(),
             l2_to_l1_logs,
         },
     )
-}
-
-fn trace_transfer_logs(
-    tx: &ZkTransaction,
-    tx_output: &TxOutput,
-    trace_entries: Vec<TraceEntry>,
-) -> Vec<Log> {
-    if !matches!(tx_output.execution_result, ExecutionResult::Success(_)) {
-        return tx_output.logs.clone();
-    }
-
-    let top_level_transfer = top_level_native_transfer(tx, tx_output);
-    let trace_event_count = trace_entries
-        .iter()
-        .filter(|entry| matches!(entry, TraceEntry::Event(_)))
-        .count();
-
-    if trace_event_count == tx_output.logs.len() {
-        let mut has_top_level_transfer = false;
-        let mut logs =
-            Vec::with_capacity(trace_entries.len() + usize::from(top_level_transfer.is_some()));
-        for entry in trace_entries {
-            match entry {
-                TraceEntry::Event(log) => logs.push(log),
-                TraceEntry::Transfer(transfer) => {
-                    if Some(transfer) == top_level_transfer {
-                        has_top_level_transfer = true;
-                    }
-                    logs.push(native_transfer_log(transfer));
-                }
-            }
-        }
-        if let Some(transfer) = top_level_transfer
-            && !has_top_level_transfer
-        {
-            logs.insert(0, native_transfer_log(transfer));
-        }
-        return logs;
-    }
-
-    let mut transfers = trace_entries
-        .into_iter()
-        .filter_map(|entry| match entry {
-            TraceEntry::Transfer(transfer) => Some(transfer),
-            TraceEntry::Event(_) => None,
-        })
-        .collect::<Vec<_>>();
-    if let Some(transfer) = top_level_transfer
-        && !transfers.contains(&transfer)
-    {
-        transfers.insert(0, transfer);
-    }
-
-    let mut logs = transfers
-        .into_iter()
-        .map(native_transfer_log)
-        .collect::<Vec<_>>();
-    logs.extend(tx_output.logs.clone());
-    logs
-}
-
-fn top_level_native_transfer(tx: &ZkTransaction, tx_output: &TxOutput) -> Option<NativeTransfer> {
-    if tx.value() == U256::ZERO
-        || !matches!(tx_output.execution_result, ExecutionResult::Success(_))
-    {
-        return None;
-    }
-
-    let to = tx.to().or(tx_output.contract_address)?;
-    Some(NativeTransfer {
-        from: tx.signer(),
-        to,
-        value: tx.value(),
-    })
-}
-
-fn native_transfer_log(transfer: NativeTransfer) -> Log {
-    let mut from_topic = B256::ZERO;
-    from_topic.0[12..].copy_from_slice(transfer.from.as_slice());
-    let mut to_topic = B256::ZERO;
-    to_topic.0[12..].copy_from_slice(transfer.to.as_slice());
-    let data = transfer.value.to_be_bytes::<32>();
-
-    Log::new_unchecked(
-        Address::repeat_byte(0xee),
-        vec![TRANSFER_EVENT_TOPIC, from_topic, to_topic],
-        Bytes::copy_from_slice(&data),
-    )
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct NativeTransfer {
-    from: Address,
-    to: Address,
-    value: U256,
-}
-
-#[derive(Clone, Debug)]
-enum TraceEntry {
-    Event(Log),
-    Transfer(NativeTransfer),
-}
-
-#[derive(Debug)]
-struct TraceFrame {
-    transfer: Option<NativeTransfer>,
-    entry_index: usize,
-}
-
-/// Minimal equivalent of reth's `TransferInspector` for the ZKsync OS tracer hooks.
-#[derive(Debug, Default)]
-struct TransferTrace {
-    enabled: bool,
-    current_tx_entries: Vec<TraceEntry>,
-    frame_stack: Vec<TraceFrame>,
-    tx_entries: Vec<Vec<TraceEntry>>,
-}
-
-impl TransferTrace {
-    fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            ..Self::default()
-        }
-    }
-
-    fn into_entries(self) -> Vec<Vec<TraceEntry>> {
-        self.tx_entries
-    }
-}
-
-impl AnyTracer for TransferTrace {
-    fn as_evm(&mut self) -> Option<&mut impl EvmTracer> {
-        Some(self)
-    }
-}
-
-impl EvmTracer for TransferTrace {
-    fn on_new_execution_frame(&mut self, request: impl EvmRequest) {
-        if !self.enabled {
-            return;
-        }
-
-        let value = request.nominal_token_value();
-        let transfer = (value > U256::ZERO
-            && matches!(
-                request.modifier(),
-                CallModifier::NoModifier | CallModifier::Constructor
-            ))
-        .then_some(NativeTransfer {
-            from: request.caller(),
-            to: request.callee(),
-            value,
-        });
-        self.frame_stack.push(TraceFrame {
-            transfer,
-            entry_index: self.current_tx_entries.len(),
-        });
-    }
-
-    fn after_execution_frame_completed(&mut self, result: Option<(EvmResources, CallResult)>) {
-        if !self.enabled {
-            return;
-        }
-
-        let Some(frame) = self.frame_stack.pop() else {
-            return;
-        };
-        if matches!(result, Some((_, CallResult::Successful { .. }))) {
-            if let Some(transfer) = frame.transfer {
-                let index = frame.entry_index.min(self.current_tx_entries.len());
-                self.current_tx_entries
-                    .insert(index, TraceEntry::Transfer(transfer));
-            }
-        } else {
-            self.current_tx_entries.truncate(frame.entry_index);
-        }
-    }
-
-    fn on_storage_read(
-        &mut self,
-        _is_transient: bool,
-        _address: Address,
-        _key: B256,
-        _value: B256,
-    ) {
-    }
-
-    fn on_storage_write(
-        &mut self,
-        _is_transient: bool,
-        _address: Address,
-        _key: B256,
-        _value: B256,
-    ) {
-    }
-
-    fn on_bytecode_change(
-        &mut self,
-        _address: Address,
-        _new_raw_bytecode: Option<&[u8]>,
-        _new_internal_bytecode_hash: B256,
-        _new_observable_bytecode_length: u32,
-    ) {
-    }
-
-    fn on_event(&mut self, address: Address, topics: Vec<B256>, data: &[u8]) {
-        if self.enabled {
-            self.current_tx_entries
-                .push(TraceEntry::Event(Log::new_unchecked(
-                    address,
-                    topics,
-                    Bytes::copy_from_slice(data),
-                )));
-        }
-    }
-
-    fn begin_tx(&mut self, _calldata: &[u8]) {
-        if self.enabled {
-            self.current_tx_entries.clear();
-            self.frame_stack.clear();
-        }
-    }
-
-    fn finish_tx(&mut self) {
-        if self.enabled {
-            self.frame_stack.clear();
-            self.tx_entries
-                .push(std::mem::take(&mut self.current_tx_entries));
-        }
-    }
-
-    fn before_evm_interpreter_execution_step(
-        &mut self,
-        _opcode: u8,
-        _frame_state: impl EvmFrameInterface,
-    ) {
-    }
-
-    fn after_evm_interpreter_execution_step(
-        &mut self,
-        _opcode: u8,
-        _frame_state: impl EvmFrameInterface,
-    ) {
-    }
-
-    fn on_opcode_error(&mut self, _error: &EvmError, _frame_state: impl EvmFrameInterface) {}
-
-    fn on_call_error(&mut self, _error: &EvmError) {}
-
-    fn on_selfdestruct(
-        &mut self,
-        beneficiary: Address,
-        token_value: U256,
-        frame_state: impl EvmFrameInterface,
-    ) {
-        if self.enabled && token_value > U256::ZERO {
-            self.current_tx_entries
-                .push(TraceEntry::Transfer(NativeTransfer {
-                    from: frame_state.address(),
-                    to: beneficiary,
-                    value: token_value,
-                }));
-        }
-    }
-
-    fn on_create_request(&mut self, _is_create2: bool) {}
 }
 
 fn next_block_context(mut block_context: BlockContext, parent_hash: B256) -> BlockContext {
@@ -1394,6 +1106,17 @@ fn apply_simulate_block_overrides(
                 got: number,
                 parent: previous_block_number,
             });
+        }
+        let skipped_blocks = number.saturating_sub(block_context.block_number);
+        if skipped_blocks >= 256 {
+            block_context.block_hashes.0 = [U256::ZERO; 256];
+        } else if skipped_blocks > 0 {
+            let skipped_blocks = skipped_blocks as usize;
+            block_context
+                .block_hashes
+                .0
+                .copy_within(skipped_blocks.., 0);
+            block_context.block_hashes.0[256 - skipped_blocks..].fill(U256::ZERO);
         }
         block_context.block_number = number;
     }
@@ -1462,6 +1185,10 @@ fn validate_state_overrides_for_simulate(
         }
     }
     if has_precompile_move {
+        // Spec note: `movePrecompileToAddress` is part of eth_simulateV1 state overrides. The
+        // current ZKsync OS execution backend does not expose a way to remap its precompile table
+        // for a single simulated block, so reject it explicitly after the spec validation checks
+        // above.
         return Err(EthCallError::SimulateMovePrecompileNotSupported);
     }
     Ok(())
@@ -1501,43 +1228,53 @@ struct SimulatedTx {
     tx: ZkTransaction,
     tx_index_in_block: u64,
     number_of_logs_before_this_tx: u64,
-    tx_output: Option<TxOutput>,
-    receipt: Option<ZkReceiptEnvelope>,
-    invalid_tx_error: Option<InvalidTransaction>,
+    result: SimulatedTxResult,
+}
+
+enum SimulatedTxResult {
+    Executed {
+        output: TxOutput,
+        receipt: Box<ZkReceiptEnvelope>,
+    },
+    Invalid(InvalidTransaction),
 }
 
 impl SimulatedTx {
+    fn is_executed(&self) -> bool {
+        matches!(&self.result, SimulatedTxResult::Executed { .. })
+    }
+
     fn to_call_result(&self, block_hash: B256, block_context: BlockContext) -> SimCallResult {
-        match (&self.tx_output, &self.receipt, &self.invalid_tx_error) {
-            (Some(tx_output), Some(receipt), None) => {
+        match &self.result {
+            SimulatedTxResult::Executed { output, receipt } => {
                 let logs = self.api_logs(block_hash, block_context, receipt);
-                match &tx_output.execution_result {
+                let (return_data, status, error) = match &output.execution_result {
                     ExecutionResult::Success(
                         ExecutionOutput::Call(return_bytes)
                         | ExecutionOutput::Create(return_bytes, _),
-                    ) => SimCallResult {
-                        return_data: Bytes::from(return_bytes.clone()),
-                        logs,
-                        gas_used: tx_output.gas_used,
-                        status: true,
-                        error: None,
-                    },
+                    ) => (Bytes::from(return_bytes.clone()), true, None),
                     ExecutionResult::Revert(return_bytes) => {
                         let revert = RevertError::new(Bytes::from(return_bytes.clone()));
-                        SimCallResult {
-                            return_data: Bytes::from(return_bytes.clone()),
-                            logs,
-                            gas_used: tx_output.gas_used,
-                            status: false,
-                            error: Some(SimulateError {
+                        (
+                            Bytes::from(return_bytes.clone()),
+                            false,
+                            Some(SimulateError {
                                 code: -32000,
                                 message: revert.to_string(),
                             }),
-                        }
+                        )
                     }
+                };
+
+                SimCallResult {
+                    return_data,
+                    logs,
+                    gas_used: output.gas_used,
+                    status,
+                    error,
                 }
             }
-            (_, _, Some(err)) => SimCallResult {
+            SimulatedTxResult::Invalid(err) => SimCallResult {
                 return_data: Bytes::default(),
                 logs: vec![],
                 gas_used: 0,
@@ -1547,7 +1284,6 @@ impl SimulatedTx {
                     message: format!("vm execution error: {err}"),
                 }),
             },
-            _ => SimCallResult::default(),
         }
     }
 
@@ -1569,14 +1305,11 @@ impl SimulatedTx {
         receipt: &ZkReceiptEnvelope,
     ) -> Vec<alloy::rpc::types::Log> {
         let tx_hash = *self.tx.hash();
-        let meta = self.tx_meta(
-            block_hash,
-            block_context,
-            self.tx_output
-                .as_ref()
-                .map(|output| output.gas_used)
-                .unwrap_or_default(),
-        );
+        let gas_used = match &self.result {
+            SimulatedTxResult::Executed { output, .. } => output.gas_used,
+            SimulatedTxResult::Invalid(_) => 0,
+        };
+        let meta = self.tx_meta(block_hash, block_context, gas_used);
         receipt
             .logs()
             .iter()
@@ -1604,10 +1337,10 @@ impl SimulatedTx {
                 .effective_gas_price(Some(block_context.eip1559_basefee.saturating_to())),
             number_of_logs_before_this_tx: self.number_of_logs_before_this_tx,
             gas_used,
-            contract_address: self
-                .tx_output
-                .as_ref()
-                .and_then(|output| output.contract_address),
+            contract_address: match &self.result {
+                SimulatedTxResult::Executed { output, .. } => output.contract_address,
+                SimulatedTxResult::Invalid(_) => None,
+            },
         }
     }
 }
@@ -1794,6 +1527,37 @@ mod tests {
             time_err,
             EthCallError::SimulateBlockTimestampInvalid { .. }
         ));
+    }
+
+    #[test]
+    fn simulate_block_override_number_jump_clears_gap_hashes() {
+        let mut hashes = [U256::ZERO; 256];
+        for (i, hash) in hashes.iter_mut().enumerate() {
+            *hash = U256::from(i + 1);
+        }
+        let mut context = BlockContext {
+            block_number: 11,
+            timestamp: 101,
+            block_hashes: BlockHashes(hashes),
+            ..Default::default()
+        };
+
+        apply_simulate_block_overrides(
+            &mut context,
+            BlockOverrides {
+                number: Some(U256::from(14)),
+                ..Default::default()
+            },
+            10,
+            100,
+        )
+        .unwrap();
+
+        assert_eq!(context.block_number, 14);
+        assert_eq!(context.block_hashes.0[252], U256::from(256));
+        assert_eq!(context.block_hashes.0[253], U256::ZERO);
+        assert_eq!(context.block_hashes.0[254], U256::ZERO);
+        assert_eq!(context.block_hashes.0[255], U256::ZERO);
     }
 
     #[test]
