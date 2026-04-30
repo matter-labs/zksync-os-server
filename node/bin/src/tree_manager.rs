@@ -103,10 +103,10 @@ impl PipelineComponent for TreeManager {
 
             tracing::debug!(
                 block_number = block_number,
-                next_free_slot = tree_batch_output.leaf_count,
-                "Processed {} entries in tree, output: {:?}",
-                count,
-                tree_batch_output
+                written_keys.len = written_keys.len(),
+                read_keys.len = read_keys.len(),
+                output = ?tree_batch_output,
+                "Processed tree update"
             );
 
             TREE_METRICS

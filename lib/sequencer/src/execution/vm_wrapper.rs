@@ -1,4 +1,5 @@
 use crate::execution::metrics::EXECUTION_METRICS;
+use crate::execution::utils::ReadRecordingState;
 use crate::model::blocks::BlockOutputWithReads;
 use anyhow::Context;
 use std::time::Duration;
@@ -40,9 +41,10 @@ impl VmWrapper {
 
         // Spawn the blocking run_block(...) call.
         let join_handle = spawn_blocking(move || {
+            let (recording_state, recording_handle) = ReadRecordingState::new(state_view.clone());
             let block_output = zksync_os_multivm::run_block(
                 context,
-                state_view.clone(),
+                recording_state,
                 state_view,
                 tx_source,
                 tx_callback,
@@ -52,7 +54,7 @@ impl VmWrapper {
 
             Ok(BlockOutputWithReads {
                 inner: block_output,
-                read_keys: Default::default(), // FIXME
+                read_keys: recording_handle.into_read_keys(),
             })
         });
 
