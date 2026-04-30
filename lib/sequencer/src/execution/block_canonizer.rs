@@ -127,7 +127,7 @@ where
                                 produced_replay.block_context.block_number
                             );
                         }
-                        if output
+                        output
                             .send_and_record(
                                 BlockPayload {
                                     output: block_output,
@@ -135,11 +135,7 @@ where
                                     command_type: cmd_type,
                                 },
                                 &state_reporter,
-                            )
-                            .is_err()
-                        {
-                            anyhow::bail!("Outbound channel closed");
-                        }
+                            )?;
                     } else {
                         tracing::info!(
                             "Received new block {} (block output hash: {}) from Consensus. \
@@ -177,7 +173,7 @@ where
                             replay_record.block_context.block_number,
                             replay_record.block_output_hash,
                         );
-                        if output
+                        output
                             .send_and_record(
                                 BlockPayload {
                                     output: block_output,
@@ -185,11 +181,7 @@ where
                                     command_type: cmd_type,
                                 },
                                 &state_reporter,
-                            )
-                            .is_err()
-                        {
-                            anyhow::bail!("Outbound channel closed");
-                        }
+                            )?;
                         }
                         BlockCommandType::Produce | BlockCommandType::Rebuild => {
                             tracing::info!(

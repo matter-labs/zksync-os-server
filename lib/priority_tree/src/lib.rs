@@ -185,12 +185,10 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                             Some(passthrough_batch_num),
                         );
                         if let Some(sender) = &execute_batches_sender {
-                            sender
-                                .send_and_record(
-                                    L1SenderCommand::Passthrough(Box::new(envelope)),
-                                    &state_reporter,
-                                )
-                                .map_err(|_| anyhow::anyhow!("execute_batches channel closed"))?;
+                            sender.send_and_record(
+                                L1SenderCommand::Passthrough(Box::new(envelope)),
+                                &state_reporter,
+                            )?;
                         }
 
                         continue;
@@ -326,8 +324,7 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                     priority_ops,
                     interop_roots,
                 ));
-                s.send_and_record(cmd, &state_reporter)
-                    .map_err(|_| anyhow::anyhow!("execute_batches channel closed"))?;
+                s.send_and_record(cmd, &state_reporter)?;
             } else {
                 state_reporter.record_processed(
                     last_block,

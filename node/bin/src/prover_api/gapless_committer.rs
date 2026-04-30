@@ -91,9 +91,7 @@ impl PipelineComponent for GaplessCommitter {
                                 .map(L1SenderCommand::SendToL1)
                                 .context("Committer batch signature failure")?
                             };
-                            if output.send_and_record(result, &state_reporter).is_err() {
-                                anyhow::bail!("Outbound channel closed");
-                            }
+                            output.send_and_record(result, &state_reporter)?;
                         }
                     }
                 }

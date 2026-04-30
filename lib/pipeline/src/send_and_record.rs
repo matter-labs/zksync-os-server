@@ -5,9 +5,8 @@ use tokio::sync::mpsc;
 /// with recording it as processed on a `ComponentStateReporter`.
 ///
 /// Recording happens only if the send succeeds — if the receiver has been
-/// dropped, the error is returned and nothing is recorded. If the channel is
-/// full, this method panics; it assumes a large-capacity channel
-/// (`OUTPUT_CHANNEL_CAPACITY`) that should never fill under normal operation.
+/// dropped, or the channel is full (consumer catastrophically behind), the
+/// error is returned and nothing is recorded.
 pub trait SendAndRecordExt<T: HasBlockRangeEnd> {
     fn send_and_record(
         &self,
@@ -28,8 +27,11 @@ impl<T: HasBlockRangeEnd> SendAndRecordExt<T> for mpsc::Sender<T> {
         match self.try_send(value) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Closed(v)) => return Err(mpsc::error::SendError(v)),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                panic!("pipeline channel unexpectedly full — consumer is catastrophically behind")
+            Err(mpsc::error::TrySendError::Full(v)) => {
+                tracing::error!(
+                    "pipeline channel unexpectedly full — consumer is catastrophically behind"
+                );
+                return Err(mpsc::error::SendError(v));
             }
         }
         reporter.record_processed(block_number, block_timestamp, batch_number);

@@ -50,12 +50,7 @@ impl PipelineComponent for GaplessL1ProofSender {
                     // picked coordinate has no meaningful value here.
                     while let Some(next_command) = buffer.remove(&next_expected_batch_number) {
                         next_expected_batch_number += next_command.batch_count() as u64;
-                        if output
-                            .send_and_record(next_command, &state_reporter)
-                            .is_err()
-                        {
-                            anyhow::bail!("Outbound channel closed");
-                        }
+                        output.send_and_record(next_command, &state_reporter)?;
                     }
                 }
                 None => {

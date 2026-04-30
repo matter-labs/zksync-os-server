@@ -106,9 +106,7 @@ impl PipelineComponent for UpgradeGatekeeper {
                     .await?;
             }
 
-            if output.send_and_record(command, &state_reporter).is_err() {
-                anyhow::bail!("Outbound channel closed");
-            }
+            output.send_and_record(command, &state_reporter)?;
         }
     }
 }
