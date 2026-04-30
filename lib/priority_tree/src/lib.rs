@@ -14,7 +14,7 @@ use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::PeekableReceiver;
+use zksync_os_pipeline::{PeekableReceiver, SendAndRecordExt};
 use zksync_os_storage_api::{ReadFinality, ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
 
@@ -185,24 +185,13 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                             Some(passthrough_batch_num),
                         );
                         if let Some(sender) = &execute_batches_sender {
-                            match sender.try_send(L1SenderCommand::Passthrough(Box::new(envelope)))
-                            {
-                                Ok(()) => {}
-                                Err(mpsc::error::TrySendError::Closed(_)) => {
-                                    return Err(anyhow::anyhow!("execute_batches channel closed"));
-                                }
-                                Err(mpsc::error::TrySendError::Full(_)) => {
-                                    panic!(
-                                        "pipeline channel unexpectedly full — consumer is catastrophically behind"
-                                    )
-                                }
-                            }
+                            sender
+                                .send_and_record(
+                                    L1SenderCommand::Passthrough(Box::new(envelope)),
+                                    &state_reporter,
+                                )
+                                .map_err(|_| anyhow::anyhow!("execute_batches channel closed"))?;
                         }
-                        state_reporter.record_processed(
-                            passthrough_last_block,
-                            passthrough_last_ts,
-                            Some(passthrough_batch_num),
-                        );
 
                         continue;
                     }
@@ -337,23 +326,15 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                     priority_ops,
                     interop_roots,
                 ));
-                match s.try_send(cmd) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        return Err(anyhow::anyhow!("execute_batches channel closed"));
-                    }
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        panic!(
-                            "pipeline channel unexpectedly full — consumer is catastrophically behind"
-                        )
-                    }
-                }
+                s.send_and_record(cmd, &state_reporter)
+                    .map_err(|_| anyhow::anyhow!("execute_batches channel closed"))?;
+            } else {
+                state_reporter.record_processed(
+                    last_block,
+                    last_block_timestamp,
+                    Some(last_batch_number),
+                );
             }
-            state_reporter.record_processed(
-                last_block,
-                last_block_timestamp,
-                Some(last_batch_number),
-            );
             last_processed_batch = last_batch_number;
         }
     }
