@@ -5,10 +5,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
+use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 use zksync_os_crypto::hasher::Hasher;
 use zksync_os_crypto::hasher::keccak::KeccakHasher;
-use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_watcher::CommittedBatchProvider;
@@ -337,7 +337,7 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                 return Ok(());
             };
             finality_receiver
-                .wait_for(|f| last_block_number <= f.last_executed_block)
+                .wait_for(|f| last_block_number <= f.last_finalized_executed_block)
                 .await
                 .context("failed to wait for executed block number")?;
 

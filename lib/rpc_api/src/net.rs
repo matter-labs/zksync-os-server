@@ -8,5 +8,5 @@ use jsonrpsee::proc_macros::rpc;
 pub trait NetApi {
     /// Returns the chain ID of the current network.
     #[method(name = "version")]
-    async fn version(&self) -> RpcResult<Option<U64>>;
+    fn version(&self) -> RpcResult<Option<U64>>;
 }

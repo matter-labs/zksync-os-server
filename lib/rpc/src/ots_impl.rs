@@ -11,7 +11,6 @@ use alloy::rpc::types::trace::otterscan::{
     OtsSlimBlock, OtsTransactionReceipt, TraceEntry, TransactionsWithReceipts,
 };
 use alloy::rpc::types::{Header, Log};
-use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use zksync_os_rpc_api::ots::OtsApiServer;
 use zksync_os_rpc_api::types::{L2ToL1Log, RpcBlockConvert, ZkApiTransaction};
@@ -297,16 +296,15 @@ impl<RpcStorage: ReadRpcStorage> OtsNamespace<RpcStorage> {
     }
 }
 
-#[async_trait]
 impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
-    async fn get_header_by_number(
+    fn get_header_by_number(
         &self,
         block_number: LenientBlockNumberOrTag,
     ) -> RpcResult<Option<Header>> {
         self.get_header_by_number_impl(block_number).to_rpc_result()
     }
 
-    async fn has_code(
+    fn has_code(
         &self,
         address: Address,
         block_id: Option<LenientBlockNumberOrTag>,
@@ -314,39 +312,36 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
         self.has_code_impl(address, block_id).to_rpc_result()
     }
 
-    async fn get_api_level(&self) -> RpcResult<u64> {
+    fn get_api_level(&self) -> RpcResult<u64> {
         Ok(API_LEVEL)
     }
 
-    async fn get_internal_operations(&self, _tx_hash: TxHash) -> RpcResult<Vec<InternalOperation>> {
+    fn get_internal_operations(&self, _tx_hash: TxHash) -> RpcResult<Vec<InternalOperation>> {
         // todo(tracing)
         Ok(vec![])
     }
 
-    async fn get_transaction_error(&self, _tx_hash: TxHash) -> RpcResult<Option<Bytes>> {
+    fn get_transaction_error(&self, _tx_hash: TxHash) -> RpcResult<Option<Bytes>> {
         // todo: consider saving tx's output or replaying the block here
         Ok(None)
     }
 
-    async fn trace_transaction(&self, _tx_hash: TxHash) -> RpcResult<Option<Vec<TraceEntry>>> {
+    fn trace_transaction(&self, _tx_hash: TxHash) -> RpcResult<Option<Vec<TraceEntry>>> {
         // todo(tracing)
         Ok(Some(vec![]))
     }
 
-    async fn get_block_details(
-        &self,
-        block_number: LenientBlockNumberOrTag,
-    ) -> RpcResult<BlockDetails> {
+    fn get_block_details(&self, block_number: LenientBlockNumberOrTag) -> RpcResult<BlockDetails> {
         self.get_block_details_by_id_impl(block_number.into())
             .to_rpc_result()
     }
 
-    async fn get_block_details_by_hash(&self, block_hash: BlockHash) -> RpcResult<BlockDetails> {
+    fn get_block_details_by_hash(&self, block_hash: BlockHash) -> RpcResult<BlockDetails> {
         self.get_block_details_by_id_impl(block_hash.into())
             .to_rpc_result()
     }
 
-    async fn get_block_transactions(
+    fn get_block_transactions(
         &self,
         block_number: LenientBlockNumberOrTag,
         page_number: usize,
@@ -356,7 +351,7 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
             .to_rpc_result()
     }
 
-    async fn search_transactions_before(
+    fn search_transactions_before(
         &self,
         address: Address,
         block_number: LenientBlockNumberOrTag,
@@ -366,7 +361,7 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
             .to_rpc_result()
     }
 
-    async fn search_transactions_after(
+    fn search_transactions_after(
         &self,
         address: Address,
         block_number: LenientBlockNumberOrTag,
@@ -376,7 +371,7 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
             .to_rpc_result()
     }
 
-    async fn get_transaction_by_sender_and_nonce(
+    fn get_transaction_by_sender_and_nonce(
         &self,
         sender: Address,
         nonce: u64,
@@ -385,7 +380,7 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
             .to_rpc_result()
     }
 
-    async fn get_contract_creator(&self, address: Address) -> RpcResult<Option<ContractCreator>> {
+    fn get_contract_creator(&self, address: Address) -> RpcResult<Option<ContractCreator>> {
         self.get_contract_creator_impl(address).to_rpc_result()
     }
 }

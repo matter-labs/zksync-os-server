@@ -2,9 +2,6 @@ use std::time::Duration;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use vise::{Counter, EncodeLabelValue};
 
-// todo: these metrics are used throughout the batcher subsystem - not only l1 sender
-//       we will move them to `batcher_metrics` or `batcher` crate once we have one.
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "stage", rename_all = "snake_case")]
 pub enum BatchExecutionStage {

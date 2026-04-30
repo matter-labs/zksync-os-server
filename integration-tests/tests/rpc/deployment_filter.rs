@@ -28,11 +28,11 @@ async fn setup() -> Result<(GatewayTester, Address)> {
 
     let signer = PrivateKeySigner::random();
     let unauthorized = signer.address();
-    mc.chains[0]
+    mc.chain_mut(0)
         .l2_provider
         .wallet_mut()
         .register_signer(signer);
-    mc.chains[0]
+    mc.chain_mut(0)
         .l2_provider
         .send_transaction(
             TransactionRequest::default()

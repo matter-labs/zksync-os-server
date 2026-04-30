@@ -459,6 +459,9 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
             // We are being optimistic with our transaction inclusion here. But, even if
             // reorg happens and transaction will not be included it's ok, it can be sent
             // on the next iteration if still needed.
+            // NOTE: alloy's implementation of watcher is unstable if required confirmations are > 1
+            // as there is possible race condition. If you want to increase amount of confirmations - check
+            // implementation of `wait_for_confirmed_receipt` in l1_sender/src/lib.rs for reference
             .with_required_confirmations(1)
             // Ensure we don't wait indefinitely and crash if the transaction is not
             // included on L1 in a reasonable time.

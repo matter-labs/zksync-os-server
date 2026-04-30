@@ -9,10 +9,10 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
+use zksync_os_batch_types::batcher_model::ProverInput;
 use zksync_os_contract_interface::models::DACommitmentScheme;
 use zksync_os_interface::traits::TxListSource;
 use zksync_os_interface::types::BlockOutput;
-use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::PeekableReceiver;
@@ -59,9 +59,16 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 "ProverInputGenerator is disabled — passing through blocks with ProverInput::Fake"
             );
             while let Some((block_output, replay_record, tree)) = input.recv().await {
-                output
+                if output
                     .send((block_output, replay_record, ProverInput::Fake, tree))
-                    .await?;
+                    .await
+                    .is_err()
+                {
+                    tracing::info!(
+                        "Prover input generator output channel closed, stopping component"
+                    );
+                    return Ok(());
+                }
             }
             return Ok(());
         }
@@ -83,7 +90,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             block_number = result.0.header.number,
             "sending block with prover input to batcher",
         );
-        output.send(result).await?;
+        if output.send(result).await.is_err() {
+            tracing::info!("Prover input generator output channel closed, stopping component");
+            return Ok(());
+        }
         latency_tracker.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
 
         // Process remaining items with up to `maximum_in_flight_blocks` in parallel.
@@ -114,7 +124,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                         block_number = item.0.header.number,
                         "sending block with prover input to batcher",
                     );
-                    output.send(item).await?;
+                    if output.send(item).await.is_err() {
+                        tracing::info!("Prover input generator output channel closed, stopping component");
+                        return Ok(());
+                    }
                     latency_tracker.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
                 }
             }

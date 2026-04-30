@@ -1,9 +1,9 @@
 use crate::main_node::component::BatchVerificationError;
 use alloy::sol_types::SolValue;
 use anyhow::anyhow;
+use zksync_os_batch_types::batcher_model::BatchForSigning;
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_contract_interface::{IExecutor, IExecutorV29, IExecutorV30};
-use zksync_os_l1_sender::batcher_model::BatchForSigning;
 use zksync_os_network::VerifyBatch;
 use zksync_os_types::PubdataMode;
 
@@ -50,8 +50,9 @@ pub(crate) fn encode_verify_batch_request<E>(
     batch_envelope: &BatchForSigning<E>,
     request_id: u64,
 ) -> Result<VerifyBatch, BatchVerificationError> {
-    let execution_protocol_version = u16::try_from(batch_envelope.batch.protocol_version.minor)
-        .map_err(|_| BatchVerificationError::Internal("protocol version overflow".into()))?;
+    let execution_protocol_version =
+        u16::try_from(batch_envelope.batch.batch_info.protocol_version.minor)
+            .map_err(|_| BatchVerificationError::Internal("protocol version overflow".into()))?;
     let commit_data = encode_commit_data(
         batch_envelope.batch.batch_info.commit_info.clone(),
         execution_protocol_version,

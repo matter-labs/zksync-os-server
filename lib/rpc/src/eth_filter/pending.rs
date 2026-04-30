@@ -1,8 +1,8 @@
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::primitives::TxHash;
 use alloy::rpc::types::{FilterChanges, Transaction};
-use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
 use zksync_os_mempool::{L2PooledTransaction, NewSubpoolTransactionStream};
 use zksync_os_types::L2Envelope;
 
@@ -18,10 +18,10 @@ pub(crate) enum PendingTransactionKind {
 }
 
 impl PendingTransactionKind {
-    pub(crate) async fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
+    pub(crate) fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
         match self {
-            Self::Hashes(receiver) => receiver.drain().await,
-            Self::FullTransaction(receiver) => receiver.drain().await,
+            Self::Hashes(receiver) => receiver.drain(),
+            Self::FullTransaction(receiver) => receiver.drain(),
         }
     }
 }
@@ -40,9 +40,12 @@ impl PendingTransactionsReceiver {
     }
 
     /// Returns all new pending transactions received since the last poll.
-    async fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
+    fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
         let mut pending_txs = Vec::new();
-        let mut prepared_stream = self.receiver.lock().await;
+        let mut prepared_stream = self
+            .receiver
+            .lock()
+            .expect("pending tx receiver lock poisoned");
 
         while let Ok(tx_hash) = prepared_stream.try_recv() {
             pending_txs.push(tx_hash);
@@ -66,9 +69,12 @@ impl FullTransactionsReceiver {
     }
 
     /// Returns all new pending transactions received since the last poll.
-    async fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
+    fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
         let mut pending_txs = Vec::new();
-        let mut prepared_stream = self.txs_stream.lock().await;
+        let mut prepared_stream = self
+            .txs_stream
+            .lock()
+            .expect("full tx stream lock poisoned");
 
         while let Ok(tx) = prepared_stream.try_recv() {
             let (tx, signer) = tx.transaction.to_consensus().into_parts();

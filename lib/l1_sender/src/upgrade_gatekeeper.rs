@@ -102,7 +102,8 @@ impl PipelineComponent for UpgradeGatekeeper {
             if let L1SenderCommand::SendToL1(command) = &command {
                 latency_tracker.enter_state(GenericComponentState::Processing);
 
-                let batch_protocol_version = command.input().batch.protocol_version.clone();
+                let batch_protocol_version =
+                    command.input().batch.batch_info.protocol_version.clone();
 
                 self.wait_until_protocol_version(&batch_protocol_version)
                     .await?;

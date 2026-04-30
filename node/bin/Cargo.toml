@@ -35,6 +35,7 @@ zksync_os_revm_consistency_checker.workspace = true
 zksync_os_gas_adjuster.workspace = true
 zksync_os_batch_verification.workspace = true
 zksync_os_batch_types.workspace = true
+zksync_os_batcher_metrics.workspace = true
 zksync_os_internal_config.workspace = true
 zksync_os_network.workspace = true
 zksync_os_metadata.workspace = true

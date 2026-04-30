@@ -46,7 +46,11 @@ impl SettlementLayerWatcher {
             tokio::time::sleep(self.poll_interval).await;
 
             // Condition 1: settlement layer must have changed.
-            let current = match self.diamond_proxy_l1.get_settlement_layer().await {
+            let current = match self
+                .diamond_proxy_l1
+                .get_settlement_layer(BlockId::latest())
+                .await
+            {
                 Ok(addr) => addr,
                 Err(e) => {
                     tracing::warn!(error = %e, "failed to poll getSettlementLayer(); will retry");

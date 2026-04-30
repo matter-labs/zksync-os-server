@@ -102,6 +102,4 @@ pub enum RepositoryError {
     Eip2718(#[from] alloy::eips::eip2718::Eip2718Error),
     #[error(transparent)]
     Rlp(#[from] alloy::rlp::Error),
-    #[error("failed to deserialize log index bitmap: {0}")]
-    BitmapDeserialize(String),
 }

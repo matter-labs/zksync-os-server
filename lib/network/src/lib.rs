@@ -1,6 +1,7 @@
 pub mod config;
 pub(crate) mod metrics;
 pub mod protocol;
+pub mod raft;
 pub mod service;
 pub mod session;
 pub mod version;
@@ -16,3 +17,5 @@ pub use wire::verification::{VerifyBatch, VerifyBatchOutcome, VerifyBatchResult}
 pub use reth_network::config::SecretKey;
 pub use reth_network::config::rng_secret_key;
 pub use reth_network_peers::NodeRecord;
+pub use reth_network_peers::PeerId;
+pub use reth_network_peers::TrustedPeer;

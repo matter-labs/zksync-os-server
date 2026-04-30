@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
+use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};

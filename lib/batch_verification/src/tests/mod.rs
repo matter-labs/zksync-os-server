@@ -1,9 +1,9 @@
 use alloy::primitives::{Address, B256};
 /// This module is for sharing various testing utilities and helpers.
 use tokio::sync::watch;
-use zksync_os_batch_types::BatchInfo;
+use zksync_os_batch_types::ExtendedCommitBatchInfo;
+use zksync_os_batch_types::batcher_model::{BatchEnvelope, BatchMetadata, MissingSignature};
 use zksync_os_contract_interface::models::{CommitBatchInfo, DACommitmentScheme, StoredBatchInfo};
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, MissingSignature};
 use zksync_os_storage_api::{FinalityStatus, ReadFinality};
 use zksync_os_types::ProtocolSemanticVersion;
 
@@ -19,6 +19,8 @@ impl DummyFinality {
             last_committed_batch: 0,
             last_executed_block: 0,
             last_executed_batch: 0,
+            last_finalized_executed_block: 0,
+            last_finalized_executed_batch: 0,
         };
         let (tx, rx) = watch::channel(status.clone());
         let _ = tx;
@@ -70,18 +72,17 @@ pub fn dummy_batch_metadata(batch_number: u64, from: u64, to: u64) -> BatchMetad
             // unused
             last_block_timestamp: Some(0),
         },
-        batch_info: BatchInfo {
+        batch_info: ExtendedCommitBatchInfo {
             commit_info: dummy_commit_batch_info(batch_number, from, to),
-            chain_address: Address::ZERO,
+            protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
             upgrade_tx_hash: None,
-            blob_sidecar: None,
         },
+        chain_address: Address::ZERO,
+        blob_sidecar: None,
         first_block_number: from,
         last_block_number: to,
         pubdata_mode: zksync_os_types::PubdataMode::Calldata,
         tx_count: 0,
-        execution_version: 1,
-        protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
         computational_native_used: None,
         logs: vec![],
         messages: vec![],

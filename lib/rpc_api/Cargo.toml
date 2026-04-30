@@ -15,7 +15,7 @@ zksync_os_genesis.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_merkle_tree_api.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc", "rpc-types-trace", "genesis"] }
+alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc", "rpc-types-trace", "genesis", "rpc-types-txpool"] }
 alloy-rlp.workspace = true
 anyhow.workspace = true
 blake2.workspace = true

@@ -95,7 +95,7 @@ pub trait ReadReplayExt: ReadReplay {
                 if let Some(record) = self.get_replay_record(block_num)
                     && output.send(f(record)).await.is_err()
                 {
-                    tracing::warn!("Replay output channel closed, stopping replay forwarder");
+                    tracing::info!("Replay output channel closed, stopping replay forwarder");
                     break;
                 }
             }
