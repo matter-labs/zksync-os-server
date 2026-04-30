@@ -25,13 +25,11 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Permit;
-use tokio::sync::mpsc::error::TrySendError;
 use zksync_os_batch_types::batcher_model::{
     BatchMetadata, FriProof, ProverInput, RealFriProof, SignedBatchEnvelope,
 };
 use zksync_os_batcher_metrics::BatchExecutionStage;
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
+use zksync_os_observability::ComponentStateReporter;
 use zksync_os_types::ProvingVersion;
 
 #[derive(Error, Debug)]

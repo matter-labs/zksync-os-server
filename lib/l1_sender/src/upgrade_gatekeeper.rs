@@ -107,7 +107,8 @@ impl PipelineComponent for UpgradeGatekeeper {
 
                 let batch_protocol_version =
                     command.input().batch.batch_info.protocol_version.clone();
-                wait_until_protocol_version(&self.zk_chain_sl, &batch_protocol_version).await?;
+                self.wait_until_protocol_version(&batch_protocol_version)
+                    .await?;
             }
 
             if output.send_and_record(command, &state_reporter).is_err() {

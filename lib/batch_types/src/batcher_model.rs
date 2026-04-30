@@ -10,9 +10,8 @@ use time::UtcDateTime;
 use zksync_os_batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_observability::LatencyDistributionTracker;
-use zksync_os_types::ProvingVersion;
 use zksync_os_pipeline::HasBlockRangeEnd;
-use zksync_os_types::PubdataMode;
+use zksync_os_types::{ProvingVersion, PubdataMode};
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
 

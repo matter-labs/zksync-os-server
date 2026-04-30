@@ -9,10 +9,10 @@ use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Sleep};
 use tracing;
+use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_batch_types::batcher_model::{
     BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
 };
-use zksync_os_batch_types::{BlockMerkleTreeData, DiscoveredCommittedBatch};
 use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;

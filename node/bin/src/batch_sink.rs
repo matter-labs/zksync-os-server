@@ -3,6 +3,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_internal_config::InternalConfigManager;
+use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::ReadFinality;
 

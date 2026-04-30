@@ -7,7 +7,6 @@ use block_cache::BlockCache;
 use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
-use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_batch_types::{BatchSignature, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_interface::types::BlockOutput;
