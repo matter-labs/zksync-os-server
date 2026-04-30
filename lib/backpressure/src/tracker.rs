@@ -30,8 +30,14 @@ impl PipelineTracker {
             .iter()
             .map(|(_, rx)| WatchStream::from_changes(rx.clone()))
             .collect::<Vec<_>>();
-        let mut combined = select_all(streams);
 
+        let snapshot: PipelineSnapshot = components
+            .iter()
+            .map(|(id, rx)| (*id, rx.borrow().clone()))
+            .collect();
+        let _ = tx.send(snapshot);
+
+        let mut combined = select_all(streams);
         while combined.next().await.is_some() {
             let snapshot: PipelineSnapshot = components
                 .iter()

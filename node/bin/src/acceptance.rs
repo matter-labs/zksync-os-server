@@ -25,19 +25,10 @@ impl TxAcceptanceGate {
     }
 
     pub async fn run(self, mut stop_receiver: watch::Receiver<bool>) {
-        // Pre-flight stop check: if stop was already set before run() was called,
-        // watch::changed() would never fire (no new change to observe), causing the
-        // gate to hang indefinitely. Match the same guard used by BackpressureMonitor.
         if *stop_receiver.borrow_and_update() {
             return;
         }
 
-        // Evaluate immediately so the initial state is correct before any changes arrive.
-        self.evaluate_and_send();
-
-        // Merge all receivers into a single stream. WatchStream::from_changes only fires
-        // on subsequent changes, not the initial value — the evaluate_and_send() call above
-        // handles the initial snapshot.
         let streams = self
             .receivers
             .iter()
@@ -47,6 +38,8 @@ impl TxAcceptanceGate {
         if streams.is_empty() {
             return;
         }
+
+        self.evaluate_and_send();
 
         let mut combined = select_all(streams);
         loop {
@@ -138,7 +131,6 @@ mod tests {
         let (_stop_tx, stop_rx) = watch::channel(false);
         tokio::spawn(gate.run(stop_rx));
 
-        // The gate's initial evaluate_and_send merges both NotAccepting channels.
         gate_rx.changed().await.unwrap();
 
         let state = gate_rx.borrow().clone();
@@ -164,12 +156,8 @@ mod tests {
         let (_stop_tx, stop_rx) = watch::channel(false);
         tokio::spawn(gate.run(stop_rx));
 
-        // Wait for initial evaluation: both channels NotAccepting → gate emits NotAccepting.
         gate_rx.changed().await.unwrap();
 
-        // Channel 1 clears; channel 2 still NotAccepting.
-        // The gate re-evaluates and emits NotAccepting([pipeline_backpressure]) — still NotAccepting
-        // but with one fewer reason, so it is a state change that changed() can observe.
         tx1.send(TransactionAcceptanceState::Accepting).unwrap();
         gate_rx.changed().await.unwrap();
 
@@ -194,13 +182,11 @@ mod tests {
         let (_stop_tx, stop_rx) = watch::channel(false);
         tokio::spawn(gate.run(stop_rx));
 
-        // Wait for initial evaluation: both channels NotAccepting → gate emits NotAccepting.
         gate_rx.changed().await.unwrap();
 
         tx1.send(TransactionAcceptanceState::Accepting).unwrap();
         tx2.send(TransactionAcceptanceState::Accepting).unwrap();
 
-        // Wait for the gate to process both clears and emit Accepting.
         gate_rx.changed().await.unwrap();
 
         assert_eq!(*gate_rx.borrow(), TransactionAcceptanceState::Accepting);
@@ -215,10 +201,8 @@ mod tests {
         let (stop_tx, stop_rx) = watch::channel(false);
         let handle = tokio::spawn(gate.run(stop_rx));
 
-        // Signal stop while the upstream sender is still alive.
         stop_tx.send(true).unwrap();
 
-        // The task should terminate promptly without the upstream dropping.
         tokio::time::timeout(tokio::time::Duration::from_millis(200), handle)
             .await
             .expect("gate did not exit after stop signal")
