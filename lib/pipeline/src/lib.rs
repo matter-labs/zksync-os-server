@@ -17,7 +17,7 @@ pub mod peekable_receiver;
 pub mod send_and_record;
 pub mod traits;
 
-pub use builder::{ComponentStateReceivers, Pipeline};
+pub use builder::Pipeline;
 pub use component_id::ComponentId;
 pub use has_block_range_end::HasBlockRangeEnd;
 pub use peekable_receiver::PeekableReceiver;

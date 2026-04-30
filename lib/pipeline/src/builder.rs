@@ -6,8 +6,6 @@ use std::collections::HashSet;
 use tokio::sync::{mpsc, watch};
 use zksync_os_observability::{ComponentState, ComponentStateReporter};
 
-pub type ComponentStateReceivers = Vec<(ComponentId, watch::Receiver<ComponentState>)>;
-
 /// Pipeline with an active output stream that can be piped to more components
 pub struct Pipeline<Output: Send + 'static> {
     receiver: PeekableReceiver<Output>,
@@ -15,11 +13,11 @@ pub struct Pipeline<Output: Send + 'static> {
     spawned_tasks: HashSet<&'static str>,
     shutdown_sender: mpsc::Sender<&'static str>,
     shutdown_receiver: mpsc::Receiver<&'static str>,
-    components: ComponentStateReceivers,
+    components: Vec<(ComponentId, watch::Receiver<ComponentState>)>,
 }
 
 impl<Output: Send + 'static> Pipeline<Output> {
-    pub fn components(&self) -> ComponentStateReceivers {
+    pub fn components(&self) -> Vec<(ComponentId, watch::Receiver<ComponentState>)> {
         self.components
             .iter()
             .map(|(id, rx)| (*id, rx.clone()))

@@ -354,11 +354,11 @@ mod tests {
     use super::*;
     use crate::config::{BackpressureConfig, ComponentId};
     use std::time::Duration;
-    use zksync_os_observability::ComponentStateReporter;
-    use zksync_os_pipeline::ComponentStateReceivers;
+    use tokio::sync::watch;
+    use zksync_os_observability::{ComponentState, ComponentStateReporter};
     use zksync_os_types::BackpressureTrigger;
 
-    fn snapshot(components: &ComponentStateReceivers) -> PipelineSnapshot {
+    fn snapshot(components: &[(ComponentId, watch::Receiver<ComponentState>)]) -> PipelineSnapshot {
         components
             .iter()
             .map(|(id, rx)| (*id, rx.borrow().clone()))
@@ -516,7 +516,7 @@ mod tests {
         let (exec_reporter, exec_rx) = ComponentStateReporter::new("block_executor");
         let (reporter, rx) = ComponentStateReporter::new("block_applier");
         exec_reporter.record_processed(100, None, None);
-        let components: ComponentStateReceivers = vec![
+        let components: Vec<(ComponentId, watch::Receiver<ComponentState>)> = vec![
             (ComponentId::BlockExecutor, exec_rx),
             (ComponentId::BlockApplier, rx),
         ];
@@ -594,7 +594,7 @@ mod tests {
         apply_reporter.record_processed(98, None, None);
         apply_reporter.record_picked(98, None, None);
 
-        let components: ComponentStateReceivers = vec![
+        let components: Vec<(ComponentId, watch::Receiver<ComponentState>)> = vec![
             (ComponentId::BlockExecutor, exec_rx),
             (ComponentId::BlockCanonizer, canon_rx),
             (ComponentId::BlockApplier, apply_rx),
@@ -636,7 +636,7 @@ mod tests {
         let (fri_reporter, fri_rx) = ComponentStateReporter::new("fri_job_manager");
         let (gc_reporter, gc_rx) = ComponentStateReporter::new("gapless_committer");
 
-        let components: ComponentStateReceivers = vec![
+        let components: Vec<(ComponentId, watch::Receiver<ComponentState>)> = vec![
             (ComponentId::BatchVerification, bv_rx),
             (ComponentId::FriJobManager, fri_rx),
             (ComponentId::GaplessCommitter, gc_rx),
@@ -689,7 +689,7 @@ mod tests {
         up_reporter.record_processed(100, None, Some(10));
         l1_reporter.record_processed(60, None, Some(5));
 
-        let components: ComponentStateReceivers = vec![
+        let components: Vec<(ComponentId, watch::Receiver<ComponentState>)> = vec![
             (ComponentId::BlockExecutor, exec_rx),
             (ComponentId::UpgradeGatekeeper, up_rx),
             (ComponentId::L1SenderCommit, l1_rx),

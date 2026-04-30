@@ -3,7 +3,8 @@ use futures::stream::{StreamExt, select_all};
 use reth_tasks::Runtime;
 use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
-use zksync_os_pipeline::ComponentStateReceivers;
+use zksync_os_observability::ComponentState;
+use zksync_os_pipeline::ComponentId;
 
 /// Aggregates all component state receivers into a single `watch::Receiver<PipelineSnapshot>`.
 pub struct PipelineTracker;
@@ -11,7 +12,7 @@ pub struct PipelineTracker;
 impl PipelineTracker {
     pub fn spawn(
         runtime: &Runtime,
-        components: ComponentStateReceivers,
+        components: Vec<(ComponentId, watch::Receiver<ComponentState>)>,
     ) -> watch::Receiver<PipelineSnapshot> {
         let initial: PipelineSnapshot = components
             .iter()
@@ -24,7 +25,7 @@ impl PipelineTracker {
 
     pub(crate) async fn run(
         tx: watch::Sender<PipelineSnapshot>,
-        components: ComponentStateReceivers,
+        components: Vec<(ComponentId, watch::Receiver<ComponentState>)>,
     ) {
         let streams = components
             .iter()
