@@ -39,6 +39,11 @@ pub trait MerkleTreeProver: Send + Sync + fmt::Debug {
 
     /// Specialized version of [`Self::prove()`] that receives an existing 0-based leaf index instead of the leaf key
     /// as an input.
+    ///
+    /// # Errors
+    ///
+    /// In addition to [`Self::prove()`] errors, this method will error if a leaf with `index`
+    /// does not exist in the specified tree `version`.
     fn prove_index(
         &self,
         version: u64,

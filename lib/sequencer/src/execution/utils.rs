@@ -11,6 +11,7 @@ use zksync_os_interface::traits::ReadStorage;
 use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_types::ZkTransaction;
 
+/// [`ReadStorage`] wrapper that tracks read storage slots.
 #[derive(Debug)]
 pub(super) struct ReadRecordingState<S> {
     inner: S,
@@ -45,6 +46,7 @@ impl<S> Drop for ReadRecordingState<S> {
     }
 }
 
+/// Handle for [`ReadRecordingState`] that allows to extract read storage slots after the state is dropped.
 #[derive(Debug)]
 pub(super) struct ReadRecordingHandle(Rc<OnceCell<HashSet<B256>>>);
 

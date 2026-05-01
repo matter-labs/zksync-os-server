@@ -132,8 +132,8 @@ impl<K> StorageSlotProof<K> {
 }
 
 impl BatchTreeProof {
-    /// Returns all sibling hashes involved in proving the update together with their locations.
-    /// The ordering of returned hashes is unspecified (it *mostly* ordered by location).
+    /// Returns all sibling hashes involved in proving the update together with their locations (tree depth + index on level).
+    /// The ordering of returned hashes is unspecified. Locations of returned hashes are unique.
     pub fn sibling_hashes(
         &self,
         tree_depth: u8,

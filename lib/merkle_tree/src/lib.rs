@@ -26,7 +26,6 @@ mod storage;
 #[cfg(test)]
 mod tests;
 mod types;
-//mod with_version;
 
 /// Unstable types that should not be used unless you know what you're doing (e.g., implementing
 /// `Database` trait for a custom type). There are no guarantees whatsoever that APIs / structure of
