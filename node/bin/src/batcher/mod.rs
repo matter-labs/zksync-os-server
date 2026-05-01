@@ -70,6 +70,24 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
+        // Record picked for the first block before blocking L1 logic.
+        // TODO: try to find better solution
+        state_reporter.enter_state(GenericComponentState::Idle);
+        match input
+            .peek_recv(|item| {
+                (
+                    item.record.block_context.block_number,
+                    Some(item.record.block_context.timestamp),
+                )
+            })
+            .await
+        {
+            None => return Ok(()),
+            Some((block_number, timestamp)) => {
+                state_reporter.record_picked(block_number, timestamp, None);
+            }
+        }
+
         // We use last executed batch as the starting point. Next immediate batch we process will be
         // `last_executed_batch + 1`.
         let last_executed_batch = self

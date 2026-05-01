@@ -5,9 +5,6 @@ use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_storage_api::ReplayRecord;
 
 /// Message flowing from `ProverInputGenerator` → `Batcher`.
-///
-/// A named struct rather than a raw tuple so that `HasBlockRangeEnd` can be implemented
-/// (orphan rule prevents impls on tuples of foreign types).
 pub struct ProverBlock {
     pub output: BlockOutput,
     pub record: ReplayRecord,

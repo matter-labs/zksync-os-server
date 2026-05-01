@@ -81,16 +81,11 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         // Process the first item alone — it involves heavy trusted-setup precomputation
         // and we want it isolated before concurrent processing starts.
         state_reporter.enter_state(GenericComponentState::Idle);
-        let first_item = match input.recv().await {
+        let first_item = match input.recv_and_record_picked(&state_reporter).await {
             Some(item) => item,
             None => return Ok(()),
         };
         state_reporter.enter_state(GenericComponentState::Active);
-        state_reporter.record_picked(
-            first_item.output.header.number,
-            Some(first_item.record.block_context.timestamp),
-            None,
-        );
         let result = self.spawn_computation(first_item).await?;
         tracing::debug!(
             block_number = result.output.header.number,
