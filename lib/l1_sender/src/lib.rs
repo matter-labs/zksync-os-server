@@ -138,6 +138,7 @@ pub async fn run_l1_sender<Input: SendToL1 + Send + 'static>(
         &mut inbound,
         command_name,
         sl_block_number,
+        &state_reporter,
     )
     .await
     {
@@ -479,11 +480,12 @@ async fn recover_in_flight_txs<F, P, Input>(
     inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
     command_name: &str,
     sl_block_number: u64,
+    state_reporter: &ComponentStateReporter,
 ) -> anyhow::Result<Vec<(alloy::primitives::B256, Input)>>
 where
     F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
     P: Provider<Ethereum>,
-    Input: SendToL1,
+    Input: SendToL1 + Send + 'static,
 {
     let latest_nonce = provider
         .get_transaction_count(operator_address)
@@ -573,7 +575,9 @@ where
                 break;
             }
             Some(true) => {
-                let Some(L1SenderCommand::SendToL1(cmd)) = inbound.recv().await else {
+                let Some(L1SenderCommand::SendToL1(cmd)) =
+                    inbound.recv_and_record_picked(state_reporter).await
+                else {
                     unreachable!("peek succeeded, recv must return the same item");
                 };
                 paired.push((tx.tx_hash(), cmd));
