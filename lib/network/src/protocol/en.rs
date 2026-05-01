@@ -29,6 +29,7 @@ pub(super) async fn run_en_connection<P: ZksProtocolVersionSpec>(
     let ExternalNodeProtocolConfig {
         starting_block,
         record_overrides,
+        max_blocks_per_message,
         replay_sender,
         verification: verifier,
     } = config;
@@ -39,9 +40,14 @@ pub(super) async fn run_en_connection<P: ZksProtocolVersionSpec>(
         return;
     }
 
-    if send_replay_request::<P>(&outbound_tx, &starting_block, record_overrides)
-        .await
-        .is_err()
+    if send_replay_request::<P>(
+        &outbound_tx,
+        &starting_block,
+        record_overrides,
+        max_blocks_per_message,
+    )
+    .await
+    .is_err()
     {
         return;
     }
@@ -114,12 +120,13 @@ async fn send_replay_request<P: ZksProtocolVersionSpec>(
     outbound_tx: &mpsc::Sender<BytesMut>,
     starting_block: &Arc<RwLock<BlockNumber>>,
     record_overrides: Vec<RecordOverride>,
+    max_blocks_per_message: u64,
 ) -> Result<(), ()> {
     let next_block = *starting_block.read().unwrap();
     tracing::info!(next_block, "requesting block replays from main node");
     let max_blocks_per_message = P::VERSION
         .supports_message(ZksMessageId::VerifierRoleRequest)
-        .then_some(MAX_BLOCKS_PER_MESSAGE);
+        .then_some(max_blocks_per_message.clamp(1, MAX_BLOCKS_PER_MESSAGE));
     let msg =
         ZksMessage::<P>::get_block_replays(next_block, max_blocks_per_message, record_overrides);
     outbound_tx.send(msg.encoded()).await.map_err(|_| ())
