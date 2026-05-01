@@ -87,7 +87,7 @@ const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
 /// Note: we pass `to_address` - L1 contract address to send transactions to.
 /// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
 #[allow(clippy::too_many_arguments)]
-pub async fn run_l1_sender<Input: SendToL1>(
+pub async fn run_l1_sender<Input: SendToL1 + Send + 'static>(
     // == plumbing ==
     mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
     outbound: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
@@ -591,7 +591,7 @@ where
     Ok(paired)
 }
 
-async fn process_prepending_passthrough_commands<Input: SendToL1>(
+async fn process_prepending_passthrough_commands<Input: SendToL1 + Send + 'static>(
     inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
     outbound: &mpsc::Sender<SignedBatchEnvelope<FriProof>>,
     state_reporter: &ComponentStateReporter,
@@ -609,7 +609,8 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
             Some(false) => return Ok(Some(())),
             // command is passthrough
             Some(true) => {
-                let Some(next_command) = inbound.recv().await else {
+                let Some(next_command) = inbound.recv_and_record_picked(state_reporter).await
+                else {
                     return Ok(None);
                 };
                 match next_command {
