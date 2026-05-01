@@ -458,6 +458,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 ZksProtocolConfig::ExternalNode(ExternalNodeProtocolConfig {
                     starting_block: Arc::new(RwLock::new(starting_block)),
                     record_overrides,
+                    max_blocks_per_message: config
+                        .sequencer_config
+                        .en_max_blocks_per_replay_message,
                     replay_sender,
                     verification: config.batch_verification_config.client_enabled.then(|| {
                         ExternalNodeVerifierConfig {

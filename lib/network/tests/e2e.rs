@@ -206,6 +206,7 @@ where
                     ExternalNodeProtocolConfig {
                         starting_block: Arc::new(RwLock::new(starting_block)),
                         record_overrides: vec![],
+                        max_blocks_per_message: 64,
                         replay_sender: replay_tx,
                         verification,
                     },

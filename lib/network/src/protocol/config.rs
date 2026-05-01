@@ -21,6 +21,8 @@ pub struct ExternalNodeProtocolConfig {
     pub starting_block: Arc<RwLock<BlockNumber>>,
     /// All overrides to pass through when requesting records.
     pub record_overrides: Vec<RecordOverride>,
+    /// Maximum replay records requested per `BlockReplays` response message.
+    pub max_blocks_per_message: u64,
     /// Channel used to forward replay records into the local sequencer.
     pub replay_sender: mpsc::Sender<ReplayRecord>,
     /// Optional verifier configuration. When absent, this EN only participates in replay sync.
