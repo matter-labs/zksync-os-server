@@ -1,5 +1,5 @@
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
-use alloy::network::TransactionBuilder;
+use alloy::network::{NetworkTransactionBuilder, TransactionBuilder};
 use alloy::primitives::{Address, IntoLogData, TxHash, U256};
 use alloy::providers::Provider;
 use alloy::pubsub::Subscription;
