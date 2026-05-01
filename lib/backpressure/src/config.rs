@@ -35,6 +35,8 @@ fn default_condition_for(id: ComponentId) -> PipelineCondition {
             ..Default::default()
         },
         ComponentId::BatchVerification
+        | ComponentId::FriJobManager
+        | ComponentId::SnarkJobManager
         | ComponentId::GaplessCommitter
         | ComponentId::UpgradeGatekeeper
         | ComponentId::L1SenderCommit
@@ -50,9 +52,7 @@ fn default_condition_for(id: ComponentId) -> PipelineCondition {
         | ComponentId::BlockExecutor
         | ComponentId::BatchSink
         | ComponentId::NoopSink
-        | ComponentId::BatchVerificationResponder
-        | ComponentId::FriJobManager
-        | ComponentId::SnarkJobManager => PipelineCondition::default(),
+        | ComponentId::BatchVerificationResponder => PipelineCondition::default(),
     }
 }
 
@@ -65,7 +65,7 @@ impl BackpressureConfig {
     ///
     /// Block-level pipeline stages default to `max_block_diff_to_upstream = 100` when not
     /// explicitly configured. Batch-level pipeline stages default to
-    /// `max_batch_diff_to_upstream = 1000`. Pipeline sources, sinks, provers, and other
+    /// `max_batch_diff_to_upstream = 1000`. Pipeline sources, sinks, and other
     /// non-participating components default to no threshold.
     pub fn condition_for(&self, id: ComponentId) -> PipelineCondition {
         self.conditions
@@ -81,8 +81,6 @@ impl BackpressureConfig {
 /// when computing adjacent pairs, so their neighbors become directly adjacent.
 ///
 /// Excluded:
-/// - Provers (`FriJobManager`, `SnarkJobManager`) are using downstream components
-///   (`GaplessCommitter`, `GaplessL1ProofSender`) for the correct signals due to reordering.
 /// - Pipeline sources (`ConsensusNodeCommandSource`, `ExternalNodeCommandSource`): no upstream.
 /// - Pipeline sinks (`BatchSink`, `NoopSink`): no downstream.
 /// - `BatchVerificationResponder`: conditional stage (`pipe_if`) — when disabled a `NoopSink`
@@ -91,9 +89,7 @@ impl BackpressureConfig {
 pub fn is_pipeline_stage(id: ComponentId) -> bool {
     !matches!(
         id,
-        ComponentId::FriJobManager
-            | ComponentId::SnarkJobManager
-            | ComponentId::ConsensusNodeCommandSource
+        ComponentId::ConsensusNodeCommandSource
             | ComponentId::ExternalNodeCommandSource
             | ComponentId::BatchSink
             | ComponentId::NoopSink

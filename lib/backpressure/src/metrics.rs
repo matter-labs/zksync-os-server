@@ -27,8 +27,7 @@ pub struct MonitorMetrics {
     /// Only set for batch-pipeline components that call `record_processed` with a batch arg.
     pub component_last_processed_batch: Family<ComponentId, Gauge<u64>>,
     /// Last batch number dequeued from the input channel by this component (high-watermark).
-    /// Only set for batch-pipeline components that call `record_picked` with a batch arg:
-    /// FriJobManager, SnarkJobManager, GaplessCommitter, GaplessL1ProofSender.
+    /// Only set for batch-pipeline components that call `record_picked` with a batch arg.
     pub component_last_picked_batch: Family<ComponentId, Gauge<u64>>,
     /// Counts transitions from Accepting to NotAccepting (transaction acceptance suspended).
     pub acceptance_state_changes: Counter<u64>,

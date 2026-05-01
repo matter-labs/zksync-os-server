@@ -1305,13 +1305,13 @@ impl From<BackpressureConfig> for zksync_os_backpressure::BackpressureConfig {
             cfg.set(ComponentId::BatchVerification, batch(Some(v)));
         }
         if let Some(v) = c.fri_prover {
-            cfg.set(ComponentId::GaplessCommitter, batch(Some(v)));
+            cfg.set(ComponentId::FriJobManager, batch(Some(v)));
         }
         if let Some(v) = c.upgrade_gatekeeper {
             cfg.set(ComponentId::UpgradeGatekeeper, batch(Some(v)));
         }
         if let Some(v) = c.snark_prover {
-            cfg.set(ComponentId::GaplessL1ProofSender, batch(Some(v)));
+            cfg.set(ComponentId::SnarkJobManager, batch(Some(v)));
         }
         if let Some(v) = c.l1_senders {
             for id in [

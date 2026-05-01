@@ -502,8 +502,8 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    #[test]
-    fn counter_does_not_increment_on_reason_change() {
+    #[tokio::test]
+    async fn counter_does_not_increment_on_reason_change() {
         let cond = crate::config::PipelineCondition {
             max_block_diff_to_upstream: Some(10),
             ..Default::default()
@@ -566,8 +566,8 @@ mod tests {
         assert_eq!(causes.len(), 2);
     }
 
-    #[test]
-    fn mid_pipeline_lag_does_not_cascade_to_downstream() {
+    #[tokio::test]
+    async fn mid_pipeline_lag_does_not_cascade_to_downstream() {
         // canon is 100 blocks behind exec (>> threshold=10, triggers).
         // apply is only 2 blocks behind canon (< threshold=10, must NOT trigger).
         // Verifies that backpressure is per-adjacent-pair, not cumulative from head.
@@ -614,18 +614,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn fri_job_manager_skipped_gapless_committer_adjacent_to_batch_verification() {
-        // FriJobManager is excluded from the adjacency window by is_pipeline_stage
-        // (hardcoded topology rule). GaplessCommitter must be measured against BatchVerification,
-        // skipping FriJobManager regardless of which thresholds are configured.
-        //
-        // GaplessCommitter is a batch-level component; its threshold and lag are in batch space.
-        // BatchVerification has no upstream in this test so it can never trigger — only GC is
-        // configured.
+    #[tokio::test]
+    async fn fri_job_manager_participates_in_adjacency_window() {
+        // FriJobManager is included in the adjacency window. Its last_processed uses
+        // high-watermark semantics so out-of-order proof completions don't cause false triggers —
+        // lag may be understated by up to max_assigned_batch_range but never overstated.
         let mut config = BackpressureConfig::default();
         config.set(
-            ComponentId::GaplessCommitter,
+            ComponentId::FriJobManager,
             crate::config::PipelineCondition {
                 max_batch_diff_to_upstream: Some(3),
                 ..Default::default()
@@ -642,38 +638,72 @@ mod tests {
             (ComponentId::GaplessCommitter, gc_rx),
         ];
 
-        // BatchVerification at batch=10, FriJobManager at batch=5 (large lag — expected for
-        // proving), GaplessCommitter at batch=6 (lag=4 vs BatchVerification, above threshold=3).
+        // BatchVerification at batch=10, FriJobManager at batch=5 (lag=5, above threshold=3).
         bv_reporter.record_processed(100, None, Some(10));
         fri_reporter.record_processed(60, None, Some(5));
         fri_reporter.record_picked(60, None, Some(5));
-        gc_reporter.record_processed(85, None, Some(6));
-        gc_reporter.record_picked(85, None, Some(6));
+        gc_reporter.record_processed(60, None, Some(5));
+        gc_reporter.record_picked(60, None, Some(5));
 
         monitor.evaluate_and_update(&snapshot(&components));
-        // FriJobManager lag=5 must NOT trigger (excluded from window).
-        // GaplessCommitter batch lag=4 vs BatchVerification exceeds threshold=3 — must trigger.
         assert!(
             matches!(
                 *monitor.acceptance_tx.borrow(),
                 TransactionAcceptanceState::NotAccepting(_)
             ),
-            "GaplessCommitter batch lag=4 vs BatchVerification must trigger; FriJobManager lag must not"
+            "FriJobManager batch lag=5 vs BatchVerification must trigger"
         );
 
-        // GaplessCommitter catches up — batch lag drops to 2, below threshold=3, clears.
-        gc_reporter.record_processed(98, None, Some(8));
-        gc_reporter.record_picked(98, None, Some(8));
+        // FriJobManager catches up — batch lag drops to 2, below threshold=3, clears.
+        fri_reporter.record_processed(80, None, Some(8));
+        fri_reporter.record_picked(80, None, Some(8));
         monitor.evaluate_and_update(&snapshot(&components));
         assert_eq!(
             *monitor.acceptance_tx.borrow(),
             TransactionAcceptanceState::Accepting,
-            "GaplessCommitter catching up must clear backpressure"
+            "FriJobManager catching up must clear backpressure"
         );
     }
 
-    #[test]
-    fn l1_sender_triggers_max_batch_diff_to_upstream_via_last_processed() {
+    #[tokio::test]
+    async fn fri_job_manager_startup_hang_detected_via_last_picked_fallback() {
+        // At startup the prover may hang before returning any proof, leaving last_processed=None.
+        // The adjacency calculation falls back to last_picked (set as batches are submitted to
+        // the job map). Once the job map fills and add_job blocks, last_picked stalls while
+        // BatchVerification advances — lag exceeds threshold and backpressure triggers.
+        let mut config = BackpressureConfig::default();
+        config.set(
+            ComponentId::FriJobManager,
+            crate::config::PipelineCondition {
+                max_batch_diff_to_upstream: Some(3),
+                ..Default::default()
+            },
+        );
+        let monitor = BackpressureMonitor::new(config, watch::channel(false).1);
+        let (bv_reporter, bv_rx) = ComponentStateReporter::new("batch_verification");
+        let (fri_reporter, fri_rx) = ComponentStateReporter::new("fri_job_manager");
+
+        let components: Vec<(ComponentId, watch::Receiver<ComponentState>)> = vec![
+            (ComponentId::BatchVerification, bv_rx),
+            (ComponentId::FriJobManager, fri_rx),
+        ];
+
+        // BatchVerification at batch=10; FriJobManager has last_picked=5 but no last_processed.
+        bv_reporter.record_processed(100, None, Some(10));
+        fri_reporter.record_picked(60, None, Some(5));
+
+        monitor.evaluate_and_update(&snapshot(&components));
+        assert!(
+            matches!(
+                *monitor.acceptance_tx.borrow(),
+                TransactionAcceptanceState::NotAccepting(_)
+            ),
+            "FriJobManager lag=5 via last_picked fallback must trigger at startup"
+        );
+    }
+
+    #[tokio::test]
+    async fn l1_sender_triggers_max_batch_diff_to_upstream_via_last_processed() {
         let config = multi_config(
             &[ComponentId::UpgradeGatekeeper, ComponentId::L1SenderCommit],
             crate::config::PipelineCondition {
