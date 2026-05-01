@@ -50,10 +50,6 @@ published. When all diffs fall back within threshold the state reverts to
 
 Some components are deliberately skipped when computing adjacent pairs:
 
-- **`FriJobManager` / `SnarkJobManager`** — external provers introduce inherent
-  reordering; their downstream consumers (`GaplessCommitter`,
-  `GaplessL1ProofSender`) already reflect the correct settled-batch watermark and
-  are measured directly against the batch-pipeline upstream.
 - **Pipeline sources** (`ConsensusNodeCommandSource`,
   `ExternalNodeCommandSource`) — no upstream to compare against.
 - **Pipeline sinks** (`BatchSink`, `NoopSink`) — no downstream.
@@ -70,8 +66,8 @@ are optional and expressed in **batch units**:
 
 ```yaml
 backpressure:
-  fri_prover: 100         # gapless_committer vs batch_verification
-  snark_prover: 100       # gapless_l1_proof_sender vs gapless_committer
+  fri_prover: 100         # fri_job_manager vs batch_verification
+  snark_prover: 100       # snark_job_manager vs gapless_committer
   batch_verification: 100
   upgrade_gatekeeper: 100 # default: 100 even if section is absent
   l1_senders: 100         # applies to l1_sender_commit, l1_sender_prove, l1_sender_execute
@@ -82,7 +78,7 @@ backpressure:
 | Category | Default threshold | Signal |
 |---|---|---|
 | Block-pipeline stages (`BlockCanonizer`, `BlockApplier`, `TreeManager`, `ProverInputGenerator`, `Batcher`, `RevmConsistencyChecker`) | 100 blocks | `block_diff_to_upstream` |
-| Batch-pipeline stages (`BatchVerification`, `GaplessCommitter`, `UpgradeGatekeeper`, `L1SenderCommit/Prove/Execute`, `GaplessL1ProofSender`, `PriorityTree`) | 1000 batches | `batch_diff_to_upstream` |
+| Batch-pipeline stages (`BatchVerification`, `FriJobManager`, `SnarkJobManager`, `GaplessCommitter`, `UpgradeGatekeeper`, `L1SenderCommit/Prove/Execute`, `GaplessL1ProofSender`, `PriorityTree`) | 1000 batches | `batch_diff_to_upstream` |
 | Pipeline sources / sinks | none | — |
 
 A `PipelineCondition` can also carry `max_time_diff_to_upstream` (wall-clock lag)
