@@ -35,7 +35,7 @@ pub struct ComponentState {
 #[derive(Debug, Clone)]
 pub struct ComponentStateReporter {
     sender: watch::Sender<ComponentState>,
-    state_tx: mpsc::UnboundedSender<(GenericComponentState, &'static str)>,
+    state_tx: mpsc::Sender<(GenericComponentState, &'static str)>,
 }
 
 impl ComponentStateReporter {
@@ -49,7 +49,7 @@ impl ComponentStateReporter {
             processed: None,
         };
         let (sender, receiver) = watch::channel(initial);
-        let (state_tx, state_rx) = mpsc::unbounded_channel();
+        let (state_tx, state_rx) = mpsc::channel(512);
         tokio::spawn(flush_state_time(
             component,
             state_rx,
@@ -75,7 +75,7 @@ impl ComponentStateReporter {
             state.state_entered_at = now;
         });
         if transitioned {
-            let _ = self.state_tx.send((new_generic, new_specific));
+            let _ = self.state_tx.try_send((new_generic, new_specific));
         }
     }
 
@@ -132,7 +132,7 @@ impl ComponentStateReporter {
 /// `component_time_spent_in_state` on every 2-second tick and on every state.
 async fn flush_state_time(
     component: &'static str,
-    mut rx: mpsc::UnboundedReceiver<(GenericComponentState, &'static str)>,
+    mut rx: mpsc::Receiver<(GenericComponentState, &'static str)>,
     initial_state: GenericComponentState,
     initial_specific: &'static str,
 ) {

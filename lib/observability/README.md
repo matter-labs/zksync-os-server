@@ -130,16 +130,16 @@ reporter.enter_state(MyState::Working);
 // Hand `rx` to a monitor (e.g. BackpressureMonitor) to observe state transitions.
 ```
 
-`enter_state` credits the time spent in the *previous* state to the
-`GENERAL_METRICS.component_time_spent_in_state` counter, so the counter is
-transition-accurate: a component that never leaves a state does not contribute
-to its own counter rate.
+A background task flushes elapsed time into
+`GENERAL_METRICS.component_time_spent_in_state` on every 2-second tick and
+immediately on each `enter_state` call. A component that stays in one state
+indefinitely will still contribute to the counter rate.
 
 ## Built-in Metrics
 
 metrics::GENERAL_METRICS exposes:
 
-- component_time_spent_in_state (counter in seconds by component / generic state / specific state; credited on transition),
+- component_time_spent_in_state (counter in seconds by component / generic state / specific state; flushed every 2 s and on state transition),
 - process_started_at (timestamp gauge with version + role),
 - startup_time (startup stage durations),
 - fee_collector_address and chain_id.
