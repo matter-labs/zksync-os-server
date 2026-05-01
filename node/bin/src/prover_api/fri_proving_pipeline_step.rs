@@ -78,8 +78,10 @@ impl PipelineComponent for FriProvingPipelineStep {
                             "Received batch for FRI proving: {:?}",
                             batch.batch_number()
                         );
+                        // Add job directly to FriJobManager - this will await if queue is full
                         self.fri_job_manager.add_job(batch).await
                     } else {
+                        // Already proven - send with fake proof to pass through the pipeline
                         let batch_with_fake_proof = batch.with_data(FriProof::AlreadySubmittedToL1);
                         output
                             .send_and_record(batch_with_fake_proof, &state_reporter)?;
@@ -91,20 +93,17 @@ impl PipelineComponent for FriProvingPipelineStep {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             },
-            _ = async {
+            result = async {
                 while let Some(proof) = self.batches_with_proof_receiver.recv().await {
                     tracing::info!(
                         "Received batch after FRI proving: {:?}",
                         proof.batch_number()
                     );
-                    if output
-                        .send_and_record(proof, &state_reporter)
-                        .is_err()
-                    {
-                        return;
-                    }
+                    output.send_and_record(proof, &state_reporter)?;
                 }
+                Ok::<(), anyhow::Error>(())
             } => {
+                result?;
                 tracing::info!("outbound channel closed");
                 return Ok(());
             },

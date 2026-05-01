@@ -69,37 +69,31 @@ impl PipelineComponent for SnarkProvingPipelineStep {
         // Forward batches: pipeline input → SnarkJobManager → pipeline output
         // Two concurrent tasks handle the bidirectional flow
         tokio::select! {
-            _ = async {
+            result = async {
                 while let Some(batch) = input.recv_and_record_picked(&state_reporter).await {
                     if batch.batch_number() > self.last_proved_batch_number {
                         self.snark_job_manager.add_job(batch).await;
                     } else {
                         let passthrough = L1SenderCommand::Passthrough(Box::new(batch));
-                        if output
-                            .send_and_record(passthrough, &state_reporter)
-                            .is_err()
-                        {
-                            return;
-                        }
+                        output.send_and_record(passthrough, &state_reporter)?;
                     }
                 }
+                Ok::<(), anyhow::Error>(())
             } => {
+                result?;
                 tracing::info!("inbound channel closed");
                 return Ok(());
             },
-            _ = async {
+            result = async {
                 while let Some(proof_command) = self.proof_commands_receiver.recv().await {
-                    if output
-                        .send_and_record(
-                            L1SenderCommand::SendToL1(proof_command),
-                            &state_reporter,
-                        )
-                        .is_err()
-                    {
-                        return;
-                    }
+                    output.send_and_record(
+                        L1SenderCommand::SendToL1(proof_command),
+                        &state_reporter,
+                    )?;
                 }
+                Ok::<(), anyhow::Error>(())
             } => {
+                result?;
                 tracing::info!("outbound channel closed");
                 return Ok(());
             },
