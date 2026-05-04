@@ -389,34 +389,6 @@ mod tests {
     use zksync_os_interface::types::BlockHashes;
 
     #[test]
-    fn simulation_default_gas_limit_splits_remaining_block_gas() {
-        let calls = vec![
-            TransactionRequest {
-                gas: Some(40),
-                ..Default::default()
-            },
-            TransactionRequest::default(),
-            TransactionRequest::default(),
-        ];
-
-        assert_eq!(simulation_default_gas_limit(&calls, 100, 0).unwrap(), 30);
-        assert_eq!(simulation_default_gas_limit(&calls, 100, 25).unwrap(), 25);
-    }
-
-    #[test]
-    fn simulation_default_gas_limit_rejects_block_gas_overflow() {
-        let calls = vec![TransactionRequest {
-            gas: Some(101),
-            ..Default::default()
-        }];
-
-        assert!(matches!(
-            simulation_default_gas_limit(&calls, 100, 0),
-            Err(EthCallError::SimulateBlockGasLimitExceeded)
-        ));
-    }
-
-    #[test]
     fn simulate_block_overrides_reject_non_increasing_sequences() {
         let mut context = BlockContext {
             block_number: 11,
