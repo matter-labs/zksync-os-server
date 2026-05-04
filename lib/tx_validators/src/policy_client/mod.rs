@@ -81,25 +81,8 @@ pub enum BuildError {
 
 /// Shareable transport handle. Clone freely and store in long-lived structs.
 /// Call [`Self::session`] to get a per-transaction [`PolicySession`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PolicyClient {
-    shared: Arc<Shared>,
-}
-
-impl std::fmt::Debug for PolicyClient {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PolicyClient")
-            .field("request_timeout", &self.shared.request_timeout)
-            .field("protocol_version", &self.shared.protocol_version)
-            .field(
-                "expected_protocol_version",
-                &self.shared.expected_protocol_version,
-            )
-            .finish_non_exhaustive()
-    }
-}
-
-struct Shared {
     transport: Transport,
     request_timeout: Duration,
     protocol_version: String,
@@ -129,13 +112,11 @@ impl PolicyClient {
         };
         let transport = Transport::from_config(transport_config)?;
         Ok(Self {
-            shared: Arc::new(Shared {
-                transport,
-                request_timeout: config.request_timeout,
-                protocol_version: config.protocol_version,
-                expected_protocol_version: config.expected_protocol_version,
-                bypass_from: config.bypass_from,
-            }),
+            transport,
+            request_timeout: config.request_timeout,
+            protocol_version: config.protocol_version,
+            expected_protocol_version: config.expected_protocol_version,
+            bypass_from: config.bypass_from,
         })
     }
 
@@ -145,7 +126,7 @@ impl PolicyClient {
     /// each other's captured frames.
     pub fn session(&self, access_type: AccessType) -> PolicySession {
         PolicySession {
-            shared: Arc::clone(&self.shared),
+            client: self.clone(),
             slot: tracer::new_slot(),
             pending_tx_from: Arc::new(Mutex::new(None)),
             access_type,
@@ -156,7 +137,7 @@ impl PolicyClient {
 /// Per-transaction state: trace slot, pending sender, and caller intent.
 /// Implements [`TxValidator`] for both block-build and RPC simulation paths.
 pub struct PolicySession {
-    shared: Arc<Shared>,
+    client: PolicyClient,
     slot: TraceSlot,
     pending_tx_from: Arc<Mutex<Option<Address>>>,
     access_type: AccessType,
@@ -171,12 +152,12 @@ impl PolicySession {
     }
 
     async fn admit(&self, ctx: &BeginTxContext<'_>) -> TxValidationResult {
-        if self.shared.bypass_from.contains(&ctx.from) {
+        if self.client.bypass_from.contains(&ctx.from) {
             POLICY_CLIENT_METRICS.admit_bypassed.inc();
             return Ok(());
         }
         let request =
-            AdmitRequest::from_context(ctx, &self.shared.protocol_version, self.access_type);
+            AdmitRequest::from_context(ctx, &self.client.protocol_version, self.access_type);
         let started = Instant::now();
         let result = self.post_and_parse(Endpoint::Admit, &request).await;
         POLICY_CLIENT_METRICS.admit_latency.observe(started.elapsed());
@@ -198,13 +179,13 @@ impl PolicySession {
 
     async fn judge(&self, from: Option<Address>, frames: Vec<CapturedFrame>) -> TxValidationResult {
         if let Some(from) = from
-            && self.shared.bypass_from.contains(&from)
+            && self.client.bypass_from.contains(&from)
         {
             POLICY_CLIENT_METRICS.judge_bypassed.inc();
             return Ok(());
         }
         let request =
-            JudgeRequest::new(&self.shared.protocol_version, from, &frames, self.access_type);
+            JudgeRequest::new(&self.client.protocol_version, from, &frames, self.access_type);
         let started = Instant::now();
         let result = self.post_and_parse(Endpoint::Judge, &request).await;
         POLICY_CLIENT_METRICS.judge_latency.observe(started.elapsed());
@@ -230,13 +211,13 @@ impl PolicySession {
         request: &R,
     ) -> Result<bool, TransportError> {
         let body = serde_json::to_vec(request).expect("policy request serialization is infallible");
-        let timeout = self.shared.request_timeout;
+        let timeout = self.client.request_timeout;
         let response = match endpoint {
             Endpoint::Admit => {
-                tokio::time::timeout(timeout, self.shared.transport.post_admit(body)).await
+                tokio::time::timeout(timeout, self.client.transport.post_admit(body)).await
             }
             Endpoint::Judge => {
-                tokio::time::timeout(timeout, self.shared.transport.post_judge(body)).await
+                tokio::time::timeout(timeout, self.client.transport.post_judge(body)).await
             }
         };
         let raw = match response {
@@ -254,7 +235,7 @@ impl PolicySession {
             tracing::warn!(?err, ?endpoint, "policy response body malformed");
             TransportError::MalformedResponse
         })?;
-        if let Some(expected) = &self.shared.expected_protocol_version
+        if let Some(expected) = &self.client.expected_protocol_version
             && parsed.protocol_version.as_deref() != Some(expected.as_str())
         {
             tracing::warn!(

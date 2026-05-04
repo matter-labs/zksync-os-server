@@ -48,7 +48,7 @@ pub(crate) enum TransportConfig {
 
 /// A pooled HTTP client plus the base URL to POST against.
 /// Built once at startup; cheap to clone (inner `Arc`).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Transport {
     client: reqwest::Client,
     base_url: String,
