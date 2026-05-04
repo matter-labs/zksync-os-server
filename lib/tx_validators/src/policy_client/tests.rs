@@ -1,4 +1,4 @@
-//! Unit + integration tests for `PolicyClient`.
+//! Unit + integration tests for `PolicyClient` / `PolicySession`.
 //!
 //! Two transports are exercised:
 //!   - **UDS** (`unix:///`) covers the bulk of the request/response
@@ -16,7 +16,6 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -41,7 +40,7 @@ use zksync_os_interface::tracing::{
     BeginTxContext, CallModifier, EvmRequest, EvmResources, EvmTracer, TxValidator,
 };
 
-use super::{AccessType, CallKind, CapturedFrame, Config, PolicyClient, TlsConfig, Tracer};
+use super::{AccessType, CallKind, CapturedFrame, Config, PolicyClient, PolicySession, TlsConfig, Tracer};
 
 const FROM: Address = address!("0x1111111111111111111111111111111111111111");
 const TO: Address = address!("0x2222222222222222222222222222222222222222");
@@ -65,7 +64,6 @@ fn base_config(url: String) -> Config {
         expected_protocol_version: None,
         bypass_from: Default::default(),
         tls: None,
-        access_type: AccessType::Write,
     }
 }
 
@@ -73,10 +71,10 @@ fn base_config(url: String) -> Config {
 /// path runs inside `spawn_blocking` (see `VmWrapper::new`) so the test
 /// mirrors that exactly — `Handle::block_on` needs a blocking thread.
 async fn run_begin_tx(
-    mut client: PolicyClient,
+    mut session: PolicySession,
     ctx: BeginTxContext<'static>,
 ) -> Result<(), InvalidTransaction> {
-    spawn_blocking(move || client.begin_tx(&ctx)).await.unwrap()
+    spawn_blocking(move || session.begin_tx(&ctx)).await.unwrap()
 }
 
 // ---------- Mock-server helper (UDS) ----------
@@ -240,7 +238,7 @@ fn allow_admit() -> MockResponse {
 async fn happy_path_allow() {
     let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(res.is_ok());
 }
 
@@ -256,7 +254,7 @@ async fn deny_maps_to_filtered_by_validator() {
     ))
     .await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
 }
 
@@ -266,7 +264,7 @@ async fn non_success_status_fails_closed() {
         start_uds_mock(MockRoutes::default().with("/admit", MockResponse::raw(503, "unavailable")))
             .await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
 }
 
@@ -277,7 +275,7 @@ async fn malformed_body_fails_closed() {
     )
     .await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
 }
 
@@ -291,7 +289,7 @@ async fn timeout_fails_closed() {
     let mut cfg = base_config(mock.url().into());
     cfg.request_timeout = Duration::from_millis(50);
     let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
 }
 
@@ -303,7 +301,7 @@ async fn connection_refused_fails_closed() {
         "unix:///tmp/zksync_os_policy_nonexistent.sock".into(),
     ))
     .unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
 }
 
@@ -317,7 +315,7 @@ async fn protocol_version_mismatch_fails_closed() {
     let mut cfg = base_config(mock.url().into());
     cfg.expected_protocol_version = Some("1".into());
     let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
 }
 
@@ -331,7 +329,7 @@ async fn protocol_version_match_allows() {
     let mut cfg = base_config(mock.url().into());
     cfg.expected_protocol_version = Some("1".into());
     let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(res.is_ok());
 }
 
@@ -339,7 +337,7 @@ async fn protocol_version_match_allows() {
 async fn serialized_request_matches_context() {
     let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let _ = run_begin_tx(client, test_context()).await;
+    let _ = run_begin_tx(client.session(AccessType::Write), test_context()).await;
 
     let recorded = mock.last_body("/admit").expect("body captured");
     let parsed: serde_json::Value = serde_json::from_slice(&recorded).unwrap();
@@ -355,8 +353,6 @@ async fn serialized_request_matches_context() {
     assert_eq!(parsed["value"].as_str().unwrap(), "0x3e8");
     assert_eq!(parsed["calldata"].as_str().unwrap(), "0xdeadbeef");
     assert_eq!(parsed["gasLimit"].as_u64().unwrap(), 100_000);
-    // `run_begin_tx` drives the `TxValidator` trait impl, which always
-    // ships `Write` (block-build is a write path).
     assert_eq!(parsed["accessType"].as_str().unwrap(), "write");
 }
 
@@ -364,22 +360,11 @@ async fn serialized_request_matches_context() {
 async fn admit_serializes_access_type_read() {
     let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let _ = client.admit(&test_context(), AccessType::Read).await;
+    let _ = run_begin_tx(client.session(AccessType::Read), test_context()).await;
 
     let recorded = mock.last_body("/admit").expect("body captured");
     let parsed: serde_json::Value = serde_json::from_slice(&recorded).unwrap();
     assert_eq!(parsed["accessType"].as_str().unwrap(), "read");
-}
-
-#[tokio::test]
-async fn admit_serializes_access_type_write() {
-    let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let _ = client.admit(&test_context(), AccessType::Write).await;
-
-    let recorded = mock.last_body("/admit").expect("body captured");
-    let parsed: serde_json::Value = serde_json::from_slice(&recorded).unwrap();
-    assert_eq!(parsed["accessType"].as_str().unwrap(), "write");
 }
 
 #[tokio::test]
@@ -413,14 +398,35 @@ async fn https_without_tls_rejected_at_construction() {
 }
 
 #[tokio::test]
-async fn unix_with_tls_rejected_at_construction() {
+async fn unix_with_tls_is_accepted_at_construction() {
     let certs = generate_test_pki();
     let mut cfg = base_config("unix:///tmp/policy.sock".into());
     cfg.tls = Some(certs.client_tls.clone());
-    let err = PolicyClient::new(cfg);
     assert!(
-        err.is_err(),
-        "expected BuildError when `unix://` is paired with TLS material"
+        PolicyClient::new(cfg).is_ok(),
+        "unix + tls material should be accepted (tls is silently ignored for UDS)"
+    );
+}
+
+#[tokio::test]
+async fn bypass_from_skips_admit_call() {
+    // Mock configured to deny everything. If the bypass isn't honoured the
+    // tx would fail closed — the Ok assertion at the end proves it didn't
+    // even reach the mock.
+    let mock = start_uds_mock(
+        MockRoutes::default().with("/admit", MockResponse::ok_json(json!({"allow": false}))),
+    )
+    .await;
+    let mut cfg = base_config(mock.url().into());
+    cfg.bypass_from = [FROM].into_iter().collect();
+    let client = PolicyClient::new(cfg).unwrap();
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
+
+    assert!(res.is_ok(), "bypassed tx should be allowed without a call");
+    assert_eq!(
+        mock.calls("/admit"),
+        0,
+        "bypass must not reach the policy service"
     );
 }
 
@@ -487,18 +493,18 @@ impl TraceScript {
     }
 }
 
-/// Drive a full tx through the (validator, tracer) pair on a blocking thread.
-/// Mirrors the bootloader: `tracer.begin_tx` → `validator.begin_tx` →
-/// nested frame hooks → `validator.finish_tx` → `tracer.finish_tx`.
+/// Drive a full tx through the (session, tracer) pair on a blocking thread.
+/// Mirrors the bootloader: `tracer.begin_tx` → `session.begin_tx` →
+/// nested frame hooks → `session.finish_tx` → `tracer.finish_tx`.
 async fn run_full_tx(
-    mut client: PolicyClient,
+    mut session: PolicySession,
     mut tracer: Tracer,
     ctx: BeginTxContext<'static>,
     scripts: Vec<TraceScript>,
 ) -> Result<(), InvalidTransaction> {
     spawn_blocking(move || {
         EvmTracer::begin_tx(&mut tracer, ctx.calldata);
-        let begin = TxValidator::begin_tx(&mut client, &ctx);
+        let begin = TxValidator::begin_tx(&mut session, &ctx);
         if begin.is_err() {
             EvmTracer::finish_tx(&mut tracer);
             return begin;
@@ -506,7 +512,7 @@ async fn run_full_tx(
         for script in &scripts {
             script.drive(&mut tracer);
         }
-        let finish = TxValidator::finish_tx(&mut client);
+        let finish = TxValidator::finish_tx(&mut session);
         EvmTracer::finish_tx(&mut tracer);
         finish
     })
@@ -533,8 +539,9 @@ async fn judge_happy_path_allow() {
     )
     .await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let tracer = client.paired_tracer();
-    let res = run_full_tx(client, tracer, test_context(), one_frame()).await;
+    let session = client.session(AccessType::Write);
+    let tracer = session.paired_tracer();
+    let res = run_full_tx(session, tracer, test_context(), one_frame()).await;
 
     assert!(res.is_ok(), "expected judge to allow, got {res:?}");
     assert_eq!(mock.calls("/judge"), 1);
@@ -552,8 +559,9 @@ async fn judge_deny_maps_to_filtered_by_validator() {
     ))
     .await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let tracer = client.paired_tracer();
-    let res = run_full_tx(client, tracer, test_context(), one_frame()).await;
+    let session = client.session(AccessType::Write);
+    let tracer = session.paired_tracer();
+    let res = run_full_tx(session, tracer, test_context(), one_frame()).await;
 
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
 }
@@ -564,8 +572,9 @@ async fn judge_transport_error_fails_closed() {
     // which the client must treat as fail-closed.
     let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let tracer = client.paired_tracer();
-    let res = run_full_tx(client, tracer, test_context(), one_frame()).await;
+    let session = client.session(AccessType::Write);
+    let tracer = session.paired_tracer();
+    let res = run_full_tx(session, tracer, test_context(), one_frame()).await;
 
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
 }
@@ -582,8 +591,9 @@ async fn judge_bypass_from_skips_call() {
     let mut cfg = base_config(mock.url().into());
     cfg.bypass_from = [FROM].into_iter().collect();
     let client = PolicyClient::new(cfg).unwrap();
-    let tracer = client.paired_tracer();
-    let res = run_full_tx(client, tracer, test_context(), one_frame()).await;
+    let session = client.session(AccessType::Write);
+    let tracer = session.paired_tracer();
+    let res = run_full_tx(session, tracer, test_context(), one_frame()).await;
 
     assert!(res.is_ok(), "bypassed tx should not be judged");
     assert_eq!(
@@ -602,7 +612,8 @@ async fn judge_serialized_request_carries_captured_frames() {
     )
     .await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let tracer = client.paired_tracer();
+    let session = client.session(AccessType::Write);
+    let tracer = session.paired_tracer();
 
     // Top-level call EOA->Factory, with a nested CREATE that deploys
     // `deployed`. The wire body should record the deploy in the *parent*'s
@@ -624,7 +635,7 @@ async fn judge_serialized_request_carries_captured_frames() {
             value: U256::ZERO,
         })],
     }];
-    let res = run_full_tx(client, tracer, test_context(), scripts).await;
+    let res = run_full_tx(session, tracer, test_context(), scripts).await;
     assert!(res.is_ok());
 
     let body = mock.last_body("/judge").expect("body captured");
@@ -661,8 +672,6 @@ async fn judge_serialized_request_carries_captured_frames() {
     // CREATE frame is the constructor.
     assert_eq!(frames_json[0]["callKind"].as_str().unwrap(), "call");
     assert_eq!(frames_json[1]["callKind"].as_str().unwrap(), "constructor");
-    // `run_full_tx` drives the `TxValidator` trait, which always ships
-    // `Write` for judge (block-build is a write path).
     assert_eq!(parsed["accessType"].as_str().unwrap(), "write");
 }
 
@@ -678,7 +687,8 @@ async fn judge_serialized_frames_carry_call_kind_for_delegatecall_and_static() {
     )
     .await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let tracer = client.paired_tracer();
+    let session = client.session(AccessType::Write);
+    let tracer = session.paired_tracer();
 
     // EOA -> Proxy (Call) -> Impl (DelegateCall) -> Oracle (StaticCall).
     let impl_addr = address!("0x5555555555555555555555555555555555555555");
@@ -708,7 +718,7 @@ async fn judge_serialized_frames_carry_call_kind_for_delegatecall_and_static() {
             })],
         }],
     }];
-    let res = run_full_tx(client, tracer, test_context(), scripts).await;
+    let res = run_full_tx(session, tracer, test_context(), scripts).await;
     assert!(res.is_ok());
 
     let body = mock.last_body("/judge").expect("body captured");
@@ -723,185 +733,95 @@ async fn judge_serialized_frames_carry_call_kind_for_delegatecall_and_static() {
 #[tokio::test]
 async fn judge_serializes_access_type_read() {
     let mock = start_uds_mock(
-        MockRoutes::default().with("/judge", MockResponse::ok_json(json!({"allow": true}))),
+        MockRoutes::default()
+            .with("/admit", allow_admit())
+            .with("/judge", MockResponse::ok_json(json!({"allow": true}))),
     )
     .await;
     let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let frame = CapturedFrame {
-        caller: FROM,
-        callee: TO,
-        value: U256::ZERO,
-        calldata: vec![0xaa],
-        deploys: vec![],
-        call_kind: CallKind::Call,
-    };
-    let _ = client
-        .judge(Some(FROM), vec![frame], AccessType::Read)
-        .await;
+    let session = client.session(AccessType::Read);
+    let tracer = session.paired_tracer();
+    let _ = run_full_tx(session, tracer, test_context(), one_frame()).await;
 
     let body = mock.last_body("/judge").expect("body captured");
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(parsed["accessType"].as_str().unwrap(), "read");
 }
 
+// ---------- session() isolation ----------
+
+/// Two sessions created from the same `PolicyClient` must each own their
+/// own trace slot and `pending_tx_from`. After driving a frame into one
+/// session, the other's `/judge` body shows zero frames.
 #[tokio::test]
-async fn judge_serializes_access_type_write() {
-    let mock = start_uds_mock(
-        MockRoutes::default().with("/judge", MockResponse::ok_json(json!({"allow": true}))),
-    )
-    .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let frame = CapturedFrame {
-        caller: FROM,
-        callee: TO,
-        value: U256::ZERO,
-        calldata: vec![0xaa],
-        deploys: vec![],
-        call_kind: CallKind::Call,
-    };
-    let _ = client
-        .judge(Some(FROM), vec![frame], AccessType::Write)
-        .await;
-
-    let body = mock.last_body("/judge").expect("body captured");
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(parsed["accessType"].as_str().unwrap(), "write");
-}
-
-#[tokio::test]
-async fn bypass_from_skips_admit_call() {
-    // Mock configured to deny everything. If the bypass isn't honoured the
-    // tx would fail closed — the Ok assertion at the end proves it didn't
-    // even reach the mock.
-    let mock = start_uds_mock(
-        MockRoutes::default().with("/admit", MockResponse::ok_json(json!({"allow": false}))),
-    )
-    .await;
-    let mut cfg = base_config(mock.url().into());
-    cfg.bypass_from = [FROM].into_iter().collect();
-    let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
-
-    assert!(res.is_ok(), "bypassed tx should be allowed without a call");
-    assert_eq!(
-        mock.calls("/admit"),
-        0,
-        "bypass must not reach the policy service"
-    );
-}
-
-// ---------- Async admit path ----------
-//
-// `admit` is the RPC-side entry point: it runs the same logic as
-// `begin_tx` but stays async so handlers don't need `spawn_blocking`.
-
-#[tokio::test]
-async fn async_admit_happy_path_allow() {
-    let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let res = client.admit(&test_context(), AccessType::Write).await;
-    assert!(res.is_ok());
-}
-
-#[tokio::test]
-async fn async_admit_deny_maps_to_filtered_by_validator() {
-    let mock = start_uds_mock(
-        MockRoutes::default().with("/admit", MockResponse::ok_json(json!({"allow": false}))),
-    )
-    .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let res = client.admit(&test_context(), AccessType::Write).await;
-    assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
-}
-
-#[tokio::test]
-async fn async_admit_bypass_skips_call() {
-    let mock = start_uds_mock(
-        MockRoutes::default().with("/admit", MockResponse::ok_json(json!({"allow": false}))),
-    )
-    .await;
-    let mut cfg = base_config(mock.url().into());
-    cfg.bypass_from = [FROM].into_iter().collect();
-    let client = PolicyClient::new(cfg).unwrap();
-    let res = client.admit(&test_context(), AccessType::Write).await;
-
-    assert!(res.is_ok(), "bypassed tx should be allowed without a call");
-    assert_eq!(mock.calls("/admit"), 0);
-}
-
-// ---------- fork() isolation ----------
-
-/// `fork` must give the sibling its own slot and `pending_tx_from`. After
-/// driving a frame into the child, the parent's `/judge` body shows zero
-/// frames while the child's body shows the captured one.
-#[tokio::test]
-async fn fork_isolates_slot_from_parent() {
+async fn session_isolates_slot_from_sibling() {
     let mock = start_uds_mock(
         MockRoutes::default()
             .with("/admit", allow_admit())
             .with("/judge", MockResponse::ok_json(json!({"allow": true}))),
     )
     .await;
-    let mut parent = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let mut child = parent.fork(AccessType::Read);
+    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let mut session_a = client.session(AccessType::Read);
+    let mut session_b = client.session(AccessType::Write);
 
-    // Drive a frame into the child via its paired tracer.
-    let mut child_tracer = child.paired_tracer();
-    child_tracer.on_new_execution_frame(&MockFrame {
+    // Drive a frame into session_a via its paired tracer.
+    let mut tracer_a = session_a.paired_tracer();
+    tracer_a.on_new_execution_frame(&MockFrame {
         caller: FROM,
         callee: TO,
         modifier: CallModifier::NoModifier,
         input: vec![0xcc],
         value: U256::ZERO,
     });
-    child_tracer.after_execution_frame_completed(None);
+    tracer_a.after_execution_frame_completed(None);
 
-    // Child's judge ships exactly the child's frame, with `read` intent.
-    spawn_blocking(move || child.finish_tx())
+    // session_a judge ships exactly session_a's frame, with `read` intent.
+    spawn_blocking(move || session_a.finish_tx())
         .await
         .unwrap()
         .unwrap();
-    let child_body = mock.last_body("/judge").expect("judge called for child");
-    let child_parsed: serde_json::Value = serde_json::from_slice(&child_body).unwrap();
-    assert_eq!(child_parsed["accessType"].as_str().unwrap(), "read");
-    let child_frames = child_parsed["trace"]["frames"].as_array().unwrap();
-    assert_eq!(child_frames.len(), 1);
-    assert_eq!(child_frames[0]["calldata"].as_str().unwrap(), "0xcc");
+    let body_a = mock.last_body("/judge").expect("judge called for session_a");
+    let parsed_a: serde_json::Value = serde_json::from_slice(&body_a).unwrap();
+    assert_eq!(parsed_a["accessType"].as_str().unwrap(), "read");
+    let frames_a = parsed_a["trace"]["frames"].as_array().unwrap();
+    assert_eq!(frames_a.len(), 1);
+    assert_eq!(frames_a[0]["calldata"].as_str().unwrap(), "0xcc");
 
-    // Parent's judge body has zero frames (the child's frame did not
-    // bleed into the parent's slot). Parent defaults to Write intent.
-    spawn_blocking(move || parent.finish_tx())
+    // session_b's judge body has zero frames (session_a's frame did not
+    // bleed into session_b's slot). session_b defaults to Write intent.
+    spawn_blocking(move || session_b.finish_tx())
         .await
         .unwrap()
         .unwrap();
-    let parent_body = mock.last_body("/judge").expect("judge called for parent");
-    let parent_parsed: serde_json::Value = serde_json::from_slice(&parent_body).unwrap();
-    assert_eq!(parent_parsed["accessType"].as_str().unwrap(), "write");
+    let body_b = mock.last_body("/judge").expect("judge called for session_b");
+    let parsed_b: serde_json::Value = serde_json::from_slice(&body_b).unwrap();
+    assert_eq!(parsed_b["accessType"].as_str().unwrap(), "write");
     assert!(
-        parent_parsed["trace"]["frames"]
+        parsed_b["trace"]["frames"]
             .as_array()
             .unwrap()
             .is_empty()
     );
 }
 
-/// Two concurrent fork sessions must not see each other's frames at
-/// `/judge`. Catches a future regression that shares the slot across
-/// concurrent RPC simulations.
+/// Two concurrent sessions must not see each other's frames at `/judge`.
+/// Catches a future regression that shares the slot across concurrent RPC
+/// simulations.
 #[tokio::test]
-async fn fork_concurrent_simulations_dont_share_slot() {
+async fn concurrent_sessions_dont_share_slot() {
     let mock = start_uds_mock(
         MockRoutes::default()
             .with("/admit", allow_admit())
             .with("/judge", MockResponse::ok_json(json!({"allow": true}))),
     )
     .await;
-    let parent = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
 
-    let parent_a = parent.clone();
-    let parent_b = parent.clone();
+    let client_a = client.clone();
+    let client_b = client.clone();
     let task_a = tokio::spawn(async move {
-        let mut session = parent_a.fork(AccessType::Read);
+        let mut session = client_a.session(AccessType::Read);
         let mut tracer = session.paired_tracer();
         tracer.on_new_execution_frame(&MockFrame {
             caller: FROM,
@@ -914,7 +834,7 @@ async fn fork_concurrent_simulations_dont_share_slot() {
         spawn_blocking(move || session.finish_tx()).await.unwrap()
     });
     let task_b = tokio::spawn(async move {
-        let mut session = parent_b.fork(AccessType::Write);
+        let mut session = client_b.session(AccessType::Write);
         let mut tracer = session.paired_tracer();
         tracer.on_new_execution_frame(&MockFrame {
             caller: TO,
@@ -944,16 +864,15 @@ async fn fork_concurrent_simulations_dont_share_slot() {
 // Construction-time URL/TLS pairing checks live in the UDS section above.
 
 struct TestPki {
-    /// Trusted CA (PEM file) used by both server and client.
-    server_ca_path: PathBuf,
-    /// Server cert chain + key (PEM files) signed by the trusted CA.
+    /// Trusted CA (PEM) used by both server and client.
+    server_ca_pem: String,
+    /// Server cert chain + key signed by the trusted CA.
     server_cert_chain: Vec<CertificateDer<'static>>,
     server_key: PrivateKeyDer<'static>,
-    /// Client TLS config pointing at PEM files signed by the trusted CA.
+    /// Client TLS config with inline PEM signed by the trusted CA.
     client_tls: TlsConfig,
     /// Trusted-CA cert in DER form (handy for building server-side verifiers).
     trusted_ca_der: CertificateDer<'static>,
-    _tmp: TempDir,
 }
 
 fn install_default_crypto_provider() {
@@ -965,8 +884,6 @@ fn install_default_crypto_provider() {
 }
 
 fn generate_test_pki() -> TestPki {
-    let tmp = tempfile::tempdir().unwrap();
-
     let mut ca_params = rcgen::CertificateParams::default();
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     ca_params
@@ -975,8 +892,6 @@ fn generate_test_pki() -> TestPki {
     let ca_key = rcgen::KeyPair::generate().unwrap();
     let ca_cert = ca_params.self_signed(&ca_key).unwrap();
     let ca_pem = ca_cert.pem();
-    let ca_path = tmp.path().join("ca.pem");
-    std::fs::write(&ca_path, ca_pem).unwrap();
     let ca_der = CertificateDer::from(ca_cert.der().to_vec());
 
     let server_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
@@ -996,24 +911,19 @@ fn generate_test_pki() -> TestPki {
     let client_cert = client_params
         .signed_by(&client_key, &ca_cert, &ca_key)
         .unwrap();
-    let client_cert_path = tmp.path().join("client.crt.pem");
-    let client_key_path = tmp.path().join("client.key.pem");
-    std::fs::write(&client_cert_path, client_cert.pem()).unwrap();
-    std::fs::write(&client_key_path, client_key.serialize_pem()).unwrap();
 
     let client_tls = TlsConfig {
-        client_cert: client_cert_path,
-        client_key: client_key_path,
-        server_ca: ca_path.clone(),
+        client_cert: client_cert.pem(),
+        client_key: client_key.serialize_pem(),
+        server_ca: ca_pem.clone(),
     };
 
     TestPki {
-        server_ca_path: ca_path,
+        server_ca_pem: ca_pem,
         server_cert_chain,
         server_key: server_key_der,
         client_tls,
         trusted_ca_der: ca_der,
-        _tmp: tmp,
     }
 }
 
@@ -1094,7 +1004,7 @@ async fn mtls_handshake_succeeds_with_pinned_ca() {
     let mut cfg = base_config(format!("https://localhost:{}", addr.port()));
     cfg.tls = Some(pki.client_tls.clone());
     let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(res.is_ok(), "mTLS happy path should succeed: {res:?}");
 }
 
@@ -1116,7 +1026,7 @@ async fn mtls_fails_when_server_signed_by_untrusted_ca() {
     let mut cfg = base_config(format!("https://localhost:{}", addr.port()));
     cfg.tls = Some(trusted.client_tls.clone());
     let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(
         matches!(res, Err(InvalidTransaction::FilteredByValidator)),
         "untrusted server cert must fail closed, got {res:?}"
@@ -1142,12 +1052,12 @@ async fn mtls_fails_when_client_cert_signed_by_untrusted_ca() {
     let mixed_tls = TlsConfig {
         client_cert: alt.client_tls.client_cert.clone(),
         client_key: alt.client_tls.client_key.clone(),
-        server_ca: trusted.server_ca_path.clone(),
+        server_ca: trusted.server_ca_pem.clone(),
     };
     let mut cfg = base_config(format!("https://localhost:{}", addr.port()));
     cfg.tls = Some(mixed_tls);
     let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(
         matches!(res, Err(InvalidTransaction::FilteredByValidator)),
         "untrusted client cert must fail closed, got {res:?}"
@@ -1155,149 +1065,35 @@ async fn mtls_fails_when_client_cert_signed_by_untrusted_ca() {
 }
 
 #[tokio::test]
-async fn mtls_unreadable_cert_path_fails_at_construction() {
+async fn mtls_invalid_pem_fails_at_construction() {
     let mut cfg = base_config("https://localhost:1".into());
     cfg.tls = Some(TlsConfig {
-        client_cert: PathBuf::from("/nonexistent/client.crt"),
-        client_key: PathBuf::from("/nonexistent/client.key"),
-        server_ca: PathBuf::from("/nonexistent/ca.crt"),
+        client_cert: "not-a-cert".into(),
+        client_key: "not-a-key".into(),
+        server_ca: "not-a-ca".into(),
     });
-    let err = PolicyClient::new(cfg);
-    assert!(err.is_err(), "missing TLS files must fail at construction");
-}
-
-#[tokio::test]
-async fn mtls_empty_pem_file_fails_at_construction() {
-    let tmp = tempfile::tempdir().unwrap();
-    let empty = tmp.path().join("empty.pem");
-    std::fs::write(&empty, "").unwrap();
-    let mut cfg = base_config("https://localhost:1".into());
-    cfg.tls = Some(TlsConfig {
-        client_cert: empty.clone(),
-        client_key: empty.clone(),
-        server_ca: empty,
-    });
-    let err = PolicyClient::new(cfg);
-    assert!(err.is_err(), "empty PEM files must fail at construction");
-}
-
-#[tokio::test]
-async fn mtls_fails_on_expired_server_cert() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mut ca_params = rcgen::CertificateParams::default();
-    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-    ca_params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, "expired-pki-ca");
-    let ca_key = rcgen::KeyPair::generate().unwrap();
-    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
-    let ca_path = tmp.path().join("ca.pem");
-    std::fs::write(&ca_path, ca_cert.pem()).unwrap();
-    let ca_der = CertificateDer::from(ca_cert.der().to_vec());
-
-    // Server cert valid only in the past.
-    let mut server_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
-    server_params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(30);
-    server_params.not_after = time::OffsetDateTime::now_utc() - time::Duration::days(1);
-    let server_key = rcgen::KeyPair::generate().unwrap();
-    let server_cert = server_params
-        .signed_by(&server_key, &ca_cert, &ca_key)
-        .unwrap();
-    let server_chain = vec![CertificateDer::from(server_cert.der().to_vec())];
-    let server_key_der = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(server_key.serialize_der()));
-
-    // A client identity (signed by the same CA, normal validity).
-    let client_params = rcgen::CertificateParams::new(vec!["policy-client".to_string()]).unwrap();
-    let client_key = rcgen::KeyPair::generate().unwrap();
-    let client_cert = client_params
-        .signed_by(&client_key, &ca_cert, &ca_key)
-        .unwrap();
-    let client_cert_path = tmp.path().join("client.crt");
-    let client_key_path = tmp.path().join("client.key");
-    std::fs::write(&client_cert_path, client_cert.pem()).unwrap();
-    std::fs::write(&client_key_path, client_key.serialize_pem()).unwrap();
-
-    let addr = start_tls_server(
-        server_chain,
-        server_key_der,
-        ca_der,
-        MockRoutes::default().with("/admit", allow_admit()),
-    )
-    .await;
-
-    let mut cfg = base_config(format!("https://localhost:{}", addr.port()));
-    cfg.tls = Some(TlsConfig {
-        client_cert: client_cert_path,
-        client_key: client_key_path,
-        server_ca: ca_path,
-    });
-    let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
     assert!(
-        matches!(res, Err(InvalidTransaction::FilteredByValidator)),
-        "expired server cert must fail closed, got {res:?}"
+        PolicyClient::new(cfg).is_err(),
+        "invalid PEM must fail at construction"
     );
 }
 
 #[tokio::test]
-async fn mtls_fails_on_hostname_mismatch() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mut ca_params = rcgen::CertificateParams::default();
-    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-    ca_params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, "san-mismatch-ca");
-    let ca_key = rcgen::KeyPair::generate().unwrap();
-    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
-    let ca_path = tmp.path().join("ca.pem");
-    std::fs::write(&ca_path, ca_cert.pem()).unwrap();
-    let ca_der = CertificateDer::from(ca_cert.der().to_vec());
-
-    // Server cert SAN is `other.example`, but the client connects to localhost.
-    let server_params = rcgen::CertificateParams::new(vec!["other.example".to_string()]).unwrap();
-    let server_key = rcgen::KeyPair::generate().unwrap();
-    let server_cert = server_params
-        .signed_by(&server_key, &ca_cert, &ca_key)
-        .unwrap();
-    let server_chain = vec![CertificateDer::from(server_cert.der().to_vec())];
-    let server_key_der = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(server_key.serialize_der()));
-
-    let client_params = rcgen::CertificateParams::new(vec!["policy-client".to_string()]).unwrap();
-    let client_key = rcgen::KeyPair::generate().unwrap();
-    let client_cert = client_params
-        .signed_by(&client_key, &ca_cert, &ca_key)
-        .unwrap();
-    let client_cert_path = tmp.path().join("client.crt");
-    let client_key_path = tmp.path().join("client.key");
-    std::fs::write(&client_cert_path, client_cert.pem()).unwrap();
-    std::fs::write(&client_key_path, client_key.serialize_pem()).unwrap();
-
-    let addr = start_tls_server(
-        server_chain,
-        server_key_der,
-        ca_der,
-        MockRoutes::default().with("/admit", allow_admit()),
-    )
-    .await;
-
-    let mut cfg = base_config(format!("https://localhost:{}", addr.port()));
+async fn mtls_empty_pem_fails_at_construction() {
+    let mut cfg = base_config("https://localhost:1".into());
     cfg.tls = Some(TlsConfig {
-        client_cert: client_cert_path,
-        client_key: client_key_path,
-        server_ca: ca_path,
+        client_cert: String::new(),
+        client_key: String::new(),
+        server_ca: String::new(),
     });
-    let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
     assert!(
-        matches!(res, Err(InvalidTransaction::FilteredByValidator)),
-        "hostname mismatch must fail closed, got {res:?}"
+        PolicyClient::new(cfg).is_err(),
+        "empty PEM must fail at construction"
     );
 }
 
 #[tokio::test]
 async fn mtls_succeeds_with_intermediate_ca_in_client_chain() {
-    let tmp = tempfile::tempdir().unwrap();
-
     // Root CA.
     let mut root_params = rcgen::CertificateParams::default();
     root_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -1306,8 +1102,6 @@ async fn mtls_succeeds_with_intermediate_ca_in_client_chain() {
         .push(rcgen::DnType::CommonName, "intermediate-test-root");
     let root_key = rcgen::KeyPair::generate().unwrap();
     let root_cert = root_params.self_signed(&root_key).unwrap();
-    let root_path = tmp.path().join("root.pem");
-    std::fs::write(&root_path, root_cert.pem()).unwrap();
     let root_der = CertificateDer::from(root_cert.der().to_vec());
 
     // Intermediate CA, signed by root.
@@ -1330,20 +1124,15 @@ async fn mtls_succeeds_with_intermediate_ca_in_client_chain() {
     let server_chain = vec![CertificateDer::from(server_cert.der().to_vec())];
     let server_key_der = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(server_key.serialize_der()));
 
-    // Client leaf signed by the intermediate. The client_cert.pem contains
-    // [leaf, intermediate] so the server can build the chain to its
-    // pinned root.
+    // Client leaf signed by the intermediate. client_cert contains
+    // [leaf, intermediate] so the server can build the chain to its pinned root.
     let client_params = rcgen::CertificateParams::new(vec!["policy-client".to_string()]).unwrap();
     let client_key = rcgen::KeyPair::generate().unwrap();
     let client_cert = client_params
         .signed_by(&client_key, &intermediate_cert, &intermediate_key)
         .unwrap();
-    let client_cert_path = tmp.path().join("client.crt.pem");
-    let client_key_path = tmp.path().join("client.key.pem");
     let mut client_chain_pem = client_cert.pem();
     client_chain_pem.push_str(&intermediate_cert.pem());
-    std::fs::write(&client_cert_path, client_chain_pem).unwrap();
-    std::fs::write(&client_key_path, client_key.serialize_pem()).unwrap();
 
     // Server's client-trust root is the same root; it builds the path
     // through the intermediate the client presents.
@@ -1357,12 +1146,12 @@ async fn mtls_succeeds_with_intermediate_ca_in_client_chain() {
 
     let mut cfg = base_config(format!("https://localhost:{}", addr.port()));
     cfg.tls = Some(TlsConfig {
-        client_cert: client_cert_path,
-        client_key: client_key_path,
-        server_ca: root_path,
+        client_cert: client_chain_pem,
+        client_key: client_key.serialize_pem(),
+        server_ca: root_cert.pem(),
     });
     let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client, test_context()).await;
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(
         res.is_ok(),
         "client chain [leaf, intermediate] should validate against root, got {res:?}"

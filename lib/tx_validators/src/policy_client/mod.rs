@@ -8,7 +8,6 @@ mod transport;
 mod wire;
 
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -19,12 +18,10 @@ use zksync_os_interface::tracing::{
     AnyTxValidator, BeginTxContext, TxValidationResult, TxValidator,
 };
 
-use self::metrics::{
-    AdmitErrorReason, AdmitOutcome, JudgeErrorReason, JudgeOutcome, POLICY_CLIENT_METRICS,
-};
+use self::metrics::{ErrorReason, Outcome, POLICY_CLIENT_METRICS};
 use self::tracer::TraceSlot;
 pub use self::tracer::{CallKind, CapturedFrame, Tracer};
-use self::transport::{Transport, TransportError};
+use self::transport::{Transport, TransportConfig, TransportError};
 use self::wire::{AdmitRequest, JudgeRequest, PolicyResponse};
 
 /// Caller intent forwarded with each request. `Read` is for read-only
@@ -54,42 +51,39 @@ pub struct Config {
     pub bypass_from: HashSet<Address>,
     /// mTLS material. Required for `https://`; must be `None` for `unix:///`.
     pub tls: Option<TlsConfig>,
-    /// Caller intent reported through the `TxValidator` trait. Block-build
-    /// uses `Write`; RPC paths fork with the right intent per call.
-    pub access_type: AccessType,
 }
 
-/// PEM paths read once at [`PolicyClient::new`] so a misconfiguration
-/// fails fast at startup.
+/// Inline PEM material validated once at [`PolicyClient::new`] so a
+/// misconfiguration fails fast at startup.
 #[derive(Clone, Debug)]
 pub struct TlsConfig {
     /// PEM-encoded client cert chain, leaf first.
-    pub client_cert: PathBuf,
+    pub client_cert: String,
     /// PEM-encoded private key (PKCS#8 or RSA) matching `client_cert`.
-    pub client_key: PathBuf,
+    pub client_key: String,
     /// PEM-encoded CA bundle the client trusts. System roots are not loaded.
-    pub server_ca: PathBuf,
+    pub server_ca: String,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
+    #[error("invalid URL: {0}")]
+    InvalidUrl(String),
+    #[error("unsupported URL scheme `{0}` (expected `https` or `unix`)")]
+    UnsupportedScheme(String),
+    #[error("missing TLS config: https URLs require client_cert/client_key/server_ca")]
+    MissingTls,
+    #[error("unix URL missing socket path")]
+    MissingSocketPath,
     #[error(transparent)]
     Transport(#[from] TransportError),
 }
 
-/// `Clone` shares the slot, `pending_tx_from`, and `access_type` (used by
-/// block-build, where the same client is reused across txs). [`Self::fork`]
-/// returns a sibling sharing the transport pool but with fresh per-tx
-/// state and a chosen access type, used by RPC so concurrent simulations
-/// don't trample each other's captured frames.
-// `Clone` shares the per-tx slot — use [`Self::fork`] for concurrent
-// simulations that must not see each other's frames.
+/// Shareable transport handle. Clone freely and store in long-lived structs;
+/// call [`Self::session`] to get a per-transaction [`PolicySession`].
 #[derive(Clone)]
 pub struct PolicyClient {
     shared: Arc<Shared>,
-    slot: TraceSlot,
-    pending_tx_from: Arc<Mutex<Option<Address>>>,
-    access_type: AccessType,
 }
 
 impl std::fmt::Debug for PolicyClient {
@@ -115,7 +109,25 @@ struct Shared {
 
 impl PolicyClient {
     pub fn new(config: Config) -> Result<Self, BuildError> {
-        let transport = Transport::from_url(&config.url, config.tls.as_ref())?;
+        let parsed = url::Url::parse(&config.url)
+            .map_err(|e| BuildError::InvalidUrl(e.to_string()))?;
+        let transport_config = match parsed.scheme() {
+            "https" => {
+                let tls = config.tls.ok_or(BuildError::MissingTls)?;
+                TransportConfig::Https { url: parsed, tls }
+            }
+            "unix" => {
+                let socket_path = parsed.path();
+                if socket_path.is_empty() {
+                    return Err(BuildError::MissingSocketPath);
+                }
+                TransportConfig::Unix {
+                    socket_path: std::path::PathBuf::from(socket_path),
+                }
+            }
+            other => return Err(BuildError::UnsupportedScheme(other.to_string())),
+        };
+        let transport = Transport::from_config(transport_config)?;
         Ok(Self {
             shared: Arc::new(Shared {
                 transport,
@@ -124,88 +136,100 @@ impl PolicyClient {
                 expected_protocol_version: config.expected_protocol_version,
                 bypass_from: config.bypass_from,
             }),
-            slot: tracer::new_slot(),
-            pending_tx_from: Arc::new(Mutex::new(None)),
-            access_type: config.access_type,
         })
     }
 
-    /// Sibling client that shares the same transport / config but owns a
-    /// fresh per-tx scratch slot and `pending_tx_from`, with the supplied
-    /// access type. Use this for each concurrent RPC simulation so the
-    /// validator's `begin_tx` / `finish_tx` hooks fired by `simulate_tx`
-    /// see only this call's frames and ship the right intent.
-    pub fn fork(&self, access_type: AccessType) -> Self {
-        Self {
+    /// Creates a per-transaction [`PolicySession`] with its own trace slot
+    /// and pending-sender state. Use a separate session for each concurrent
+    /// RPC simulation so their `begin_tx` / `finish_tx` hooks don't trample
+    /// each other's captured frames.
+    pub fn session(&self, access_type: AccessType) -> PolicySession {
+        PolicySession {
             shared: Arc::clone(&self.shared),
             slot: tracer::new_slot(),
             pending_tx_from: Arc::new(Mutex::new(None)),
             access_type,
         }
     }
+}
 
-    /// Construct the [`Tracer`] paired with this client. The tracer writes
-    /// captured frames into this client's slot; `validator.finish_tx`
-    /// (fired by the bootloader after EVM execution) reads them and POSTs
-    /// `/judge`.
+/// Per-transaction state: trace slot, pending sender, and caller intent.
+/// Implements [`TxValidator`] for both block-build and RPC simulation paths.
+pub struct PolicySession {
+    shared: Arc<Shared>,
+    slot: TraceSlot,
+    pending_tx_from: Arc<Mutex<Option<Address>>>,
+    access_type: AccessType,
+}
+
+impl PolicySession {
+    /// Construct the [`Tracer`] paired with this session. The tracer writes
+    /// captured frames into this session's slot; `finish_tx` reads them and
+    /// POSTs `/judge`.
     pub fn paired_tracer(&self) -> Tracer {
         Tracer::new(self.slot.clone())
     }
 
-    /// Pre-execution call. Async surface used by RPC handlers; block-build
-    /// reaches it through the sync [`TxValidator::begin_tx`] bridge.
-    pub async fn admit(
-        &self,
-        ctx: &BeginTxContext<'_>,
-        access_type: AccessType,
-    ) -> TxValidationResult {
+    async fn admit(&self, ctx: &BeginTxContext<'_>) -> TxValidationResult {
         if self.shared.bypass_from.contains(&ctx.from) {
             POLICY_CLIENT_METRICS.admit_bypassed.inc();
             return Ok(());
         }
-        let request = AdmitRequest::from_context(ctx, &self.shared.protocol_version, access_type);
+        let request =
+            AdmitRequest::from_context(ctx, &self.shared.protocol_version, self.access_type);
         let started = Instant::now();
-        let outcome = self.post_and_parse(Endpoint::Admit, &request).await;
-        POLICY_CLIENT_METRICS
-            .admit_latency
-            .observe(started.elapsed());
-        record_admit_outcome(&outcome);
-        outcome.map_err(|_| InvalidTransaction::FilteredByValidator)
+        let result = self.post_and_parse(Endpoint::Admit, &request).await;
+        POLICY_CLIENT_METRICS.admit_latency.observe(started.elapsed());
+        match result {
+            Ok(true) => {
+                POLICY_CLIENT_METRICS.admit_decisions[&Outcome::Allow].inc();
+                Ok(())
+            }
+            Ok(false) => {
+                POLICY_CLIENT_METRICS.admit_decisions[&Outcome::Deny].inc();
+                Err(InvalidTransaction::FilteredByValidator)
+            }
+            Err(err) => {
+                POLICY_CLIENT_METRICS.admit_errors[&classify_error(&err)].inc();
+                Err(InvalidTransaction::FilteredByValidator)
+            }
+        }
     }
 
-    /// Post-execution call. Same surface as [`Self::admit`], but ships the
-    /// captured execution trace.
-    pub async fn judge(
-        &self,
-        from: Option<Address>,
-        frames: Vec<CapturedFrame>,
-        access_type: AccessType,
-    ) -> TxValidationResult {
+    async fn judge(&self, from: Option<Address>, frames: Vec<CapturedFrame>) -> TxValidationResult {
         if let Some(from) = from
             && self.shared.bypass_from.contains(&from)
         {
             POLICY_CLIENT_METRICS.judge_bypassed.inc();
             return Ok(());
         }
-        let request = JudgeRequest::new(&self.shared.protocol_version, from, &frames, access_type);
+        let request =
+            JudgeRequest::new(&self.shared.protocol_version, from, &frames, self.access_type);
         let started = Instant::now();
-        let outcome = self.post_and_parse(Endpoint::Judge, &request).await;
-        POLICY_CLIENT_METRICS
-            .judge_latency
-            .observe(started.elapsed());
-        record_judge_outcome(&outcome);
-        outcome.map_err(|_| InvalidTransaction::FilteredByValidator)
+        let result = self.post_and_parse(Endpoint::Judge, &request).await;
+        POLICY_CLIENT_METRICS.judge_latency.observe(started.elapsed());
+        match result {
+            Ok(true) => {
+                POLICY_CLIENT_METRICS.judge_decisions[&Outcome::Allow].inc();
+                Ok(())
+            }
+            Ok(false) => {
+                POLICY_CLIENT_METRICS.judge_decisions[&Outcome::Deny].inc();
+                Err(InvalidTransaction::FilteredByValidator)
+            }
+            Err(err) => {
+                POLICY_CLIENT_METRICS.judge_errors[&classify_error(&err)].inc();
+                Err(InvalidTransaction::FilteredByValidator)
+            }
+        }
     }
 
     async fn post_and_parse<R: Serialize>(
         &self,
         endpoint: Endpoint,
         request: &R,
-    ) -> Result<(), OutcomeErr> {
-        let body = serde_json::to_vec(request).map_err(|err| {
-            tracing::error!(?err, ?endpoint, "failed to serialize policy request");
-            OutcomeErr::MalformedResponse
-        })?;
+    ) -> Result<bool, TransportError> {
+        let body = serde_json::to_vec(request).expect("policy request serialization is infallible");
         let timeout = self.shared.request_timeout;
         let response = match endpoint {
             Endpoint::Admit => {
@@ -219,16 +243,16 @@ impl PolicyClient {
             Ok(Ok(bytes)) => bytes,
             Ok(Err(err)) => {
                 tracing::warn!(?err, ?endpoint, "policy request failed");
-                return Err(classify_transport_error(&err));
+                return Err(err);
             }
             Err(_) => {
                 tracing::warn!(?timeout, ?endpoint, "policy request timed out");
-                return Err(OutcomeErr::Timeout);
+                return Err(TransportError::Timeout(timeout));
             }
         };
         let parsed: PolicyResponse = serde_json::from_slice(&raw).map_err(|err| {
             tracing::warn!(?err, ?endpoint, "policy response body malformed");
-            OutcomeErr::MalformedResponse
+            TransportError::MalformedResponse
         })?;
         if let Some(expected) = &self.shared.expected_protocol_version
             && parsed.protocol_version.as_deref() != Some(expected.as_str())
@@ -239,10 +263,10 @@ impl PolicyClient {
                 ?endpoint,
                 "policy response protocolVersion mismatch"
             );
-            return Err(OutcomeErr::ProtocolVersionMismatch);
+            return Err(TransportError::ProtocolVersionMismatch);
         }
         if parsed.allow {
-            Ok(())
+            Ok(true)
         } else {
             tracing::info!(
                 rule_id = ?parsed.rule_id,
@@ -250,7 +274,7 @@ impl PolicyClient {
                 ?endpoint,
                 "policy denied"
             );
-            Err(OutcomeErr::Denied)
+            Ok(false)
         }
     }
 }
@@ -261,61 +285,21 @@ enum Endpoint {
     Judge,
 }
 
-fn record_admit_outcome(outcome: &Result<(), OutcomeErr>) {
-    match outcome {
-        Ok(()) => {
-            POLICY_CLIENT_METRICS.admit_decisions[&AdmitOutcome::Allow].inc();
-        }
-        Err(OutcomeErr::Denied) => {
-            POLICY_CLIENT_METRICS.admit_decisions[&AdmitOutcome::Deny].inc();
-        }
-        Err(reason) => {
-            if let Some(label) = reason.admit_label() {
-                POLICY_CLIENT_METRICS.admit_errors[&label].inc();
-            }
-        }
-    }
-}
-
-fn record_judge_outcome(outcome: &Result<(), OutcomeErr>) {
-    match outcome {
-        Ok(()) => {
-            POLICY_CLIENT_METRICS.judge_decisions[&JudgeOutcome::Allow].inc();
-        }
-        Err(OutcomeErr::Denied) => {
-            POLICY_CLIENT_METRICS.judge_decisions[&JudgeOutcome::Deny].inc();
-        }
-        Err(reason) => {
-            if let Some(label) = reason.judge_label() {
-                POLICY_CLIENT_METRICS.judge_errors[&label].inc();
-            }
-        }
-    }
-}
-
-impl AnyTxValidator for PolicyClient {
+impl AnyTxValidator for PolicySession {
     fn as_evm(&mut self) -> Option<&mut impl TxValidator> {
         Some(self)
     }
 }
 
-impl TxValidator for PolicyClient {
+impl TxValidator for PolicySession {
     fn begin_tx(&mut self, ctx: &BeginTxContext<'_>) -> TxValidationResult {
-        let handle = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle,
-            Err(_) => {
-                tracing::error!("PolicyClient called outside a tokio runtime");
-                POLICY_CLIENT_METRICS.admit_errors[&AdmitErrorReason::NoRuntime].inc();
-                return Err(InvalidTransaction::FilteredByValidator);
-            }
-        };
         // Stash `from` so `finish_tx` can apply the same `bypass_from`
         // short-circuit.
         *self
             .pending_tx_from
             .lock()
             .expect("pending_tx_from mutex poisoned") = Some(ctx.from);
-        handle.block_on(self.admit(ctx, self.access_type))
+        tokio::runtime::Handle::current().block_on(self.admit(ctx))
     }
 
     fn finish_tx(&mut self) -> TxValidationResult {
@@ -329,75 +313,20 @@ impl TxValidator for PolicyClient {
             .lock()
             .expect("pending_tx_from mutex poisoned")
             .take();
-
-        let handle = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle,
-            Err(_) => {
-                tracing::error!("PolicyClient called outside a tokio runtime");
-                POLICY_CLIENT_METRICS.judge_errors[&JudgeErrorReason::NoRuntime].inc();
-                return Err(InvalidTransaction::FilteredByValidator);
-            }
-        };
-        handle.block_on(self.judge(from, frames, self.access_type))
+        tokio::runtime::Handle::current().block_on(self.judge(from, frames))
     }
 }
 
-/// Failure modes from a single HTTP call. `Denied` is counted as a
-/// decision; the rest land in the per-endpoint error metric.
-#[derive(Debug)]
-enum OutcomeErr {
-    Denied,
-    Timeout,
-    Connect,
-    Http,
-    Status,
-    MalformedResponse,
-    ProtocolVersionMismatch,
-}
-
-impl OutcomeErr {
-    fn admit_label(&self) -> Option<AdmitErrorReason> {
-        Some(match self {
-            Self::Denied => return None,
-            Self::Timeout => AdmitErrorReason::Timeout,
-            Self::Connect => AdmitErrorReason::Connect,
-            Self::Http => AdmitErrorReason::Http,
-            Self::Status => AdmitErrorReason::Status,
-            Self::MalformedResponse => AdmitErrorReason::MalformedResponse,
-            Self::ProtocolVersionMismatch => AdmitErrorReason::ProtocolVersionMismatch,
-        })
-    }
-
-    fn judge_label(&self) -> Option<JudgeErrorReason> {
-        Some(match self {
-            Self::Denied => return None,
-            Self::Timeout => JudgeErrorReason::Timeout,
-            Self::Connect => JudgeErrorReason::Connect,
-            Self::Http => JudgeErrorReason::Http,
-            Self::Status => JudgeErrorReason::Status,
-            Self::MalformedResponse => JudgeErrorReason::MalformedResponse,
-            Self::ProtocolVersionMismatch => JudgeErrorReason::ProtocolVersionMismatch,
-        })
-    }
-}
-
-fn classify_transport_error(err: &TransportError) -> OutcomeErr {
+fn classify_error(err: &TransportError) -> ErrorReason {
     match err {
-        TransportError::Timeout(_) => OutcomeErr::Timeout,
-        TransportError::Connect(_) => OutcomeErr::Connect,
-        TransportError::NonSuccessStatus(_) => OutcomeErr::Status,
+        TransportError::Timeout(_) => ErrorReason::Timeout,
+        TransportError::Connect(_) | TransportError::TlsConfig(_) => ErrorReason::Connect,
+        TransportError::NonSuccessStatus(_) => ErrorReason::Status,
         TransportError::Hyper(_)
         | TransportError::HttpClient(_)
-        | TransportError::BuildRequest(_) => OutcomeErr::Http,
-        // URL/TLS errors are construction-time and shouldn't reach here.
-        // Fold into `Connect` to stay fail-closed if config changed under us.
-        TransportError::InvalidUrl(_)
-        | TransportError::UnsupportedScheme(_)
-        | TransportError::MissingTls
-        | TransportError::UnexpectedTls
-        | TransportError::TlsRead { .. }
-        | TransportError::TlsParse { .. }
-        | TransportError::TlsConfig(_) => OutcomeErr::Connect,
+        | TransportError::BuildRequest(_) => ErrorReason::Http,
+        TransportError::MalformedResponse => ErrorReason::MalformedResponse,
+        TransportError::ProtocolVersionMismatch => ErrorReason::ProtocolVersionMismatch,
     }
 }
 
