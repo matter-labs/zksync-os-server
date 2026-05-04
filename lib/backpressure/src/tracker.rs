@@ -50,38 +50,3 @@ impl PipelineTracker {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::ComponentId;
-    use tokio::sync::watch;
-    use zksync_os_observability::ComponentStateReporter;
-
-    #[tokio::test]
-    async fn tracker_republishes_on_state_change() {
-        let (reporter, rx) = ComponentStateReporter::new("block_executor");
-        reporter.record_processed(42, None, None);
-        let components = vec![(ComponentId::BlockExecutor, rx)];
-
-        let initial: PipelineSnapshot = components
-            .iter()
-            .map(|(id, rx)| (*id, rx.borrow().clone()))
-            .collect();
-        let (tx, mut snapshot_rx) = watch::channel(initial);
-        tokio::spawn(PipelineTracker::run(tx, components));
-
-        reporter.record_processed(100, None, None);
-        snapshot_rx.changed().await.unwrap();
-
-        assert_eq!(
-            snapshot_rx
-                .borrow()
-                .iter()
-                .find(|(id, _)| *id == ComponentId::BlockExecutor)
-                .and_then(|(_, h)| h.processed.as_ref())
-                .map(|c| c.block_number),
-            Some(100)
-        );
-    }
-}

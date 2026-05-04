@@ -26,12 +26,6 @@ observability:
 sequencer:
   revm_consistency_checker_enabled: false
 
-backpressure:
-  fri_prover: 25
-  snark_prover: 25
-  l1_senders: 25
-  batch_verification: 25
-
 external_price_api_client:
   source: Forced
   forced_prices:

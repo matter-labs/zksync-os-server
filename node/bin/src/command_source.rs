@@ -46,6 +46,10 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 
     const COMPONENT_ID: zksync_os_pipeline::ComponentId =
         zksync_os_pipeline::ComponentId::ConsensusNodeCommandSource;
+    // Capacity 1 is intentional: the leader arm in run_loop emits Produce tokens inside
+    // tokio::select! on output.send(), firing whenever the channel has space. A larger buffer
+    // would let the leader queue multiple tokens ahead of execution. Capacity of 1 ensures
+    // at most one un-executed Produce command in flight, making the downstream consumer the pacer.
     const OUTPUT_CHANNEL_CAPACITY: usize = 1;
 
     async fn run(
