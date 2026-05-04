@@ -320,11 +320,15 @@ impl TxValidator for PolicySession {
 fn classify_error(err: &TransportError) -> ErrorReason {
     match err {
         TransportError::Timeout(_) => ErrorReason::Timeout,
-        TransportError::Connect(_) | TransportError::TlsConfig(_) => ErrorReason::Connect,
+        TransportError::TlsConfig(_) => ErrorReason::Connect,
         TransportError::NonSuccessStatus(_) => ErrorReason::Status,
-        TransportError::Hyper(_)
-        | TransportError::HttpClient(_)
-        | TransportError::BuildRequest(_) => ErrorReason::Http,
+        TransportError::Request(e) => {
+            if e.is_connect() {
+                ErrorReason::Connect
+            } else {
+                ErrorReason::Http
+            }
+        }
         TransportError::MalformedResponse => ErrorReason::MalformedResponse,
         TransportError::ProtocolVersionMismatch => ErrorReason::ProtocolVersionMismatch,
     }
