@@ -12,8 +12,19 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zksync_os_interface::traits::{PreimageSource, ReadStorage};
 
+/// Trait for providing storage and preimage overrides.
+/// Allows different implementations: owned HashMaps for RPC calls, or shared data for sequencer.
+/// Requires 'static because it's used in types that implement ReadStorage/PreimageSource.
+pub trait OverrideProvider: 'static {
+    /// Look up a storage override by key.
+    fn get_storage_override(&self, key: &B256) -> Option<B256>;
+
+    /// Look up a preimage override by hash.
+    fn get_preimage_override(&self, hash: &B256) -> Option<Vec<u8>>;
+}
+
 /// Owned HashMap-based override provider.
-/// Used for RPC calls with `StateOverride` and for in-memory block overlays.
+/// Used for RPC calls with StateOverride, where we own the override data.
 #[derive(Debug, Clone, Default)]
 pub struct OwnedOverrides {
     storage: HashMap<B256, B256>,
@@ -31,15 +42,14 @@ impl OwnedOverrides {
     }
 }
 
-/// Trait for providing storage and preimage overrides.
-/// Allows different implementations: owned HashMaps for RPC calls, or shared data for sequencer.
-/// Requires 'static because it's used in types that implement ReadStorage/PreimageSource.
-pub trait OverrideProvider: 'static {
-    /// Look up a storage override by key.
-    fn get_storage_override(&self, key: &B256) -> Option<B256>;
+impl OverrideProvider for OwnedOverrides {
+    fn get_storage_override(&self, key: &B256) -> Option<B256> {
+        self.storage.get(key).copied()
+    }
 
-    /// Look up a preimage override by hash.
-    fn get_preimage_override(&self, hash: &B256) -> Option<Vec<u8>>;
+    fn get_preimage_override(&self, hash: &B256) -> Option<Vec<u8>> {
+        self.preimages.get(hash).cloned()
+    }
 }
 
 impl<T: OverrideProvider> OverrideProvider for Arc<T> {
@@ -49,16 +59,6 @@ impl<T: OverrideProvider> OverrideProvider for Arc<T> {
 
     fn get_preimage_override(&self, hash: &B256) -> Option<Vec<u8>> {
         self.as_ref().get_preimage_override(hash)
-    }
-}
-
-impl OverrideProvider for OwnedOverrides {
-    fn get_storage_override(&self, key: &B256) -> Option<B256> {
-        self.storage.get(key).copied()
-    }
-
-    fn get_preimage_override(&self, hash: &B256) -> Option<Vec<u8>> {
-        self.preimages.get(hash).cloned()
     }
 }
 
@@ -115,7 +115,7 @@ impl<V: ViewState, O: OverrideProvider> PreimageSource for OverriddenStateView<V
     }
 }
 
-/// Converts RPC `StateOverride` into an owned override provider.
+/// Converts RPC `StateOverride` into an `OwnedOverrides` provider.
 pub fn build_state_override_maps<V: ViewState>(
     inner: &V,
     state_overrides: StateOverride,

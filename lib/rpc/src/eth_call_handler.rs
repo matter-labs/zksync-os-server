@@ -29,8 +29,8 @@ use zksync_os_interface::{
 use zksync_os_multivm::run_block;
 use zksync_os_rpc_api::types::ZkApiBlock;
 use zksync_os_storage_api::{
-    OwnedOverrides, RepositoryError, StateError, ViewState,
-    state_override_view::{OverriddenStateView, build_state_override_maps},
+    RepositoryError, StateError, ViewState,
+    state_override_view::{OverriddenStateView, OwnedOverrides, build_state_override_maps},
 };
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{

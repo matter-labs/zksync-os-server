@@ -8,7 +8,7 @@ use zksync_os_interface::types::StorageWrite;
 use crate::state_override_view::{OverrideProvider, OwnedOverrides};
 use crate::{OverriddenStateView, ReadStateHistory, ViewState};
 
-type BlockOverlay = OwnedOverrides;
+pub type BlockOverlay = OwnedOverrides;
 
 #[derive(Debug, Default, Clone)]
 pub struct OverlayBuffer {
@@ -28,7 +28,7 @@ impl OverlayBuffer {
         base: &'a S,
         block_number_to_execute: BlockNumber,
     ) -> anyhow::Result<
-        OverriddenStateView<impl ViewState + 'a, Arc<BTreeMap<BlockNumber, OwnedOverrides>>>,
+        OverriddenStateView<impl ViewState + 'a, Arc<BTreeMap<BlockNumber, BlockOverlay>>>,
     >
     where
         S: ReadStateHistory + 'a,

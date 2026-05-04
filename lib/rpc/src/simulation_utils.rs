@@ -12,7 +12,7 @@ use zksync_os_interface::types::{
     BlockContext, BlockOutput, ExecutionOutput, ExecutionResult, TxOutput,
 };
 use zksync_os_rpc_api::types::ZkApiBlock;
-use zksync_os_storage_api::OwnedOverrides;
+use zksync_os_storage_api::state_override_view::OwnedOverrides;
 use zksync_os_types::{ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
 
 #[derive(Debug)]
