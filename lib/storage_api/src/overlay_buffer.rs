@@ -14,6 +14,13 @@ pub struct BlockOverlay {
     pub preimages: HashMap<B256, Vec<u8>>,
 }
 
+impl BlockOverlay {
+    pub fn extend(&mut self, changes: Self) {
+        self.storage_writes.extend(changes.storage_writes);
+        self.preimages.extend(changes.preimages);
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct OverlayBuffer {
     overlays: Arc<BTreeMap<BlockNumber, BlockOverlay>>,
@@ -143,9 +150,9 @@ impl OverlayBuffer {
     }
 }
 
-/// Implement OverrideProvider directly on Arc<BTreeMap<BlockNumber, BlockOverlay>>.
+/// Implement OverrideProvider directly on BTreeMap<BlockNumber, BlockOverlay>.
 /// Searches through overlays in reverse order (most recent first) with O(1) HashMap lookups per block
-impl OverrideProvider for Arc<BTreeMap<BlockNumber, BlockOverlay>> {
+impl OverrideProvider for BTreeMap<BlockNumber, BlockOverlay> {
     fn get_storage_override(&self, key: &B256) -> Option<B256> {
         for (_, overlay) in self.iter().rev() {
             if let Some(&value) = overlay.storage_writes.get(key) {

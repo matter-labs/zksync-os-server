@@ -51,6 +51,19 @@ pub struct L2ToL1Log {
     pub value: B256,
 }
 
+impl From<zksync_os_interface::types::L2ToL1Log> for L2ToL1Log {
+    fn from(log: zksync_os_interface::types::L2ToL1Log) -> Self {
+        Self {
+            l2_shard_id: log.l2_shard_id,
+            is_service: log.is_service,
+            tx_number_in_block: log.tx_number_in_block,
+            sender: log.sender,
+            key: log.key,
+            value: log.value,
+        }
+    }
+}
+
 impl L2ToL1Log {
     ///
     /// Encode L2 to l1 log using solidity abi packed encoding.

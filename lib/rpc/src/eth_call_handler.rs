@@ -446,23 +446,24 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         opts: SimulatePayload,
         block: Option<BlockId>,
     ) -> Result<Vec<SimulatedBlock<ZkApiBlock>>, EthCallError> {
-        if opts.block_state_calls.is_empty() {
-            return Err(EthCallError::SimulateInvalidParams(
-                "calls are empty".to_string(),
-            ));
-        }
-        if opts.block_state_calls.len() > MAX_SIMULATE_BLOCKS as usize {
-            return Err(EthCallError::SimulateInvalidParams(
-                "too many blocks".to_string(),
-            ));
-        }
-
         let SimulatePayload {
             block_state_calls,
             trace_transfers,
             validation,
             return_full_transactions,
         } = opts;
+
+        if block_state_calls.is_empty() {
+            return Err(EthCallError::SimulateInvalidParams(
+                "calls are empty".to_string(),
+            ));
+        }
+        if block_state_calls.len() > MAX_SIMULATE_BLOCKS as usize {
+            return Err(EthCallError::SimulateInvalidParams(
+                "too many blocks".to_string(),
+            ));
+        }
+
         if trace_transfers {
             // Reth implements this with `TransferInspector`, which records all native value moves,
             // including internal CALL/CREATE/SELFDESTRUCT. The ZKsync OS VM path used here does not
@@ -475,11 +476,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
         let SimulationStartContext {
             mut block_context,
-            base_state_block,
             parent_block_number,
             parent_timestamp,
         } = self.resolve_simulation_start_context(block)?;
-        let base_state = self.storage.state_view_at(base_state_block)?;
+        let base_state = self.storage.state_view_at(parent_block_number)?;
         let mut overlays = Arc::new(BTreeMap::new());
         let mut simulated_blocks = Vec::with_capacity(block_state_calls.len());
         let mut previous_block_number = parent_block_number;
@@ -544,11 +544,14 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             let mut overlay = state_override_overlay;
             // State overrides seed this simulated block; actual VM writes take precedence for
             // subsequent simulated blocks.
-            overlay
-                .storage_writes
-                .extend(simulated_block.overlay.storage_writes);
-            overlay.preimages.extend(simulated_block.overlay.preimages);
-            Arc::make_mut(&mut overlays).insert(block_context.block_number, overlay);
+            overlay.extend(simulated_block.overlay);
+            Arc::get_mut(&mut overlays)
+                .ok_or_else(|| {
+                    EthCallError::ForwardSubsystemError(anyhow::anyhow!(
+                        "simulation overlay still borrowed during mutation"
+                    ))
+                })?
+                .insert(block_context.block_number, overlay);
             previous_block_number = block_context.block_number;
             previous_timestamp = block_context.timestamp;
             simulated_blocks.push(SimulatedBlock {
@@ -604,15 +607,15 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 .ok_or(RpcStorageError::BlockNotFound(block))?;
             return Ok(SimulationStartContext {
                 block_context: self.build_pending_block_context(),
-                base_state_block: parent_block,
                 parent_block_number: parent_block,
                 parent_timestamp: parent_context.timestamp,
             });
         }
 
-        let Some(parent_block) = self.storage.resolve_block_number(block)? else {
-            return Err(RpcStorageError::BlockNotFound(block).into());
-        };
+        let parent_block = self
+            .storage
+            .resolve_block_number(block)?
+            .ok_or(RpcStorageError::BlockNotFound(block))?;
         let parent_context = self
             .storage
             .replay_storage()
@@ -626,15 +629,14 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
         Ok(SimulationStartContext {
             block_context,
-            base_state_block: parent_block,
             parent_block_number: parent_block,
             parent_timestamp: parent_context.timestamp,
         })
     }
 
-    fn create_simulation_txs<V: ViewState + Clone>(
+    fn create_simulation_txs<V: ViewState>(
         &self,
-        mut calls: Vec<TransactionRequest>,
+        calls: Vec<TransactionRequest>,
         block_context: BlockContext,
         mut state_view: V,
     ) -> Result<Vec<ZkTransaction>, EthCallError> {
@@ -646,43 +648,41 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let mut next_nonces = HashMap::new();
 
         calls
-            .iter_mut()
-            .map(|request| {
+            .into_iter()
+            .map(|mut request| {
                 if request.gas.is_none() {
                     request.set_gas_limit(default_gas_limit);
                 }
 
                 let from = request.from.unwrap_or_default();
-                if request.nonce.is_none() {
-                    let nonce = *next_nonces.entry(from).or_insert_with(|| {
-                        state_view
-                            .get_account(from)
-                            .as_ref()
-                            .map(get_nonce)
-                            .unwrap_or_default()
-                    });
+                let state_nonce = next_nonces.entry(from).or_insert_with(|| {
+                    state_view
+                        .get_account(from)
+                        .as_ref()
+                        .map(get_nonce)
+                        .unwrap_or_default()
+                });
+                if let Some(nonce) = request.nonce {
+                    if nonce >= *state_nonce {
+                        *state_nonce =
+                            nonce
+                                .checked_add(1)
+                                .ok_or(EthCallError::SimulateInvalidParams(
+                                    "nonce has max value".to_string(),
+                                ))?;
+                    }
+                } else {
+                    let nonce = *state_nonce;
                     request.set_nonce(nonce);
-                    let next_nonce =
+                    *state_nonce =
                         nonce
                             .checked_add(1)
                             .ok_or(EthCallError::SimulateInvalidParams(
                                 "nonce has max value".to_string(),
                             ))?;
-                    next_nonces.insert(from, next_nonce);
-                } else if let Some(nonce) = request.nonce {
-                    let state_nonce = next_nonces.entry(from).or_insert_with(|| {
-                        state_view
-                            .get_account(from)
-                            .as_ref()
-                            .map(get_nonce)
-                            .unwrap_or_default()
-                    });
-                    if nonce >= *state_nonce {
-                        *state_nonce = nonce.saturating_add(1);
-                    }
                 }
 
-                self.create_tx_from_request(request.clone(), &block_context, false)
+                self.create_tx_from_request(request, &block_context, false)
             })
             .collect()
     }
@@ -928,7 +928,6 @@ where
 #[derive(Debug)]
 struct SimulationStartContext {
     block_context: BlockContext,
-    base_state_block: u64,
     parent_block_number: u64,
     parent_timestamp: u64,
 }
@@ -956,10 +955,8 @@ fn build_simulated_block_response(
         header: sealed_header,
         tx_results,
         storage_writes,
-        account_diffs: _,
         published_preimages,
-        pubdata: _,
-        computational_native_used: _,
+        ..
     } = block_output;
 
     let mut block_bloom = Bloom::default();
@@ -969,7 +966,7 @@ fn build_simulated_block_response(
     let mut simulated_txs = Vec::with_capacity(tx_results.len());
     let mut executed_tx_index = 0;
 
-    for (call_index, (tx, result)) in txs.into_iter().zip(tx_results.into_iter()).enumerate() {
+    for (call_index, (tx, result)) in txs.into_iter().zip(tx_results).enumerate() {
         let simulated_tx = match result {
             Ok(tx_output) => {
                 let receipt = build_simulated_receipt(&tx, &tx_output, cumulative_gas_used);
@@ -1003,13 +1000,12 @@ fn build_simulated_block_response(
     header.base_fee_per_gas = Some(block_context.eip1559_basefee.saturating_to());
     header.logs_bloom = block_bloom;
     header.gas_used = cumulative_gas_used;
-    header.transactions_root = calculate_transaction_root(
-        &simulated_txs
-            .iter()
-            .filter(|tx| tx.is_executed())
-            .map(|tx| tx.tx.envelope().clone())
-            .collect::<Vec<_>>(),
-    );
+    let executed_envelopes = simulated_txs
+        .iter()
+        .filter(|tx| tx.is_executed())
+        .map(|tx| tx.tx.envelope())
+        .collect::<Vec<_>>();
+    header.transactions_root = calculate_transaction_root(&executed_envelopes);
     header.receipts_root = calculate_receipt_root(&receipts);
     if let Some(difficulty) = header_overrides.difficulty {
         header.difficulty = difficulty;
@@ -1061,14 +1057,7 @@ fn build_simulated_receipt(
     let l2_to_l1_logs = tx_output
         .l2_to_l1_logs
         .iter()
-        .map(|l2_to_l1_log| zksync_os_types::L2ToL1Log {
-            l2_shard_id: l2_to_l1_log.log.l2_shard_id,
-            is_service: l2_to_l1_log.log.is_service,
-            tx_number_in_block: l2_to_l1_log.log.tx_number_in_block,
-            sender: l2_to_l1_log.log.sender,
-            key: l2_to_l1_log.log.key,
-            value: l2_to_l1_log.log.value,
-        })
+        .map(|l2_to_l1_log| l2_to_l1_log.log.clone().into())
         .collect();
 
     ZkReceiptEnvelope::from_typed(
@@ -1254,13 +1243,13 @@ impl SimulatedTx {
                         | ExecutionOutput::Create(return_bytes, _),
                     ) => (Bytes::from(return_bytes.clone()), true, None),
                     ExecutionResult::Revert(return_bytes) => {
-                        let revert = RevertError::new(Bytes::from(return_bytes.clone()));
+                        let return_data = Bytes::from(return_bytes.clone());
                         (
-                            Bytes::from(return_bytes.clone()),
+                            return_data.clone(),
                             false,
                             Some(SimulateError {
                                 code: -32000,
-                                message: revert.to_string(),
+                                message: RevertError::new(return_data).to_string(),
                             }),
                         )
                     }
@@ -1294,7 +1283,7 @@ impl SimulatedTx {
     ) -> zksync_os_rpc_api::types::ZkApiTransaction {
         build_api_tx(
             self.tx.clone(),
-            Some(&self.tx_meta(block_hash, block_context, 0)),
+            Some(&self.tx_meta(block_hash, block_context, self.gas_used())),
         )
     }
 
@@ -1305,11 +1294,7 @@ impl SimulatedTx {
         receipt: &ZkReceiptEnvelope,
     ) -> Vec<alloy::rpc::types::Log> {
         let tx_hash = *self.tx.hash();
-        let gas_used = match &self.result {
-            SimulatedTxResult::Executed { output, .. } => output.gas_used,
-            SimulatedTxResult::Invalid(_) => 0,
-        };
-        let meta = self.tx_meta(block_hash, block_context, gas_used);
+        let meta = self.tx_meta(block_hash, block_context, self.gas_used());
         receipt
             .logs()
             .iter()
@@ -1341,6 +1326,13 @@ impl SimulatedTx {
                 SimulatedTxResult::Executed { output, .. } => output.contract_address,
                 SimulatedTxResult::Invalid(_) => None,
             },
+        }
+    }
+
+    fn gas_used(&self) -> u64 {
+        match &self.result {
+            SimulatedTxResult::Executed { output, .. } => output.gas_used,
+            SimulatedTxResult::Invalid(_) => 0,
         }
     }
 }
