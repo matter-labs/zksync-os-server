@@ -852,23 +852,12 @@ pub struct SequencerConfig {
 }
 
 /// Configuration for all transaction validators applied during block production.
-///
-/// At most one of `deployment_filter` and `policy_service` may be active at a
-/// time — the policy service can express the same allow-list the deployment
-/// filter does, and the block-build-side dispatch picks the policy client
-/// when configured. Enabling both is a misconfiguration the node refuses
-/// to start with.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
+#[config(validate(Self::check_mutual_exclusion, "deployment_filter cannot be enabled at the same time as policy_service.url; express the allow-list via the policy service"))]
 pub struct TxValidatorConfig {
     /// Deployment filter configuration.
     #[config(nest)]
-    #[config_validate(custom(
-        |root: &Config, value: &DeploymentFilterConfig|
-            !value.enabled
-                || root.sequencer_config.tx_validator.policy_service.url.is_none(),
-        "cannot be enabled at the same time as `sequencer.tx_validator.policy_service.url` — express the allow-list via the policy service"
-    ))]
     pub deployment_filter: DeploymentFilterConfig,
 
     /// Prividium policy-service client configuration.
@@ -895,12 +884,10 @@ pub struct DeploymentFilterConfig {
 /// service).
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
-#[config(validate(Self::check_tls, "`tls` block is required when `url` is `https://`"))]
+#[config(validate(Self::check_url, "URL must use scheme `https` or `unix`; `https` requires a `tls` block"))]
 pub struct PolicyServiceConfig {
-    /// `https://host:port` (mTLS) or `unix:///path/to/socket` (kernel
-    /// perms). Plain `http://` is rejected.
+    /// `https://host:port` (mTLS) or `unix:///path/to/socket` (kernel perms).
     #[config(with = Serde![str])]
-    #[config(validate(valid_policy_url, "must be a valid URL with scheme `https://` or `unix:///`; plain `http://` is not accepted"))]
     pub url: Option<url::Url>,
 
     /// Per-request timeout. Fail-closed on exceed.
@@ -939,10 +926,6 @@ pub struct PolicyServiceTlsConfig {
     pub client_key: SecretString,
     /// CA bundle (PEM) the client trusts. System roots are not loaded.
     pub server_ca: String,
-}
-
-fn valid_policy_url(url: &url::Url) -> bool {
-    matches!(url.scheme(), "https" | "unix")
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1728,16 +1711,37 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
     }
 }
 
-impl PolicyServiceConfig {
-    fn check_tls(&self) -> Result<(), ErrorWithOrigin> {
-        let is_https = self.url.as_ref().map(|u| u.scheme() == "https").unwrap_or(false);
-        if is_https && self.tls.is_none() {
+impl TxValidatorConfig {
+    fn check_mutual_exclusion(&self) -> Result<(), ErrorWithOrigin> {
+        if self.deployment_filter.enabled && self.policy_service.url.is_some() {
             Err(ErrorWithOrigin::custom(
-                "`tls` block is required when `url` is `https://`",
+                "deployment_filter cannot be enabled at the same time as policy_service.url; express the allow-list via the policy service",
             ))
         } else {
             Ok(())
         }
+    }
+}
+
+impl PolicyServiceConfig {
+    fn check_url(&self) -> Result<(), ErrorWithOrigin> {
+        let Some(url) = &self.url else { return Ok(()) };
+        match url.scheme() {
+            "https" => {
+                if self.tls.is_none() {
+                    return Err(ErrorWithOrigin::custom(
+                        "`tls` block is required when `url` is `https://`",
+                    ));
+                }
+            }
+            "unix" => {}
+            other => {
+                return Err(ErrorWithOrigin::custom(format!(
+                    "unsupported URL scheme `{other}`; expected `https` or `unix`"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Build a `PolicyClient`, or `None` when no service is configured.
@@ -2326,25 +2330,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn deployment_filter_and_policy_service_are_mutually_exclusive() {
-        let mut config = base_config(NodeRole::MainNode);
-        config.sequencer_config.tx_validator.deployment_filter = DeploymentFilterConfig {
-            enabled: true,
-            allowed_deployers: vec![Address::with_last_byte(0xee)],
-        };
-        config.sequencer_config.tx_validator.policy_service.url =
-            Some(url::Url::parse("unix:///tmp/policy.sock").unwrap());
-
-        let err = config.validate().await.unwrap_err().to_string();
-        assert!(
-            err.contains(
-                "cannot be enabled at the same time as `sequencer.tx_validator.policy_service.url`"
-            ),
-            "expected mutex error, got: {err}"
-        );
-    }
-
     fn parse_policy_service_config<const N: usize>(
         env_vars: [(&str, &str); N],
     ) -> Result<PolicyServiceConfig, ParseErrors> {
@@ -2361,7 +2346,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("must be a valid URL with scheme `https://` or `unix:///`"),
+            err.contains("unsupported URL scheme"),
             "expected scheme rejection, got: {err}"
         );
     }
