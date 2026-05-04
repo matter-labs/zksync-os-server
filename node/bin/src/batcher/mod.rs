@@ -387,6 +387,8 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 "Adding block to recreated batch"
             );
 
+            // Mirrors the record_picked call in create_batch; needed here too because
+            // recreate_existing_batch is a separate code path for already-committed batches.
             state_reporter.record_picked(
                 replay_record.block_context.block_number,
                 Some(replay_record.block_context.timestamp),

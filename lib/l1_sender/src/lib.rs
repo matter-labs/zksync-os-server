@@ -351,7 +351,7 @@ where
 {
     state_reporter.enter_state(L1SenderState::WaitingL1Inclusion);
 
-    let completed_commands: Vec<Input> = match async {
+    let completed_commands: Vec<Input> = async {
         let mut completed = Vec::with_capacity(pending_txs.len());
         for (receipt_fut, command, submitted_at) in pending_txs.into_iter() {
             let receipt = receipt_fut.await;
@@ -364,13 +364,7 @@ where
         }
         anyhow::Ok(completed)
     }
-    .await
-    {
-        Ok(cmds) => cmds,
-        Err(e) => {
-            return Err(e);
-        }
-    };
+    .await?;
 
     let range = Input::display_range(&completed_commands);
     let balance = format_ether(provider.get_balance(operator_address).await?);
