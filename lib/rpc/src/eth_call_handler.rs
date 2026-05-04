@@ -19,11 +19,14 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zk_os_api::helpers::{get_balance, get_nonce};
+use zksync_os_interface::tracing::{NopTracer, NopValidator};
+use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
 use zksync_os_interface::types::{BlockHashes, ExecutionOutput};
 use zksync_os_interface::{
     error::InvalidTransaction,
     types::{BlockContext, ExecutionResult},
 };
+use zksync_os_multivm::run_block;
 use zksync_os_rpc_api::types::ZkApiBlock;
 use zksync_os_storage_api::{
     BlockOverlay, RepositoryError, StateError, ViewState,
@@ -771,15 +774,14 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
         for sim_block in block_state_calls {
             block_context.mix_hash = U256::ZERO;
-            let header_overrides = match sim_block.block_overrides {
-                Some(block_overrides) => simulation_utils::apply_simulate_block_overrides(
+            if let Some(block_overrides) = sim_block.block_overrides {
+                simulation_utils::apply_simulate_block_overrides(
                     &mut block_context,
                     block_overrides,
                     previous_block_number,
                     previous_timestamp,
-                )?,
-                None => simulation_utils::SimulateHeaderOverrides::default(),
-            };
+                )?;
+            }
 
             // `validation=false` disables fee validation for execution, but the returned block
             // still reports the requested/header-overridden base fee.
@@ -806,12 +808,22 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 execution_context,
                 overridden_view.clone(),
             )?;
-            let block_output =
-                simulation_utils::run_simulation_block(execution_context, overridden_view, &txs)?;
+            let tx_source = TxListSource {
+                transactions: txs.iter().cloned().map(|tx| tx.encode()).collect(),
+            };
+            let block_output = run_block(
+                execution_context,
+                overridden_view.clone(),
+                overridden_view,
+                tx_source,
+                NoopTxCallback,
+                &mut NopTracer,
+                &mut NopValidator,
+            )
+            .map_err(EthCallError::ForwardSubsystemError)?;
 
             let simulated_block = simulation_utils::build_simulated_block_response(
                 response_context,
-                header_overrides,
                 txs,
                 block_output,
                 return_full_transactions,

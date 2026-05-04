@@ -10,39 +10,12 @@ use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use std::collections::HashSet;
 use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::tracing::{NopTracer, NopValidator};
-use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
 use zksync_os_interface::types::{
     BlockContext, BlockOutput, ExecutionOutput, ExecutionResult, TxOutput,
 };
-use zksync_os_multivm::run_block;
 use zksync_os_rpc_api::types::ZkApiBlock;
-use zksync_os_storage_api::{BlockOverlay, ViewState};
-use zksync_os_types::{ZkReceipt, ZkReceiptEnvelope, ZkTransaction, ZksyncOsEncode};
-
-pub(super) fn run_simulation_block<State>(
-    block_context: BlockContext,
-    state_view: State,
-    txs: &[ZkTransaction],
-) -> Result<BlockOutput, EthCallError>
-where
-    State: ViewState,
-{
-    let tx_source = TxListSource {
-        transactions: txs.iter().cloned().map(|tx| tx.encode()).collect(),
-    };
-
-    run_block(
-        block_context,
-        state_view.clone(),
-        state_view,
-        tx_source,
-        NoopTxCallback,
-        &mut NopTracer,
-        &mut NopValidator,
-    )
-    .map_err(EthCallError::ForwardSubsystemError)
-}
+use zksync_os_storage_api::BlockOverlay;
+use zksync_os_types::{ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
 
 #[derive(Debug)]
 pub(super) struct SimulationStartContext {
@@ -57,14 +30,8 @@ pub(super) struct SimulatedBlockResponse {
     pub(super) overlay: BlockOverlay,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub(super) struct SimulateHeaderOverrides {
-    pub(super) difficulty: Option<U256>,
-}
-
 pub(super) fn build_simulated_block_response(
     block_context: BlockContext,
-    header_overrides: SimulateHeaderOverrides,
     txs: Vec<ZkTransaction>,
     block_output: BlockOutput,
     return_full_transactions: bool,
@@ -125,9 +92,6 @@ pub(super) fn build_simulated_block_response(
         .collect::<Vec<_>>();
     header.transactions_root = calculate_transaction_root(&executed_envelopes);
     header.receipts_root = calculate_receipt_root(&receipts);
-    if let Some(difficulty) = header_overrides.difficulty {
-        header.difficulty = difficulty;
-    }
 
     let header = alloy::rpc::types::Header::new(header);
     let block_hash = header.hash;
@@ -205,9 +169,7 @@ pub(super) fn apply_simulate_block_overrides(
     overrides: BlockOverrides,
     previous_block_number: u64,
     previous_timestamp: u64,
-) -> Result<SimulateHeaderOverrides, EthCallError> {
-    let mut header_overrides = SimulateHeaderOverrides::default();
-
+) -> Result<(), EthCallError> {
     if let Some(number) = overrides.number {
         let number = u64::try_from(number)
             .map_err(|_| EthCallError::SimulateInvalidBlockOverride("number"))?;
@@ -256,9 +218,8 @@ pub(super) fn apply_simulate_block_overrides(
     if let Some(blob_base_fee) = overrides.blob_base_fee {
         block_context.blob_fee = blob_base_fee;
     }
-    if let Some(difficulty) = overrides.difficulty {
-        header_overrides.difficulty = Some(difficulty);
-    }
+    // TODO: difficulty override is not propagated to BlockContext (ZKsync OS uses mix_hash
+    // for prevrandao), so it is silently ignored.
     if let Some(block_hash_overrides) = overrides.block_hash {
         for (block_number, block_hash) in block_hash_overrides {
             if block_number >= block_context.block_number {
@@ -274,7 +235,7 @@ pub(super) fn apply_simulate_block_overrides(
         }
     }
 
-    Ok(header_overrides)
+    Ok(())
 }
 
 pub(super) fn validate_state_overrides_for_simulate(
