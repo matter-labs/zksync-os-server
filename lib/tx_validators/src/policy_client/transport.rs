@@ -18,8 +18,7 @@ use super::TlsConfig;
 
 /// Errors raised by the transport layer at request time. All of these are
 /// treated as fail-closed by `PolicyClient`; the caller never branches on the
-/// variant. Construction-time errors (bad URL, unsupported scheme, missing TLS)
-/// are reported as `BuildError` instead.
+/// variant.
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("invalid TLS config: {0}")]

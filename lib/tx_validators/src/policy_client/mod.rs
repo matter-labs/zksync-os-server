@@ -6,9 +6,11 @@ mod metrics;
 mod tracer;
 mod transport;
 mod wire;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alloy::primitives::Address;
@@ -65,58 +67,45 @@ pub struct TlsConfig {
     pub server_ca: String,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum BuildError {
-    #[error("invalid URL: {0}")]
-    InvalidUrl(String),
-    #[error("unsupported URL scheme `{0}` (expected `https` or `unix`)")]
-    UnsupportedScheme(String),
-    #[error("missing TLS config: https URLs require client_cert/client_key/server_ca")]
-    MissingTls,
-    #[error("unix URL missing socket path")]
-    MissingSocketPath,
-    #[error(transparent)]
-    Transport(#[from] TransportError),
-}
 
-/// Call [`Self::session`] to get a per-transaction [`PolicySession`].
-#[derive(Clone, Debug)]
-pub struct PolicyClient {
+#[derive(Debug)]
+struct PolicyClientInner {
     transport: Transport,
     request_timeout: Duration,
     protocol_version: String,
     expected_protocol_version: Option<String>,
-    bypass_from: Arc<HashSet<Address>>,
+    bypass_from: HashSet<Address>,
 }
 
+/// Call [`Self::session`] to get a per-transaction [`PolicySession`].
+#[derive(Clone, Debug)]
+pub struct PolicyClient(Arc<PolicyClientInner>);
+
 impl PolicyClient {
-    pub fn new(config: Config) -> Result<Self, BuildError> {
+    pub fn new(config: Config) -> anyhow::Result<Self> {
         let parsed = url::Url::parse(&config.url)
-            .map_err(|e| BuildError::InvalidUrl(e.to_string()))?;
+            .map_err(|e| anyhow::anyhow!("invalid policy service URL: {e}"))?;
         let transport_config = match parsed.scheme() {
-            "https" => {
-                let tls = config.tls.ok_or(BuildError::MissingTls)?;
-                TransportConfig::Https { url: parsed, tls }
-            }
-            "unix" => {
-                let socket_path = parsed.path();
-                if socket_path.is_empty() {
-                    return Err(BuildError::MissingSocketPath);
-                }
-                TransportConfig::Unix {
-                    socket_path: std::path::PathBuf::from(socket_path),
-                }
-            }
-            other => return Err(BuildError::UnsupportedScheme(other.to_string())),
+            "https" => TransportConfig::Https {
+                url: parsed,
+                tls: config
+                    .tls
+                    .ok_or_else(|| anyhow::anyhow!("TLS config required for https://"))?,
+            },
+            "unix" => TransportConfig::Unix {
+                socket_path: std::path::PathBuf::from(parsed.path()),
+            },
+            other => anyhow::bail!("unsupported URL scheme `{other}` (expected `https` or `unix`)"),
         };
-        let transport = Transport::from_config(transport_config)?;
-        Ok(Self {
+        let transport = Transport::from_config(transport_config)
+            .map_err(|e| anyhow::anyhow!("failed to build TLS transport: {e}"))?;
+        Ok(Self(Arc::new(PolicyClientInner {
             transport,
             request_timeout: config.request_timeout,
             protocol_version: config.protocol_version,
             expected_protocol_version: config.expected_protocol_version,
-            bypass_from: Arc::new(config.bypass_from),
-        })
+            bypass_from: config.bypass_from,
+        })))
     }
 
     /// Creates a per-transaction [`PolicySession`] with its own trace slot
@@ -125,9 +114,9 @@ impl PolicyClient {
     /// each other's captured frames.
     pub fn session(&self, access_type: AccessType) -> PolicySession {
         PolicySession {
-            client: self.clone(),
+            client: Arc::clone(&self.0),
             slot: tracer::new_slot(),
-            pending_tx_from: Arc::new(Mutex::new(None)),
+            pending_tx_from: None,
             access_type,
         }
     }
@@ -136,9 +125,9 @@ impl PolicyClient {
 /// Per-transaction state: trace slot, pending sender, and caller intent.
 /// Implements [`TxValidator`] for both block-build and RPC simulation paths.
 pub struct PolicySession {
-    client: PolicyClient,
+    client: Arc<PolicyClientInner>,
     slot: TraceSlot,
-    pending_tx_from: Arc<Mutex<Option<Address>>>,
+    pending_tx_from: Option<Address>,
     access_type: AccessType,
 }
 
@@ -275,10 +264,7 @@ impl TxValidator for PolicySession {
     fn begin_tx(&mut self, ctx: &BeginTxContext<'_>) -> TxValidationResult {
         // Stash `from` so `finish_tx` can apply the same `bypass_from`
         // short-circuit.
-        *self
-            .pending_tx_from
-            .lock()
-            .expect("pending_tx_from mutex poisoned") = Some(ctx.from);
+        self.pending_tx_from = Some(ctx.from);
         tokio::runtime::Handle::current().block_on(self.admit(ctx))
     }
 
@@ -288,11 +274,7 @@ impl TxValidator for PolicySession {
             .lock()
             .expect("policy tracer slot mutex poisoned")
             .take_frames();
-        let from = self
-            .pending_tx_from
-            .lock()
-            .expect("pending_tx_from mutex poisoned")
-            .take();
+        let from = self.pending_tx_from.take();
         tokio::runtime::Handle::current().block_on(self.judge(from, frames))
     }
 }
@@ -313,6 +295,3 @@ fn classify_error(err: &TransportError) -> ErrorReason {
         TransportError::ProtocolVersionMismatch => ErrorReason::ProtocolVersionMismatch,
     }
 }
-
-#[cfg(test)]
-mod tests;
