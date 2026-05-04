@@ -5,7 +5,7 @@ use alloy::consensus::Transaction as _;
 use alloy::consensus::proofs::{calculate_receipt_root, calculate_transaction_root};
 use alloy::network::primitives::BlockTransactions;
 use alloy::primitives::{B256, Bloom, Bytes, U256};
-use alloy::rpc::types::simulate::{SimCallResult, SimulateError};
+use alloy::rpc::types::simulate::{SimCallResult, SimulateError, SimulatedBlock};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::{
@@ -22,18 +22,12 @@ pub(super) struct SimulationStartContext {
     pub(super) parent_timestamp: u64,
 }
 
-pub(super) struct SimulatedBlockResponse {
-    pub(super) inner: ZkApiBlock,
-    pub(super) calls: Vec<SimCallResult>,
-    pub(super) overlay: OwnedOverrides,
-}
-
 pub(super) fn build_simulated_block_response(
     block_context: BlockContext,
     txs: Vec<ZkTransaction>,
     block_output: BlockOutput,
     return_full_transactions: bool,
-) -> Result<SimulatedBlockResponse, EthCallError> {
+) -> Result<(SimulatedBlock<ZkApiBlock>, OwnedOverrides), EthCallError> {
     let BlockOutput {
         header: sealed_header,
         tx_results,
@@ -116,17 +110,16 @@ pub(super) fn build_simulated_block_response(
     };
     let inner = ZkApiBlock::new(header, transactions);
 
-    Ok(SimulatedBlockResponse {
-        inner,
-        calls,
-        overlay: OwnedOverrides::new(
+    Ok((
+        SimulatedBlock { inner, calls },
+        OwnedOverrides::new(
             storage_writes
                 .into_iter()
                 .map(|write| (write.key, write.value))
                 .collect(),
             published_preimages.into_iter().collect(),
         ),
-    })
+    ))
 }
 
 fn build_simulated_receipt(

@@ -827,7 +827,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             )
             .map_err(EthCallError::ForwardSubsystemError)?;
 
-            let simulated_block = simulation_utils::build_simulated_block_response(
+            let (simulated_block, block_overlay) = simulation_utils::build_simulated_block_response(
                 response_context,
                 txs,
                 block_output,
@@ -838,7 +838,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             let mut overlay = state_overrides;
             // State overrides seed this simulated block; actual VM writes take precedence for
             // subsequent simulated blocks.
-            overlay.extend(simulated_block.overlay);
+            overlay.extend(block_overlay);
             Arc::get_mut(&mut overlays)
                 .ok_or_else(|| {
                     EthCallError::ForwardSubsystemError(anyhow::anyhow!(
@@ -848,10 +848,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 .insert(block_context.block_number, overlay);
             previous_block_number = block_context.block_number;
             previous_timestamp = block_context.timestamp;
-            simulated_blocks.push(SimulatedBlock {
-                inner: simulated_block.inner,
-                calls: simulated_block.calls,
-            });
+            simulated_blocks.push(simulated_block);
 
             block_context = simulation_utils::next_block_context(block_context, next_hash);
         }
