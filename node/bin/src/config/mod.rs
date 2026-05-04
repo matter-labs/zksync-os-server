@@ -767,21 +767,9 @@ pub struct L1SenderConfig {
     #[config(default_t = 2 * EtherUnit::Gwei)]
     pub max_fee_per_blob_gas: EtherAmount,
 
-    /// Multiplier applied to `max_fee_per_gas` when `force_transaction_resubmission` is enabled.
-    #[config(default_t = 1.0)]
-    pub max_fee_per_gas_replacement_multiplier: f64,
-
-    /// Multiplier applied to `max_priority_fee_per_gas` when `force_transaction_resubmission` is enabled.
-    #[config(default_t = 1.0)]
-    pub max_priority_fee_per_gas_replacement_multiplier: f64,
-
-    /// Multiplier applied to `max_fee_per_blob_gas` when `force_transaction_resubmission` is enabled.
-    #[config(default_t = 1.0)]
-    pub max_fee_per_blob_gas_replacement_multiplier: f64,
-
-    /// Skips startup in-flight recovery and resubmits queued L1 transactions with replacement fee caps.
-    #[config(default_t = false)]
-    pub force_transaction_resubmission: bool,
+    /// Force transaction resubmission options.
+    #[config(nest, default)]
+    pub force_transaction_resubmission: ForceTransactionResubmissionConfig,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
@@ -817,6 +805,29 @@ pub struct L1SenderConfig {
     #[config_validate(required_if = NodeRole::MainNode)]
     #[config(with = Serde![str])]
     pub pubdata_mode: Option<PubdataMode>,
+}
+
+#[derive(Clone, Copy, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+pub struct ForceTransactionResubmissionConfig {
+    /// Skips startup in-flight recovery and resubmits queued L1 transactions with replacement fee caps.
+    #[config(default_t = false)]
+    pub enabled: bool,
+
+    /// Multiplier applied to `max_fee_per_gas` when force transaction resubmission is enabled.
+    #[config(default_t = 1.0)]
+    #[config_validate(custom(|_: &Config, value: &f64| value.is_sign_positive(), "must be positive"))]
+    pub max_fee_per_gas_replacement_multiplier: f64,
+
+    /// Multiplier applied to `max_priority_fee_per_gas` when force transaction resubmission is enabled.
+    #[config(default_t = 1.0)]
+    #[config_validate(custom(|_: &Config, value: &f64| value.is_sign_positive(), "must be positive"))]
+    pub max_priority_fee_per_gas_replacement_multiplier: f64,
+
+    /// Multiplier applied to `max_fee_per_blob_gas` when force transaction resubmission is enabled.
+    #[config(default_t = 1.0)]
+    #[config_validate(custom(|_: &Config, value: &f64| value.is_sign_positive(), "must be positive"))]
+    pub max_fee_per_blob_gas_replacement_multiplier: f64,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1344,19 +1355,21 @@ impl L1SenderConfig {
         self,
         operator_signer: SignerConfig,
     ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
+        let force_transaction_resubmission = self.force_transaction_resubmission;
         zksync_os_l1_sender::config::L1SenderConfig {
             operator_signer,
             fee_config: zksync_os_l1_sender::config::L1SenderFeeConfig {
                 max_fee_per_gas_wei: self.max_fee_per_gas.0,
                 max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
                 max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
-                max_fee_per_gas_replacement_multiplier: self.max_fee_per_gas_replacement_multiplier,
-                max_priority_fee_per_gas_replacement_multiplier: self
+                max_fee_per_gas_replacement_multiplier: force_transaction_resubmission
+                    .max_fee_per_gas_replacement_multiplier,
+                max_priority_fee_per_gas_replacement_multiplier: force_transaction_resubmission
                     .max_priority_fee_per_gas_replacement_multiplier,
-                max_fee_per_blob_gas_replacement_multiplier: self
+                max_fee_per_blob_gas_replacement_multiplier: force_transaction_resubmission
                     .max_fee_per_blob_gas_replacement_multiplier,
             },
-            force_transaction_resubmission: self.force_transaction_resubmission,
+            force_transaction_resubmission: force_transaction_resubmission.enabled,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
@@ -1574,6 +1587,12 @@ mod tests {
         repo.single::<NetworkConfig>().unwrap().parse().unwrap()
     }
 
+    fn parse_l1_sender_config<const N: usize>(env_vars: [(&str, &str); N]) -> L1SenderConfig {
+        let schema = ConfigSchema::new(&L1SenderConfig::DESCRIPTION, "l1_sender");
+        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
+        repo.single::<L1SenderConfig>().unwrap().parse().unwrap()
+    }
+
     #[test]
     fn network_interface_is_a_separate_field_and_overrides_address() {
         let config = parse_network_config([
@@ -1601,6 +1620,54 @@ mod tests {
         assert!(record.address.is_loopback());
         assert_eq!(record.tcp_port, 30303);
         assert_eq!(record.udp_port, 30301);
+    }
+
+    #[test]
+    fn l1_sender_force_resubmission_config_is_nested() {
+        let default_config = parse_l1_sender_config([]);
+        assert!(!default_config.force_transaction_resubmission.enabled);
+        assert_eq!(
+            default_config
+                .force_transaction_resubmission
+                .max_fee_per_gas_replacement_multiplier,
+            1.0
+        );
+
+        let config = parse_l1_sender_config([
+            ("L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_ENABLED", "true"),
+            (
+                "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_FEE_PER_GAS_REPLACEMENT_MULTIPLIER",
+                "1.25",
+            ),
+            (
+                "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_PRIORITY_FEE_PER_GAS_REPLACEMENT_MULTIPLIER",
+                "1.5",
+            ),
+            (
+                "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_FEE_PER_BLOB_GAS_REPLACEMENT_MULTIPLIER",
+                "1.75",
+            ),
+        ]);
+
+        assert!(config.force_transaction_resubmission.enabled);
+        assert_eq!(
+            config
+                .force_transaction_resubmission
+                .max_fee_per_gas_replacement_multiplier,
+            1.25
+        );
+        assert_eq!(
+            config
+                .force_transaction_resubmission
+                .max_priority_fee_per_gas_replacement_multiplier,
+            1.5
+        );
+        assert_eq!(
+            config
+                .force_transaction_resubmission
+                .max_fee_per_blob_gas_replacement_multiplier,
+            1.75
+        );
     }
 
     #[test]
@@ -1642,10 +1709,7 @@ mod tests {
                 max_fee_per_gas: 200 * EtherUnit::Gwei,
                 max_priority_fee_per_gas: 1 * EtherUnit::Gwei,
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
-                max_fee_per_gas_replacement_multiplier: 1.0,
-                max_priority_fee_per_gas_replacement_multiplier: 1.0,
-                max_fee_per_blob_gas_replacement_multiplier: 1.0,
-                force_transaction_resubmission: false,
+                force_transaction_resubmission: ForceTransactionResubmissionConfig::default(),
                 command_limit: 16,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
@@ -1668,6 +1732,35 @@ mod tests {
             }),
             fee_config: FeeConfig::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn l1_sender_replacement_multipliers_must_be_positive() {
+        let mut config = base_config(NodeRole::MainNode);
+        config
+            .l1_sender_config
+            .force_transaction_resubmission
+            .max_fee_per_gas_replacement_multiplier = -1.0;
+        config
+            .l1_sender_config
+            .force_transaction_resubmission
+            .max_priority_fee_per_gas_replacement_multiplier = -1.25;
+        config
+            .l1_sender_config
+            .force_transaction_resubmission
+            .max_fee_per_blob_gas_replacement_multiplier = -1.5;
+
+        let err = config.validate().await.unwrap_err().to_string();
+
+        assert!(err.contains(
+            "`l1_sender.force_transaction_resubmission.max_fee_per_gas_replacement_multiplier` must be positive"
+        ));
+        assert!(err.contains(
+            "`l1_sender.force_transaction_resubmission.max_priority_fee_per_gas_replacement_multiplier` must be positive"
+        ));
+        assert!(err.contains(
+            "`l1_sender.force_transaction_resubmission.max_fee_per_blob_gas_replacement_multiplier` must be positive"
+        ));
     }
 
     #[tokio::test]
