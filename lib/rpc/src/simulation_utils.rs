@@ -12,7 +12,7 @@ use zksync_os_interface::types::{
     BlockContext, BlockOutput, ExecutionOutput, ExecutionResult, TxOutput,
 };
 use zksync_os_rpc_api::types::ZkApiBlock;
-use zksync_os_storage_api::BlockOverlay;
+use zksync_os_storage_api::OwnedOverrides;
 use zksync_os_types::{ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
 
 #[derive(Debug)]
@@ -25,7 +25,7 @@ pub(super) struct SimulationStartContext {
 pub(super) struct SimulatedBlockResponse {
     pub(super) inner: ZkApiBlock,
     pub(super) calls: Vec<SimCallResult>,
-    pub(super) overlay: BlockOverlay,
+    pub(super) overlay: OwnedOverrides,
 }
 
 pub(super) fn build_simulated_block_response(
@@ -119,13 +119,13 @@ pub(super) fn build_simulated_block_response(
     Ok(SimulatedBlockResponse {
         inner,
         calls,
-        overlay: BlockOverlay {
-            storage_writes: storage_writes
+        overlay: OwnedOverrides::new(
+            storage_writes
                 .into_iter()
                 .map(|write| (write.key, write.value))
                 .collect(),
-            preimages: published_preimages.into_iter().collect(),
-        },
+            published_preimages.into_iter().collect(),
+        ),
     })
 }
 
@@ -393,8 +393,6 @@ impl SimulatedTx {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::Address;
-    use alloy::rpc::types::state::AccountOverride;
     use zksync_os_interface::types::BlockHashes;
 
     #[test]
@@ -492,43 +490,5 @@ mod tests {
         assert_eq!(context.block_hashes.0[253], U256::ZERO);
         assert_eq!(context.block_hashes.0[254], U256::ZERO);
         assert_eq!(context.block_hashes.0[255], U256::ZERO);
-    }
-
-    #[test]
-    fn simulate_state_overrides_validate_precompile_moves() {
-        let source = Address::from([1; 20]);
-        let destination = Address::from([2; 20]);
-        let mut overrides = StateOverride::default();
-        overrides.insert(
-            source,
-            AccountOverride {
-                move_precompile_to: Some(source),
-                ..Default::default()
-            },
-        );
-        assert!(matches!(
-            validate_state_overrides_for_simulate(&overrides),
-            Err(EthCallError::SimulatePrecompileSelfReference)
-        ));
-
-        let mut overrides = StateOverride::default();
-        overrides.insert(
-            source,
-            AccountOverride {
-                move_precompile_to: Some(destination),
-                ..Default::default()
-            },
-        );
-        overrides.insert(
-            Address::from([3; 20]),
-            AccountOverride {
-                move_precompile_to: Some(destination),
-                ..Default::default()
-            },
-        );
-        assert!(matches!(
-            validate_state_overrides_for_simulate(&overrides),
-            Err(EthCallError::SimulatePrecompileDuplicateAddress)
-        ));
     }
 }

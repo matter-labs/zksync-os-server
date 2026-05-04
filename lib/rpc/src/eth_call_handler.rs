@@ -29,7 +29,7 @@ use zksync_os_interface::{
 use zksync_os_multivm::run_block;
 use zksync_os_rpc_api::types::ZkApiBlock;
 use zksync_os_storage_api::{
-    BlockOverlay, RepositoryError, StateError, ViewState,
+    OwnedOverrides, RepositoryError, StateError, ViewState,
     state_override_view::{OverriddenStateView, build_state_override_maps},
 };
 use zksync_os_types::ZksyncOsEncode;
@@ -804,7 +804,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                     }
                     build_state_override_maps(&simulation_view, state_overrides)
                 }
-                None => BlockOverlay::default(),
+                None => OwnedOverrides::default(),
             };
             let overridden_view =
                 OverriddenStateView::new(simulation_view, state_overrides.clone());

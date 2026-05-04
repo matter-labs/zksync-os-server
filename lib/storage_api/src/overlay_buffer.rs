@@ -5,8 +5,10 @@ use alloy::primitives::{B256, BlockNumber};
 use anyhow::bail;
 use zksync_os_interface::types::StorageWrite;
 
-use crate::state_override_view::OverrideProvider;
-use crate::{BlockOverlay, OverriddenStateView, ReadStateHistory, ViewState};
+use crate::state_override_view::{OverrideProvider, OwnedOverrides};
+use crate::{OverriddenStateView, ReadStateHistory, ViewState};
+
+type BlockOverlay = OwnedOverrides;
 
 #[derive(Debug, Default, Clone)]
 pub struct OverlayBuffer {
@@ -26,7 +28,7 @@ impl OverlayBuffer {
         base: &'a S,
         block_number_to_execute: BlockNumber,
     ) -> anyhow::Result<
-        OverriddenStateView<impl ViewState + 'a, Arc<BTreeMap<BlockNumber, BlockOverlay>>>,
+        OverriddenStateView<impl ViewState + 'a, Arc<BTreeMap<BlockNumber, OwnedOverrides>>>,
     >
     where
         S: ReadStateHistory + 'a,
@@ -137,7 +139,7 @@ impl OverlayBuffer {
 impl OverrideProvider for BTreeMap<BlockNumber, BlockOverlay> {
     fn get_storage_override(&self, key: &B256) -> Option<B256> {
         for (_, overlay) in self.iter().rev() {
-            if let Some(&value) = overlay.storage_writes.get(key) {
+            if let Some(value) = overlay.get_storage_override(key) {
                 return Some(value);
             }
         }
@@ -146,8 +148,8 @@ impl OverrideProvider for BTreeMap<BlockNumber, BlockOverlay> {
 
     fn get_preimage_override(&self, hash: &B256) -> Option<Vec<u8>> {
         for (_, overlay) in self.iter().rev() {
-            if let Some(bytes) = overlay.preimages.get(hash) {
-                return Some(bytes.clone());
+            if let Some(bytes) = overlay.get_preimage_override(hash) {
+                return Some(bytes);
             }
         }
         None

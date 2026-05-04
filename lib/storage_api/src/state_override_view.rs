@@ -12,22 +12,21 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zksync_os_interface::traits::{PreimageSource, ReadStorage};
 
+/// Owned HashMap-based override provider.
+/// Used for RPC calls with `StateOverride` and for in-memory block overlays.
 #[derive(Debug, Clone, Default)]
-pub struct BlockOverlay {
-    pub storage_writes: HashMap<B256, B256>,
-    pub preimages: HashMap<B256, Vec<u8>>,
+pub struct OwnedOverrides {
+    storage: HashMap<B256, B256>,
+    preimages: HashMap<B256, Vec<u8>>,
 }
 
-impl BlockOverlay {
-    pub fn new(storage_writes: HashMap<B256, B256>, preimages: HashMap<B256, Vec<u8>>) -> Self {
-        Self {
-            storage_writes,
-            preimages,
-        }
+impl OwnedOverrides {
+    pub fn new(storage: HashMap<B256, B256>, preimages: HashMap<B256, Vec<u8>>) -> Self {
+        Self { storage, preimages }
     }
 
     pub fn extend(&mut self, changes: Self) {
-        self.storage_writes.extend(changes.storage_writes);
+        self.storage.extend(changes.storage);
         self.preimages.extend(changes.preimages);
     }
 }
@@ -53,9 +52,9 @@ impl<T: OverrideProvider> OverrideProvider for Arc<T> {
     }
 }
 
-impl OverrideProvider for BlockOverlay {
+impl OverrideProvider for OwnedOverrides {
     fn get_storage_override(&self, key: &B256) -> Option<B256> {
-        self.storage_writes.get(key).copied()
+        self.storage.get(key).copied()
     }
 
     fn get_preimage_override(&self, hash: &B256) -> Option<Vec<u8>> {
@@ -79,7 +78,7 @@ impl<V: ViewState, O: OverrideProvider> OverriddenStateView<V, O> {
 }
 
 // Convenience constructors for common cases
-impl<V: ViewState> OverriddenStateView<V, BlockOverlay> {
+impl<V: ViewState> OverriddenStateView<V, OwnedOverrides> {
     /// Create from RPC StateOverride.
     pub fn with_state_overrides(inner: V, state_overrides: StateOverride) -> Self {
         let overrides = build_state_override_maps(&inner, state_overrides);
@@ -92,7 +91,7 @@ impl<V: ViewState> OverriddenStateView<V, BlockOverlay> {
             .iter()
             .cloned()
             .collect::<HashMap<B256, Vec<u8>>>();
-        Self::new(inner, BlockOverlay::new(HashMap::new(), preimages))
+        Self::new(inner, OwnedOverrides::new(HashMap::new(), preimages))
     }
 }
 
@@ -120,7 +119,7 @@ impl<V: ViewState, O: OverrideProvider> PreimageSource for OverriddenStateView<V
 pub fn build_state_override_maps<V: ViewState>(
     inner: &V,
     state_overrides: StateOverride,
-) -> BlockOverlay {
+) -> OwnedOverrides {
     let mut storage: HashMap<B256, B256> = HashMap::new();
     let mut preimages: HashMap<B256, Vec<u8>> = HashMap::new();
 
@@ -177,5 +176,5 @@ pub fn build_state_override_maps<V: ViewState>(
         }
     }
 
-    BlockOverlay::new(storage, preimages)
+    OwnedOverrides::new(storage, preimages)
 }
