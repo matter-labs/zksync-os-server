@@ -164,8 +164,7 @@ impl L1State {
         // against a v30 fixture and ride through the v30→v31 upgrade without
         // restarting. If the call keeps failing after the upgrade we'll see
         // it when other L1 lookups break downstream.
-        let current_migration_number: u64 = match bridgehub_l1.migration_number(l2_chain_id).await
-        {
+        let current_migration_number: u64 = match bridgehub_l1.migration_number(l2_chain_id).await {
             Ok(n) => n
                 .try_into()
                 .context("current migration number overflows u64")?,

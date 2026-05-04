@@ -81,15 +81,16 @@ impl BatchInfoAccumulator {
         // sanity check below) and must NOT be treated as a migration — it
         // would wrongly quiesce the batcher after the upgrade batch of any
         // freshly-started chain.
-        let set_sl_migration_number: Option<u64> = replay_record.transactions.iter().find_map(|tx| {
-            if let Some(SystemTxType::SetSLChainId(n)) = tx.as_system_tx_type()
-                && *n != u64::MAX
-            {
-                Some(*n)
-            } else {
-                None
-            }
-        });
+        let set_sl_migration_number: Option<u64> =
+            replay_record.transactions.iter().find_map(|tx| {
+                if let Some(SystemTxType::SetSLChainId(n)) = tx.as_system_tx_type()
+                    && *n != u64::MAX
+                {
+                    Some(*n)
+                } else {
+                    None
+                }
+            });
         // If the SetSLChainId tx lands in a later block of the batch, seal now so
         // it ends up as the first tx of the next batch.
         if set_sl_migration_number.is_some() && self.block_count > 1 {

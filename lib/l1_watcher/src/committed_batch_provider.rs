@@ -158,7 +158,6 @@ impl CommittedBatchProvider {
         Ok(())
     }
 
-
     pub fn insert(&self, batch: DiscoveredCommittedBatch) {
         let mut inner = self.inner.write().expect("lock poisoned");
         inner.insert(batch);

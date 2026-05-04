@@ -225,7 +225,8 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             {
                 tracing::info!(
                     migration_number = n,
-                    l1_current_migration_number_at_startup = self.current_migration_number_on_startup,
+                    l1_current_migration_number_at_startup =
+                        self.current_migration_number_on_startup,
                     "Migration batch sealed and sent. \
                      Entering drain-only mode — no new batches will be created. \
                      The upstream pipeline stays alive so RPC (e.g. \

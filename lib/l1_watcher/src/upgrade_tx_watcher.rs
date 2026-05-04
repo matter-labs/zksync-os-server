@@ -186,10 +186,18 @@ impl L1UpgradeTxWatcher {
             .await?
             .try_into()
             .map_err(|e| anyhow::anyhow!("chain id overflows u64: {e:?}"))?;
-        match ISettlementLayerV31UpgradeInstance::new(upgrade_init_address, self.provider_l1.clone())
-            .getL2UpgradeTxData(bridgehub_l1, U256::from(l2_chain_id), true, original_tx_data)
-            .call()
-            .await
+        match ISettlementLayerV31UpgradeInstance::new(
+            upgrade_init_address,
+            self.provider_l1.clone(),
+        )
+        .getL2UpgradeTxData(
+            bridgehub_l1,
+            U256::from(l2_chain_id),
+            true,
+            original_tx_data,
+        )
+        .call()
+        .await
         {
             Ok(rewritten) => {
                 tracing::info!(
