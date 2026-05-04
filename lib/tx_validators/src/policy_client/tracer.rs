@@ -26,17 +26,15 @@ pub enum CallKind {
 impl From<CallModifier> for CallKind {
     fn from(modifier: CallModifier) -> Self {
         match modifier {
-            CallModifier::NoModifier => Self::Call,
+            // ZKVMSystem is protocol-internal; map to the closest user-visible kind.
+            CallModifier::NoModifier | CallModifier::ZKVMSystem => Self::Call,
             CallModifier::Constructor => Self::Constructor,
-            CallModifier::Delegate => Self::DelegateCall,
-            CallModifier::Static => Self::StaticCall,
-            // CALLCODE shares delegatecall's storage-context semantics.
-            CallModifier::EVMCallcode | CallModifier::EVMCallcodeStatic => Self::DelegateCall,
-            CallModifier::DelegateStatic => Self::DelegateCall,
-            // System frames are protocol-internal and shouldn't appear in
-            // user traces; map to safe defaults.
-            CallModifier::ZKVMSystem => Self::Call,
-            CallModifier::ZKVMSystemStatic => Self::StaticCall,
+            // CALLCODE and DelegateStatic share delegatecall's storage-context semantics.
+            CallModifier::Delegate
+            | CallModifier::EVMCallcode
+            | CallModifier::EVMCallcodeStatic
+            | CallModifier::DelegateStatic => Self::DelegateCall,
+            CallModifier::Static | CallModifier::ZKVMSystemStatic => Self::StaticCall,
         }
     }
 }
