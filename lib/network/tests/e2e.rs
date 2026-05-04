@@ -18,7 +18,8 @@ use zksync_os_network::protocol::{
     MainNodeProtocolConfig, ProtocolEvent, ZksProtocolHandler,
 };
 use zksync_os_network::version::{
-    ZksProtocolV0, ZksProtocolV1, ZksProtocolV2, ZksProtocolV3, ZksProtocolV4, ZksProtocolVersionSpec, ZksVersion,
+    ZksProtocolV0, ZksProtocolV1, ZksProtocolV2, ZksProtocolV3, ZksProtocolV4,
+    ZksProtocolVersionSpec, ZksVersion,
 };
 use zksync_os_network::{PeerVerifyBatchResult, VerifyBatchOutcome, VerifyBatchResult};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
