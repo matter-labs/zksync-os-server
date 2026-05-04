@@ -30,3 +30,13 @@ pub struct GeneralMetrics {
 
 #[vise::register]
 pub static GENERAL_METRICS: vise::Global<GeneralMetrics> = vise::Global::new();
+
+#[derive(Debug, Metrics)]
+pub struct PushMetrics {
+    /// Unix timestamp of the latest unexpected event by event type.
+    #[metrics(labels = ["event"])]
+    pub unexpected_events_push: LabeledFamily<&'static str, Gauge<i64>, 1>,
+}
+
+#[vise::register]
+pub static PUSH_METRICS: vise::Global<PushMetrics> = vise::Global::new();

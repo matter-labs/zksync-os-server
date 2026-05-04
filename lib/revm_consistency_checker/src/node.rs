@@ -4,10 +4,11 @@ use reth_revm::ExecuteCommitEvm;
 use reth_revm::context::{Context, ContextTr};
 use reth_revm::db::CacheDB;
 use std::collections::HashSet;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState, PUSH_METRICS};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_revm::{DefaultZk, ZkBuilder};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
@@ -16,6 +17,8 @@ use zksync_os_types::ExecutionVersion;
 use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
 use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
+
+const REVM_DIVERGENCE_EVENT: &str = "revm_divergence";
 
 pub struct RevmConsistencyChecker<State>
 where
@@ -49,7 +52,13 @@ where
         report: &CompareReport,
     ) -> anyhow::Result<()> {
         report.log_tracing(20);
-        if self.revert_enabled && !report.is_empty() {
+        if report.is_empty() {
+            return Ok(());
+        }
+
+        record_unexpected_event(REVM_DIVERGENCE_EVENT);
+
+        if self.revert_enabled {
             let mut config = self.internal_config_manager.read_config()?;
             config.failing_block = Some(replay_record.block_context.block_number);
 
@@ -74,6 +83,14 @@ where
 
         Ok(())
     }
+}
+
+fn record_unexpected_event(event: &'static str) {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before UNIX epoch")
+        .as_secs() as i64;
+    PUSH_METRICS.unexpected_events_push[&event].set(timestamp);
 }
 
 #[async_trait]

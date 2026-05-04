@@ -6,11 +6,12 @@ use std::{path::Path, path::PathBuf, str::FromStr, time::Duration};
 use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::oneshot;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
-    Config, ConfigArgs, ConfigValidate, ProofStorageConfig, RebuildBlocksConfig,
+    Config, ConfigArgs, ConfigValidate, PrometheusConfig, ProofStorageConfig, RebuildBlocksConfig,
     StateBackendConfig, build_external_config, load_config_file_sources,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
@@ -24,6 +25,8 @@ static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemall
 
 const IMMEDIATE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const PROMETHEUS_PUSH_INTERVAL: Duration = Duration::from_secs(5);
+const PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
@@ -169,7 +172,8 @@ pub async fn main() {
     // ======= Run tasks ===========
     let ephemeral_enabled = config.general_config.ephemeral;
     let _ephemeral_guard = ephemeral_enabled.then(|| enable_ephemeral_mode(&mut config));
-    let prometheus_port = config.observability_config.prometheus.port;
+    let prometheus_config = config.observability_config.prometheus.clone();
+    let prometheus_port = prometheus_config.port;
 
     match config.general_config.state_backend {
         StateBackendConfig::FullDiffs => run::<FullDiffsState>(&runtime, config).await,
@@ -186,19 +190,78 @@ pub async fn main() {
         }
     });
 
+    let prometheus_push_shutdown = if ephemeral_enabled {
+        tracing::info!("Ephemeral mode enabled, skipping Prometheus push exporter");
+        None
+    } else {
+        spawn_prometheus_push_exporter(&runtime, &prometheus_config)
+    };
+
     let task_manager_handle = runtime
         .take_task_manager_handle()
         .expect("Runtime must contain a TaskManager handle");
+    let runtime_for_signal = runtime.clone();
 
     tokio::select! {
         task_manager_result = task_manager_handle => {
             if let Ok(Err(err)) = task_manager_result {
-                tracing::error!("shutting down due to error");
+                tracing::error!(%err, "shutting down due to critical task error");
+                wait_for_prometheus_push_shutdown(prometheus_push_shutdown).await;
                 eprintln!("Error: {err:?}");
                 std::process::exit(1);
             }
         },
-        _ = handle_delayed_termination(runtime) => {},
+        _ = handle_delayed_termination(runtime_for_signal) => {},
+    }
+}
+
+fn spawn_prometheus_push_exporter(
+    runtime: &Runtime,
+    prometheus_config: &PrometheusConfig,
+) -> Option<oneshot::Receiver<()>> {
+    let Some(push_gateway_url) = prometheus_config.push_gateway_url.clone() else {
+        tracing::warn!(
+            "Prometheus push gateway URL is not configured; push-only metrics will not be exported"
+        );
+        return None;
+    };
+
+    let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+    runtime.spawn_critical_with_graceful_shutdown_signal(
+        "prometheus push",
+        |shutdown| async move {
+            let push_gateway_endpoint =
+                PrometheusExporterConfig::gateway_endpoint(&push_gateway_url);
+            let prometheus =
+                PrometheusExporterConfig::push(push_gateway_endpoint, PROMETHEUS_PUSH_INTERVAL);
+            let result = prometheus.run(shutdown).await;
+            shutdown_sender.send(()).ok();
+            result.expect("prometheus push failed");
+        },
+    );
+
+    Some(shutdown_receiver)
+}
+
+async fn wait_for_prometheus_push_shutdown(receiver: Option<oneshot::Receiver<()>>) {
+    let Some(receiver) = receiver else {
+        tracing::warn!("Prometheus push exporter was not configured; nothing to wait for");
+        return;
+    };
+
+    match tokio::time::timeout(PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT, receiver).await {
+        Ok(Ok(())) => {
+            tracing::info!("Prometheus push exporter shutdown completed");
+        }
+        Ok(Err(_)) => {
+            tracing::warn!("Prometheus push exporter shutdown completion sender was dropped");
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout = ?PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT,
+                "Timed out waiting for Prometheus push exporter shutdown"
+            );
+        }
     }
 }
 

@@ -1049,6 +1049,10 @@ pub struct PrometheusConfig {
     /// Port to expose Prometheus metrics on.
     #[config(default_t = 3312)]
     pub port: u16,
+
+    /// Base URL for the Prometheus Pushgateway used for push-only metrics.
+    #[config(default_t = None)]
+    pub push_gateway_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
