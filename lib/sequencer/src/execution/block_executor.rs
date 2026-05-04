@@ -15,6 +15,7 @@ use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{OverlayBuffer, ReadStateHistory, WriteState};
 use zksync_os_tx_validators::deployment_filter;
+use zksync_os_tx_validators::policy_client::AccessType;
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
 /// Executes blocks, while only updating local in-memory state (mempool, block context).
@@ -133,17 +134,14 @@ where
                 .then(|| self.config.tx_validator.policy_client.clone())
                 .flatten();
             let exec_result = if let Some(policy_client) = policy_client {
-                // Pair the policy tracer with the client *before* moving the
-                // client into `execute_block_in_vm` — the two share a
-                // per-instance scratch slot that `paired_tracer()` returns a
-                // handle into.
-                let policy_tracer = policy_client.paired_tracer();
+                let policy_session = policy_client.session(AccessType::Write);
+                let policy_tracer = policy_session.paired_tracer();
                 execute_block_in_vm(
                     prepared_command,
                     exec_view,
                     &latency_tracker,
                     policy_tracer,
-                    policy_client,
+                    policy_session,
                 )
                 .await
             } else {
