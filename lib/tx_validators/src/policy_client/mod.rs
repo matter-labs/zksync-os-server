@@ -79,7 +79,6 @@ pub enum BuildError {
     Transport(#[from] TransportError),
 }
 
-/// Shareable transport handle. Clone freely and store in long-lived structs.
 /// Call [`Self::session`] to get a per-transaction [`PolicySession`].
 #[derive(Clone, Debug)]
 pub struct PolicyClient {
