@@ -46,7 +46,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tokio-metrics.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
 vise.workspace = true
