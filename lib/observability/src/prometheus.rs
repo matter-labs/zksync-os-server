@@ -4,7 +4,6 @@ use std::{env, net::Ipv4Addr, time::Duration};
 
 use anyhow::Context as _;
 use reth_tasks::shutdown::GracefulShutdown;
-use tokio::sync::oneshot;
 use vise::{MetricsCollection, Registry, descriptors::MetricGroupDescriptor};
 use vise_exporter::MetricsExporter;
 
@@ -73,11 +72,11 @@ impl PrometheusExporterConfig {
     pub async fn run(self, shutdown: GracefulShutdown) -> anyhow::Result<()> {
         tokio_runtime::register_monitor();
         let registry = self.registry();
+        let metrics_exporter = MetricsExporter::new(registry.into())
+            .with_graceful_shutdown(shutdown.clone().ignore_guard());
 
         match self.transport {
             PrometheusTransport::Pull { port } => {
-                let metrics_exporter = MetricsExporter::new(registry.into())
-                    .with_graceful_shutdown(shutdown.ignore_guard());
                 let prom_bind_address = (Ipv4Addr::UNSPECIFIED, port).into();
                 metrics_exporter
                     .start(prom_bind_address)
@@ -91,22 +90,10 @@ impl PrometheusExporterConfig {
                 let endpoint = gateway_uri
                     .parse()
                     .context("Failed parsing Prometheus push gateway endpoint")?;
-                let (guard_sender, guard_receiver) = oneshot::channel();
-                let shutdown = async move {
-                    let guard = shutdown.await;
-                    let _ = guard_sender.send(guard);
-                };
-                let metrics_exporter =
-                    MetricsExporter::new(registry.into()).with_graceful_shutdown(shutdown);
                 metrics_exporter.push_to_gateway(endpoint, interval).await;
-                match guard_receiver.await {
-                    Ok(guard) => drop(guard),
-                    Err(err) => {
-                        tracing::warn!(%err, "Prometheus push exporter shutdown guard was not received");
-                    }
-                }
             }
         }
+        drop(shutdown);
         Ok(())
     }
 }

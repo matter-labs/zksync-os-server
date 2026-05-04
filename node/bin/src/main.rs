@@ -6,7 +6,7 @@ use std::{path::Path, path::PathBuf, str::FromStr, time::Duration};
 use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
@@ -218,7 +218,7 @@ pub async fn main() {
 fn spawn_prometheus_push_exporter(
     runtime: &Runtime,
     prometheus_config: &PrometheusConfig,
-) -> Option<oneshot::Receiver<()>> {
+) -> Option<JoinHandle<()>> {
     let Some(push_gateway_url) = prometheus_config.push_gateway_url.clone() else {
         tracing::warn!(
             "Prometheus push gateway URL is not configured; push-only metrics will not be exported"
@@ -226,35 +226,35 @@ fn spawn_prometheus_push_exporter(
         return None;
     };
 
-    let (shutdown_sender, shutdown_receiver) = oneshot::channel();
-    runtime.spawn_critical_with_graceful_shutdown_signal(
+    let handle = runtime.spawn_critical_with_graceful_shutdown_signal(
         "prometheus push",
         |shutdown| async move {
             let push_gateway_endpoint =
                 PrometheusExporterConfig::gateway_endpoint(&push_gateway_url);
             let prometheus =
                 PrometheusExporterConfig::push(push_gateway_endpoint, PROMETHEUS_PUSH_INTERVAL);
-            let result = prometheus.run(shutdown).await;
-            shutdown_sender.send(()).ok();
-            result.expect("prometheus push failed");
+            prometheus
+                .run(shutdown)
+                .await
+                .expect("prometheus push failed");
         },
     );
 
-    Some(shutdown_receiver)
+    Some(handle)
 }
 
-async fn wait_for_prometheus_push_shutdown(receiver: Option<oneshot::Receiver<()>>) {
-    let Some(receiver) = receiver else {
+async fn wait_for_prometheus_push_shutdown(handle: Option<JoinHandle<()>>) {
+    let Some(handle) = handle else {
         tracing::warn!("Prometheus push exporter was not configured; nothing to wait for");
         return;
     };
 
-    match tokio::time::timeout(PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT, receiver).await {
+    match tokio::time::timeout(PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT, handle).await {
         Ok(Ok(())) => {
             tracing::info!("Prometheus push exporter shutdown completed");
         }
-        Ok(Err(_)) => {
-            tracing::warn!("Prometheus push exporter shutdown completion sender was dropped");
+        Ok(Err(err)) => {
+            tracing::warn!(%err, "Prometheus push exporter task did not complete cleanly");
         }
         Err(_) => {
             tracing::warn!(
