@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::GenericComponentState;
 use vise::{Counter, Gauge, LabeledFamily, Metrics};
 
@@ -40,3 +42,11 @@ pub struct PushMetrics {
 
 #[vise::register]
 pub static PUSH_METRICS: vise::Global<PushMetrics> = vise::Global::new();
+
+pub fn record_unexpected_event(event: &'static str) {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before UNIX epoch")
+        .as_secs() as i64;
+    PUSH_METRICS.unexpected_events_push[&event].set(timestamp);
+}

@@ -4,11 +4,12 @@ use reth_revm::ExecuteCommitEvm;
 use reth_revm::context::{Context, ContextTr};
 use reth_revm::db::CacheDB;
 use std::collections::HashSet;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState, PUSH_METRICS};
+use zksync_os_observability::{
+    ComponentStateReporter, GenericComponentState, record_unexpected_event,
+};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_revm::{DefaultZk, ZkBuilder};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
@@ -56,6 +57,13 @@ where
             return Ok(());
         }
 
+        let message = format!(
+            "REVM consistency check failed for block number {}, block hash {}",
+            replay_record.block_context.block_number,
+            block_output.header.hash(),
+        );
+        tracing::warn!(message);
+
         record_unexpected_event(REVM_DIVERGENCE_EVENT);
 
         if self.revert_enabled {
@@ -68,29 +76,16 @@ where
             }
             let new_blacklist_size = config.l2_signer_blacklist.len();
             tracing::info!(
-                "Adding {} new addresses to L2 signer blacklist due to REVM inconsistency",
+                "Adding {} new addresses to L2 signer blacklist due to REVM divergence",
                 new_blacklist_size - initial_blacklist_size
             );
 
-            let message = format!(
-                "REVM consistency check failed for block number {}, block hash {}",
-                replay_record.block_context.block_number,
-                block_output.header.hash(),
-            );
             self.internal_config_manager
                 .write_config_and_panic(&config, &message)?;
         }
 
         Ok(())
     }
-}
-
-fn record_unexpected_event(event: &'static str) {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before UNIX epoch")
-        .as_secs() as i64;
-    PUSH_METRICS.unexpected_events_push[&event].set(timestamp);
 }
 
 #[async_trait]
