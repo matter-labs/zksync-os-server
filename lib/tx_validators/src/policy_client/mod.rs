@@ -86,7 +86,7 @@ pub struct PolicyClient {
     request_timeout: Duration,
     protocol_version: String,
     expected_protocol_version: Option<String>,
-    bypass_from: HashSet<Address>,
+    bypass_from: Arc<HashSet<Address>>,
 }
 
 impl PolicyClient {
@@ -115,7 +115,7 @@ impl PolicyClient {
             request_timeout: config.request_timeout,
             protocol_version: config.protocol_version,
             expected_protocol_version: config.expected_protocol_version,
-            bypass_from: config.bypass_from,
+            bypass_from: Arc::new(config.bypass_from),
         })
     }
 
