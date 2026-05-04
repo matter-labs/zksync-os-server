@@ -1,5 +1,4 @@
 use alloy::primitives::U64;
-use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use zksync_os_rpc_api::net::NetApiServer;
 
@@ -13,9 +12,8 @@ impl NetNamespace {
     }
 }
 
-#[async_trait]
 impl NetApiServer for NetNamespace {
-    async fn version(&self) -> RpcResult<Option<U64>> {
+    fn version(&self) -> RpcResult<Option<U64>> {
         Ok(Some(U64::from(self.chain_id)))
     }
 }

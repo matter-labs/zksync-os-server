@@ -5,7 +5,7 @@ use crate::util::ANVIL_L1_CHAIN_ID;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
-use alloy::primitives::{Address, B256, BlockNumber, U256};
+use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
@@ -13,8 +13,8 @@ use blake2::{Blake2s256, Digest};
 use zksync_os_contract_interface::IBytecodeSupplier::EVMBytecodePublished;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
-use zksync_os_contract_interface::ISettlementLayerV31Upgrade::ISettlementLayerV31UpgradeInstance;
-use zksync_os_contract_interface::ZkChain;
+use zksync_os_contract_interface::is_method_missing;
+use zksync_os_contract_interface::{Bridgehub, ZkChain};
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_types::{
     L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
@@ -22,6 +22,7 @@ use zksync_os_types::{
 };
 
 use zksync_os_contract_interface::IChainTypeManager::IChainTypeManagerInstance;
+use zksync_os_contract_interface::ISettlementLayerV31Upgrade::ISettlementLayerV31UpgradeInstance;
 
 /// Limit the number of L1 blocks to scan when looking for the set timestamp transaction.
 const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
@@ -41,10 +42,10 @@ const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 /// - **L1**: The `BytecodesSupplier` publishes the factory dep bytecodes via
 ///   `EVMBytecodePublished` events — these live on L1 regardless of settlement layer.
 pub struct L1UpgradeTxWatcher {
-    admin_contract_l1: Address,
-
+    l2_chain_id: ChainId,
     provider_l1: DynProvider,
     provider_sl: DynProvider,
+    bridgehub_l1: Address,
     /// Address of the bytecode supplier contract on L1 (used to scan EVMBytecodePublished events)
     bytecode_supplier_address: Address,
     /// Address of the CTM contract on L1 (used to resolve the canonical bytecode supplier)
@@ -65,8 +66,11 @@ pub struct L1UpgradeTxWatcher {
 }
 
 impl L1UpgradeTxWatcher {
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
         config: L1WatcherConfig,
+        l2_chain_id: ChainId,
+        bridgehub_l1: Bridgehub<DynProvider>,
         zk_chain_l1: ZkChain<DynProvider>,
         zk_chain_sl: ZkChain<DynProvider>,
         bytecode_supplier_address: Address,
@@ -121,9 +125,10 @@ impl L1UpgradeTxWatcher {
 
         let zk_chain_l1_address = *zk_chain_l1.address();
         let this = Self {
-            admin_contract_l1: admin_l1,
+            l2_chain_id,
             provider_l1: zk_chain_l1.provider().clone(),
             provider_sl: zk_chain_sl.provider().clone(),
+            bridgehub_l1: *bridgehub_l1.address(),
             bytecode_supplier_address,
             ctm_l1,
             ctm_sl,
@@ -132,18 +137,16 @@ impl L1UpgradeTxWatcher {
             upgrade_subpool,
             max_blocks_to_process: config.max_blocks_to_process,
         };
-        let l1_watcher = L1Watcher::new(
+        L1Watcher::new(
+            config,
             zk_chain_l1.provider().clone(),
+            admin_l1.into(),
             last_l1_block,
-            config.max_blocks_to_process,
-            config.confirmations,
+            None,
             zk_chain_l1.provider().get_chain_id().await?,
-            config.poll_interval,
-            this.into(),
+            Box::new(this),
         )
-        .await?;
-
-        Ok(l1_watcher)
+        .await
     }
 
     async fn fetch_upgrade_info(&self, request: &L1UpgradeRequest) -> anyhow::Result<UpgradeInfo> {
@@ -153,49 +156,8 @@ impl L1UpgradeTxWatcher {
             raw_protocol_version,
         } = request;
 
-        // TODO: for now we assume that upgrades cannot be skipped, e.g.
-        // each chain upgrades before the new upgrade is published.
-        // This is a temporary solution and should be fixed ASAP.
-        let mut current_block = self.provider_sl.get_block_number().await?;
-        let start_block = current_block
-            .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS) // Upgrade could've been set a long time ago.
-            .max(1u64);
-
-        // TODO: upgrade data can be much farther in history and we can't easily find a block where it was set,
-        // so we scan linearly (in order to not go over the limit per request) but move backwards since it's
-        // more likely to be recent.
-        let mut upgrade_cut_data_logs = Vec::new();
-        while current_block >= start_block && upgrade_cut_data_logs.is_empty() {
-            let from_block = current_block
-                .saturating_sub(self.max_blocks_to_process - 1)
-                .max(start_block);
-
-            let filter = Filter::new()
-                .from_block(from_block)
-                .to_block(current_block)
-                .address(self.ctm_sl)
-                .event_signature(NewUpgradeCutData::SIGNATURE_HASH)
-                .topic1(*raw_protocol_version);
-            upgrade_cut_data_logs = self.provider_sl.get_logs(&filter).await?;
-            current_block = from_block.saturating_sub(1);
-        }
-
-        if upgrade_cut_data_logs.is_empty() {
-            anyhow::bail!(
-                "no upgrade cut found for the suggested protocol version: {}",
-                protocol_version
-            );
-        }
-        if upgrade_cut_data_logs.len() > 1 {
-            tracing::warn!(
-                %protocol_version,
-                "multiple upgrade cuts found for the suggested protocol version; picking the most recent one"
-            );
-        }
-        // Safe unwrap because of checks above
-        // `last()` because, even though we scan backwards, each scan returns a list of ascending result
-        let upgrade_cut_data = upgrade_cut_data_logs.last().unwrap();
-        let raw_diamond_cut: Log<NewUpgradeCutData> = upgrade_cut_data.log_decode()?;
+        let upgrade_cut_data_log = self.find_upgrade_cut_log(*raw_protocol_version).await?;
+        let raw_diamond_cut: Log<NewUpgradeCutData> = upgrade_cut_data_log.log_decode()?;
         let diamond_cut_data = raw_diamond_cut.inner.data.diamondCutData;
         let mut proposed_upgrade =
             ProposedUpgrade::abi_decode(&diamond_cut_data.initCalldata[4..]).unwrap(); // TODO: we're in fact parsing `upgrade(..)` signature here
@@ -252,6 +214,59 @@ impl L1UpgradeTxWatcher {
         let (l2_upgrade_tx, force_preimages) = if patch_only {
             (None, Vec::new())
         } else {
+            // `NewUpgradeCutData` carries a placeholder `additionalForceDeploymentsData`
+            // (`""`) that `upgradeChainFromVersion` rewrites per-chain when the
+            // diamond-cut init runs on L1 — see
+            // `SettlementLayerV31UpgradeBase.upgrade()` which replaces
+            // `l2ProtocolUpgradeTx.data` via `getL2UpgradeTxData(bridgehub, chainId, existingTxData)`.
+            // Call that same function off-chain so the tx we inject into the
+            // mempool matches what L1 actually wrote into the priority queue.
+            //
+            // Route through the upgrade facet's deployed address, which is
+            // `diamond_cut_data.initAddress`. Only "method missing" reverts (pre-v31
+            // init contracts that don't expose this function) fall back to the
+            // original tx data; any other error — RPC failure, decode error, or a
+            // genuine revert like `UnexpectedZKsyncOSFlag` / `UnexpectedUpgradeSelector`
+            // — is propagated, because silently using the placeholder would inject
+            // a tx whose hash diverges from what L1 wrote into the priority queue.
+            let upgrade_init_address = diamond_cut_data.initAddress;
+            let original_tx_data = proposed_upgrade.l2ProtocolUpgradeTx.data.clone();
+            match ISettlementLayerV31UpgradeInstance::new(
+                upgrade_init_address,
+                self.provider_l1.clone(),
+            )
+            .getL2UpgradeTxData(
+                self.bridgehub_l1,
+                U256::from(self.l2_chain_id),
+                true,
+                original_tx_data,
+            )
+            .call()
+            .await
+            {
+                Ok(rewritten) => {
+                    tracing::info!(
+                        init_address = ?upgrade_init_address,
+                        bridgehub = ?self.bridgehub_l1,
+                        l2_chain_id = self.l2_chain_id,
+                        rewritten_len = rewritten.len(),
+                        "rewrote L2 upgrade tx data via getL2UpgradeTxData"
+                    );
+                    proposed_upgrade.l2ProtocolUpgradeTx.data = rewritten;
+                }
+                Err(e) if is_method_missing(&e) => {
+                    tracing::info!(
+                        init_address = ?upgrade_init_address,
+                        "init contract does not expose getL2UpgradeTxData (pre-v31); using original tx data"
+                    );
+                }
+                Err(e) => {
+                    return Err(anyhow::Error::new(e).context(format!(
+                        "getL2UpgradeTxData call failed at init address {upgrade_init_address}"
+                    )));
+                }
+            }
+
             let tx = L1UpgradeEnvelope::try_from(proposed_upgrade.l2ProtocolUpgradeTx).unwrap();
             let force_preimages = self.fetch_force_preimages(&tx.inner.factory_deps).await?;
 
@@ -272,6 +287,78 @@ impl L1UpgradeTxWatcher {
         };
 
         Ok(upgrade_tx)
+    }
+
+    /// Finds the `NewUpgradeCutData` event for `raw_protocol_version`.
+    ///
+    /// Prefers `ChainTypeManagerBase.upgradeCutDataBlock(protocolVersion)` (populated starting
+    /// with V31) on each CTM: a non-zero answer pins the cut to a specific block on that CTM's
+    /// chain, so we can fetch the event with a single `eth_getLogs` call against the right
+    /// settlement layer. For pre-V31 CTMs the mapping is absent, so we fall back to the
+    /// pre-existing backward linear scan on the SL CTM.
+    async fn find_upgrade_cut_log(&self, raw_protocol_version: U256) -> anyhow::Result<Log> {
+        let l1_block =
+            get_upgrade_cut_data_block(&self.provider_l1, self.ctm_l1, raw_protocol_version)
+                .await?;
+        // Avoid a redundant RPC when L1 and SL are the same (chain settling on L1).
+        let sl_block = if self.ctm_l1 == self.ctm_sl {
+            l1_block
+        } else {
+            get_upgrade_cut_data_block(&self.provider_sl, self.ctm_sl, raw_protocol_version).await?
+        };
+
+        let target = match (l1_block, sl_block) {
+            (Some(b), _) if b != 0 => Some((&self.provider_l1, self.ctm_l1, b)),
+            (_, Some(b)) if b != 0 => Some((&self.provider_sl, self.ctm_sl, b)),
+            _ => None,
+        };
+
+        if let Some((provider, ctm_address, block)) = target {
+            return fetch_upgrade_cut_log_at(provider, ctm_address, raw_protocol_version, block)
+                .await;
+        }
+
+        // Neither CTM reports a cut data block; either we're on a pre-V31 CTM without this
+        // mapping, or the upgrade has not yet been registered.
+        self.legacy_backward_scan(raw_protocol_version).await
+    }
+
+    /// Pre-V31 fallback: scan `UPGRADE_DATA_LOOKBEHIND_BLOCKS` worth of `NewUpgradeCutData`
+    /// events backward on the SL CTM. Pre-V31 chains do not have Gateway migrations, so the
+    /// cut always lives on the SL CTM (which equals the L1 CTM in that era).
+    async fn legacy_backward_scan(&self, raw_protocol_version: U256) -> anyhow::Result<Log> {
+        let mut current_block = self.provider_sl.get_block_number().await?;
+        let start_block = current_block
+            .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS)
+            .max(1u64);
+
+        let mut upgrade_cut_data_logs = Vec::new();
+        while current_block >= start_block && upgrade_cut_data_logs.is_empty() {
+            let from_block = current_block
+                .saturating_sub(self.max_blocks_to_process - 1)
+                .max(start_block);
+
+            let filter = Filter::new()
+                .from_block(from_block)
+                .to_block(current_block)
+                .address(self.ctm_sl)
+                .event_signature(NewUpgradeCutData::SIGNATURE_HASH)
+                .topic1(raw_protocol_version);
+            upgrade_cut_data_logs = self.provider_sl.get_logs(&filter).await?;
+            current_block = from_block.saturating_sub(1);
+        }
+
+        if upgrade_cut_data_logs.is_empty() {
+            anyhow::bail!("no upgrade cut found for raw protocol version {raw_protocol_version}");
+        }
+        if upgrade_cut_data_logs.len() > 1 {
+            tracing::warn!(
+                %raw_protocol_version,
+                "multiple upgrade cuts found; picking the most recent one"
+            );
+        }
+        // `last()` because each scan batch returns logs in ascending order.
+        Ok(upgrade_cut_data_logs.pop().unwrap())
     }
 
     async fn wait_until_timestamp(&self, target_timestamp: u64) {
@@ -319,8 +406,7 @@ impl L1UpgradeTxWatcher {
     ///    set_bytecode_on_address.rs:178` → `account_cache.rs:933`), with
     ///    `expected_preimage_len_in_bytes = observable_len`. The corresponding
     ///    preimage body the cache must return is exactly the raw bytes (length =
-    ///    observable len). This is also what each entry in `factory_deps` of the
-    ///    upgrade tx must equal so that we can fetch the matching preimage here.
+    ///    observable len).
     ///
     /// 3. **`Blake2s256(raw + padding + artifacts)`** — the "padded blake hash",
     ///    a.k.a. `account_properties.bytecode_hash`. This is what `set_properties_code`
@@ -352,14 +438,6 @@ impl L1UpgradeTxWatcher {
     /// That's a deliberate design choice — it keeps `BytecodesSupplier` publication
     /// cost proportional to the raw bytecode length, and removes any cross-node
     /// disagreement risk on artifact format.
-    ///
-    /// # Why we scan instead of filtering
-    ///
-    /// `EVMBytecodePublished` is indexed by hash (1) (`keccak256`), not hash (2)
-    /// (`Blake2s256`). Our `factory_deps` carries hash (2). We can't translate
-    /// between them without the bytecode itself, so we have to scan all events in
-    /// range and recompute Blake2s on each payload. If the supplier ever gains a
-    /// second event indexed by hash (2), this can become a topic-filtered lookup.
     async fn fetch_force_preimages(&self, hashes: &[B256]) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
         if hashes.is_empty() {
             return Ok(Vec::new());
@@ -379,8 +457,9 @@ impl L1UpgradeTxWatcher {
             tracing::debug!(idx = i, hash = ?h, "fetch_force_preimages: requested keccak");
         }
 
-        let requested_keccak: Vec<B256> = hashes.iter().copied().collect();
-        let requested_set: std::collections::HashSet<B256> = requested_keccak.iter().copied().collect();
+        let requested_keccak: Vec<B256> = hashes.to_vec();
+        let requested_set: std::collections::HashSet<B256> =
+            requested_keccak.iter().copied().collect();
         let mut by_keccak: HashMap<B256, Vec<u8>> = HashMap::new();
 
         // First pass: filter by topic1 for efficiency. This is the fast path
@@ -534,12 +613,9 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
     type SolEvent = UpdateUpgradeTimestamp;
     type WatchedEvent = L1UpgradeRequest;
 
-    fn contract_address(&self) -> Address {
-        self.admin_contract_l1
-    }
-
     async fn process_event(
         &mut self,
+        _provider: &DynProvider,
         request: L1UpgradeRequest,
         _log: Log,
     ) -> Result<(), L1WatcherError> {
@@ -629,6 +705,43 @@ pub enum UpgradeTxWatcherError {
     TimestampExceedsU64(U256),
     #[error("Incorrect protocol version: {0}")]
     IncorrectProtocolVersion(#[from] ProtocolSemanticVersionError),
+}
+
+/// Returns `Some(block)` if the CTM exposes `upgradeCutDataBlock` (V31+), where `block == 0`
+/// means the mapping is empty for that version. Returns `None` if the method is missing on the
+/// deployed CTM (pre-V31).
+async fn get_upgrade_cut_data_block(
+    provider: &DynProvider,
+    ctm_address: Address,
+    raw_protocol_version: U256,
+) -> anyhow::Result<Option<u64>> {
+    let ctm = IChainTypeManagerInstance::new(ctm_address, provider.clone());
+    match ctm.upgradeCutDataBlock(raw_protocol_version).call().await {
+        Ok(n) => Ok(Some(n.saturating_to::<u64>())),
+        Err(e) if is_method_missing(&e) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+async fn fetch_upgrade_cut_log_at(
+    provider: &DynProvider,
+    ctm_address: Address,
+    raw_protocol_version: U256,
+    block: u64,
+) -> anyhow::Result<Log> {
+    let filter = Filter::new()
+        .from_block(block)
+        .to_block(block)
+        .address(ctm_address)
+        .event_signature(NewUpgradeCutData::SIGNATURE_HASH)
+        .topic1(raw_protocol_version);
+    let logs = provider.get_logs(&filter).await?;
+    logs.into_iter().next().ok_or_else(|| {
+        anyhow::anyhow!(
+            "upgradeCutDataBlock({raw_protocol_version}) returned {block} on CTM {ctm_address} \
+             but no NewUpgradeCutData event was found at that block"
+        )
+    })
 }
 
 async fn find_l1_block_by_protocol_version(

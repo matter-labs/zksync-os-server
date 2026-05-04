@@ -4,6 +4,7 @@ use alloy::providers::DynProvider;
 use anyhow::Context;
 use futures::stream::{self, StreamExt};
 use rangemap::RangeInclusiveMap;
+use reth_tasks::Runtime;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -12,6 +13,7 @@ use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_storage_api::ReadBatch;
 
 const INIT_MAX_PARALLEL_BATCH_FETCHES: usize = 10;
@@ -35,6 +37,9 @@ const WAIT_FOR_BATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 #[derive(Clone)]
 pub struct CommittedBatchProvider {
     inner: Arc<RwLock<Inner>>,
+    /// Intervals used to route batch lookups to the diamond proxy of the SL the batch was
+    /// committed to.
+    intervals: SettlementLayerIntervals,
     /// Final fallback for resolving commit events that live on a settlement layer this node can
     /// no longer query (e.g. after migrating a chain back from a gateway — commits for
     /// pre-migration batches are on the gateway L2 diamond). Written by the previous run's
@@ -47,6 +52,7 @@ impl std::fmt::Debug for CommittedBatchProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CommittedBatchProvider")
             .field("inner", &self.inner)
+            .field("intervals", &self.intervals)
             .finish_non_exhaustive()
     }
 }
@@ -74,6 +80,7 @@ impl CommittedBatchProvider {
     /// For a chain that never migrated, the fallback is never hit: the SL lookup succeeds on the
     /// first try.
     pub async fn new(
+        runtime: &Runtime,
         l1_state: &L1State,
         max_l1_blocks_to_scan: u64,
         load_genesis_batch_info: impl AsyncFnOnce() -> StoredBatchInfo,
@@ -81,6 +88,7 @@ impl CommittedBatchProvider {
     ) -> anyhow::Result<Self> {
         let provider = Self {
             inner: Arc::new(RwLock::new(Inner::default())),
+            intervals: l1_state.settlement_layer_intervals.clone(),
             local_batch_storage,
         };
         // Special case for genesis
@@ -103,33 +111,50 @@ impl CommittedBatchProvider {
             l1_state.last_committed_batch,
             l1_state.last_proved_batch,
             l1_state.last_executed_batch,
+            l1_state.last_finalized_executed_batch,
         );
         provider
-            .load_batch_numbers(
-                l1_state.diamond_proxy_sl.clone(),
-                l1_state.diamond_proxy_l1.clone(),
-                max_l1_blocks_to_scan,
-                prioritized_batch_numbers,
-            )
+            .load_batch_numbers(max_l1_blocks_to_scan, prioritized_batch_numbers)
             .await?;
+
+        let provider_for_init = provider.clone();
+        let last_committed = l1_state.last_committed_batch;
+        let last_proved = l1_state.last_proved_batch;
+        let last_executed = l1_state.last_executed_batch;
+        let last_finalized_executed = l1_state.last_finalized_executed_batch;
+        runtime.spawn_critical_task("committed batch provider init", async move {
+            provider_for_init
+                .init(
+                    last_committed,
+                    last_proved,
+                    last_executed,
+                    last_finalized_executed,
+                    max_l1_blocks_to_scan,
+                )
+                .await
+                .expect("failed to initialize CommittedBatchProvider");
+        });
 
         Ok(provider)
     }
 
     /// Loads the remaining historical committed batches discovered on startup.
-    pub async fn init(&self, l1_state: &L1State, max_l1_blocks_to_scan: u64) -> anyhow::Result<()> {
+    async fn init(
+        &self,
+        last_committed_batch: u64,
+        last_proved_batch: u64,
+        last_executed_batch: u64,
+        last_finalized_executed_batch: u64,
+        max_l1_blocks_to_scan: u64,
+    ) -> anyhow::Result<()> {
         let (_, remaining_batch_numbers) = startup_batch_numbers(
-            l1_state.last_committed_batch,
-            l1_state.last_proved_batch,
-            l1_state.last_executed_batch,
+            last_committed_batch,
+            last_proved_batch,
+            last_executed_batch,
+            last_finalized_executed_batch,
         );
-        self.load_batch_numbers(
-            l1_state.diamond_proxy_sl.clone(),
-            l1_state.diamond_proxy_l1.clone(),
-            max_l1_blocks_to_scan,
-            remaining_batch_numbers,
-        )
-        .await?;
+        self.load_batch_numbers(max_l1_blocks_to_scan, remaining_batch_numbers)
+            .await?;
         Ok(())
     }
 
@@ -172,32 +197,25 @@ impl CommittedBatchProvider {
     /// unbounded number of L1 requests.
     async fn load_batch_numbers(
         &self,
-        diamond_proxy_sl: ZkChain<DynProvider>,
-        diamond_proxy_l1: ZkChain<DynProvider>,
         max_l1_blocks_to_scan: u64,
         batch_numbers: Vec<u64>,
     ) -> anyhow::Result<()> {
         stream::iter(batch_numbers)
-            .map(|batch_number| {
-                let provider = self.clone();
-                let diamond_proxy_sl = diamond_proxy_sl.clone();
-                let diamond_proxy_l1 = diamond_proxy_l1.clone();
-                async move {
-                    let discovered_batch = fetch_batch(
-                        diamond_proxy_sl,
-                        diamond_proxy_l1,
-                        batch_number,
-                        max_l1_blocks_to_scan,
-                        provider.local_batch_storage.as_ref(),
-                    )
-                    .await?;
-                    tracing::info!(
-                        "discovered committed batch {} on startup",
-                        discovered_batch.number()
-                    );
-                    provider.insert(discovered_batch);
-                    Ok::<_, anyhow::Error>(())
-                }
+            .map(|batch_number| async move {
+                let discovered_batch = fetch_batch(
+                    &self.intervals,
+                    batch_number,
+                    max_l1_blocks_to_scan,
+                    self.local_batch_storage.as_ref(),
+                )
+                .await?;
+                tracing::info!(
+                    batch_number = discovered_batch.number(),
+                    "discovered committed batch {} on startup",
+                    discovered_batch.number()
+                );
+                self.insert(discovered_batch);
+                anyhow::Ok(())
             })
             .buffer_unordered(INIT_MAX_PARALLEL_BATCH_FETCHES)
             .collect::<Vec<_>>()
@@ -218,65 +236,77 @@ impl Inner {
 
 /// Returns startup frontier batches first, then the remaining committed startup range.
 ///
-/// The prioritized vector preserves the bookkeeping order most likely to unblock startup:
-/// committed, proved, then executed.
+/// The prioritized vector contains every batch needed for immediate startup bookkeeping:
+/// committed, proved, operational executed, and finalized executed.
 fn startup_batch_numbers(
     last_committed_batch: u64,
     last_proved_batch: u64,
     last_executed_batch: u64,
+    last_finalized_executed_batch: u64,
 ) -> (Vec<u64>, Vec<u64>) {
-    let prioritized = [last_committed_batch, last_proved_batch, last_executed_batch];
+    let prioritized = [
+        last_committed_batch,
+        last_proved_batch,
+        last_executed_batch,
+        last_finalized_executed_batch,
+    ];
     let (prioritized_in_range, remaining_batch_numbers): (Vec<_>, Vec<_>) =
-        (last_executed_batch.max(1)..=last_committed_batch)
+        (last_finalized_executed_batch.max(1)..=last_committed_batch)
             .partition(|batch_number| prioritized.contains(batch_number));
-
     (prioritized_in_range, remaining_batch_numbers)
 }
 
-/// Resolves a committed batch by cascading through three sources in order of freshness:
-///   1. `diamond_proxy_sl` — the current settlement layer diamond, canonical for new commits.
-///   2. `diamond_proxy_l1` — the chain's L1 diamond. Distinct from `diamond_proxy_sl` only for
-///      a gateway-settling chain; holds commits that pre-date a *to-gateway* migration.
-///   3. `local_batch_storage` — local RocksDB populated by the previous run's
+/// Resolves a committed batch by routing through `SettlementLayerIntervals` to find the diamond
+/// proxy that holds the commit, then falling back to local storage if needed:
+///   1. `intervals.resolve_proxy(batch_number)` — picks the SL diamond (current SL, current
+///      gateway, or L1) the batch was committed to.
+///   2. `local_batch_storage` — local RocksDB populated by the previous run's
 ///      `L1PersistBatchWatcher`. The only way to recover commit metadata after a
-///      *from-gateway* migration, because those commits live on the former-gateway L2
-///      diamond which this node can no longer (and shouldn't need to) query.
+///      *from-gateway* migration, because those commits live on the former-gateway L2 diamond
+///      which this node can no longer (and shouldn't need to) query — in that case
+///      `resolve_proxy` errors out and we fall back here.
 ///
-/// For a chain that never migrated, sources 2 and 3 are never hit: source 1 resolves.
+/// For a chain that never migrated, source 2 is never hit: source 1 resolves.
 async fn fetch_batch(
-    diamond_proxy_sl: ZkChain<DynProvider>,
-    diamond_proxy_l1: ZkChain<DynProvider>,
+    intervals: &SettlementLayerIntervals,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
     local_batch_storage: &dyn ReadBatch,
 ) -> anyhow::Result<DiscoveredCommittedBatch> {
-    if let Some(batch) =
-        try_fetch_batch_on_proxy(&diamond_proxy_sl, batch_number, max_l1_blocks_to_scan).await?
-    {
-        return Ok(batch);
-    }
-    if let Some(batch) =
-        try_fetch_batch_on_proxy(&diamond_proxy_l1, batch_number, max_l1_blocks_to_scan).await?
-    {
-        return Ok(batch);
+    match intervals.resolve_proxy(batch_number) {
+        Ok(proxy) => {
+            if let Some(batch) =
+                try_fetch_batch_on_proxy(proxy, batch_number, max_l1_blocks_to_scan).await?
+            {
+                return Ok(batch);
+            }
+        }
+        Err(err) => {
+            tracing::info!(
+                batch_number,
+                error = %err,
+                "interval resolution unavailable for batch (likely former-gateway L2); \
+                 falling back to local storage",
+            );
+        }
     }
     match local_batch_storage.get_batch_by_number(batch_number) {
         Ok(Some(persisted)) => {
             tracing::info!(
                 batch_number,
-                "resolved committed batch from local storage after SL + L1 diamond missed \
+                "resolved committed batch from local storage after interval lookup missed \
                  (post-migration recovery path)",
             );
             Ok(persisted.committed_batch)
         }
         Ok(None) => anyhow::bail!(
-            "failed to find committed batch {batch_number} on current SL, L1 diamond, \
+            "failed to find committed batch {batch_number} via settlement layer intervals \
              or local storage",
         ),
         Err(err) => Err(err).with_context(|| {
             format!(
-                "failed to find committed batch {batch_number} on SL or L1 diamond, and \
-                 local storage lookup errored",
+                "failed to find committed batch {batch_number} via settlement layer intervals, \
+                 and local storage lookup errored",
             )
         }),
     }
@@ -305,14 +335,14 @@ mod tests {
 
     #[test]
     fn prioritizes_frontier_batches_once() {
-        assert_eq!(startup_batch_numbers(10, 8, 8), (vec![8, 10], vec![9]));
+        assert_eq!(startup_batch_numbers(10, 8, 8, 8), (vec![8, 10], vec![9]));
     }
 
     #[test]
     fn excludes_prioritized_batches_from_remaining_range() {
         assert_eq!(
-            startup_batch_numbers(10, 8, 6),
-            (vec![6, 8, 10], vec![7, 9])
+            startup_batch_numbers(10, 8, 6, 4),
+            (vec![4, 6, 8, 10], vec![5, 7, 9])
         );
     }
 }

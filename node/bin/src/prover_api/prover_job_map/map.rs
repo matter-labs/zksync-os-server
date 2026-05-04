@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Notify};
-use zksync_os_l1_sender::batcher_model::{BatchMetadata, SignedBatchEnvelope};
+use zksync_os_batch_types::batcher_model::{BatchMetadata, SignedBatchEnvelope};
 
 /// Concurrent map of prover jobs that support FRI and SNARK workflows.
 /// Imposes a limit on batch range
@@ -466,11 +466,11 @@ mod tests {
     use crate::prover_api::metrics::ProverStage;
     use alloy::primitives::{Address, B256};
     use std::time::Duration;
-    use zksync_os_batch_types::BatchInfo;
+    use zksync_os_batch_types::ExtendedCommitBatchInfo;
+    use zksync_os_batch_types::batcher_model::{BatchForSigning, BatchMetadata};
     use zksync_os_contract_interface::models::{
         CommitBatchInfo, DACommitmentScheme, StoredBatchInfo,
     };
-    use zksync_os_l1_sender::batcher_model::{BatchForSigning, BatchMetadata};
     use zksync_os_types::{ProtocolSemanticVersion, PubdataMode};
 
     fn create_test_batch_envelope(batch_number: u64) -> SignedBatchEnvelope<Vec<u8>> {
@@ -486,7 +486,7 @@ mod tests {
                 // unused
                 last_block_timestamp: Some(0),
             },
-            batch_info: BatchInfo {
+            batch_info: ExtendedCommitBatchInfo {
                 commit_info: CommitBatchInfo {
                     batch_number,
                     new_state_commitment: B256::ZERO,
@@ -505,16 +505,15 @@ mod tests {
                     operator_da_input: vec![],
                     sl_chain_id: 2,
                 },
-                chain_address: Address::ZERO,
+                protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
                 upgrade_tx_hash: None,
-                blob_sidecar: None,
             },
+            chain_address: Address::ZERO,
+            blob_sidecar: None,
             first_block_number: batch_number,
             last_block_number: batch_number,
             pubdata_mode: PubdataMode::Calldata,
             tx_count: 10,
-            execution_version: 1,
-            protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
             computational_native_used: None,
             logs: vec![],
             messages: vec![],
@@ -522,7 +521,7 @@ mod tests {
         };
 
         BatchForSigning::new(batch, vec![1, 2, 3])
-            .with_signatures(zksync_os_l1_sender::batcher_model::BatchSignatureData::NotNeeded)
+            .with_signatures(zksync_os_batch_types::batcher_model::BatchSignatureData::NotNeeded)
     }
 
     #[tokio::test]

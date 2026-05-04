@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use zksync_os_batch_types::{BatchSignatureSet, ValidatedBatchSignature};
-use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
-use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::{
+use zksync_os_batch_types::batcher_model::{
     BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
 };
+use zksync_os_batch_types::{BatchSignatureSet, ValidatedBatchSignature};
+use zksync_os_batcher_metrics::BatchExecutionStage;
+use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_network::{PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
@@ -120,6 +120,7 @@ struct BatchVerificationRunner {
     verify_request_tx: mpsc::Sender<VerifyBatch>,
     verify_result_rx: mpsc::Receiver<PeerVerifyBatchResult>,
     l1_chain_id: u64,
+    diamond_proxy_sl: Address,
     multisig_committer: Address,
     last_committed_batch_number: u64,
 }
@@ -128,13 +129,15 @@ struct BatchVerificationRunner {
 pub(crate) enum BatchVerificationError {
     #[error("Not enough signers: {0} < {1}")]
     NotEnoughSigners(u64, u64),
+    #[error("Verify request channel closed")]
+    VerifyRequestChannelClosed,
     #[error("Internal error: {0}")]
     Internal(String),
 }
 
 impl BatchVerificationError {
     fn retryable(&self) -> bool {
-        !matches!(self, BatchVerificationError::Internal(_))
+        matches!(self, BatchVerificationError::NotEnoughSigners(..))
     }
 }
 
@@ -155,6 +158,7 @@ impl BatchVerificationRunner {
             verify_request_tx: component.verify_request_tx,
             verify_result_rx: component.verify_result_rx,
             l1_chain_id: component.l1_state.sl_chain_id,
+            diamond_proxy_sl: component.l1_state.diamond_proxy_address_sl(),
             multisig_committer: component.l1_state.validator_timelock_sl,
             last_committed_batch_number: component.last_committed_batch_number,
         }
@@ -171,7 +175,7 @@ impl BatchVerificationRunner {
         );
         let metrics = &*BATCH_VERIFICATION_SEQUENCER_METRICS;
 
-        loop {
+        'runner: loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             let Some(batch_envelope) = batch_for_signing_receiver.recv().await else {
                 tracing::info!("BatchForSigning channel closed, exiting batch verification runner");
@@ -211,6 +215,13 @@ impl BatchVerificationRunner {
                     .await
                 {
                     Ok(result) => break Ok(result),
+                    Err(BatchVerificationError::VerifyRequestChannelClosed) => {
+                        tracing::info!(
+                            batch_number = batch_envelope.batch_number(),
+                            "Verify request channel closed, exiting batch verification runner"
+                        );
+                        break 'runner Ok(());
+                    }
                     Err(err) if err.retryable() => {
                         if Instant::now() < deadline {
                             retry_count += 1;
@@ -263,9 +274,10 @@ impl BatchVerificationRunner {
             request_id,
             "Starting batch verification"
         );
-        self.verify_request_tx.send(request).await.map_err(|_| {
-            BatchVerificationError::Internal("Verify request channel closed".into())
-        })?;
+        self.verify_request_tx
+            .send(request)
+            .await
+            .map_err(|_| BatchVerificationError::VerifyRequestChannelClosed)?;
 
         let mut responses = BatchSignatureSet::new();
         let start_time = Instant::now();
@@ -397,10 +409,11 @@ impl BatchVerificationRunner {
 
         let Ok(validated_signature) = signature.verify_signature(
             &batch_envelope.batch.previous_stored_batch_info,
-            &batch_envelope.batch.batch_info,
+            &batch_envelope.batch.batch_info.commit_info,
+            self.diamond_proxy_sl,
             self.l1_chain_id,
             self.multisig_committer,
-            &batch_envelope.batch.protocol_version,
+            &batch_envelope.batch.batch_info.protocol_version,
         ) else {
             BATCH_VERIFICATION_SEQUENCER_METRICS.failed_responses[&"invalid_signature"].inc();
             tracing::warn!(
@@ -436,10 +449,10 @@ mod tests {
     use alloy::signers::local::PrivateKeySigner;
     use secrecy::SecretString;
     use tokio::sync::mpsc;
-    use zksync_os_batch_types::{BatchSignature, ValidatedBatchSignature};
-    use zksync_os_l1_sender::batcher_model::{
+    use zksync_os_batch_types::batcher_model::{
         BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
     };
+    use zksync_os_batch_types::{BatchSignature, ValidatedBatchSignature};
     use zksync_os_network::{PeerVerifyBatchResult, VerifyBatchResult};
 
     const DUMMY_ADDRESS: &str = "0x1111111111111111111111111111111111111111";
@@ -479,10 +492,11 @@ mod tests {
         let addr = signer.address();
         let sig = BatchSignature::sign_batch(
             &batch.batch.previous_stored_batch_info,
-            &batch.batch.batch_info,
+            &batch.batch.batch_info.commit_info,
+            batch.batch.chain_address,
             CHAIN_ID,
             MULTISIG_COMMITTER_DUMMY.parse().unwrap(),
-            &batch.batch.protocol_version,
+            &batch.batch.batch_info.protocol_version,
             &signer,
         )
         .await;
@@ -521,6 +535,7 @@ mod tests {
             verify_request_tx,
             verify_result_rx,
             l1_chain_id: CHAIN_ID,
+            diamond_proxy_sl: Address::ZERO,
             multisig_committer: MULTISIG_COMMITTER_DUMMY.parse().unwrap(),
             last_committed_batch_number,
         };
@@ -645,5 +660,27 @@ mod tests {
 
         assert!(output_rx.recv().await.is_none());
         run_handle.await.expect("run task should complete");
+    }
+
+    #[tokio::test]
+    async fn run_returns_ok_if_verify_request_channel_is_closed() {
+        let batch = dummy_batch_envelope(3, 10, 15);
+        let (verifier, verify_request_rx, _verify_result_tx) = make_verifier(Vec::new(), 0);
+        drop(verify_request_rx);
+
+        let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
+        let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
+        let peekable = zksync_os_pipeline::PeekableReceiver::new(input_rx);
+
+        input_tx.send(batch).await.expect("failed to send batch");
+        drop(input_tx);
+
+        let run_handle = tokio::spawn(async move { verifier.run(peekable, output_tx).await });
+
+        run_handle
+            .await
+            .expect("run task should complete")
+            .expect("run should exit successfully when verify request channel is closed");
+        assert!(output_rx.recv().await.is_none());
     }
 }

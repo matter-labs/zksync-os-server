@@ -1,5 +1,5 @@
 use alloy::consensus::{BlobTransactionSidecar, SidecarBuilder, SimpleCoder};
-use alloy::primitives::{Address, B256, BlockNumber, U256, keccak256};
+use alloy::primitives::{B256, BlockNumber, U256, keccak256};
 use alloy::sol_types::SolValue;
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
@@ -14,24 +14,23 @@ use zksync_os_types::{
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 
+/// Commitment information about a batch.
+/// Contains enough data to restore `StoredBatchInfo` that got applied on-chain.
+/// Contains enough data to construct public input hash.
+/// todo: these fields should be a part of `CommitBatchInfo` but needs to be changed on L1 contracts' side first
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct BatchInfo {
+pub struct ExtendedCommitBatchInfo {
     #[serde(flatten)]
     pub commit_info: CommitBatchInfo,
-    /// Chain's diamond proxy address on L1.
-    // todo: this should not be a part of this struct as this is static information for the entire chain
-    //       but we cannot remove it without breaking backwards compatibility
-    pub chain_address: Address,
     /// L1 protocol upgrade transaction that was finalized in this batch. Missing for the vast
     /// majority of batches.
     pub upgrade_tx_hash: Option<B256>,
-    /// Blobs sidecar that should be sent with commit operation.
-    pub blob_sidecar: Option<BlobTransactionSidecar>,
+    pub protocol_version: ProtocolSemanticVersion,
 }
 
-impl BatchInfo {
+impl ExtendedCommitBatchInfo {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn build(
         blocks: Vec<(
             &BlockOutput,
             &BlockContext,
@@ -39,13 +38,12 @@ impl BatchInfo {
             &zksync_os_merkle_tree::TreeBatchOutput,
         )>,
         chain_id: u64,
-        chain_address: Address,
         batch_number: u64,
         pubdata_mode: PubdataMode,
         sl_chain_id: u64,
         multichain_root: B256,
         protocol_version: &ProtocolSemanticVersion,
-    ) -> Self {
+    ) -> (Self, Option<BlobTransactionSidecar>) {
         let mut priority_operations_hash = keccak256([]);
         let mut number_of_layer1_txs = 0;
         let mut number_of_layer2_txs = 0;
@@ -178,19 +176,21 @@ impl BatchInfo {
             operator_da_input: da_fields.operator_da_input,
             sl_chain_id,
         };
-        Self {
-            commit_info,
-            chain_address,
-            upgrade_tx_hash,
-            blob_sidecar: da_fields.blob_sidecar,
-        }
+        (
+            Self {
+                commit_info,
+                protocol_version: protocol_version.clone(),
+                upgrade_tx_hash,
+            },
+            da_fields.blob_sidecar,
+        )
     }
 
     /// Calculate keccak256 hash of BatchOutput part of public input
-    pub fn public_input_hash(&self, protocol_version: &ProtocolSemanticVersion) -> B256 {
+    pub fn public_input_hash(&self) -> B256 {
         let commit_info = &self.commit_info;
         let upgrade_tx_hash = self.upgrade_tx_hash.unwrap_or(B256::ZERO);
-        match protocol_version.minor {
+        match self.protocol_version.minor {
             // v30 and v31 use different packed layouts for batch output hash:
             // v31 inserts number_of_layer2_txs between L1 tx count and priority_operations_hash.
             30 => B256::from(keccak256(
@@ -225,12 +225,12 @@ impl BatchInfo {
                 )
                     .abi_encode_packed(),
             )),
-            _ => panic!("Unsupported protocol version: {protocol_version}"),
+            _ => panic!("Unsupported protocol version: {}", self.protocol_version),
         }
     }
 
-    pub fn into_stored(self, protocol_version: &ProtocolSemanticVersion) -> StoredBatchInfo {
-        let commitment = self.public_input_hash(protocol_version);
+    pub fn into_stored(self) -> StoredBatchInfo {
+        let commitment = self.public_input_hash();
         let commit_info = self.commit_info;
         StoredBatchInfo {
             batch_number: commit_info.batch_number,
@@ -246,7 +246,7 @@ impl BatchInfo {
     }
 }
 
-impl Deref for BatchInfo {
+impl Deref for ExtendedCommitBatchInfo {
     type Target = CommitBatchInfo;
 
     fn deref(&self) -> &Self::Target {
@@ -254,7 +254,7 @@ impl Deref for BatchInfo {
     }
 }
 
-impl DerefMut for BatchInfo {
+impl DerefMut for ExtendedCommitBatchInfo {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.commit_info
     }

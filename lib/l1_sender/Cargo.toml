@@ -11,17 +11,12 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_contract_interface.workspace = true
-zksync_os_mini_merkle_tree.workspace = true
 zksync_os_observability.workspace = true
-zksync_os_merkle_tree.workspace = true
 zksync_os_pipeline.workspace = true
 zksync_os_types.workspace = true
 zksync_os_batch_types.workspace = true
+zksync_os_batcher_metrics.workspace = true
 zksync_os_operator_signer.workspace = true
-
-zksync_os_interface.workspace = true
-zk_ee.workspace = true
-zk_os_basic_system.workspace = true
 
 alloy = { workspace = true, default-features = false, features = [
     "reqwest",
@@ -31,17 +26,9 @@ alloy = { workspace = true, default-features = false, features = [
 ] }
 anyhow.workspace = true
 async-trait.workspace = true
-blake2.workspace = true
 futures.workspace = true
-ruint.workspace = true
-serde.workspace = true
-secrecy.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-time = { workspace = true, features = ["parsing", "formatting"] }
 itertools.workspace = true
 vise.workspace = true
 thiserror.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true

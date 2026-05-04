@@ -11,7 +11,7 @@ use jsonrpsee::proc_macros::rpc;
 pub trait Web3Api {
     /// Returns current client version.
     #[method(name = "clientVersion")]
-    async fn client_version(&self) -> RpcResult<String>;
+    fn client_version(&self) -> RpcResult<String>;
 
     /// Returns sha3 of the given data.
     #[method(name = "sha3")]

@@ -1,0 +1,15 @@
+[package]
+name = "zksync_os_consensus_types"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+openraft.workspace = true
+reth-network-peers.workspace = true
+zksync_os_storage_api.workspace = true

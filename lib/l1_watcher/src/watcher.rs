@@ -1,50 +1,95 @@
-use crate::ProcessRawEvents;
 use crate::metrics::METRICS;
-use alloy::primitives::BlockNumber;
+use crate::{L1WatcherConfig, ProcessRawEvents};
+use alloy::eips::BlockId;
+use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
-use alloy::rpc::types::{Filter, Log};
+use alloy::rpc::types::{Filter, Log, ValueOrArray};
 use std::time::Duration;
 
 /// An abstract watcher for events.
 /// Handles polling for new blocks and extracting logs,
 /// while delegating the actual event processing to a user-provided processor.
+///
+/// May be run unbounded (live tail) or bounded by `end_block` (used by
+/// [`SlAwareL1Watcher`](crate::SlAwareL1Watcher) to scan a closed segment to completion).
 pub struct L1Watcher {
     provider: DynProvider,
+    address: ValueOrArray<Address>,
     next_block: BlockNumber,
+    /// `Some(eb)` makes the watcher exit `run` once `next_block > eb`. `None` runs forever.
+    end_block: Option<BlockNumber>,
     max_blocks_to_process: u64,
-    confirmations: BlockNumber,
+    block_boundary: BlockBoundary,
     poll_interval: Duration,
-    processor: Box<dyn ProcessRawEvents>,
+    pub(crate) processor: Box<dyn ProcessRawEvents>,
+}
+
+enum BlockBoundary {
+    Confirmed { confirmations: BlockNumber },
+    Finalized,
 }
 
 impl L1Watcher {
     pub(crate) async fn new(
+        config: L1WatcherConfig,
         provider: DynProvider,
+        address: ValueOrArray<Address>,
         next_block: BlockNumber,
-        max_blocks_to_process: u64,
-        mut confirmations: BlockNumber,
+        end_block: Option<BlockNumber>,
         l1_chain_id: u64,
-        poll_interval: Duration,
         processor: Box<dyn ProcessRawEvents>,
     ) -> anyhow::Result<Self> {
-        if provider.get_chain_id().await? != l1_chain_id {
+        let confirmations = if provider.get_chain_id().await? != l1_chain_id {
             // Gateway case, zero out confirmations.
-            confirmations = 0;
-        }
+            0
+        } else {
+            config.confirmations
+        };
 
         Ok(Self {
             provider,
+            address,
             next_block,
-            max_blocks_to_process,
-            confirmations,
-            poll_interval,
+            end_block,
+            max_blocks_to_process: config.max_blocks_to_process,
+            block_boundary: BlockBoundary::Confirmed { confirmations },
+            poll_interval: config.poll_interval,
             processor,
         })
+    }
+
+    pub(crate) fn new_finalized(
+        config: L1WatcherConfig,
+        provider: DynProvider,
+        address: ValueOrArray<Address>,
+        next_block: BlockNumber,
+        end_block: Option<BlockNumber>,
+        processor: Box<dyn ProcessRawEvents>,
+    ) -> Self {
+        Self {
+            provider,
+            address,
+            next_block,
+            end_block,
+            max_blocks_to_process: config.max_blocks_to_process,
+            block_boundary: BlockBoundary::Finalized,
+            poll_interval: config.poll_interval,
+            processor,
+        }
     }
 }
 
 impl L1Watcher {
+    /// Polls for new events.
+    ///
+    /// For unbounded watchers (`end_block = None`) this never returns; for bounded watchers
+    /// it returns once the cursor passes `end_block`.
     pub async fn run(mut self) {
+        self.run_inner().await;
+    }
+
+    /// Non-consuming version of `run`, intended for internal usage in this crate.
+    pub(crate) async fn run_inner(&mut self) {
         let mut timer = tokio::time::interval(self.poll_interval);
         loop {
             timer.tick().await;
@@ -52,17 +97,47 @@ impl L1Watcher {
                 tracing::error!("l1 watcher fatal error: {e}");
                 panic!("watcher failed: {e}");
             }
+            if let Some(eb) = self.end_block
+                && self.next_block > eb
+            {
+                return;
+            }
         }
     }
 
     async fn poll(&mut self) -> Result<(), L1WatcherError> {
-        let latest_block = self.provider.get_block_number().await?;
-        let latest_confirmed_block = latest_block.saturating_sub(self.confirmations);
+        let cap = match self.end_block {
+            // Closed segment: `end_block` was already resolved against a finalized/executed batch,
+            // so the confirmation/finalization window doesn't apply and we don't need an
+            // additional RPC.
+            Some(eb) => eb,
+            None => match self.block_boundary {
+                BlockBoundary::Confirmed { confirmations } => self
+                    .provider
+                    .get_block_number()
+                    .await?
+                    .saturating_sub(confirmations),
+                BlockBoundary::Finalized => {
+                    let Some(finalized_block) = self
+                        .provider
+                        .get_block_number_by_id(BlockId::finalized())
+                        .await?
+                    else {
+                        tracing::debug!(
+                            event_name = &self.processor.name(),
+                            "no finalized L1 block available yet"
+                        );
+                        return Ok(());
+                    };
+                    finalized_block
+                }
+            },
+        };
 
-        while self.next_block <= latest_confirmed_block {
+        while self.next_block <= cap {
             let from_block = self.next_block;
             // Inspect up to `self.max_blocks_to_process` blocks at a time
-            let to_block = latest_confirmed_block.min(from_block + self.max_blocks_to_process - 1);
+            let to_block = cap.min(from_block + self.max_blocks_to_process - 1);
 
             let events = self
                 .extract_logs_from_l1_blocks(from_block, to_block)
@@ -74,7 +149,9 @@ impl L1Watcher {
             METRICS.most_recently_scanned_l1_block[&self.processor.name()].set(to_block);
 
             for event in events {
-                self.processor.process_raw_event(event).await?;
+                self.processor
+                    .process_raw_event(&self.provider, event)
+                    .await?;
             }
 
             self.next_block = to_block + 1;
@@ -95,7 +172,7 @@ impl L1Watcher {
             .from_block(from)
             .to_block(to)
             .event_signature(self.processor.event_signatures())
-            .address(self.processor.contract_addresses());
+            .address(self.address.clone());
         if let Some(topic1) = self.processor.topic1_filter() {
             filter = filter.topic1(topic1);
         }
@@ -103,14 +180,14 @@ impl L1Watcher {
 
         if new_logs.is_empty() {
             tracing::trace!(
-                event_name = &self.processor.name(),
+                event_name = self.processor.name(),
                 l1_block_from = from,
                 l1_block_to = to,
                 "no new events"
             );
         } else {
             tracing::info!(
-                event_name = &self.processor.name(),
+                event_name = self.processor.name(),
                 event_count = new_logs.len(),
                 l1_block_from = from,
                 l1_block_to = to,

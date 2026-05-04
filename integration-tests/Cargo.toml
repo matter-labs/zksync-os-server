@@ -29,7 +29,7 @@ alloy = { workspace = true, default-features = false, features = ["provider-anvi
 anyhow.workspace = true
 flate2.workspace = true
 fs2.workspace = true
-reqwest = { workspace = true, optional = true }
+reqwest.workspace = true
 tar.workspace = true
 tokio.workspace = true
 tempfile.workspace = true
@@ -57,5 +57,5 @@ test-log = { workspace = true, default-features = false, features = ["trace", "c
 regex.workspace = true
 
 [features]
-prover-tests = ["dep:reqwest"]
+prover-tests = []
 gpu-prover-tests = ["prover-tests"]

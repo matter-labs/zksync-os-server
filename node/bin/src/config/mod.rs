@@ -46,7 +46,7 @@ pub use build_external_config::{build_external_config, load_config_file_sources}
 ///    files are used. In Docker, the `local-chains/` directory is not copied into the image,
 ///    so no files are auto-loaded and config must be provided entirely via environment variables.
 /// 3. **Environment variables** — always override everything.
-#[derive(Debug, ConfigValidate)]
+#[derive(Clone, Debug, ConfigValidate)]
 #[config_validate(root)]
 pub struct Config {
     pub general_config: GeneralConfig,
@@ -635,6 +635,10 @@ pub struct SequencerConfig {
     /// If set, external node will sync up to and including this block number and then stop processing blocks.
     #[config(default)]
     pub en_sync_up_to_block: Option<u64>,
+
+    /// Maximum replay records requested per p2p replay response message by an external node.
+    #[config(default_t = 1)]
+    pub en_max_blocks_per_replay_message: u64,
 
     #[config(default, with = Serde![*])]
     /// List of (block_number, db_key) pairs to override when downloading replay records.

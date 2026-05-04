@@ -20,7 +20,7 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
     let tester = Tester::setup().await?;
-    let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+    let upgrade_tester = UpgradeTester::for_default_upgrade(&tester).await?;
 
     // Prepare protocol upgrade
     let protocol_upgrade = upgrade_tester
@@ -49,14 +49,12 @@ async fn upgrade_patch_no_deployments_gateway() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
-    // Test that we can deposit L2 funds from a rich L1 account
     let gateway_tester = GatewayTester::builder()
         .protocol_version(NEXT_PROTOCOL_VERSION)
         .num_chains(0)
         .build()
         .await?;
-    let tester = gateway_tester.into_gateway();
-    let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+    let upgrade_tester = UpgradeTester::for_default_upgrade(gateway_tester.gateway()).await?;
 
     // Prepare protocol upgrade
     let protocol_upgrade = upgrade_tester
@@ -90,8 +88,7 @@ async fn upgrade_patch_no_deployments_settles_to_gateway() -> anyhow::Result<()>
         .num_chains(1)
         .build()
         .await?;
-    let tester = gateway_tester.into_primary_chain();
-    let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+    let upgrade_tester = UpgradeTester::for_default_upgrade(gateway_tester.chain(0)).await?;
 
     let protocol_upgrade = upgrade_tester
         .protocol_upgrade_builder()
@@ -131,12 +128,12 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
     .into_iter()
     .collect();
 
-    // Test that we can deposit L2 funds from a rich L1 account
-    let tester = Tester::builder().enable_p2p().build().await?;
-    let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+    let tester = Tester::setup().await?;
+    let upgrade_tester = UpgradeTester::for_default_upgrade(&tester).await?;
 
-    // Publish the bytecodes for upgrade beforehand via L2 deploy
-    // so that the preimages are known to the node.
+    // Pre-register the force-deployment bytecode via an L2 create tx.
+    // This test exercises the legacy path where the node already knows the preimage
+    // and the upgrade tx does not carry `factory_deps`.
     upgrade_tester
         .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
         .await?;
@@ -189,7 +186,10 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
     let main_node_block = upgrade_tester.tester.l2_provider.get_block_number().await?;
 
     // Ensure that EN can sync from the upgraded node.
-    let en1 = upgrade_tester.tester.launch_external_node().await?;
+    let en1 = upgrade_tester
+        .tester
+        .launch_from_config(upgrade_tester.tester.external_node_config())
+        .await?;
 
     while en1.l2_provider.get_block_number().await? < main_node_block {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -219,20 +219,20 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
     let gateway_tester = GatewayTester::builder()
         .protocol_version(NEXT_PROTOCOL_VERSION)
         .num_chains(1)
-        .enable_chain_p2p()
         .build()
         .await?;
-    let tester = gateway_tester.into_primary_chain();
-    let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+    let upgrade_tester = UpgradeTester::for_default_upgrade(gateway_tester.chain(0)).await?;
 
-    // Publish to the L1 BytecodesSupplier only (no L2 deploy). This exercises
-    // the end-to-end path: the server discovers preimages from `EVMBytecodePublished`
-    // events via `fetch_force_preimages`.
+    // Publish the raw runtime bytecode from the force-deployment payload to the
+    // L1 BytecodesSupplier. This exercises the supplier-backed path where the
+    // node discovers force-deployment preimages from `EVMBytecodePublished`
+    // events using the upgrade tx `factory_deps`.
     upgrade_tester
         .publish_bytecodes_to_l1_supplier([SampleForceDeployment::DEPLOYED_BYTECODE.clone()])
         .await?;
 
-    // Prepare protocol upgrade with factory_deps so the server fetches from the supplier.
+    // Prepare protocol upgrade with `factory_deps` so the node fetches preimages
+    // from the supplier instead of relying on a prior L2 deployment.
     let protocol_upgrade = upgrade_tester
         .protocol_upgrade_builder()
         .await?
@@ -263,7 +263,10 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
     let main_node_block = upgrade_tester.tester.l2_provider.get_block_number().await?;
 
     // Ensure that EN can sync from the upgraded node.
-    let en1 = upgrade_tester.tester.launch_external_node().await?;
+    let en1 = upgrade_tester
+        .tester
+        .launch_from_config(upgrade_tester.tester.external_node_config())
+        .await?;
 
     while en1.l2_provider.get_block_number().await? < main_node_block {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;

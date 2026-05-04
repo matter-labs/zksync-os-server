@@ -70,7 +70,7 @@ use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
-    L1TxWatcher, L1UpgradeTxWatcher,
+    L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
@@ -325,6 +325,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
 
     let committed_batch_provider = CommittedBatchProvider::new(
+        runtime,
         &l1_state,
         config.l1_watcher_config.max_blocks_to_process,
         || async {
@@ -338,16 +339,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     .await
     .expect("failed to init CommittedBatchProvider");
 
-    let committed_batch_provider_for_init = committed_batch_provider.clone();
-    let l1_state_for_init = l1_state.clone();
-    let max_blocks_to_process = config.l1_watcher_config.max_blocks_to_process;
-    runtime.spawn_critical_task("committed batch provider init", async move {
-        committed_batch_provider_for_init
-            .init(&l1_state_for_init, max_blocks_to_process)
-            .await
-            .expect("failed to initialize CommittedBatchProvider");
-    });
-
     let state = State::new(&config.general_config, &genesis).await;
 
     tracing::info!("Initializing mempools");
@@ -358,8 +349,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.tx_validator_config.clone().into(),
     );
 
-    let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
-        commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider).await;
+    let (
+        last_l1_committed_block,
+        last_l1_proved_block,
+        last_l1_executed_block,
+        last_l1_finalized_executed_block,
+    ) = commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider).await;
 
     let node_startup_state = NodeStateOnStartup {
         node_role,
@@ -396,6 +391,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_committed_batch: l1_state.last_committed_batch,
         last_executed_block: last_l1_executed_block,
         last_executed_batch: l1_state.last_executed_batch,
+        last_finalized_executed_block: last_l1_finalized_executed_block,
+        last_finalized_executed_batch: l1_state.last_finalized_executed_batch,
     });
 
     // `starting_block` - the block number to go through the pipeline.
@@ -460,6 +457,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
+                None,
             )
             .await
         } else {
@@ -477,6 +475,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 ZksProtocolConfig::ExternalNode(ExternalNodeProtocolConfig {
                     starting_block: Arc::new(RwLock::new(starting_block)),
                     record_overrides,
+                    max_blocks_per_message: config
+                        .sequencer_config
+                        .en_max_blocks_per_replay_message,
                     replay_sender,
                     verification: config.batch_verification_config.client_enabled.then(|| {
                         ExternalNodeVerifierConfig {
@@ -488,6 +489,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
+                None,
             )
             .await
         }
@@ -541,6 +543,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .await
         .expect("failed to start L1 execute watcher")
+        .run(),
+    );
+
+    runtime.spawn_critical_task(
+        "l1 finalized execute watcher",
+        L1FinalizedExecuteWatcher::create_finalized_watcher(
+            config.l1_watcher_config.clone().into(),
+            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            committed_batch_provider.clone(),
+            finality_storage.clone(),
+        )
+        .await
+        .expect("failed to start finalized L1 execute watcher")
         .run(),
     );
 
@@ -776,6 +791,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 upgrade transaction watcher",
         L1UpgradeTxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
+            chain_id,
+            node_startup_state.l1_state.bridgehub_l1.clone(),
             node_startup_state.l1_state.diamond_proxy_l1.clone(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             bytecode_supplier_address,
@@ -803,11 +820,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 batch persist watcher",
         L1PersistBatchWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            node_startup_state
+                .l1_state
+                .settlement_layer_intervals
+                .clone(),
             persistent_batch_storage.clone(),
-            node_startup_state.l1_state.l1_chain_id,
         )
-        .await
         .expect("failed to start L1 batch persist watcher")
         .run(),
     );
@@ -1180,6 +1198,7 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
             commit_submitted_tx: Some(commit_submitted_tx),
+            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })
         .pipe(snark_proving_step)
         .pipe(GaplessL1ProofSender::new(
@@ -1191,6 +1210,7 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
             commit_submitted_tx: None,
+            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })
         .pipe(
             PriorityTreePipelineStep::new(
@@ -1207,6 +1227,7 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: config.general_config.gateway_rpc_url.is_some(),
             commit_submitted_tx: None,
+            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })
         .pipe(BatchSink::new(internal_config_manager));
 
@@ -1390,7 +1411,7 @@ fn check_batch_verification_mismatch(
 async fn commit_proof_execute_block_numbers(
     l1_state: &L1State,
     committed_batch_provider: &CommittedBatchProvider,
-) -> (u64, u64, u64) {
+) -> (u64, u64, u64, u64) {
     let last_committed_block = if l1_state.last_committed_batch == 0 {
         0
     } else {
@@ -1418,7 +1439,20 @@ async fn commit_proof_execute_block_numbers(
             .expect("last_executed_batch is expected to be loaded")
             .last_block_number()
     };
-    (last_committed_block, last_proved_block, last_executed_block)
+    let last_finalized_executed_block = if l1_state.last_finalized_executed_batch == 0 {
+        0
+    } else {
+        committed_batch_provider
+            .get(l1_state.last_finalized_executed_batch)
+            .expect("last_finalized_executed_batch is expected to be loaded")
+            .last_block_number()
+    };
+    (
+        last_committed_block,
+        last_proved_block,
+        last_executed_block,
+        last_finalized_executed_block,
+    )
 }
 
 fn run_fake_snark_provers(

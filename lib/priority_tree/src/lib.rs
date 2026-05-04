@@ -5,10 +5,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
+use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 use zksync_os_crypto::hasher::Hasher;
 use zksync_os_crypto::hasher::keccak::KeccakHasher;
-use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_watcher::CommittedBatchProvider;
@@ -221,12 +221,14 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                 }
             };
             latency_tracker.enter_state(GenericComponentState::Processing);
-            let mut priority_ops = Vec::new();
-            let mut interop_roots = Vec::new();
-            let mut merkle_tree = self.merkle_tree.lock().await;
+
+            // Phase 1: fetch all replay data before taking the tree lock.
+            // wait_for_replay_record is async and must not run under the mutex.
+            let mut batch_data = Vec::with_capacity(batch_ranges.len());
             for (batch_number, block_range) in batch_ranges.clone() {
-                let mut first_priority_op_id_in_batch = None;
-                let mut priority_op_count = 0;
+                let mut priority_hashes = Vec::new();
+                let mut first_priority_op_id: Option<usize> = None;
+                let mut priority_op_count: usize = 0;
                 let mut batch_interop_roots = Vec::new();
                 let last_block_number = *block_range.end();
                 for block_number in block_range {
@@ -236,10 +238,9 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                     for tx in replay.transactions {
                         match tx.into_envelope() {
                             ZkEnvelope::L1(l1_tx) => {
-                                first_priority_op_id_in_batch
-                                    .get_or_insert(l1_tx.priority_id() as usize);
+                                first_priority_op_id.get_or_insert(l1_tx.priority_id() as usize);
                                 priority_op_count += 1;
-                                merkle_tree.push_hash(l1_tx.hash().0.into());
+                                priority_hashes.push(l1_tx.hash().0.into());
                             }
                             ZkEnvelope::System(system_tx) => {
                                 batch_interop_roots
@@ -249,61 +250,93 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                         }
                     }
                 }
-                interop_roots.push(batch_interop_roots);
-                tracing::info!(
+                batch_data.push((
                     batch_number,
                     last_block_number,
+                    priority_hashes,
+                    first_priority_op_id,
                     priority_op_count,
-                    "Processing batch in priority tree manager"
-                );
+                    batch_interop_roots,
+                ));
+            }
 
-                latency_tracker.enter_state(GenericComponentState::WaitingSend);
-                priority_ops_internal_sender
-                    .send((
+            // Phase 2: synchronous tree mutations and proof generation — no .await inside.
+            let mut priority_ops = Vec::new();
+            let mut interop_roots = Vec::new();
+            let mut cache_events: Vec<(u64, u64, Option<usize>)> = Vec::new();
+            {
+                let mut merkle_tree = self.merkle_tree.lock().await;
+                for (
+                    batch_number,
+                    last_block_number,
+                    priority_hashes,
+                    first_priority_op_id,
+                    priority_op_count,
+                    batch_interop_roots,
+                ) in batch_data
+                {
+                    for hash in priority_hashes {
+                        merkle_tree.push_hash(hash);
+                    }
+                    interop_roots.push(batch_interop_roots);
+                    tracing::info!(
                         batch_number,
                         last_block_number,
-                        first_priority_op_id_in_batch.map(|id| id + priority_op_count - 1),
-                    ))
+                        priority_op_count,
+                        "Processing batch in priority tree manager"
+                    );
+                    cache_events.push((
+                        batch_number,
+                        last_block_number,
+                        first_priority_op_id.map(|id| id + priority_op_count - 1),
+                    ));
+                    if first_priority_op_id.is_none() {
+                        // Short-circuit for batches with no L1 txs.
+                        priority_ops.push(PriorityOpsBatchInfo::default());
+                        continue;
+                    }
+                    let range = {
+                        let start = first_priority_op_id.expect("at least one L1 tx")
+                            - merkle_tree.start_index();
+                        start..(start + priority_op_count)
+                    };
+                    tracing::trace!(
+                        "getting merkle paths for priority ops range {range:?}, merkle_tree.start_index() = {}, merkle_tree.length() = {}",
+                        merkle_tree.start_index(),
+                        merkle_tree.length(),
+                    );
+                    let (_, left, right) =
+                        merkle_tree.merkle_root_and_paths_for_range(range.clone());
+                    let hashes = merkle_tree.hashes_range(range);
+                    priority_ops.push(PriorityOpsBatchInfo {
+                        left_path: left
+                            .into_iter()
+                            .map(Option::unwrap_or_default)
+                            .map(|hash| TxHash::from(hash.0))
+                            .collect(),
+                        right_path: right
+                            .into_iter()
+                            .map(Option::unwrap_or_default)
+                            .map(|hash| TxHash::from(hash.0))
+                            .collect(),
+                        item_hashes: hashes
+                            .into_iter()
+                            .map(|hash| TxHash::from(hash.0))
+                            .collect(),
+                    });
+                }
+            } // merkle_tree lock released here — no .await was called while locked
+
+            // Phase 3: notify keep_caching. Safe to .await here — lock is not held.
+            for event in cache_events {
+                latency_tracker.enter_state(GenericComponentState::WaitingSend);
+                priority_ops_internal_sender
+                    .send(event)
                     .await
                     .context("failed to send priority ops count")?;
                 latency_tracker.enter_state(GenericComponentState::Processing);
-
-                if first_priority_op_id_in_batch.is_none() {
-                    // Short-circuit for batches with no L1 txs.
-                    priority_ops.push(PriorityOpsBatchInfo::default());
-                    continue;
-                }
-                let range = {
-                    let start = first_priority_op_id_in_batch.expect("at least one L1 tx")
-                        - merkle_tree.start_index();
-                    start..(start + priority_op_count)
-                };
-                tracing::trace!(
-                    "getting merkle paths for priority ops range {range:?}, merkle_tree.start_index() = {}, merkle_tree.length() = {}",
-                    merkle_tree.start_index(),
-                    merkle_tree.length(),
-                );
-
-                let (_, left, right) = merkle_tree.merkle_root_and_paths_for_range(range.clone());
-                let hashes = merkle_tree.hashes_range(range);
-                priority_ops.push(PriorityOpsBatchInfo {
-                    left_path: left
-                        .into_iter()
-                        .map(Option::unwrap_or_default)
-                        .map(|hash| TxHash::from(hash.0))
-                        .collect(),
-                    right_path: right
-                        .into_iter()
-                        .map(Option::unwrap_or_default)
-                        .map(|hash| TxHash::from(hash.0))
-                        .collect(),
-                    item_hashes: hashes
-                        .into_iter()
-                        .map(|hash| TxHash::from(hash.0))
-                        .collect(),
-                });
             }
-            drop(merkle_tree);
+
             if let Some(s) = &execute_batches_sender {
                 latency_tracker.enter_state(GenericComponentState::WaitingSend);
                 s.send(L1SenderCommand::SendToL1(ExecuteCommand::new(
@@ -337,7 +370,7 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                 return Ok(());
             };
             finality_receiver
-                .wait_for(|f| last_block_number <= f.last_executed_block)
+                .wait_for(|f| last_block_number <= f.last_finalized_executed_block)
                 .await
                 .context("failed to wait for executed block number")?;
 

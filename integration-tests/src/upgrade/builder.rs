@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, B256, Bytes, U256};
+use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy::sol_types::{SolCall, SolValue};
 use blake2::{Blake2s256, Digest};
 use std::collections::BTreeMap;
@@ -142,9 +142,7 @@ impl ProtocolUpgradeBuilder {
             //        VM uses Blake2s). This is the **lookup key** the
             //        `set_bytecode_on_address` system hook on L2 hands to the
             //        preimage cache, and the corresponding preimage body must be
-            //        exactly the raw bytecode (length = observable len). It is also
-            //        what the upgrade tx's `factory_deps` array carries so the
-            //        server can fetch matching preimages from `BytecodesSupplier`.
+            //        exactly the raw bytecode (length = observable len).
             //
             //   3) `Blake2s256(raw + padding + artifacts)`
             //        Aliases: `account_properties.bytecode_hash`, "padded blake
@@ -186,16 +184,26 @@ impl ProtocolUpgradeBuilder {
             //   - records a *new* preimage of shape B keyed by hash (3),
             //   - writes hash (3) to `account.bytecode_hash`.
             //
-            // So the upgrade tx must carry: hash (2), `bytecodeLength = observable
-            // len`, hash (1) — and the supplier (or test fixture) must register
-            // shape A under hash (2). Anything else either panics on length, fails
-            // the proof-env hash check, or silently writes an unusable account.
+            // So the inner force-deployment payload must carry: hash (2),
+            // `bytecodeLength = observable len`, hash (1) — and the supplier
+            // (or test fixture) must register shape A under hash (2). Anything
+            // else either panics on length, fails the proof-env hash check, or
+            // silently writes an unusable account.
+            //
+            // The `L2CanonicalTransaction.factoryDeps` array is a *separate*
+            // field and carries hash (1), matching `EVMBytecodePublished`'s
+            // topic1 on `BytecodesSupplier`. The server uses these to topic-
+            // filter supplier events in `fetch_force_preimages`, then re-keys
+            // each fetched preimage under hash (2) before insertion. zksync-os
+            // itself parses `factoryDeps` but never resolves it as preimages,
+            // so its semantic is purely server-side.
             //
             // ----- Branch selection below -----
             //
             // `include_factory_deps == true` — production / BytecodesSupplier path.
             //   The server's `fetch_force_preimages` will scan supplier events and
-            //   register shape A under hash (2). Send hash (2) + observable len.
+            //   register shape A under hash (2). Send hash (2) + observable len in
+            //   the inner payload, and hash (1) in the outer `factoryDeps`.
             //
             // `include_factory_deps == false` — legacy path used by v30→v31 tests.
             //   No supplier interaction; instead the test pre-runs `Create` on L2
@@ -243,14 +251,13 @@ impl ProtocolUpgradeBuilder {
             });
 
             if self.include_factory_deps {
-                // `factory_deps` carries the *same* hash the supplier-fed preimage
-                // cache will be keyed by — i.e. hash (2). The server's
-                // `L1UpgradeTxWatcher::fetch_force_preimages` reads this list and
-                // resolves each entry against scanned `EVMBytecodePublished`
-                // events, computing Blake2s on each event payload to match.
-                factory_deps.push(U256::from_be_slice(
-                    deployed_bytecode_info.bytecodeHash.as_ref(),
-                ));
+                // `factory_deps` carries hash (1) — `keccak256(raw_bytecode)`,
+                // which is `EVMBytecodePublished`'s topic1 on `BytecodesSupplier`.
+                // The server's `L1UpgradeTxWatcher::fetch_force_preimages` filters
+                // supplier events by this topic, then re-keys each fetched
+                // preimage under hash (2) (Blake2s) for the L2 lookup above. The
+                // two distinct hashes mirror the production v31 layout.
+                factory_deps.push(U256::from_be_slice(keccak256(&bytecode).as_ref()));
             }
         }
 

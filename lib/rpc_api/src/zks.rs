@@ -9,10 +9,10 @@ use zksync_os_genesis::GenesisInput;
 #[cfg_attr(feature = "server", rpc(server, client, namespace = "zks"))]
 pub trait ZksApi {
     #[method(name = "getBridgehubContract")]
-    async fn get_bridgehub_contract(&self) -> RpcResult<Address>;
+    fn get_bridgehub_contract(&self) -> RpcResult<Address>;
 
     #[method(name = "getBytecodeSupplierContract")]
-    async fn get_bytecode_supplier_contract(&self) -> RpcResult<Address>;
+    fn get_bytecode_supplier_contract(&self) -> RpcResult<Address>;
 
     /// Returns the merkle proof for an L2->L1 log emitted in a given transaction.
     ///
@@ -30,13 +30,10 @@ pub trait ZksApi {
     async fn get_genesis(&self) -> RpcResult<GenesisInput>;
 
     #[method(name = "getBlockMetadataByNumber")]
-    async fn get_block_metadata_by_number(
-        &self,
-        block_number: u64,
-    ) -> RpcResult<Option<BlockMetadata>>;
+    fn get_block_metadata_by_number(&self, block_number: u64) -> RpcResult<Option<BlockMetadata>>;
 
-    #[method(name = "getProof")]
-    async fn get_proof(
+    #[method(name = "getProof", blocking)]
+    fn get_proof(
         &self,
         account: Address,
         keys: Vec<B256>,

@@ -19,7 +19,7 @@ zksync_os_batch_types.workspace = true
 
 zksync_os_interface.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["eips", "rlp"] }
+alloy = { workspace = true, default-features = false, features = ["eips", "rlp", "rpc-types"] }
 dashmap.workspace = true
 tokio.workspace = true
 tracing.workspace = true

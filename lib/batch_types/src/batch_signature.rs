@@ -5,10 +5,8 @@ use alloy::sol;
 use alloy::sol_types::{Eip712Domain, SolStruct};
 use serde::{Deserialize, Serialize};
 use zksync_os_contract_interface::calldata::encode_commit_batch_data;
-use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_types::ProtocolSemanticVersion;
-
-use crate::BatchInfo;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BatchSignatureSet(Vec<ValidatedBatchSignature>);
@@ -62,7 +60,8 @@ impl BatchSignature {
     /// Sign a batch for `commitBatchesMultisig`
     pub async fn sign_batch(
         prev_batch_info: &StoredBatchInfo,
-        batch_info: &BatchInfo,
+        commit_batch_info: &CommitBatchInfo,
+        diamond_proxy_sl: Address,
         sl_chain_id: u64,
         multisig_committer: Address,
         protocol_version: &ProtocolSemanticVersion,
@@ -70,7 +69,8 @@ impl BatchSignature {
     ) -> Self {
         let digest = eip712_multisig_digest(
             prev_batch_info,
-            batch_info,
+            commit_batch_info,
+            diamond_proxy_sl,
             sl_chain_id,
             multisig_committer,
             protocol_version,
@@ -82,7 +82,8 @@ impl BatchSignature {
     pub fn verify_signature(
         self,
         prev_batch_info: &StoredBatchInfo,
-        batch_info: &BatchInfo,
+        commit_batch_info: &CommitBatchInfo,
+        diamond_proxy_sl: Address,
         sl_chain_id: u64,
         multisig_committer: Address,
         protocol_version: &ProtocolSemanticVersion,
@@ -92,7 +93,8 @@ impl BatchSignature {
                 .0
                 .recover_address_from_prehash(&eip712_multisig_digest(
                     prev_batch_info,
-                    batch_info,
+                    commit_batch_info,
+                    diamond_proxy_sl,
                     sl_chain_id,
                     multisig_committer,
                     protocol_version,
@@ -125,21 +127,22 @@ sol! {
 /// and L1 domain parameters.
 fn eip712_multisig_digest(
     prev_batch_info: &StoredBatchInfo,
-    batch_info: &BatchInfo,
+    commit_batch_info: &CommitBatchInfo,
+    diamond_proxy_sl: Address,
     sl_chain_id: u64,
     multisig_committer: Address,
     protocol_version: &ProtocolSemanticVersion,
 ) -> B256 {
     let batch_data = encode_commit_batch_data(
         prev_batch_info,
-        batch_info.commit_info.clone(),
+        commit_batch_info.clone(),
         protocol_version.minor,
     );
 
     let message = CommitBatchesMultisig {
-        chainAddress: batch_info.chain_address,
-        processBatchFrom: U256::from(batch_info.batch_number),
-        processBatchTo: U256::from(batch_info.batch_number),
+        chainAddress: diamond_proxy_sl,
+        processBatchFrom: U256::from(commit_batch_info.batch_number),
+        processBatchTo: U256::from(commit_batch_info.batch_number),
         batchData: batch_data.into(),
     };
 
