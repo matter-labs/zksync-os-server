@@ -18,11 +18,9 @@ pub trait PipelineComponent: Send + 'static {
     type Output: Send + 'static;
 
     /// Id of this component.
-    /// Used as the task name for logging, shutdown tracking, and state-monitor adjacency.
     const COMPONENT_ID: ComponentId;
 
     /// Capacity of the output channel for this component.
-    /// Default is 4096 messages; override for components with specific backpressure needs.
     const OUTPUT_CHANNEL_CAPACITY: usize = 4096;
 
     /// Run the component, receiving from input and sending to output.

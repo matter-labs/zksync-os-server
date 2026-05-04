@@ -1344,8 +1344,10 @@ async fn run_en_pipeline(
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "priority tree caching",
             |shutdown| async move {
+                let (reporter, _rx) =
+                    zksync_os_observability::ComponentStateReporter::new("priority_tree");
                 tokio::select! {
-                    result = priority_tree_manager.run(None, zksync_os_observability::ComponentStateReporter::new("priority_tree").0) => {
+                    result = priority_tree_manager.run(None, reporter) => {
                         result.expect("PriorityTreeManager run failed");
                     }
                     _guard = shutdown => {

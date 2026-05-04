@@ -1,4 +1,6 @@
 use crate::execution::execute_block_in_vm::SealReason;
+use std::time::Duration;
+use vise::{Buckets, Counter, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use zksync_os_observability::{GenericComponentState, StateLabel};
 use zksync_os_storage_api::StateAccessLabel;
 
@@ -130,10 +132,6 @@ impl StateLabel for BlockApplierState {
         }
     }
 }
-
-use std::time::Duration;
-use vise::Counter;
-use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "execution")]

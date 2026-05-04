@@ -49,25 +49,9 @@ where
         replay_record: &ReplayRecord,
         report: &CompareReport,
     ) -> anyhow::Result<()> {
-        Self::handle_report_with(
-            block_output,
-            replay_record,
-            report,
-            self.revert_enabled,
-            &self.internal_config_manager,
-        )
-    }
-
-    fn handle_report_with(
-        block_output: &BlockOutput,
-        replay_record: &ReplayRecord,
-        report: &CompareReport,
-        revert_enabled: bool,
-        internal_config_manager: &InternalConfigManager,
-    ) -> anyhow::Result<()> {
         report.log_tracing(20);
-        if revert_enabled && !report.is_empty() {
-            let mut config = internal_config_manager.read_config()?;
+        if self.revert_enabled && !report.is_empty() {
+            let mut config = self.internal_config_manager.read_config()?;
             config.failing_block = Some(replay_record.block_context.block_number);
 
             let initial_blacklist_size = config.l2_signer_blacklist.len();
@@ -85,7 +69,8 @@ where
                 replay_record.block_context.block_number,
                 block_output.header.hash(),
             );
-            internal_config_manager.write_config_and_panic(&config, &message)?;
+            self.internal_config_manager
+                .write_config_and_panic(&config, &message)?;
         }
 
         Ok(())
@@ -200,13 +185,7 @@ where
                     &block_output.storage_writes,
                     &block_output.account_diffs,
                 )?;
-                Self::handle_report_with(
-                    &block_output,
-                    &replay_record,
-                    &compare_report,
-                    self.revert_enabled,
-                    &self.internal_config_manager,
-                )?;
+                self.handle_report(&block_output, &replay_record, &compare_report)?;
             }
 
             output.send_and_record(

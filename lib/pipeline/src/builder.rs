@@ -62,13 +62,11 @@ impl Pipeline<()> {
                     };
 
                     if !self.spawned_tasks.remove(name) {
-                        panic!(
-                            "deregistration for unknown pipeline segment {name:?}; \
-                             known segments: {:?}",
-                            self.spawned_tasks
-                        );
+                        // Defensive logging for duplicate or unexpected notifications.
+                        tracing::warn!(%name, "tried to deregister non-existent segment");
+                    } else {
+                        tracing::debug!(%name, "pipeline segment deregistered");
                     }
-                    tracing::debug!(%name, "pipeline segment deregistered");
 
                     if !self.spawned_tasks.is_empty() {
                         tracing::debug!("pipeline segments left: {:?}", self.spawned_tasks);

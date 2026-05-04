@@ -4,7 +4,6 @@
 /// boilerplate `last_block` local variable in every component.
 pub trait HasBlockRangeEnd: Send + 'static {
     /// Block number of the last block represented by this message.
-    /// For block-level messages this is the block's number.
     /// For batch-level messages this is the last block in the batch.
     fn block_number(&self) -> u64;
     /// Block timestamp in seconds, or `None` if unavailable (e.g. batch-level messages).
@@ -12,10 +11,6 @@ pub trait HasBlockRangeEnd: Send + 'static {
         None
     }
     /// Batch number of the last batch represented by this message, if applicable.
-    /// Returns `None` for block-level messages and batch-level messages that do not
-    /// carry a batch number (e.g. `ReplayRecord`). Used by `send_and_record` and
-    /// `recv_and_record_picked` so the unified `record_processed` / `record_picked`
-    /// call updates the batch-space watermark alongside the block-space one.
     fn batch_number(&self) -> Option<u64> {
         None
     }

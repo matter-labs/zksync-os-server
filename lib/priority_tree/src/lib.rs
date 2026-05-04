@@ -59,8 +59,6 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
 
     /// Initializes priority tree and starts the tasks
     /// For ENs set main_node_channels to None.
-    /// Pass a `ComponentStateReporter` to enable state tracking; use
-    /// `ComponentStateReporter::new("priority_tree").0` for a no-op reporter.
     pub async fn run(
         mut self,
         main_node_channels: Option<(InputChannel, OutputChannel)>,
@@ -349,6 +347,7 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
             let Some((batch_number, last_block_number, last_priority_op_id)) =
                 priority_ops_internal_receiver.recv().await
             else {
+                // Sender was dropped (graceful shutdown), exit cleanly.
                 return Ok(());
             };
             finality_receiver
