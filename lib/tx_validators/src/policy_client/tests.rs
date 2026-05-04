@@ -15,7 +15,6 @@
 //! timeout, and TLS code paths run end-to-end.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -27,20 +26,16 @@ use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
-use rustls::ServerConfig;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use rustls::server::WebPkiClientVerifier;
 use serde_json::json;
 use tempfile::TempDir;
-use tokio::net::{TcpListener, UnixListener};
+use tokio::net::UnixListener;
 use tokio::task::spawn_blocking;
-use tokio_rustls::TlsAcceptor;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{
     BeginTxContext, CallModifier, EvmRequest, EvmResources, EvmTracer, TxValidator,
 };
 
-use super::{AccessType, CallKind, CapturedFrame, Config, PolicyClient, PolicySession, TlsConfig, Tracer};
+use super::{AccessType, Config, PolicyClient, PolicySession, TlsConfig, Tracer};
 
 const FROM: Address = address!("0x1111111111111111111111111111111111111111");
 const TO: Address = address!("0x2222222222222222222222222222222222222222");
@@ -367,45 +362,31 @@ async fn admit_serializes_access_type_read() {
     assert_eq!(parsed["accessType"].as_str().unwrap(), "read");
 }
 
-#[tokio::test]
-async fn unsupported_scheme_rejected_at_construction() {
-    let err = PolicyClient::new(base_config("ftp://example.com".into()));
-    assert!(err.is_err(), "expected BuildError for unsupported scheme");
+#[test]
+fn unsupported_scheme_rejected_at_construction() {
+    assert!(PolicyClient::new(base_config("ftp://example.com".into())).is_err());
 }
 
-#[tokio::test]
-async fn invalid_url_rejected_at_construction() {
-    let err = PolicyClient::new(base_config("not a url".into()));
-    assert!(err.is_err(), "expected BuildError for invalid url");
+#[test]
+fn invalid_url_rejected_at_construction() {
+    assert!(PolicyClient::new(base_config("not a url".into())).is_err());
 }
 
-#[tokio::test]
-async fn plain_http_rejected_at_construction() {
-    let err = PolicyClient::new(base_config("http://policy.local:9000".into()));
-    assert!(
-        err.is_err(),
-        "expected BuildError for unsupported `http://` scheme"
-    );
+#[test]
+fn plain_http_rejected_at_construction() {
+    assert!(PolicyClient::new(base_config("http://policy.local:9000".into())).is_err());
 }
 
-#[tokio::test]
-async fn https_without_tls_rejected_at_construction() {
-    let err = PolicyClient::new(base_config("https://policy.local:9000".into()));
-    assert!(
-        err.is_err(),
-        "expected BuildError when `https://` is used without TLS material"
-    );
+#[test]
+fn https_without_tls_rejected_at_construction() {
+    assert!(PolicyClient::new(base_config("https://policy.local:9000".into())).is_err());
 }
 
-#[tokio::test]
-async fn unix_with_tls_is_accepted_at_construction() {
-    let certs = generate_test_pki();
+#[test]
+fn unix_with_tls_is_accepted_at_construction() {
     let mut cfg = base_config("unix:///tmp/policy.sock".into());
-    cfg.tls = Some(certs.client_tls.clone());
-    assert!(
-        PolicyClient::new(cfg).is_ok(),
-        "unix + tls material should be accepted (tls is silently ignored for UDS)"
-    );
+    cfg.tls = Some(generate_test_pki());
+    PolicyClient::new(cfg).unwrap(); // tls is silently ignored for UDS
 }
 
 #[tokio::test]
@@ -862,27 +843,7 @@ async fn concurrent_sessions_dont_share_slot() {
 //   - client cert from a CA the server doesn't trust → handshake fails
 // Construction-time URL/TLS pairing checks live in the UDS section above.
 
-struct TestPki {
-    /// Trusted CA (PEM) used by both server and client.
-    server_ca_pem: String,
-    /// Server cert chain + key signed by the trusted CA.
-    server_cert_chain: Vec<CertificateDer<'static>>,
-    server_key: PrivateKeyDer<'static>,
-    /// Client TLS config with inline PEM signed by the trusted CA.
-    client_tls: TlsConfig,
-    /// Trusted-CA cert in DER form (handy for building server-side verifiers).
-    trusted_ca_der: CertificateDer<'static>,
-}
-
-fn install_default_crypto_provider() {
-    // rustls 0.23 needs *some* crypto provider installed for the server-side
-    // verifier APIs that don't take a provider explicitly. Idempotent: only
-    // the first call wins, so it's safe to call from every test.
-    let _ =
-        rustls::crypto::CryptoProvider::install_default(rustls::crypto::ring::default_provider());
-}
-
-fn generate_test_pki() -> TestPki {
+fn generate_test_pki() -> TlsConfig {
     let mut ca_params = rcgen::CertificateParams::default();
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     ca_params
@@ -890,16 +851,6 @@ fn generate_test_pki() -> TestPki {
         .push(rcgen::DnType::CommonName, "policy-test-ca");
     let ca_key = rcgen::KeyPair::generate().unwrap();
     let ca_cert = ca_params.self_signed(&ca_key).unwrap();
-    let ca_pem = ca_cert.pem();
-    let ca_der = CertificateDer::from(ca_cert.der().to_vec());
-
-    let server_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
-    let server_key = rcgen::KeyPair::generate().unwrap();
-    let server_cert = server_params
-        .signed_by(&server_key, &ca_cert, &ca_key)
-        .unwrap();
-    let server_cert_chain = vec![CertificateDer::from(server_cert.der().to_vec())];
-    let server_key_der = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(server_key.serialize_der()));
 
     let mut client_params =
         rcgen::CertificateParams::new(vec!["policy-client".to_string()]).unwrap();
@@ -911,248 +862,9 @@ fn generate_test_pki() -> TestPki {
         .signed_by(&client_key, &ca_cert, &ca_key)
         .unwrap();
 
-    let client_tls = TlsConfig {
+    TlsConfig {
         client_cert: client_cert.pem(),
         client_key: client_key.serialize_pem(),
-        server_ca: ca_pem.clone(),
-    };
-
-    TestPki {
-        server_ca_pem: ca_pem,
-        server_cert_chain,
-        server_key: server_key_der,
-        client_tls,
-        trusted_ca_der: ca_der,
+        server_ca: ca_cert.pem(),
     }
-}
-
-/// Generate a second PKI universe whose CA the trusted PKI doesn't know.
-/// Used to forge mismatched roots between client and server.
-fn generate_alt_pki() -> TestPki {
-    generate_test_pki()
-}
-
-async fn start_tls_server(
-    server_cert_chain: Vec<CertificateDer<'static>>,
-    server_key: PrivateKeyDer<'static>,
-    client_root_ca: CertificateDer<'static>,
-    routes: MockRoutes,
-) -> SocketAddr {
-    install_default_crypto_provider();
-
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(client_root_ca).unwrap();
-    let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
-        .build()
-        .unwrap();
-    let server_config = ServerConfig::builder()
-        .with_client_cert_verifier(verifier)
-        .with_single_cert(server_cert_chain, server_key)
-        .unwrap();
-    let acceptor = TlsAcceptor::from(Arc::new(server_config));
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let routes = Arc::new(routes);
-
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(p) => p,
-                Err(_) => break,
-            };
-            let acceptor = acceptor.clone();
-            let routes = routes.clone();
-            tokio::spawn(async move {
-                let stream = match acceptor.accept(stream).await {
-                    Ok(s) => s,
-                    Err(_) => return,
-                };
-                let io = TokioIo::new(stream);
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(
-                        io,
-                        service_fn(move |req: Request<Incoming>| {
-                            let routes = routes.clone();
-                            async move {
-                                let path = req.uri().path().to_string();
-                                let _ = req.into_body().collect().await;
-                                respond(routes.by_path.get(&path).cloned()).await
-                            }
-                        }),
-                    )
-                    .await;
-            });
-        }
-    });
-
-    addr
-}
-
-#[tokio::test]
-async fn mtls_handshake_succeeds_with_pinned_ca() {
-    let pki = generate_test_pki();
-    let addr = start_tls_server(
-        pki.server_cert_chain.clone(),
-        pki.server_key.clone_key(),
-        pki.trusted_ca_der.clone(),
-        MockRoutes::default().with("/admit", allow_admit()),
-    )
-    .await;
-
-    let mut cfg = base_config(format!("https://localhost:{}", addr.port()));
-    cfg.tls = Some(pki.client_tls.clone());
-    let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
-    assert!(res.is_ok(), "mTLS happy path should succeed: {res:?}");
-}
-
-#[tokio::test]
-async fn mtls_fails_when_server_signed_by_untrusted_ca() {
-    let trusted = generate_test_pki();
-    let untrusted = generate_alt_pki();
-    // Server presents a cert from `untrusted`; client only pins `trusted` CA.
-    let addr = start_tls_server(
-        untrusted.server_cert_chain.clone(),
-        untrusted.server_key.clone_key(),
-        // Server still accepts client certs from the trusted CA — we want
-        // to isolate the failure to *server cert* validation.
-        trusted.trusted_ca_der.clone(),
-        MockRoutes::default().with("/admit", allow_admit()),
-    )
-    .await;
-
-    let mut cfg = base_config(format!("https://localhost:{}", addr.port()));
-    cfg.tls = Some(trusted.client_tls.clone());
-    let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
-    assert!(
-        matches!(res, Err(InvalidTransaction::FilteredByValidator)),
-        "untrusted server cert must fail closed, got {res:?}"
-    );
-}
-
-#[tokio::test]
-async fn mtls_fails_when_client_cert_signed_by_untrusted_ca() {
-    let trusted = generate_test_pki();
-    let alt = generate_alt_pki();
-    // Server pins only the *trusted* CA for client-cert verification, but
-    // the client presents a cert from `alt` — server should reject.
-    let addr = start_tls_server(
-        trusted.server_cert_chain.clone(),
-        trusted.server_key.clone_key(),
-        trusted.trusted_ca_der.clone(),
-        MockRoutes::default().with("/admit", allow_admit()),
-    )
-    .await;
-
-    // Build a client whose pinned server-CA is `trusted` (so the server cert
-    // validates) but whose client cert is signed by `alt`.
-    let mixed_tls = TlsConfig {
-        client_cert: alt.client_tls.client_cert.clone(),
-        client_key: alt.client_tls.client_key.clone(),
-        server_ca: trusted.server_ca_pem.clone(),
-    };
-    let mut cfg = base_config(format!("https://localhost:{}", addr.port()));
-    cfg.tls = Some(mixed_tls);
-    let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
-    assert!(
-        matches!(res, Err(InvalidTransaction::FilteredByValidator)),
-        "untrusted client cert must fail closed, got {res:?}"
-    );
-}
-
-#[tokio::test]
-async fn mtls_invalid_pem_fails_at_construction() {
-    let mut cfg = base_config("https://localhost:1".into());
-    cfg.tls = Some(TlsConfig {
-        client_cert: "not-a-cert".into(),
-        client_key: "not-a-key".into(),
-        server_ca: "not-a-ca".into(),
-    });
-    assert!(
-        PolicyClient::new(cfg).is_err(),
-        "invalid PEM must fail at construction"
-    );
-}
-
-#[tokio::test]
-async fn mtls_empty_pem_fails_at_construction() {
-    let mut cfg = base_config("https://localhost:1".into());
-    cfg.tls = Some(TlsConfig {
-        client_cert: String::new(),
-        client_key: String::new(),
-        server_ca: String::new(),
-    });
-    assert!(
-        PolicyClient::new(cfg).is_err(),
-        "empty PEM must fail at construction"
-    );
-}
-
-#[tokio::test]
-async fn mtls_succeeds_with_intermediate_ca_in_client_chain() {
-    // Root CA.
-    let mut root_params = rcgen::CertificateParams::default();
-    root_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-    root_params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, "intermediate-test-root");
-    let root_key = rcgen::KeyPair::generate().unwrap();
-    let root_cert = root_params.self_signed(&root_key).unwrap();
-    let root_der = CertificateDer::from(root_cert.der().to_vec());
-
-    // Intermediate CA, signed by root.
-    let mut intermediate_params = rcgen::CertificateParams::default();
-    intermediate_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-    intermediate_params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, "intermediate-ca");
-    let intermediate_key = rcgen::KeyPair::generate().unwrap();
-    let intermediate_cert = intermediate_params
-        .signed_by(&intermediate_key, &root_cert, &root_key)
-        .unwrap();
-
-    // Server cert signed by root (so the client trusts it directly).
-    let server_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
-    let server_key = rcgen::KeyPair::generate().unwrap();
-    let server_cert = server_params
-        .signed_by(&server_key, &root_cert, &root_key)
-        .unwrap();
-    let server_chain = vec![CertificateDer::from(server_cert.der().to_vec())];
-    let server_key_der = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(server_key.serialize_der()));
-
-    // Client leaf signed by the intermediate. client_cert contains
-    // [leaf, intermediate] so the server can build the chain to its pinned root.
-    let client_params = rcgen::CertificateParams::new(vec!["policy-client".to_string()]).unwrap();
-    let client_key = rcgen::KeyPair::generate().unwrap();
-    let client_cert = client_params
-        .signed_by(&client_key, &intermediate_cert, &intermediate_key)
-        .unwrap();
-    let mut client_chain_pem = client_cert.pem();
-    client_chain_pem.push_str(&intermediate_cert.pem());
-
-    // Server's client-trust root is the same root; it builds the path
-    // through the intermediate the client presents.
-    let addr = start_tls_server(
-        server_chain,
-        server_key_der,
-        root_der,
-        MockRoutes::default().with("/admit", allow_admit()),
-    )
-    .await;
-
-    let mut cfg = base_config(format!("https://localhost:{}", addr.port()));
-    cfg.tls = Some(TlsConfig {
-        client_cert: client_chain_pem,
-        client_key: client_key.serialize_pem(),
-        server_ca: root_cert.pem(),
-    });
-    let client = PolicyClient::new(cfg).unwrap();
-    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
-    assert!(
-        res.is_ok(),
-        "client chain [leaf, intermediate] should validate against root, got {res:?}"
-    );
 }

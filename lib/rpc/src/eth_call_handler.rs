@@ -319,7 +319,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         );
 
         let tx_type = execution_env.transaction.tx_type();
-        // Per-call fork so concurrent simulations don't share captured
+        // New session per call so concurrent simulations don't share captured
         // frames. Read intent because `eth_call` is read-only.
         let mut policy_session = self
             .policy_client

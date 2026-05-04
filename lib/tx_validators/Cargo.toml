@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 zksync_os_interface.workspace = true
 zksync_os_evm_errors.workspace = true
 tracing.workspace = true
@@ -35,4 +36,3 @@ rcgen.workspace = true
 tempfile.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["full"] }
-tokio-rustls.workspace = true
