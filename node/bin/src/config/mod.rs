@@ -73,7 +73,6 @@ pub struct Config {
     #[config_validate(required_if = NodeRole::MainNode, skip_nested)]
     pub external_price_api_client_config: Option<ExternalPriceApiClientConfig>,
     pub fee_config: FeeConfig,
-    pub backpressure_config: BackpressureConfig,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -245,9 +244,6 @@ impl Config {
         schema
             .insert(&FeeConfig::DESCRIPTION, "fee")
             .expect("Failed to insert fee config");
-        schema
-            .insert(&BackpressureConfig::DESCRIPTION, "backpressure")
-            .expect("Failed to insert backpressure config");
         schema
     }
 
@@ -805,6 +801,10 @@ pub struct L1SenderConfig {
     #[config_validate(required_if = NodeRole::MainNode)]
     #[config(with = Serde![str])]
     pub pubdata_mode: Option<PubdataMode>,
+
+    /// Stop accepting transactions when L1 senders fall this many batches behind their upstream.
+    /// Applied to commit, prove, execute senders and the upgrade gatekeeper.
+    pub max_batch_diff_to_upstream: Option<u64>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -963,6 +963,10 @@ pub struct ProverApiConfig {
     /// Default: store files in ./db/fri_proofs/ with 1GiB disk usage cap
     #[config(nest, default)]
     pub proof_storage: ProofStorageConfig,
+
+    /// Stop accepting transactions when the prover pipeline falls this many batches behind
+    /// its upstream. Applied to both FRI and SNARK job managers.
+    pub max_batch_diff_to_upstream: Option<u64>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1149,6 +1153,9 @@ pub struct BatchVerificationConfig {
     // default address 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
     #[config(default_t = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110".into())]
     pub signing_key: SecretString,
+    /// Stop accepting transactions when batch verification falls this many batches behind
+    /// its upstream.
+    pub max_batch_diff_to_upstream: Option<u64>,
 }
 
 /// Config for the base token price updater.
@@ -1270,56 +1277,29 @@ pub struct FeeConfig {
     pub native_price_override: Option<U128>,
 }
 
-/// Backpressure configuration.
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-#[config(derive(Default))]
-pub struct BackpressureConfig {
-    /// Stop accepting transactions when processed batch diff between FRI prover and its upstream
-    /// grows beyond this.
-    pub fri_prover: Option<u64>,
-    /// Stop accepting transactions when processed batch diff between SNARK prover and its upstream
-    /// grows beyond this.
-    pub snark_prover: Option<u64>,
-    /// Stop accepting transactions when processed batch diff between batch verifier and its upstream
-    /// grows beyond this.
-    pub batch_verification: Option<u64>,
-    /// Stop accepting transactions when processed batch diff between upgrade gatekeeper and its upstream
-    /// grows beyond this.
-    #[config(default_t = Some(100_u64))]
-    pub upgrade_gatekeeper: Option<u64>,
-    /// Stop accepting transactions when processed batch diff between any L1 sender and its upstream
-    /// grows beyond this.
-    pub l1_senders: Option<u64>,
-}
-
-impl From<BackpressureConfig> for zksync_os_backpressure::BackpressureConfig {
-    fn from(c: BackpressureConfig) -> Self {
+impl Config {
+    pub fn build_backpressure_config(&self) -> zksync_os_backpressure::BackpressureConfig {
         use zksync_os_backpressure::{ComponentId, PipelineCondition};
-        let batch = |v| PipelineCondition {
+        let condition = |v| PipelineCondition {
             max_batch_diff_to_upstream: v,
             ..Default::default()
         };
         let mut cfg = zksync_os_backpressure::BackpressureConfig::default();
-
-        if let Some(v) = c.batch_verification {
-            cfg.set(ComponentId::BatchVerification, batch(Some(v)));
+        if let Some(v) = self.prover_api_config.max_batch_diff_to_upstream {
+            cfg.set(ComponentId::FriJobManager, condition(Some(v)));
+            cfg.set(ComponentId::SnarkJobManager, condition(Some(v)));
         }
-        if let Some(v) = c.fri_prover {
-            cfg.set(ComponentId::FriJobManager, batch(Some(v)));
+        if let Some(v) = self.batch_verification_config.max_batch_diff_to_upstream {
+            cfg.set(ComponentId::BatchVerification, condition(Some(v)));
         }
-        if let Some(v) = c.upgrade_gatekeeper {
-            cfg.set(ComponentId::UpgradeGatekeeper, batch(Some(v)));
-        }
-        if let Some(v) = c.snark_prover {
-            cfg.set(ComponentId::SnarkJobManager, batch(Some(v)));
-        }
-        if let Some(v) = c.l1_senders {
+        if let Some(v) = self.l1_sender_config.max_batch_diff_to_upstream {
             for id in [
                 ComponentId::L1SenderCommit,
                 ComponentId::L1SenderProve,
                 ComponentId::L1SenderExecute,
+                ComponentId::UpgradeGatekeeper,
             ] {
-                cfg.set(id, batch(Some(v)));
+                cfg.set(id, condition(Some(v)));
             }
         }
         cfg
@@ -1684,6 +1664,7 @@ mod tests {
                 fusaka_upgrade_timestamp: u64::MAX,
                 enabled: true,
                 pubdata_mode: Some(PubdataMode::Blobs),
+                max_batch_diff_to_upstream: None,
             },
             l1_watcher_config: L1WatcherConfig::default(),
             batcher_config: BatcherConfig::default(),
@@ -1699,7 +1680,6 @@ mod tests {
                 forced: ForcedPriceClientConfig::default(),
             }),
             fee_config: FeeConfig::default(),
-            backpressure_config: BackpressureConfig::default(),
         }
     }
 

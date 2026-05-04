@@ -1,7 +1,7 @@
 use crate::config::{
-    BackpressureConfig, BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig,
-    Config, ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig,
-    GenesisConfig, InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
+    BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config,
+    ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
+    InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
     MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig, ProverApiConfig,
     ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
@@ -137,12 +137,6 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse fee config");
 
-    let backpressure_config = repo
-        .single::<BackpressureConfig>()
-        .expect("Failed to load backpressure config")
-        .parse()
-        .expect("Failed to parse backpressure config");
-
     Config {
         general_config,
         network_config,
@@ -164,7 +158,6 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         interop_fee_updater_config,
         external_price_api_client_config,
         fee_config,
-        backpressure_config,
     }
 }
 

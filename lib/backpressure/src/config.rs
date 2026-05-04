@@ -3,15 +3,15 @@ use std::time::Duration;
 
 pub use zksync_os_pipeline::ComponentId;
 
-const DEFAULT_BLOCK_DIFF_LIMIT: u64 = 100;
-const DEFAULT_BATCH_DIFF_LIMIT: u64 = 1000;
+///
+const DEFAULT_BLOCK_DIFF_LIMIT: u64 = 256;
+const DEFAULT_BATCH_DIFF_LIMIT: u64 = 128;
 
 /// Backpressure thresholds for a single component.
 #[derive(Default, Clone, Debug)]
 pub struct PipelineCondition {
     pub max_block_diff_to_upstream: Option<u64>,
     pub max_time_diff_to_upstream: Option<Duration>,
-    /// Only meaningful for batch-pipeline components; forced to `None` for block-pipeline.
     pub max_batch_diff_to_upstream: Option<u64>,
 }
 
@@ -62,11 +62,6 @@ impl BackpressureConfig {
     }
 
     /// Returns the effective condition for `id`.
-    ///
-    /// Block-level pipeline stages default to `max_block_diff_to_upstream = 100` when not
-    /// explicitly configured. Batch-level pipeline stages default to
-    /// `max_batch_diff_to_upstream = 1000`. Pipeline sources, sinks, and other
-    /// non-participating components default to no threshold.
     pub fn condition_for(&self, id: ComponentId) -> PipelineCondition {
         self.conditions
             .get(&id)
@@ -79,13 +74,6 @@ impl BackpressureConfig {
 ///
 /// Window membership is topology-based. Excluded components are skipped
 /// when computing adjacent pairs, so their neighbors become directly adjacent.
-///
-/// Excluded:
-/// - Pipeline sources (`ConsensusNodeCommandSource`, `ExternalNodeCommandSource`): no upstream.
-/// - Pipeline sinks (`BatchSink`, `NoopSink`): no downstream.
-/// - `BatchVerificationResponder`: conditional stage (`pipe_if`) — when disabled a `NoopSink`
-///   takes its place, which shifts window pairs based on config. Also only reports block numbers
-///   (no batch), so batch-diff pairs would always be `None`.
 pub fn is_pipeline_stage(id: ComponentId) -> bool {
     !matches!(
         id,

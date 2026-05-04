@@ -61,24 +61,30 @@ Some components are deliberately skipped when computing adjacent pairs:
 
 ## Configuration
 
-Thresholds are set via the top-level `[backpressure]` config section. All fields
-are optional and expressed in **batch units**:
+Thresholds are distributed to their respective component config sections. All
+fields are optional and expressed in **batch units**. When unset the built-in
+defaults apply (see table below).
 
 ```yaml
-backpressure:
-  fri_prover: 100         # fri_job_manager vs batch_verification
-  snark_prover: 100       # snark_job_manager vs gapless_committer
-  batch_verification: 100
-  upgrade_gatekeeper: 100 # default: 100 even if section is absent
-  l1_senders: 100         # applies to l1_sender_commit, l1_sender_prove, l1_sender_execute
+prover_api:
+  # Applied to both fri_job_manager and snark_job_manager.
+  max_batch_diff_to_upstream: 100
+
+batch_verification:
+  max_batch_diff_to_upstream: 100
+
+l1_sender:
+  # Applied to l1_sender_commit, l1_sender_prove, l1_sender_execute,
+  # and upgrade_gatekeeper.
+  max_batch_diff_to_upstream: 100
 ```
 
 ### Built-in defaults (no explicit config required)
 
 | Category | Default threshold | Signal |
 |---|---|---|
-| Block-pipeline stages (`BlockCanonizer`, `BlockApplier`, `TreeManager`, `ProverInputGenerator`, `Batcher`, `RevmConsistencyChecker`) | 100 blocks | `block_diff_to_upstream` |
-| Batch-pipeline stages (`BatchVerification`, `FriJobManager`, `SnarkJobManager`, `GaplessCommitter`, `UpgradeGatekeeper`, `L1SenderCommit/Prove/Execute`, `GaplessL1ProofSender`, `PriorityTree`) | 1000 batches | `batch_diff_to_upstream` |
+| Block-pipeline stages (`BlockCanonizer`, `BlockApplier`, `TreeManager`, `ProverInputGenerator`, `Batcher`, `RevmConsistencyChecker`) | 256 blocks | `block_diff_to_upstream` |
+| Batch-pipeline stages (`BatchVerification`, `FriJobManager`, `SnarkJobManager`, `GaplessCommitter`, `UpgradeGatekeeper`, `L1SenderCommit/Prove/Execute`, `GaplessL1ProofSender`, `PriorityTree`) | 128 batches | `batch_diff_to_upstream` |
 | Pipeline sources / sinks | none | — |
 
 A `PipelineCondition` can also carry `max_time_diff_to_upstream` (wall-clock lag)
