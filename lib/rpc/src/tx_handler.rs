@@ -102,7 +102,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
                 // outer future (RPC client disconnect) does not cancel
                 // this task; admit and judge fire to completion.
                 let sim = tokio::task::spawn_blocking(move || {
-                    let mut policy_session = policy_client.fork(AccessType::Write);
+                    let mut policy_session = policy_client.session(AccessType::Write);
                     let mut tracer = policy_session.paired_tracer();
                     crate::sandbox::execute_with(
                         zk_tx,
@@ -118,7 +118,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
                 if let Err(err) = sim
                     && matches!(err, InvalidTransaction::FilteredByValidator)
                 {
-                    return Err(EthSendRawTransactionError::PolicyDenied(err));
+                    return Err(EthSendRawTransactionError::PolicyDenied);
                 }
                 // Other sim errors (nonce, gas, etc.) are handled by the
                 // mempool / block-build rejection paths.
@@ -222,8 +222,8 @@ pub enum EthSendRawTransactionError {
     #[error("Signer is blacklisted")]
     BlacklistedSigner,
     /// Policy service rejected the transaction.
-    #[error("transaction denied by policy service: {0:?}")]
-    PolicyDenied(InvalidTransaction),
+    #[error("transaction denied by policy service")]
+    PolicyDenied,
     /// Local simulation for the RPC-side judge call failed for an internal
     /// reason (storage error, etc.). Clean tx rejections fall through and
     /// surface via the mempool / block-build paths instead.
@@ -243,7 +243,7 @@ impl From<&EthSendRawTransactionError> for TxRejectionReason {
                 _ => Self::ForwardTransportError,
             },
             EthSendRawTransactionError::PoolError(pool_err) => Self::from(&pool_err.kind),
-            EthSendRawTransactionError::PolicyDenied(_) => Self::PolicyDenied,
+            EthSendRawTransactionError::PolicyDenied => Self::PolicyDenied,
             EthSendRawTransactionError::JudgeSimFailed(_) => Self::JudgeSimFailed,
         }
     }

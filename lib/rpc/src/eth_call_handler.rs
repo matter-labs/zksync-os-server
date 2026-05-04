@@ -25,7 +25,7 @@ use zksync_os_interface::{
 use zksync_os_storage_api::{
     RepositoryError, StateError, ViewState, state_override_view::OverriddenStateView,
 };
-use zksync_os_tx_validators::policy_client::{AccessType, PolicyClient};
+use zksync_os_tx_validators::policy_client::{AccessType, PolicyClient, PolicySession};
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
     L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
@@ -325,7 +325,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .policy_client
             .as_ref()
             .filter(|_| tx_type_runs_policy(tx_type))
-            .map(|client| client.fork(AccessType::Read));
+            .map(|client| client.session(AccessType::Read));
         let res = simulate_with_optional_policy(
             execution_env.transaction,
             execution_env.block_context,
@@ -681,7 +681,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         {
             let mut judged_tx = tx.clone();
             set_gas_limit(&mut judged_tx, highest_gas_limit);
-            let mut policy_session = policy_client.fork(AccessType::Write);
+            let mut policy_session = policy_client.session(AccessType::Write);
             simulate_with_optional_policy(
                 judged_tx,
                 block_context,
@@ -707,7 +707,7 @@ fn simulate_with_optional_policy<V: ViewState>(
     tx: ZkTransaction,
     block_context: BlockContext,
     view: V,
-    policy: Option<&mut PolicyClient>,
+    policy: Option<&mut PolicySession>,
 ) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
     if let Some(policy) = policy {
         let mut tracer = policy.paired_tracer();
@@ -721,7 +721,7 @@ fn simulate_with_optional_policy<V: ViewState>(
 /// to `TransactionRejected` rather than a generic invalid-transaction error.
 fn map_simulate_invalid_to_call_error(err: InvalidTransaction) -> EthCallError {
     match err {
-        InvalidTransaction::FilteredByValidator => EthCallError::PolicyDenied(err),
+        InvalidTransaction::FilteredByValidator => EthCallError::PolicyDenied,
         _ => EthCallError::InvalidTransaction(err),
     }
 }
@@ -788,8 +788,8 @@ pub fn update_estimated_gas_range(
 pub enum EthCallError {
     /// Policy service rejected the simulation request at the RPC admit
     /// boundary.
-    #[error("simulation denied by policy service: {0:?}")]
-    PolicyDenied(InvalidTransaction),
+    #[error("simulation denied by policy service")]
+    PolicyDenied,
     // todo: temporary, needs to be supported eventually
     #[error("block overrides are not supported in `eth_call`")]
     BlockOverridesNotSupported,

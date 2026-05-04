@@ -86,7 +86,7 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionError> for Result<Ok, EthSendRawTr
             EthSendRawTransactionError::ForwardError(ref rpc_err) => {
                 forward_error_to_rpc_err(rpc_err, &err)
             }
-            EthSendRawTransactionError::PolicyDenied(_) => rpc_err(
+            EthSendRawTransactionError::PolicyDenied => rpc_err(
                 EthRpcErrorCode::TransactionRejected.code(),
                 err.to_string(),
                 None,
@@ -135,7 +135,7 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
             EthCallError::SimulateMovePrecompileNotSupported => {
                 invalid_params_rpc_err(err.to_string())
             }
-            EthCallError::PolicyDenied(_) => rpc_err(
+            EthCallError::PolicyDenied => rpc_err(
                 EthRpcErrorCode::TransactionRejected.code(),
                 err.to_string(),
                 None,
