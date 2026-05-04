@@ -70,9 +70,9 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
-    CommittedBatchProvider, GatewayMigrationState, GatewayMigrationWatcher, L1CommitWatcher,
-    L1ExecuteWatcher, L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
-    MigrationFinalizedWatcher, SettlementLayerWatcher,
+    CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
+    L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, MigrationFinalizedWatcher,
+    SettlementLayerWatcher,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
@@ -596,11 +596,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         upgrade_subpool.insert(upgrade_tx).await;
     }
 
-    // The migration state channel is always created so that the MigrationGate in the
-    // main-node pipeline has a stable receiver regardless of the protocol version.
-    // On pre-v31 chains the sender is never written to, so the gate stays transparent.
-    let (migration_state_sender, migration_state_receiver) =
-        watch::channel(GatewayMigrationState::Stable);
+    // Last-finalized migration counter, the sole input to `MigrationGate`'s pause decision.
+    // Always created so the gate has a stable receiver regardless of protocol version; on
+    // pre-v31 chains it stays at 0 (no migrations exist) and the gate is transparent.
+    let (last_finalized_migration_sender, last_finalized_migration_receiver) =
+        watch::channel::<u64>(0);
 
     // Carries the trigger batch number from MigrationGate to SettlementLayerWatcher.
     // None until MigrationGate detects the SetSLChainId batch; Some(N) after detection.
@@ -608,49 +608,41 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         watch::channel::<Option<u64>>(None);
 
     if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
-        // MigrationFinalizedWatcher needs its own sender clone so both watchers can
-        // write to the shared migration state channel independently.
-        let migration_finalized_state_sender = migration_state_sender.clone();
         runtime.spawn_critical_task(
             "gateway migration watcher",
             GatewayMigrationWatcher::create_watcher(
                 node_startup_state.l1_state.diamond_proxy_l1.clone(),
                 node_startup_state.l1_state.bridgehub_l1.clone(),
-                node_startup_state
-                    .l1_state
-                    .settlement_layer_intervals
-                    .clone(),
                 chain_id,
                 node_startup_state.l1_state.l1_chain_id,
                 config.general_config.gateway_chain_id,
                 next_cursors.migration_number,
                 config.l1_watcher_config.clone().into(),
                 sl_chain_id_subpool.clone(),
-                migration_state_sender,
             )
             .await
             .expect("failed to start gateway migration watcher")
             .run(),
         );
 
-        // Watches for MigrationFinalized events on the IChainAssetHandler of the current
-        // settlement layer. On detection, sets migration state back to Stable so the
-        // MigrationGate resumes forwarding L1 commit transactions.
-        runtime.spawn_critical_task(
-            "migration finalized watcher",
-            MigrationFinalizedWatcher::create_watcher(
-                node_startup_state.l1_state.diamond_proxy_sl.clone(),
-                node_startup_state.l1_state.bridgehub_sl.clone(),
-                chain_id,
-                node_startup_state.l1_state.l1_chain_id,
-                next_cursors.migration_number,
-                config.l1_watcher_config.clone().into(),
-                migration_finalized_state_sender,
-            )
-            .await
-            .expect("failed to start migration finalized watcher")
-            .run(),
-        );
+        // Initializes `last_finalized_migration` from the SL's `migrationNumber(chainId)` and,
+        // if the current SL interval migration has not yet finalized, spawns a watcher to track
+        // future `MigrationFinalized` events. When the migration is already finalized at startup
+        // the watcher is skipped — the seeded counter alone keeps the gate transparent.
+        let migration_finalized_watcher = MigrationFinalizedWatcher::create_watcher(
+            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            node_startup_state.l1_state.bridgehub_sl.clone(),
+            &node_startup_state.l1_state.settlement_layer_intervals,
+            chain_id,
+            node_startup_state.l1_state.l1_chain_id,
+            config.l1_watcher_config.clone().into(),
+            last_finalized_migration_sender,
+        )
+        .await
+        .expect("failed to start migration finalized watcher");
+        if let Some(watcher) = migration_finalized_watcher {
+            runtime.spawn_critical_task("migration finalized watcher", watcher.run());
+        }
 
         // Crashes the node when getSettlementLayer() changes, forcing a restart against the
         // new settlement layer.
@@ -964,7 +956,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             commit_submitted_tx,
             verify_request_tx,
             verify_result_rx,
-            migration_state_receiver,
+            last_finalized_migration_receiver,
             migration_triggered_sender,
         )
         .await;
@@ -1057,7 +1049,7 @@ async fn run_main_node_pipeline(
     commit_submitted_tx: watch::Sender<u64>,
     verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
-    migration_state: watch::Receiver<GatewayMigrationState>,
+    last_finalized_migration: watch::Receiver<u64>,
     migration_triggered: watch::Sender<Option<u64>>,
 ) {
     let pubdata_mode = config
@@ -1227,7 +1219,7 @@ async fn run_main_node_pipeline(
             node_state_on_startup.l1_state.diamond_proxy_sl.clone(),
         ))
         .pipe(migration_gate::MigrationGate {
-            migration_state,
+            last_finalized_migration,
             migration_triggered,
         })
         .pipe(L1Sender::<_, _, CommitCommand> {

@@ -1,4 +1,3 @@
-use crate::gateway_migration_watcher::GatewayMigrationState;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, U256};
@@ -6,6 +5,7 @@ use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use tokio::sync::watch;
+use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_contract_interface::{Bridgehub, IChainAssetHandler::MigrationFinalized, ZkChain};
 
 /// Limit the number of SL blocks to scan when performing the initial binary search.
@@ -14,42 +14,63 @@ const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
 /// Watches for `MigrationFinalized(uint256 indexed chainId, uint256 migrationNumber, ...)` events
 /// emitted by the `IChainAssetHandler` contract on the current settlement layer.
 ///
-/// When detected, transitions the shared [`GatewayMigrationState`] back to
-/// [`Stable`][GatewayMigrationState::Stable], allowing the [`MigrationGate`] to resume
-/// forwarding L1 commit transactions.
+/// The watcher is the only writer of `last_finalized_migration`, a monotonic counter consumed by
+/// [`MigrationGate`][crate::MigrationGate] to decide whether to forward an L1 commit. Each event
+/// raises the counter to `max(current, event.migrationNumber)`.
 ///
 /// `MigrationFinalized` has `chainId` as an indexed parameter, so a `topic1` filter is applied
 /// to receive only events for this chain.
 pub struct MigrationFinalizedWatcher {
     /// L2 chain ID used for topic1 filtering.
     l2_chain_id: u64,
-    migration_state: watch::Sender<GatewayMigrationState>,
+    last_finalized_migration: watch::Sender<u64>,
 }
 
 impl MigrationFinalizedWatcher {
-    /// Creates a watcher that starts scanning from the first SL block where
-    /// `IChainAssetHandler::migrationNumber(l2_chain_id) >= current_migration_number`,
-    /// determined via binary search.
-    ///
-    /// `zk_chain` is used for the binary search and its provider is the settlement layer provider.
-    /// `bridgehub_sl` is used to retrieve the `IChainAssetHandler` address on the SL.
+    /// Initializes `last_finalized_migration` from the current SL's
+    /// `IChainAssetHandler.migrationNumber(l2_chain_id)` (which by construction tracks the
+    /// destination's view of finalized migrations) and decides whether to spawn the watcher.
     pub async fn create_watcher(
         zk_chain: ZkChain<DynProvider>,
         bridgehub_sl: Bridgehub<DynProvider>,
+        intervals: &SettlementLayerIntervals,
         l2_chain_id: u64,
         l1_chain_id: u64,
-        current_migration_number: u64,
         config: L1WatcherConfig,
-        migration_state: watch::Sender<GatewayMigrationState>,
-    ) -> anyhow::Result<L1Watcher> {
-        let chain_asset_handler = bridgehub_sl.chain_asset_handler_address().await?;
+        last_finalized_migration: watch::Sender<u64>,
+    ) -> anyhow::Result<Option<L1Watcher>> {
+        let active_migration_number = (intervals.intervals().len() - 1) as u64;
+        let sl_migration_number: u64 = bridgehub_sl
+            .migration_number(l2_chain_id)
+            .await?
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("SL migrationNumber overflow: {e}"))?;
+        // Seed the counter from the SL so the gate's pause condition starts off correct even
+        // before the watcher (if any) processes its first event.
+        let _ = last_finalized_migration.send(sl_migration_number);
 
+        if active_migration_number == 0 {
+            tracing::info!(
+                "no gateway migrations recorded on L1; skipping migration finalized watcher"
+            );
+            return Ok(None);
+        }
+        if sl_migration_number >= active_migration_number {
+            tracing::info!(
+                migration_number = sl_migration_number,
+                "current SL interval migration (#{sl_migration_number}) already finalized; skipping migration finalized watcher"
+            );
+            return Ok(None);
+        }
+
+        let chain_asset_handler = bridgehub_sl.chain_asset_handler_address().await?;
         let current_sl_block = zk_chain.provider().get_block_number().await?;
+        // todo: not necessary to run binary search here, just use latest
         let starting_block = util::find_block_by_migration_number(
             zk_chain.clone(),
             chain_asset_handler,
             l2_chain_id,
-            current_migration_number,
+            active_migration_number,
         )
         .await
         .or_else(|err| {
@@ -68,10 +89,11 @@ impl MigrationFinalizedWatcher {
             contract = %chain_asset_handler,
             l2_chain_id,
             starting_block,
+            active_migration_number,
             "migration finalized watcher starting"
         );
 
-        L1Watcher::new(
+        let watcher = L1Watcher::new(
             config,
             zk_chain.provider().clone(),
             chain_asset_handler.into(),
@@ -80,10 +102,11 @@ impl MigrationFinalizedWatcher {
             l1_chain_id,
             Box::new(Self {
                 l2_chain_id,
-                migration_state,
+                last_finalized_migration,
             }),
         )
-        .await
+        .await?;
+        Ok(Some(watcher))
     }
 }
 
@@ -128,13 +151,19 @@ impl ProcessRawEvents for MigrationFinalizedWatcher {
             .try_into()
             .map_err(|e| L1WatcherError::Other(anyhow::anyhow!("migrationNumber overflow: {e}")))?;
 
-        tracing::info!(
-            migration_number,
-            "MigrationFinalized event received; resuming L1 commit pipeline"
-        );
-
-        // Ignore errors: they only occur if every receiver has been dropped.
-        let _ = self.migration_state.send(GatewayMigrationState::Stable);
+        // Monotonic raise: out-of-order or stale events can never lower the counter.
+        self.last_finalized_migration.send_if_modified(|current| {
+            if migration_number > *current {
+                *current = migration_number;
+                tracing::info!(
+                    migration_number,
+                    "MigrationFinalized event observed; advancing last_finalized_migration"
+                );
+                true
+            } else {
+                false
+            }
+        });
         Ok(())
     }
 }
