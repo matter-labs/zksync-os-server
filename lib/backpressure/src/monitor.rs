@@ -156,7 +156,7 @@ impl BackpressureMonitor {
             }
         }
         tracing::info!(
-            "BackpressureMonitor: pipeline - {}",
+            "Pipeline order: {}",
             if chain.is_empty() {
                 "none".to_string()
             } else {

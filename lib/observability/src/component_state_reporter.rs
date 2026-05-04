@@ -34,6 +34,7 @@ pub struct ComponentState {
 
 #[derive(Debug, Clone)]
 pub struct ComponentStateReporter {
+    component: &'static str,
     sender: watch::Sender<ComponentState>,
     state_tx: mpsc::Sender<(GenericComponentState, &'static str)>,
 }
@@ -56,7 +57,14 @@ impl ComponentStateReporter {
             GenericComponentState::Idle,
             "idle",
         ));
-        (Self { sender, state_tx }, receiver)
+        (
+            Self {
+                component,
+                sender,
+                state_tx,
+            },
+            receiver,
+        )
     }
 
     /// Transition to a new state.
@@ -86,12 +94,14 @@ impl ComponentStateReporter {
         timestamp: Option<u64>,
         batch_number: Option<u64>,
     ) {
+        let mut highest_seen: Option<u64> = None;
         self.sender.send_if_modified(|state| {
             let stale = state
                 .picked
                 .as_ref()
                 .is_some_and(|c| block_number < c.block_number);
             if stale {
+                highest_seen = state.picked.as_ref().map(|c| c.block_number);
                 return false;
             }
             state.picked = Some(TrackingCoordinates {
@@ -101,6 +111,24 @@ impl ComponentStateReporter {
             });
             true
         });
+        let component = self.component;
+        if let Some(highest_seen) = highest_seen {
+            if let Some(batch) = batch_number {
+                tracing::info!(
+                    component,
+                    "picked batch={batch} last_block={block_number} (out of order, highest_seen={highest_seen})"
+                );
+            } else {
+                tracing::info!(
+                    component,
+                    "picked block={block_number} (out of order, highest_seen={highest_seen})"
+                );
+            }
+        } else if let Some(batch) = batch_number {
+            tracing::info!(component, "picked batch={batch} last_block={block_number}");
+        } else {
+            tracing::info!(component, "picked block={block_number}");
+        }
     }
 
     /// Record when an item was fully processed.
@@ -110,12 +138,14 @@ impl ComponentStateReporter {
         timestamp: Option<u64>,
         batch_number: Option<u64>,
     ) {
+        let mut highest_seen: Option<u64> = None;
         self.sender.send_if_modified(|state| {
             let stale = state
                 .processed
                 .as_ref()
                 .is_some_and(|c| block_number < c.block_number);
             if stale {
+                highest_seen = state.processed.as_ref().map(|c| c.block_number);
                 return false;
             }
             state.processed = Some(TrackingCoordinates {
@@ -125,6 +155,27 @@ impl ComponentStateReporter {
             });
             true
         });
+        let component = self.component;
+        if let Some(highest_seen) = highest_seen {
+            if let Some(batch) = batch_number {
+                tracing::info!(
+                    component,
+                    "processed batch={batch} last_block={block_number} (out of order, highest_seen={highest_seen})"
+                );
+            } else {
+                tracing::info!(
+                    component,
+                    "processed block={block_number} (out of order, highest_seen={highest_seen})"
+                );
+            }
+        } else if let Some(batch) = batch_number {
+            tracing::info!(
+                component,
+                "processed batch={batch} last_block={block_number}"
+            );
+        } else {
+            tracing::info!(component, "processed block={block_number}");
+        }
     }
 }
 
@@ -180,7 +231,7 @@ mod tests {
     use tokio::time::sleep;
 
     #[tokio::test]
-    async fn record_processed_high_watermark() {
+    async fn record_processed_high_highest_seen() {
         let (reporter, rx) = ComponentStateReporter::new("test");
         reporter.record_processed(100, Some(1_000), None);
         reporter.record_processed(80, Some(800), None); // stale
@@ -228,7 +279,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_picked_high_watermark_guard() {
+    async fn record_picked_high_highest_seen_guard() {
         let (reporter, rx) = ComponentStateReporter::new("test");
         reporter.record_picked(10, None, None);
         reporter.record_picked(5, None, None);
@@ -236,7 +287,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_batch_number_high_watermark() {
+    async fn record_batch_number_high_highest_seen() {
         let (reporter, rx) = ComponentStateReporter::new("test");
         reporter.record_processed(100, None, Some(10));
         reporter.record_processed(50, None, Some(5)); // stale on block_number
