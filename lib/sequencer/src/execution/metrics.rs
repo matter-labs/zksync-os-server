@@ -13,6 +13,8 @@ pub enum SequencerState {
     /// Command dequeued, waiting for BlockApplier to finish applying the
     /// previous block.
     WaitingForApplier,
+    /// Waiting for the first transaction to arrive in the mempool before block production can start.
+    WaitingForTransaction,
     /// Setting up the VM for block execution.
     InitializingVm,
     /// Waiting for the next transaction from the tx stream.
@@ -33,7 +35,9 @@ impl StateLabel for SequencerState {
             Self::WaitingForCommand | Self::ConfiguredBlockLimitReached => {
                 GenericComponentState::Idle
             }
-            Self::WaitingForApplier | Self::WaitingForTx => GenericComponentState::Idle,
+            Self::WaitingForApplier | Self::WaitingForTransaction | Self::WaitingForTx => {
+                GenericComponentState::Idle
+            }
             Self::InitializingVm
             | Self::Execution
             | Self::ReadStorage
@@ -46,6 +50,7 @@ impl StateLabel for SequencerState {
             Self::WaitingForCommand => "waiting_for_command",
             Self::ConfiguredBlockLimitReached => "configured_block_limit_reached",
             Self::WaitingForApplier => "waiting_for_applier",
+            Self::WaitingForTransaction => "waiting_for_transaction",
             Self::InitializingVm => "initializing_vm",
             Self::WaitingForTx => "waiting_for_tx",
             Self::Execution => "execution",

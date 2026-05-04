@@ -98,9 +98,11 @@ where
                 .await;
                 produced_blocks_count += 1;
             }
-            state_reporter.enter_state(SequencerState::InitializingVm);
+            state_reporter.enter_state(SequencerState::WaitingForTransaction);
 
             let prepared_command = self.block_context_provider.prepare_command(cmd).await?;
+
+            state_reporter.enter_state(SequencerState::InitializingVm);
 
             let block_number = prepared_command.block_context.block_number;
             state_reporter.record_picked(
