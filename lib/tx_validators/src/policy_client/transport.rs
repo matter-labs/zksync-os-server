@@ -14,8 +14,8 @@
 //! Both the admit and judge endpoints share the same transport surface;
 //! they differ only in the request path passed to [`Transport::post`].
 
-use std::fs::File;
 use std::io::BufReader;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,25 +34,12 @@ use tokio::net::UnixStream;
 
 use super::TlsConfig;
 
-/// Errors raised by the transport layer. All of these are treated as fail-closed
-/// by `PolicyClient` — the caller never needs to branch on the variant.
+/// Errors raised by the transport layer at request time. All of these are
+/// treated as fail-closed by `PolicyClient`; the caller never branches on the
+/// variant. Construction-time errors (bad URL, unsupported scheme, missing TLS)
+/// are reported as `BuildError` instead.
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
-    #[error("invalid URL: {0}")]
-    InvalidUrl(String),
-    #[error("unsupported URL scheme `{0}` (expected `https` or `unix`)")]
-    UnsupportedScheme(String),
-    #[error("missing TLS config: https URLs require client_cert/client_key/server_ca")]
-    MissingTls,
-    #[error("TLS config is set but URL scheme is not `https`")]
-    UnexpectedTls,
-    #[error("failed to read TLS material at {path}: {source}")]
-    TlsRead {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-    #[error("failed to parse TLS material at {path}: {reason}")]
-    TlsParse { path: PathBuf, reason: String },
     #[error("invalid TLS config: {0}")]
     TlsConfig(String),
     #[error("failed to build request: {0}")]
@@ -67,6 +54,20 @@ pub enum TransportError {
     NonSuccessStatus(StatusCode),
     #[error("timed out after {0:?}")]
     Timeout(Duration),
+    #[error("response body is not valid JSON or missing required fields")]
+    MalformedResponse,
+    #[error("response protocolVersion does not match expected")]
+    ProtocolVersionMismatch,
+}
+
+/// Type-safe transport configuration; the variant encodes the scheme-specific
+/// invariants so that `Transport::from_config` can rely on them without
+/// further validation.
+pub(crate) enum TransportConfig {
+    /// mTLS over TCP. `url` is the validated service URL (path preserved).
+    Https { url: url::Url, tls: TlsConfig },
+    /// UDS. `socket_path` is the absolute path to the socket file.
+    Unix { socket_path: PathBuf },
 }
 
 /// Selected at construction based on the URL scheme; this is the one seam
@@ -88,21 +89,18 @@ pub(crate) struct HttpsTransport {
 }
 
 impl Transport {
-    pub fn from_url(url: &str, tls: Option<&TlsConfig>) -> Result<Self, TransportError> {
-        let parsed = url::Url::parse(url).map_err(|e| TransportError::InvalidUrl(e.to_string()))?;
-        match parsed.scheme() {
-            "https" => {
-                let tls = tls.ok_or(TransportError::MissingTls)?;
-                // `base_url` is scheme://host[:port] — strip any path; we append `/admit`
-                // ourselves so that the URL env var can be the service root.
-                let host = parsed
-                    .host_str()
-                    .ok_or_else(|| TransportError::InvalidUrl("missing host".into()))?;
-                let base_url = match parsed.port() {
-                    Some(port) => format!("https://{host}:{port}"),
-                    None => format!("https://{host}"),
-                };
-                let client_config = build_client_config(tls)?;
+    pub fn from_config(config: TransportConfig) -> Result<Self, TransportError> {
+        match config {
+            TransportConfig::Https { url, tls } => {
+                // Preserve the configured path so the URL can point at a
+                // non-root mount (e.g. `https://gateway.internal/policy`).
+                // Query and fragment are stripped; `/admit` / `/judge` are
+                // appended relative to this base.
+                let mut base = url.clone();
+                base.set_query(None);
+                base.set_fragment(None);
+                let base_url = base.to_string().trim_end_matches('/').to_owned();
+                let client_config = build_client_config(&tls)?;
                 let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
                     .with_tls_config(client_config)
                     .https_only()
@@ -111,21 +109,7 @@ impl Transport {
                 let client = Client::builder(TokioExecutor::new()).build(https_connector);
                 Ok(Self::Https(Box::new(HttpsTransport { client, base_url })))
             }
-            "unix" => {
-                if tls.is_some() {
-                    return Err(TransportError::UnexpectedTls);
-                }
-                let socket_path = parsed.path();
-                if socket_path.is_empty() {
-                    return Err(TransportError::InvalidUrl(
-                        "unix URL missing socket path".into(),
-                    ));
-                }
-                Ok(Self::Unix {
-                    socket_path: PathBuf::from(socket_path),
-                })
-            }
-            other => Err(TransportError::UnsupportedScheme(other.to_string())),
+            TransportConfig::Unix { socket_path } => Ok(Self::Unix { socket_path }),
         }
     }
 
@@ -218,10 +202,9 @@ fn build_client_config(tls: &TlsConfig) -> Result<ClientConfig, TransportError> 
     let mut roots = RootCertStore::empty();
     let server_ca_certs = read_certs(&tls.server_ca)?;
     if server_ca_certs.is_empty() {
-        return Err(TransportError::TlsConfig(format!(
-            "no certificates found in server_ca {}",
-            tls.server_ca.display()
-        )));
+        return Err(TransportError::TlsConfig(
+            "no certificates found in server_ca".into(),
+        ));
     }
     for cert in server_ca_certs {
         roots
@@ -231,10 +214,9 @@ fn build_client_config(tls: &TlsConfig) -> Result<ClientConfig, TransportError> 
 
     let client_certs = read_certs(&tls.client_cert)?;
     if client_certs.is_empty() {
-        return Err(TransportError::TlsConfig(format!(
-            "no certificates found in client_cert {}",
-            tls.client_cert.display()
-        )));
+        return Err(TransportError::TlsConfig(
+            "no certificates found in client_cert".into(),
+        ));
     }
     let client_key = read_private_key(&tls.client_key)?;
 
@@ -252,32 +234,16 @@ fn build_client_config(tls: &TlsConfig) -> Result<ClientConfig, TransportError> 
     Ok(config)
 }
 
-fn read_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, TransportError> {
-    let file = File::open(path).map_err(|err| TransportError::TlsRead {
-        path: path.to_path_buf(),
-        source: err,
-    })?;
-    let mut reader = BufReader::new(file);
+fn read_certs(pem: &str) -> Result<Vec<CertificateDer<'static>>, TransportError> {
+    let mut reader = BufReader::new(Cursor::new(pem.as_bytes()));
     rustls_pemfile::certs(&mut reader)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| TransportError::TlsParse {
-            path: path.to_path_buf(),
-            reason: err.to_string(),
-        })
+        .map_err(|err| TransportError::TlsConfig(format!("failed to parse cert PEM: {err}")))
 }
 
-fn read_private_key(path: &Path) -> Result<PrivateKeyDer<'static>, TransportError> {
-    let file = File::open(path).map_err(|err| TransportError::TlsRead {
-        path: path.to_path_buf(),
-        source: err,
-    })?;
-    let mut reader = BufReader::new(file);
+fn read_private_key(pem: &str) -> Result<PrivateKeyDer<'static>, TransportError> {
+    let mut reader = BufReader::new(Cursor::new(pem.as_bytes()));
     rustls_pemfile::private_key(&mut reader)
-        .map_err(|err| TransportError::TlsParse {
-            path: path.to_path_buf(),
-            reason: err.to_string(),
-        })?
-        .ok_or_else(|| {
-            TransportError::TlsConfig(format!("no private key found in {}", path.display()))
-        })
+        .map_err(|err| TransportError::TlsConfig(format!("failed to parse key PEM: {err}")))?
+        .ok_or_else(|| TransportError::TlsConfig("no private key found in client_key".into()))
 }
