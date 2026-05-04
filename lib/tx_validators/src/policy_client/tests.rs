@@ -410,9 +410,8 @@ async fn unix_with_tls_is_accepted_at_construction() {
 
 #[tokio::test]
 async fn bypass_from_skips_admit_call() {
-    // Mock configured to deny everything. If the bypass isn't honoured the
-    // tx would fail closed — the Ok assertion at the end proves it didn't
-    // even reach the mock.
+    // Mock configured to deny everything. If the bypass is not honoured the
+    // tx fails closed. The Ok assertion at the end proves it never reached the mock.
     let mock = start_uds_mock(
         MockRoutes::default().with("/admit", MockResponse::ok_json(json!({"allow": false}))),
     )
