@@ -36,7 +36,7 @@ use zksync_os_multivm::run_block;
 use zksync_os_rpc_api::types::ZkApiBlock;
 use zksync_os_storage_api::{
     BlockOverlay, RepositoryError, StateError, ViewState,
-    state_override_view::{OverriddenStateView, OwnedOverrides, build_state_override_maps},
+    state_override_view::{OverriddenStateView, build_state_override_maps},
 };
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
@@ -508,23 +508,15 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             let simulation_view =
                 OverriddenStateView::new(base_state.clone(), Arc::clone(&overlays));
 
-            let (state_override_overlay, state_overrides) = match sim_block.state_overrides {
+            let state_overrides = match sim_block.state_overrides {
                 Some(state_overrides) => {
                     validate_state_overrides_for_simulate(&state_overrides)?;
-                    let state_overrides =
-                        build_state_override_maps(&simulation_view, state_overrides);
-                    let (storage_writes, preimages) = state_overrides.clone().into_parts();
-                    (
-                        BlockOverlay {
-                            storage_writes,
-                            preimages,
-                        },
-                        state_overrides,
-                    )
+                    build_state_override_maps(&simulation_view, state_overrides)
                 }
-                None => (BlockOverlay::default(), OwnedOverrides::default()),
+                None => BlockOverlay::default(),
             };
-            let overridden_view = OverriddenStateView::new(simulation_view, state_overrides);
+            let overridden_view =
+                OverriddenStateView::new(simulation_view, state_overrides.clone());
             let txs = self.create_simulation_txs(
                 sim_block.calls,
                 execution_context,
@@ -541,7 +533,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             )?;
             let next_hash = simulated_block.inner.header.hash;
 
-            let mut overlay = state_override_overlay;
+            let mut overlay = state_overrides;
             // State overrides seed this simulated block; actual VM writes take precedence for
             // subsequent simulated blocks.
             overlay.extend(simulated_block.overlay);

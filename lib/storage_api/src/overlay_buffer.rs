@@ -6,20 +6,7 @@ use anyhow::bail;
 use zksync_os_interface::types::StorageWrite;
 
 use crate::state_override_view::OverrideProvider;
-use crate::{OverriddenStateView, ReadStateHistory, ViewState};
-
-#[derive(Debug, Clone, Default)]
-pub struct BlockOverlay {
-    pub storage_writes: HashMap<B256, B256>,
-    pub preimages: HashMap<B256, Vec<u8>>,
-}
-
-impl BlockOverlay {
-    pub fn extend(&mut self, changes: Self) {
-        self.storage_writes.extend(changes.storage_writes);
-        self.preimages.extend(changes.preimages);
-    }
-}
+use crate::{BlockOverlay, OverriddenStateView, ReadStateHistory, ViewState};
 
 #[derive(Debug, Default, Clone)]
 pub struct OverlayBuffer {
@@ -118,13 +105,8 @@ impl OverlayBuffer {
             1,
             "Arc refcount > 1 during mutation - this would cause expensive clone!"
         );
-        Arc::make_mut(&mut self.overlays).insert(
-            block_number,
-            BlockOverlay {
-                storage_writes: storage_map,
-                preimages: preimage_map,
-            },
-        );
+        Arc::make_mut(&mut self.overlays)
+            .insert(block_number, BlockOverlay::new(storage_map, preimage_map));
         Ok(())
     }
 

@@ -24,9 +24,9 @@ mod state;
 pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};
 
 pub mod state_override_view;
-pub use state_override_view::OverriddenStateView;
+pub use state_override_view::{BlockOverlay, OverriddenStateView};
 
 mod read_multichain_root;
 pub use read_multichain_root::read_multichain_root;
 mod overlay_buffer;
-pub use overlay_buffer::{BlockOverlay, OverlayBuffer};
+pub use overlay_buffer::OverlayBuffer;
