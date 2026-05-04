@@ -114,6 +114,3 @@ tar.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = { workspace = true, optional = true }
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
