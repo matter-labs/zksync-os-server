@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.19.3](https://github.com/matter-labs/zksync-os-server/compare/v0.19.2...v0.19.3) (2026-05-01)
+
+
+### Features
+
+* **l1-watcher:** adapt upgrade logic to V31 `BytecodeSupplier` ([#1229](https://github.com/matter-labs/zksync-os-server/issues/1229)) ([0ccdf93](https://github.com/matter-labs/zksync-os-server/commit/0ccdf9344ec5f3ac59e811788303a8e70f59397c))
+* **l1-watcher:** add SL-aware watcher ([#1236](https://github.com/matter-labs/zksync-os-server/issues/1236)) ([7f78b5d](https://github.com/matter-labs/zksync-os-server/commit/7f78b5d86480bcf1c648011609871b481ca9a414))
+* Make block replay size configurable ([#1243](https://github.com/matter-labs/zksync-os-server/issues/1243)) ([0d353f0](https://github.com/matter-labs/zksync-os-server/commit/0d353f0cc39decd9e1504c19ea352e3c5a8cf0f1))
+* **network:** add raft transport layer over devp2p ([#1224](https://github.com/matter-labs/zksync-os-server/issues/1224)) ([c4851fb](https://github.com/matter-labs/zksync-os-server/commit/c4851fbfcad2817b7e61570aa3d921c155d85ce6))
+* **observability:** add tokio runtime metrics ([#1226](https://github.com/matter-labs/zksync-os-server/issues/1226)) ([76ec1d6](https://github.com/matter-labs/zksync-os-server/commit/76ec1d6f1e33c4a622860b5dc9ed93dff880895b))
+* track finalized executed batches and blocks ([#1235](https://github.com/matter-labs/zksync-os-server/issues/1235)) ([6994a67](https://github.com/matter-labs/zksync-os-server/commit/6994a67a5c92f6919733bf87c56031fb4a1a56d2))
+
+
+### Bug Fixes
+
+* GatewayMigrationWatcher init ([#1231](https://github.com/matter-labs/zksync-os-server/issues/1231)) ([4575099](https://github.com/matter-labs/zksync-os-server/commit/45750994f9f8290c8b786d70d72a56f28c5cdfd8))
+* InteropWatcher init ([#1233](https://github.com/matter-labs/zksync-os-server/issues/1233)) ([b95f566](https://github.com/matter-labs/zksync-os-server/commit/b95f566a9d0d6688055d48b3bd06ca2ad800472f))
+* **observability:** align tokio metrics sampling interval with Prometheus scrape interval ([#1237](https://github.com/matter-labs/zksync-os-server/issues/1237)) ([39aad42](https://github.com/matter-labs/zksync-os-server/commit/39aad42a34dce056de04795bb5eb86cce632072d))
+* **priority-tree:** release merkle tree lock before sending to internal channel ([#1238](https://github.com/matter-labs/zksync-os-server/issues/1238)) ([37c7131](https://github.com/matter-labs/zksync-os-server/commit/37c7131ed8afd169d8685e7a77c0ec7cff8af105))
+* Reduce logging verbosity ([#1242](https://github.com/matter-labs/zksync-os-server/issues/1242)) ([db58eef](https://github.com/matter-labs/zksync-os-server/commit/db58eef1c1a941741086e04d3788d686b4c71a46))
+
+
+### Performance Improvements
+
+* Default to jemalloc for mem allocation ([#1244](https://github.com/matter-labs/zksync-os-server/issues/1244)) ([6b34c6e](https://github.com/matter-labs/zksync-os-server/commit/6b34c6e3922190ccce699ab8a25fd1cde94b7c44))
+
 ## [0.19.2](https://github.com/matter-labs/zksync-os-server/compare/v0.19.1...v0.19.2) (2026-04-27)
 
 

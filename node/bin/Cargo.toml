@@ -13,6 +13,10 @@ categories.workspace = true
 name = "zksync-os-server"
 path = "src/main.rs"
 
+[features]
+default = ["jemalloc"]
+jemalloc = ["dep:tikv-jemallocator"]
+
 [dependencies]
 zksync_os_l1_sender.workspace = true
 zksync_os_l1_watcher.workspace = true
@@ -106,3 +110,6 @@ sentry.workspace = true
 tempfile.workspace = true
 flate2.workspace = true
 tar.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+tikv-jemallocator = { workspace = true, optional = true }

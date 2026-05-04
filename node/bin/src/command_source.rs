@@ -199,8 +199,23 @@ impl PipelineComponent for ExternalNodeCommandSource {
     ) -> anyhow::Result<()> {
         while let Some(record) = self.replays_for_sequencer.recv().await {
             let block_number = record.block_context.block_number;
+            let txs = record.transactions.len();
+            let force_preimages = record.force_preimages.len();
+            let force_preimage_bytes = record
+                .force_preimages
+                .iter()
+                .map(|(_, value)| value.len())
+                .sum::<usize>();
+            let protocol_version = record.protocol_version.to_string();
+            let starting_l1_priority_id = record.starting_cursors.l1_priority_id;
             let command = BlockCommand::Replay(Box::new(record));
-            tracing::info!(?command, "Received block command from main node");
+            tracing::info!(
+                "Received replay block command from main node: block_number: {block_number}, \
+                 txs: {txs}, force_preimages: {force_preimages}, \
+                 force_preimage_bytes: {force_preimage_bytes}, protocol_version: {protocol_version}, \
+                 starting_l1_priority_id: {starting_l1_priority_id}"
+            );
+            tracing::debug!(?command, "Received replay block command from main node");
 
             if let Some(up_to_block) = self.up_to_block
                 && block_number > up_to_block
