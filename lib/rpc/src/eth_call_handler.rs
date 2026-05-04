@@ -724,10 +724,18 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     /// separate execution context when `validation=false` so fee validation does not leak into the
     /// returned header.
     ///
-    /// Spec limitations: this backend does not expose reth's `TransferInspector` equivalent, so
-    /// `traceTransfers=true` is rejected instead of returning partial transfer logs. The backend
-    /// also cannot remap precompiles for a single simulated block, so `movePrecompileToAddress` is
-    /// rejected as unsupported.
+    /// # Spec limitations
+    ///
+    /// The following features from the `eth_simulateV1` spec are not supported:
+    ///
+    /// - `traceTransfers=true`: rejected with an error. ZKsync OS has no transfer-tracing
+    ///   inspector equivalent, so synthetic ERC-20 transfer logs cannot be generated.
+    /// - `movePrecompileToAddress`: rejected with an error. The VM does not support remapping
+    ///   precompile addresses on a per-block basis.
+    /// - `blockOverrides.difficulty`: silently ignored. ZKsync OS has no `difficulty` field in
+    ///   its block context; use `blockOverrides.random` (prevrandao) instead.
+    /// - `blockOverrides.parentBeaconBlockRoot`: silently ignored. There is no corresponding
+    ///   field in `BlockContext`.
     pub fn simulate_v1_impl(
         &self,
         opts: SimulatePayload,
@@ -827,12 +835,13 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             )
             .map_err(EthCallError::ForwardSubsystemError)?;
 
-            let (simulated_block, block_overlay) = simulation_utils::build_simulated_block_response(
-                response_context,
-                txs,
-                block_output,
-                return_full_transactions,
-            )?;
+            let (simulated_block, block_overlay) =
+                simulation_utils::build_simulated_block_response(
+                    response_context,
+                    txs,
+                    block_output,
+                    return_full_transactions,
+                )?;
             let next_hash = simulated_block.inner.header.hash;
 
             let mut overlay = state_overrides;
