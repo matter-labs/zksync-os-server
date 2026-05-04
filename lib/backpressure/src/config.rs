@@ -3,7 +3,6 @@ use std::time::Duration;
 
 pub use zksync_os_pipeline::ComponentId;
 
-///
 const DEFAULT_BLOCK_DIFF_LIMIT: u64 = 256;
 const DEFAULT_BATCH_DIFF_LIMIT: u64 = 128;
 
