@@ -94,12 +94,7 @@ impl Transport {
             TransportConfig::Https { url, tls } => {
                 // Preserve the configured path so the URL can point at a
                 // non-root mount (e.g. `https://gateway.internal/policy`).
-                // Query and fragment are stripped; `/admit` / `/judge` are
-                // appended relative to this base.
-                let mut base = url.clone();
-                base.set_query(None);
-                base.set_fragment(None);
-                let base_url = base.to_string().trim_end_matches('/').to_owned();
+                let base_url = url.to_string().trim_end_matches('/').to_owned();
                 let client_config = build_client_config(&tls)?;
                 let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
                     .with_tls_config(client_config)
