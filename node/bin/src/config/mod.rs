@@ -636,6 +636,10 @@ pub struct SequencerConfig {
     #[config(default)]
     pub en_sync_up_to_block: Option<u64>,
 
+    /// Maximum replay records requested per p2p replay response message by an external node.
+    #[config(default_t = 1)]
+    pub en_max_blocks_per_replay_message: u64,
+
     #[config(default, with = Serde![*])]
     /// List of (block_number, db_key) pairs to override when downloading replay records.
     pub en_replay_record_overrides: Vec<(u64, Bytes)>,

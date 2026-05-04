@@ -1,7 +1,6 @@
 use crate::committed_batch_provider::CommittedBatchProvider;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
-use alloy::primitives::Address;
 use alloy::providers::DynProvider;
 use alloy::rpc::types::Log;
 use tokio::sync::watch;
@@ -22,7 +21,6 @@ use zksync_os_storage_api::WriteFinality;
 ///   startup replay and live operation;
 /// - node startup / recovery logic, which relies on the committed frontier stored in finality.
 pub struct L1CommitWatcher<Finality> {
-    zk_chain: ZkChain<DynProvider>,
     next_batch_number: u64,
     // SL tip used for finality initialization. Used to identify historical events during catch-up.
     sl_block_initial_finality_init_at: u64,
@@ -61,7 +59,6 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
         tracing::info!(last_l1_block, "resolved on L1");
 
         let this = Self {
-            zk_chain: zk_chain.clone(),
             next_batch_number: last_committed_batch + 1,
             sl_block_initial_finality_init_at,
             startup_last_committed_batch: last_committed_batch,
@@ -69,20 +66,18 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
             finality,
             commit_submitted_rx,
         };
-        let l1_watcher = L1Watcher::new(
+        L1Watcher::new(
+            config,
             zk_chain.provider().clone(),
+            (*zk_chain.address()).into(),
             // We start from last L1 block as it may contain more committed batches apart from the last
             // one.
             last_l1_block,
-            config.max_blocks_to_process,
-            config.confirmations,
+            None,
             l1_chain_id,
-            config.poll_interval,
-            this.into(),
+            Box::new(this),
         )
-        .await?;
-
-        Ok(l1_watcher)
+        .await
     }
 }
 
@@ -93,12 +88,9 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
     type SolEvent = ReportCommittedBatchRangeZKsyncOS;
     type WatchedEvent = ReportCommittedBatchRangeZKsyncOS;
 
-    fn contract_address(&self) -> Address {
-        *self.zk_chain.address()
-    }
-
     async fn process_event(
         &mut self,
+        provider: &DynProvider,
         report: ReportCommittedBatchRangeZKsyncOS,
         log: Log,
     ) -> Result<(), L1WatcherError> {
@@ -129,7 +121,8 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
 
             tracing::debug!(batch_number, "discovered committed batch");
             let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
-            let batch_info = util::fetch_committed_batch_data(&self.zk_chain, tx_hash)
+            let zk_chain = ZkChain::new(log.address(), provider.clone());
+            let batch_info = util::fetch_committed_batch_data(&zk_chain, tx_hash)
                 .await?
                 .into_stored();
             let committed_batch = DiscoveredCommittedBatch {

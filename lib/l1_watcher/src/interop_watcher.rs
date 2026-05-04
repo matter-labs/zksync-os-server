@@ -1,11 +1,11 @@
-use std::collections::HashMap;
-
 use alloy::primitives::ruint::FromUintError;
-use alloy::rpc::types::{Log, Topic, ValueOrArray};
+use alloy::providers::DynProvider;
+use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
-use alloy::{primitives::Address, providers::DynProvider};
+use std::collections::HashMap;
+use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMessageRoot::NewInteropRoot;
-use zksync_os_contract_interface::{Bridgehub, InteropRoot};
+use zksync_os_contract_interface::InteropRoot;
 use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
 use zksync_os_types::IndexedInteropRoot;
 
@@ -19,7 +19,6 @@ use crate::{L1WatcherConfig, ProcessRawEvents};
 /// de-duplicates multiple logs for the same `logId`, and inserts the latest `IndexedInteropRoot`
 /// into `InteropRootsSubpool`.
 pub struct InteropWatcher {
-    contract_address: Address,
     starting_interop_root_id: u64,
     interop_roots_subpool: InteropRootsSubpool,
 }
@@ -44,23 +43,20 @@ impl InteropWatcher {
             find_l1_block_by_interop_root_id(bridgehub.clone(), starting_interop_root_id).await?;
 
         let this = Self {
-            contract_address,
             starting_interop_root_id,
             interop_roots_subpool,
         };
 
-        let l1_watcher = L1Watcher::new(
+        L1Watcher::new(
+            config,
             bridgehub.provider().clone(),
+            contract_address.into(),
             next_l1_block,
-            config.max_blocks_to_process,
-            config.confirmations,
+            None,
             l1_chain_id,
-            config.poll_interval,
             Box::new(this),
         )
-        .await?;
-
-        Ok(l1_watcher)
+        .await
     }
 }
 
@@ -72,10 +68,6 @@ impl ProcessRawEvents for InteropWatcher {
 
     fn event_signatures(&self) -> Topic {
         NewInteropRoot::SIGNATURE_HASH.into()
-    }
-
-    fn contract_addresses(&self) -> ValueOrArray<Address> {
-        self.contract_address.into()
     }
 
     fn filter_events(&self, logs: Vec<Log>) -> Vec<Log> {
@@ -96,7 +88,11 @@ impl ProcessRawEvents for InteropWatcher {
         indexes.into_values().collect()
     }
 
-    async fn process_raw_event(&mut self, log: Log) -> Result<(), L1WatcherError> {
+    async fn process_raw_event(
+        &mut self,
+        _provider: &DynProvider,
+        log: Log,
+    ) -> Result<(), L1WatcherError> {
         let event = NewInteropRoot::decode_log(&log.inner)?.data;
 
         let log_id: u64 = event
