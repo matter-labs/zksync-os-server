@@ -49,7 +49,7 @@ pub struct Config {
     /// protocol-internal senders (bootloader, force-deployer) the chain
     /// cannot let an external service refuse without bricking startup.
     pub bypass_from: HashSet<Address>,
-    /// mTLS material. Required for `https://`; must be `None` for `unix:///`.
+    /// mTLS material. Required for `https://`; silently ignored for `unix:///`.
     pub tls: Option<TlsConfig>,
 }
 
