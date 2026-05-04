@@ -266,23 +266,6 @@ alloy::sol! {
         ) external view returns (bytes memory);
     }
 
-    // `SettlementLayerV31UpgradeBase.sol` — the per-chain upgrade init contract.
-    // `NewUpgradeCutData` carries a placeholder `additionalForceDeploymentsData`
-    // that `upgradeChainFromVersion` rewrites per-chain inside the delegatecall
-    // via `getL2UpgradeTxData(bridgehub, chainId, existingTxData)`. The server
-    // must call this before executing the L2 upgrade tx — otherwise the
-    // placeholder's empty `additionalForceDeploymentsData` would revert inside
-    // `performForceDeployedContractsInit`.
-    #[sol(rpc)]
-    interface ISettlementLayerV31Upgrade {
-        function getL2UpgradeTxData(
-            address _bridgehub,
-            uint256 _chainId,
-            bool _zksyncOS,
-            bytes memory _existingTxData
-        ) external view returns (bytes memory);
-    }
-
     // `IZKChain.sol`
     #[sol(rpc)]
     interface IZKChain {

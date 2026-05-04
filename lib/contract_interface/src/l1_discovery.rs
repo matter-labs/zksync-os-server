@@ -3,7 +3,7 @@ use crate::models::BatchDaInputMode;
 use crate::settlement_layer_intervals::SettlementLayerIntervals;
 use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
-use alloy::primitives::{Address, U256, address};
+use alloy::primitives::{address, Address, U256};
 use alloy::providers::{DynProvider, Provider};
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};

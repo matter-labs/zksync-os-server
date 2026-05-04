@@ -1,4 +1,4 @@
-use crate::{IChainAssetHandler, ZkChain, is_method_missing};
+use crate::{is_method_missing, IChainAssetHandler, ZkChain};
 use alloy::primitives::{Address, U256};
 use alloy::providers::DynProvider;
 use anyhow::Context;
