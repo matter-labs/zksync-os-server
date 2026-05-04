@@ -125,12 +125,6 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
             EthCallError::SimulateBlockGasLimitExceeded => {
                 rpc_error_with_code(-38015, err.to_string())
             }
-            EthCallError::SimulatePrecompileSelfReference => {
-                rpc_error_with_code(-38022, err.to_string())
-            }
-            EthCallError::SimulatePrecompileDuplicateAddress => {
-                rpc_error_with_code(-38023, err.to_string())
-            }
             EthCallError::SimulateMovePrecompileNotSupported => {
                 invalid_params_rpc_err(err.to_string())
             }

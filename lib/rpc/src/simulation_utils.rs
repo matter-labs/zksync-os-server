@@ -6,9 +6,7 @@ use alloy::consensus::proofs::{calculate_receipt_root, calculate_transaction_roo
 use alloy::network::primitives::BlockTransactions;
 use alloy::primitives::{B256, Bloom, Bytes, U256};
 use alloy::rpc::types::simulate::{SimCallResult, SimulateError};
-use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
-use std::collections::HashSet;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::{
     BlockContext, BlockOutput, ExecutionOutput, ExecutionResult, TxOutput,
@@ -226,7 +224,7 @@ pub(super) fn apply_simulate_block_overrides(
                 continue;
             }
             let distance = block_context.block_number - block_number;
-            if distance == 0 || distance > 256 {
+            if distance > 256 {
                 continue;
             }
 
@@ -235,33 +233,6 @@ pub(super) fn apply_simulate_block_overrides(
         }
     }
 
-    Ok(())
-}
-
-pub(super) fn validate_state_overrides_for_simulate(
-    state_overrides: &StateOverride,
-) -> Result<(), EthCallError> {
-    let mut destinations = HashSet::new();
-    let mut has_precompile_move = false;
-    for (source, account) in state_overrides {
-        let Some(destination) = account.move_precompile_to else {
-            continue;
-        };
-        has_precompile_move = true;
-        if *source == destination {
-            return Err(EthCallError::SimulatePrecompileSelfReference);
-        }
-        if !destinations.insert(destination) {
-            return Err(EthCallError::SimulatePrecompileDuplicateAddress);
-        }
-    }
-    if has_precompile_move {
-        // Spec note: `movePrecompileToAddress` is part of eth_simulateV1 state overrides. The
-        // current ZKsync OS execution backend does not expose a way to remap its precompile table
-        // for a single simulated block, so reject it explicitly after the spec validation checks
-        // above.
-        return Err(EthCallError::SimulateMovePrecompileNotSupported);
-    }
     Ok(())
 }
 

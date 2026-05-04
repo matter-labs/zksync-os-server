@@ -727,7 +727,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     /// Spec limitations: this backend does not expose reth's `TransferInspector` equivalent, so
     /// `traceTransfers=true` is rejected instead of returning partial transfer logs. The backend
     /// also cannot remap precompiles for a single simulated block, so `movePrecompileToAddress` is
-    /// validated for self/duplicate references and then rejected as unsupported.
+    /// rejected as unsupported.
     pub fn simulate_v1_impl(
         &self,
         opts: SimulatePayload,
@@ -796,7 +796,12 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
             let state_overrides = match sim_block.state_overrides {
                 Some(state_overrides) => {
-                    simulation_utils::validate_state_overrides_for_simulate(&state_overrides)?;
+                    if state_overrides
+                        .values()
+                        .any(|account| account.move_precompile_to.is_some())
+                    {
+                        return Err(EthCallError::SimulateMovePrecompileNotSupported);
+                    }
                     build_state_override_maps(&simulation_view, state_overrides)
                 }
                 None => BlockOverlay::default(),
@@ -965,10 +970,6 @@ pub enum EthCallError {
     SimulateBlockTimestampInvalid { got: u64, parent: u64 },
     #[error("block gas limit exceeded by the block's transactions")]
     SimulateBlockGasLimitExceeded,
-    #[error("MovePrecompileToAddress referenced itself")]
-    SimulatePrecompileSelfReference,
-    #[error("multiple MovePrecompileToAddress values reference the same replacement address")]
-    SimulatePrecompileDuplicateAddress,
     #[error("movePrecompileToAddress is not supported by this execution backend")]
     SimulateMovePrecompileNotSupported,
     // todo(EIP-4844)
