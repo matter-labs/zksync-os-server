@@ -1287,7 +1287,9 @@ impl Config {
         let mut cfg = zksync_os_backpressure::BackpressureConfig::default();
         if let Some(v) = self.prover_api_config.max_batch_diff_to_upstream {
             cfg.set(ComponentId::FriJobManager, condition(Some(v)));
+            cfg.set(ComponentId::GaplessCommitter, condition(Some(v)));
             cfg.set(ComponentId::SnarkJobManager, condition(Some(v)));
+            cfg.set(ComponentId::GaplessL1ProofSender, condition(Some(v)));
         }
         if let Some(v) = self.batch_verification_config.max_batch_diff_to_upstream {
             cfg.set(ComponentId::BatchVerification, condition(Some(v)));
