@@ -54,7 +54,7 @@ impl PrometheusExporterConfig {
     }
 
     /// Get the list of metrics that use this type of exporter (Push vs Pull)
-    /// Only the groups with `PushMetrics` suffix are exported using Push Exporter
+    /// Only groups with the `PushMetrics` suffix are exported using the push exporter.
     fn registry(&self) -> Registry {
         let is_push_exporter = matches!(self.transport, PrometheusTransport::Push { .. });
         MetricsCollection::lazy()
