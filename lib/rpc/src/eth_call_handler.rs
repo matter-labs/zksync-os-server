@@ -736,6 +736,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     ///   its block context; use `blockOverrides.random` (prevrandao) instead.
     /// - `blockOverrides.parentBeaconBlockRoot`: silently ignored. There is no corresponding
     ///   field in `BlockContext`.
+    /// - `validation=false` nonce relaxation: partially unsupported. The basefee is zeroed as
+    ///   the spec requires, but nonce checks are not disabled. Transactions without an explicit
+    ///   nonce are auto-filled from state (the common case works), but an explicitly supplied
+    ///   stale nonce will be rejected by the VM.
     pub fn simulate_v1_impl(
         &self,
         opts: SimulatePayload,
@@ -791,8 +795,11 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 )?;
             }
 
-            // `validation=false` disables fee validation for execution, but the returned block
-            // still reports the requested/header-overridden base fee.
+            // `validation=false` is supposed to disable both fee and nonce validation. We zero
+            // the basefee to satisfy fee checks, but nonce checks are not disabled — the VM still
+            // enforces them. Callers that rely on sending transactions with arbitrary nonces when
+            // `validation=false` will see unexpected failures. Nonces without an explicit value are
+            // auto-filled from state, so the common case works correctly.
             let response_context = block_context;
             let mut execution_context = response_context;
             if !validation {
