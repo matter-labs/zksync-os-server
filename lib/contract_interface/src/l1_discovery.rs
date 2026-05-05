@@ -267,6 +267,12 @@ impl L1State {
         *self.diamond_proxy_sl.address()
     }
 
+    /// `true` when the chain is currently committing batches to a Gateway, derived from the
+    /// settlement layer interval discovered at startup.
+    pub fn settles_on_gateway(&self) -> bool {
+        self.settlement_layer_intervals.settles_on_gateway()
+    }
+
     pub fn report_metrics(&self) {
         // Need to leak Strings here as metric exporter expects label names as `&'static`
         // This only happens once per process lifetime so is safe
