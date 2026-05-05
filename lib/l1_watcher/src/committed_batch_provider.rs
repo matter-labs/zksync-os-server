@@ -14,6 +14,7 @@ use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
+use zksync_os_storage_api::ReadBatch;
 
 const INIT_MAX_PARALLEL_BATCH_FETCHES: usize = 10;
 const WAIT_FOR_BATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -33,12 +34,27 @@ const WAIT_FOR_BATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// startup bookkeeping. Then run [`Self::init`] in a background task to populate the remaining
 /// historical committed range while consumers use [`Self::wait_for_batch`] to block until a
 /// specific batch becomes available.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CommittedBatchProvider {
     inner: Arc<RwLock<Inner>>,
     /// Intervals used to route batch lookups to the diamond proxy of the SL the batch was
     /// committed to.
     intervals: SettlementLayerIntervals,
+    /// Final fallback for resolving commit events that live on a settlement layer this node can
+    /// no longer query (e.g. after migrating a chain back from a gateway — commits for
+    /// pre-migration batches are on the gateway L2 diamond). Written by the previous run's
+    /// `L1PersistBatchWatcher`.
+    local_batch_storage: Arc<dyn ReadBatch>,
+}
+
+// Manual Debug impl because `dyn ReadBatch` isn't Debug.
+impl std::fmt::Debug for CommittedBatchProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommittedBatchProvider")
+            .field("inner", &self.inner)
+            .field("intervals", &self.intervals)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -50,15 +66,30 @@ struct Inner {
 impl CommittedBatchProvider {
     /// Creates a provider, inserts the genesis batch if needed, and eagerly loads the startup
     /// frontier batches used by startup bookkeeping.
+    ///
+    /// `local_batch_storage` is consulted as a final fallback when a batch's commit event can't
+    /// be found on either the current SL or L1 diamond. This is essential for recovery after a
+    /// live settlement-layer migration:
+    ///   - to-gateway: commits for pre-migration batches live on the chain's L1 diamond. The
+    ///     existing `diamond_proxy_l1` fallback resolves them.
+    ///   - from-gateway: commits for pre-migration batches live on the chain's diamond on the
+    ///     former-gateway L2, which the server can't (and shouldn't have to) query on restart.
+    ///     The `L1PersistBatchWatcher` on the previous run wrote those batches to local RocksDB,
+    ///     so we read them back from there.
+    ///
+    /// For a chain that never migrated, the fallback is never hit: the SL lookup succeeds on the
+    /// first try.
     pub async fn new(
         runtime: &Runtime,
         l1_state: &L1State,
         max_l1_blocks_to_scan: u64,
         load_genesis_batch_info: impl AsyncFnOnce() -> StoredBatchInfo,
+        local_batch_storage: Arc<dyn ReadBatch>,
     ) -> anyhow::Result<Self> {
         let provider = Self {
             inner: Arc::new(RwLock::new(Inner::default())),
             intervals: l1_state.settlement_layer_intervals.clone(),
+            local_batch_storage,
         };
         // Special case for genesis
         if l1_state.last_executed_batch == 0 {
@@ -127,7 +158,7 @@ impl CommittedBatchProvider {
         Ok(())
     }
 
-    pub(crate) fn insert(&self, batch: DiscoveredCommittedBatch) {
+    pub fn insert(&self, batch: DiscoveredCommittedBatch) {
         let mut inner = self.inner.write().expect("lock poisoned");
         inner.insert(batch);
     }
@@ -170,9 +201,13 @@ impl CommittedBatchProvider {
     ) -> anyhow::Result<()> {
         stream::iter(batch_numbers)
             .map(|batch_number| async move {
-                let proxy = self.intervals.resolve_proxy(batch_number)?;
-                let discovered_batch =
-                    fetch_batch(proxy, batch_number, max_l1_blocks_to_scan).await?;
+                let discovered_batch = fetch_batch(
+                    &self.intervals,
+                    batch_number,
+                    max_l1_blocks_to_scan,
+                    self.local_batch_storage.as_ref(),
+                )
+                .await?;
                 tracing::info!(
                     batch_number = discovered_batch.number(),
                     "discovered committed batch {} on startup",
@@ -220,22 +255,77 @@ fn startup_batch_numbers(
     (prioritized_in_range, remaining_batch_numbers)
 }
 
-/// Resolves a committed batch from L1 by first finding the block that committed it and then
-/// decoding the corresponding stored batch data.
+/// Resolves a committed batch by routing through `SettlementLayerIntervals` to find the diamond
+/// proxy that holds the commit, then falling back to local storage if needed:
+///   1. `intervals.resolve_proxy(batch_number)` — picks the SL diamond (current SL, current
+///      gateway, or L1) the batch was committed to.
+///   2. `local_batch_storage` — local RocksDB populated by the previous run's
+///      `L1PersistBatchWatcher`. The only way to recover commit metadata after a
+///      *from-gateway* migration, because those commits live on the former-gateway L2 diamond
+///      which this node can no longer (and shouldn't need to) query — in that case
+///      `resolve_proxy` errors out and we fall back here.
+///
+/// For a chain that never migrated, source 2 is never hit: source 1 resolves.
 async fn fetch_batch(
-    diamond_proxy_sl: &ZkChain<DynProvider>,
+    intervals: &SettlementLayerIntervals,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
+    local_batch_storage: &dyn ReadBatch,
 ) -> anyhow::Result<DiscoveredCommittedBatch> {
-    let sl_block_with_commit = util::find_l1_commit_block_by_batch_number(
-        diamond_proxy_sl.clone(),
+    match intervals.resolve_proxy(batch_number) {
+        Ok(proxy) => {
+            if let Some(batch) =
+                try_fetch_batch_on_proxy(proxy, batch_number, max_l1_blocks_to_scan).await?
+            {
+                return Ok(batch);
+            }
+        }
+        Err(err) => {
+            tracing::info!(
+                batch_number,
+                error = %err,
+                "interval resolution unavailable for batch (likely former-gateway L2); \
+                 falling back to local storage",
+            );
+        }
+    }
+    match local_batch_storage.get_batch_by_number(batch_number) {
+        Ok(Some(persisted)) => {
+            tracing::info!(
+                batch_number,
+                "resolved committed batch from local storage after interval lookup missed \
+                 (post-migration recovery path)",
+            );
+            Ok(persisted.committed_batch)
+        }
+        Ok(None) => anyhow::bail!(
+            "failed to find committed batch {batch_number} via settlement layer intervals \
+             or local storage",
+        ),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "failed to find committed batch {batch_number} via settlement layer intervals, \
+                 and local storage lookup errored",
+            )
+        }),
+    }
+}
+
+async fn try_fetch_batch_on_proxy(
+    zk_chain: &ZkChain<DynProvider>,
+    batch_number: u64,
+    max_l1_blocks_to_scan: u64,
+) -> anyhow::Result<Option<DiscoveredCommittedBatch>> {
+    let Some(block_with_commit) = util::find_l1_commit_block_by_batch_number(
+        zk_chain.clone(),
         batch_number,
         max_l1_blocks_to_scan,
     )
-    .await?;
-    util::fetch_stored_batch_data(diamond_proxy_sl, sl_block_with_commit, batch_number)
-        .await?
-        .with_context(|| format!("failed to find committed batch {batch_number} on L1"))
+    .await?
+    else {
+        return Ok(None);
+    };
+    util::fetch_stored_batch_data(zk_chain, block_with_commit, batch_number).await
 }
 
 #[cfg(test)]

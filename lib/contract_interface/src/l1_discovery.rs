@@ -3,7 +3,7 @@ use crate::models::BatchDaInputMode;
 use crate::settlement_layer_intervals::SettlementLayerIntervals;
 use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
-use alloy::primitives::{Address, U256, address};
+use alloy::primitives::{address, Address, U256};
 use alloy::providers::{DynProvider, Provider};
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
@@ -43,6 +43,13 @@ pub struct L1State {
     pub da_input_mode: BatchDaInputMode,
     pub l1_chain_id: u64,
     pub sl_chain_id: u64,
+    /// The authoritative migration number for this chain, as reported by L1's
+    /// `IChainAssetHandler.migrationNumber(chainId)`. Used by the batcher to
+    /// distinguish a newly-produced `SetSLChainId(n)` tx (when `n` exceeds this
+    /// value — a real gateway migration) from a replay of a historical one
+    /// (when `n <= current_migration_number` — the chain is re-executing past
+    /// blocks on a fresh RocksDB).
+    pub current_migration_number: u64,
     /// Settlement layer intervals discovered on startup. Can be used to route batch lookups to the
     /// diamond proxy of the SL the batch was committed to.
     pub settlement_layer_intervals: SettlementLayerIntervals,
@@ -149,6 +156,27 @@ impl L1State {
             None => BatchVerificationSL::Disabled,
         };
 
+        // `Bridgehub.chainAssetHandler()` + `IChainAssetHandler.migrationNumber()`
+        // are v31+ additions. Pre-v31 bridgehubs don't expose them, so the
+        // call reverts (alloy surfaces that as a TransportError with a
+        // JSON-RPC error response). Treat any failure here as "chain never
+        // migrated" (current_migration_number = 0) so the server can start
+        // against a v30 fixture and ride through the v30→v31 upgrade without
+        // restarting. If the call keeps failing after the upgrade we'll see
+        // it when other L1 lookups break downstream.
+        let current_migration_number: u64 = match bridgehub_l1.migration_number(l2_chain_id).await {
+            Ok(n) => n
+                .try_into()
+                .context("current migration number overflows u64")?,
+            Err(e) => {
+                tracing::info!(
+                    error = %e,
+                    "migrationNumber() not available on L1 bridgehub (pre-v31?); assuming current_migration_number = 0"
+                );
+                0
+            }
+        };
+
         let chain_asset_handler = bridgehub_l1.chain_asset_handler_address().await?;
         let diamond_proxy_gw = if sl_chain_id == l1_chain_id {
             None
@@ -183,6 +211,7 @@ impl L1State {
             da_input_mode,
             l1_chain_id,
             sl_chain_id,
+            current_migration_number,
             settlement_layer_intervals,
         })
     }
@@ -254,6 +283,7 @@ impl L1State {
             da_input_mode: this.da_input_mode,
             l1_chain_id: this.l1_chain_id,
             sl_chain_id: this.sl_chain_id,
+            current_migration_number: this.current_migration_number,
             settlement_layer_intervals: this.settlement_layer_intervals,
         })
     }

@@ -4,6 +4,7 @@ use crate::{L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
+use anyhow::Context;
 use std::collections::HashMap;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};

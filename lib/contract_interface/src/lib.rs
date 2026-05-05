@@ -277,6 +277,8 @@ alloy::sol! {
         function getPubdataPricingMode() external view returns (PubdataPricingMode);
         function getAdmin() external view returns (address);
         function getChainTypeManager() external view returns (address);
+        function getBridgehub() external view returns (address);
+        function getChainId() external view returns (uint256);
         function getProtocolVersion() external view returns (uint256);
         function getL2SystemContractsUpgradeTxHash() external view returns (bytes32);
         function getL2SystemContractsUpgradeBatchNumber() external view returns (uint256);

@@ -23,7 +23,7 @@ use zksync_os_rpc_api::{
     zks::ZksApiServer,
 };
 use zksync_os_storage_api::{PersistedBatch, RepositoryError, StateError, read_multichain_root};
-use zksync_os_types::L2_TO_L1_TREE_SIZE;
+use zksync_os_types::{L2_TO_L1_TREE_SIZE, SystemTxType};
 
 const LOG_PROOF_SUPPORTED_METADATA_VERSION: u8 = 1;
 
@@ -459,6 +459,31 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
     ) -> RpcResult<Option<BatchStorageProof>> {
         self.get_proof_impl(account, &keys, batch_number)
             .to_rpc_result()
+    }
+
+    async fn last_settlement_change_block(&self) -> RpcResult<Option<u64>> {
+        let replay = self.storage.replay_storage();
+        let latest = replay.latest_record();
+        // Scan backwards from the tip for a block containing a real (non-sentinel)
+        // `SetSLChainId` system tx. In normal operation the scan is short because
+        // the caller polls this immediately after triggering a migration; for
+        // already-migrated long-running chains it walks back to the migration
+        // block (one-off cost per server process; no caching needed).
+        for block_number in (0..=latest).rev() {
+            let Some(record) = replay.get_replay_record(block_number) else {
+                continue;
+            };
+            let has_real_set_sl_chain_id = record.transactions.iter().any(|tx| {
+                matches!(
+                    tx.as_system_tx_type(),
+                    Some(SystemTxType::SetSLChainId(n)) if *n != u64::MAX
+                )
+            });
+            if has_real_set_sl_chain_id {
+                return Ok(Some(block_number));
+            }
+        }
+        Ok(None)
     }
 }
 

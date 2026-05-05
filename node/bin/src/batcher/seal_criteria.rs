@@ -14,6 +14,14 @@ pub(crate) struct BatchInfoAccumulator {
     pub block_count: u64,
     pub tx_count: u64,
     pub has_upgrade_tx: bool,
+    /// Migration number from a `SetSLChainId(n)` system tx included in this
+    /// batch's first block. `u64::MAX` is the v31 upgrade sentinel and is
+    /// never recorded here. The batcher compares this against L1's current
+    /// migration number to decide whether the batch represents a real
+    /// settlement-layer change (requiring it to quiesce) vs. a replay of a
+    /// historical migration (the chain booted empty and is re-executing
+    /// past blocks — no action needed).
+    pub migration_number: Option<u64>,
     pub interop_roots_count: u64,
     pub should_seal_for_gateway_migration: bool,
 
@@ -67,14 +75,32 @@ impl BatchInfoAccumulator {
             })
             .sum::<u64>();
 
-        // If there is a chain id update transaction not in the first block(note `self.block_count > 1`), we need to seal the batch for gateway migration(so it goes in the first block of the next batch)
-        if replay_record
-            .transactions
-            .iter()
-            .any(|tx| matches!(tx.as_system_tx_type(), Some(SystemTxType::SetSLChainId(_))))
-            && self.block_count > 1
-        {
+        // Detect a real gateway-migration `SetSLChainId(n)` tx. The `u64` value
+        // is a monotonic migration number, not a chain id. The `u64::MAX`
+        // sentinel is emitted after every v31 upgrade (see the upgrade-tx
+        // sanity check below) and must NOT be treated as a migration — it
+        // would wrongly quiesce the batcher after the upgrade batch of any
+        // freshly-started chain.
+        let set_sl_migration_number: Option<u64> =
+            replay_record.transactions.iter().find_map(|tx| {
+                if let Some(SystemTxType::SetSLChainId(n)) = tx.as_system_tx_type()
+                    && *n != u64::MAX
+                {
+                    Some(*n)
+                } else {
+                    None
+                }
+            });
+        // If the SetSLChainId tx lands in a later block of the batch, seal now so
+        // it ends up as the first tx of the next batch.
+        if set_sl_migration_number.is_some() && self.block_count > 1 {
             self.should_seal_for_gateway_migration = true;
+        }
+        // If the SetSLChainId tx landed in the first block (i.e. it's included
+        // in this batch), record its migration number so the batcher can decide
+        // whether this is a real migration vs. a historical replay.
+        if set_sl_migration_number.is_some() && self.block_count == 1 {
+            self.migration_number = set_sl_migration_number;
         }
 
         if !self.has_upgrade_tx

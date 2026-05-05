@@ -19,6 +19,10 @@ pub struct SlChainIdSubpool {
 struct Inner {
     sender: Option<mpsc::Sender<SystemTxEnvelope>>,
     pending_txs: VecDeque<SystemTxEnvelope>,
+    /// Highest `SetSLChainId(migration_number)` ever accepted. Used to drop
+    /// duplicate or stale inserts from the gateway migration watcher. The
+    /// `u64::MAX` sentinel (emitted alongside the v31 upgrade) is ignored.
+    max_accepted_migration_number: Option<u64>,
 }
 
 impl Default for SlChainIdSubpool {
@@ -28,6 +32,7 @@ impl Default for SlChainIdSubpool {
             inner: Arc::new(RwLock::new(Inner {
                 sender: None,
                 pending_txs: VecDeque::new(),
+                max_accepted_migration_number: None,
             })),
         }
     }
@@ -48,12 +53,44 @@ impl SlChainIdSubpool {
     }
 
     pub async fn insert(&self, tx: SystemTxEnvelope) {
+        let subtype = tx.system_subtype().clone();
         assert!(
-            matches!(tx.system_subtype(), SystemTxType::SetSLChainId(_)),
-            "tried to insert unrelated system tx ({:?}) into `SlChainIdSubpool`",
-            tx.system_subtype()
+            matches!(subtype, SystemTxType::SetSLChainId(_)),
+            "tried to insert unrelated system tx ({subtype:?}) into `SlChainIdSubpool`"
         );
+        let SystemTxType::SetSLChainId(migration_number) = subtype else {
+            unreachable!();
+        };
         let mut inner = self.inner.write().await;
+        // Dedupe: the gateway migration watcher can fire the same
+        // `MigrateTo/FromGateway` event more than once on startup (e.g. when
+        // the initial L1 block scan and a live poll both surface the same
+        // event at overlapping block windows). Accepting both would put two
+        // identical `SetSLChainId` txs into two consecutive blocks — one
+        // drained between the duplicate inserts — breaking the invariant
+        // that a given tx hash belongs to exactly one block.
+        //
+        // Tracking `pending_txs` alone is insufficient because the first
+        // copy can be popped by a consumer between the two inserts. We
+        // track the highest migration number ever accepted so re-fires of
+        // the same (or stale) migration are rejected regardless of pool
+        // state. This is a monotonic counter — duplicates and out-of-order
+        // stragglers both get the same treatment.
+        if migration_number != u64::MAX
+            && inner
+                .max_accepted_migration_number
+                .is_some_and(|max| migration_number <= max)
+        {
+            tracing::debug!(
+                migration_number,
+                max_accepted = ?inner.max_accepted_migration_number,
+                "skipping duplicate/stale SetSLChainId tx in SlChainIdSubpool"
+            );
+            return;
+        }
+        if migration_number != u64::MAX {
+            inner.max_accepted_migration_number = Some(migration_number);
+        }
         if let Some(sender) = &inner.sender {
             // If the receiver has been dropped, we should stop sending transactions and clear the sender to avoid unnecessary work.
             if sender.send(tx.clone()).await.is_err() {

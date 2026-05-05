@@ -3,6 +3,7 @@ use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::Log;
+use anyhow::Context;
 use tokio::sync::watch;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
@@ -55,7 +56,13 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
             last_committed_batch,
             config.max_blocks_to_process,
         )
-        .await?;
+        .await?
+        .with_context(|| {
+            format!(
+                "could not find L1 commit block for batch {last_committed_batch} on zk_chain {}",
+                zk_chain.address()
+            )
+        })?;
         tracing::info!(last_l1_block, "resolved on L1");
 
         let this = Self {

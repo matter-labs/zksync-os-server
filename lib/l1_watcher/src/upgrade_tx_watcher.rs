@@ -52,6 +52,12 @@ pub struct L1UpgradeTxWatcher {
     ctm_l1: Address,
     /// Address of the CTM contract on SL (used to scan NewUpgradeCutData events)
     ctm_sl: Address,
+    /// L1 diamond proxy address for this chain. Used to query `getBridgehub()` /
+    /// `getChainId()` so we can call `getL2UpgradeTxData(bridgehub, chainId, …)`
+    /// on the upgrade facet's `initAddress` to get the per-chain rewritten L2
+    /// upgrade tx (v31+ upgrades replace a placeholder in the tx data at
+    /// `upgradeChainFromVersion` time).
+    zk_chain_l1_address: Address,
     current_protocol_version: ProtocolSemanticVersion,
     upgrade_subpool: UpgradeSubpool,
 
@@ -117,6 +123,7 @@ impl L1UpgradeTxWatcher {
 
         tracing::info!(last_l1_block, "checking block starting from");
 
+        let zk_chain_l1_address = *zk_chain_l1.address();
         let this = Self {
             l2_chain_id,
             provider_l1: zk_chain_l1.provider().clone(),
@@ -125,6 +132,7 @@ impl L1UpgradeTxWatcher {
             bytecode_supplier_address,
             ctm_l1,
             ctm_sl,
+            zk_chain_l1_address,
             current_protocol_version,
             upgrade_subpool,
             max_blocks_to_process: config.max_blocks_to_process,
@@ -153,6 +161,62 @@ impl L1UpgradeTxWatcher {
         let diamond_cut_data = raw_diamond_cut.inner.data.diamondCutData;
         let mut proposed_upgrade =
             ProposedUpgrade::abi_decode(&diamond_cut_data.initCalldata[4..]).unwrap(); // TODO: we're in fact parsing `upgrade(..)` signature here
+
+        // `NewUpgradeCutData` carries a placeholder `additionalForceDeploymentsData`
+        // (`""`) that `upgradeChainFromVersion` rewrites per-chain when the
+        // diamond-cut init runs on L1 — see
+        // `SettlementLayerV31UpgradeBase.upgrade()` which replaces
+        // `l2ProtocolUpgradeTx.data` via `getL2UpgradeTxData(bridgehub, chainId, existingTxData)`.
+        // Call that same function off-chain so the tx we inject into the
+        // mempool matches what L1 actually wrote into the priority queue.
+        //
+        // We route this through the upgrade facet's deployed address, which is
+        // `diamond_cut_data.initAddress`. If the call reverts (pre-v31 init
+        // contracts don't have this function), keep the original tx data.
+        let upgrade_init_address = diamond_cut_data.initAddress;
+        let original_tx_data = proposed_upgrade.l2ProtocolUpgradeTx.data.clone();
+        let zk_chain_l1 = zksync_os_contract_interface::IZKChain::new(
+            self.zk_chain_l1_address,
+            self.provider_l1.clone(),
+        );
+        let bridgehub_l1 = zk_chain_l1.getBridgehub().call().await?;
+        let l2_chain_id: u64 = zk_chain_l1
+            .getChainId()
+            .call()
+            .await?
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("chain id overflows u64: {e:?}"))?;
+        match ISettlementLayerV31UpgradeInstance::new(
+            upgrade_init_address,
+            self.provider_l1.clone(),
+        )
+        .getL2UpgradeTxData(
+            bridgehub_l1,
+            U256::from(l2_chain_id),
+            true,
+            original_tx_data,
+        )
+        .call()
+        .await
+        {
+            Ok(rewritten) => {
+                tracing::info!(
+                    init_address = ?upgrade_init_address,
+                    bridgehub = ?bridgehub_l1,
+                    l2_chain_id,
+                    rewritten_len = rewritten.len(),
+                    "rewrote L2 upgrade tx data via getL2UpgradeTxData"
+                );
+                proposed_upgrade.l2ProtocolUpgradeTx.data = rewritten.into();
+            }
+            Err(e) => {
+                tracing::info!(
+                    error = %e,
+                    init_address = ?upgrade_init_address,
+                    "init contract does not expose getL2UpgradeTxData (pre-v31?); using original tx data"
+                );
+            }
+        }
 
         let patch_only = protocol_version.minor == self.current_protocol_version.minor;
         let (l2_upgrade_tx, force_preimages) = if patch_only {

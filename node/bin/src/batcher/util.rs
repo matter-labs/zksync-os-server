@@ -1,4 +1,4 @@
-use alloy::primitives::{B256, U256, keccak256};
+use alloy::primitives::{keccak256, B256, U256};
 use blake2::{Blake2s256, Digest};
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_genesis::GenesisState;

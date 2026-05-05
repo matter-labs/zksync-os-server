@@ -308,6 +308,22 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let tree_db = tree_at_genesis.tree;
     let tree_for_rpc = Arc::new(tree_db.clone());
 
+    // Open the local executed-batch storage early. The `CommittedBatchProvider`
+    // consults it as a lazy third fallback (after the SL diamond and the L1
+    // diamond) when resolving a batch whose commit event the current node
+    // can't find on-chain. This only happens after a settlement-layer
+    // migration: e.g. after migrating a chain back from a gateway, the commits
+    // for pre-migration batches live on the former-gateway L2 diamond — which
+    // this node can't (and shouldn't have to) query — and the previous run's
+    // `L1PersistBatchWatcher` will have written them to local RocksDB.
+    //
+    // `ExecutedBatchStorage` is `Clone` (RocksDB wraps its handle in an Arc
+    // internally), so we pass plain clones to the downstream consumers and
+    // wrap a clone in `Arc<dyn ReadBatch>` only for the provider, whose API
+    // is trait-object to stay decoupled from the storage crate.
+    let persistent_batch_storage =
+        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
+
     let committed_batch_provider = CommittedBatchProvider::new(
         runtime,
         &l1_state,
@@ -318,6 +334,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .await
                 .unwrap()
         },
+        Arc::new(persistent_batch_storage.clone()),
     )
     .await
     .expect("failed to init CommittedBatchProvider");
@@ -788,9 +805,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ========== Start L1 Persist Batch Watcher ===========
+    // `persistent_batch_storage` was opened earlier (so the provider seeding
+    // can read from it); reuse the same handle here.
 
-    let persistent_batch_storage =
-        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
     let rpc_storage = RpcStorage::new(
         repositories.clone(),
         block_replay_storage.clone(),
@@ -1154,6 +1171,9 @@ async fn run_main_node_pipeline(
             sidecar_sender,
             committed_batch_provider: committed_batch_provider.clone(),
             read_state: state.clone(),
+            current_migration_number_on_startup: node_state_on_startup
+                .l1_state
+                .current_migration_number,
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.clone().into(),
