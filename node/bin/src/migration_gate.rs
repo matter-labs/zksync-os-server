@@ -2,8 +2,8 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
-use zksync_os_observability::ComponentStateReporter;
-use zksync_os_pipeline::{ComponentId, PeekableReceiver, PipelineComponent};
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
+use zksync_os_pipeline::{ComponentId, PeekableReceiver, PipelineComponent, SendAndRecordExt};
 
 /// A pipeline component that acts as a gate in front of the L1 commit sender.
 ///
@@ -33,20 +33,22 @@ impl PipelineComponent for MigrationGate {
     type Output = L1SenderCommand<CommitCommand>;
 
     const COMPONENT_ID: ComponentId = ComponentId::MigrationGate;
-    // 1-sized buffer so back-pressure propagates immediately upstream when the gate is closed.
-    const OUTPUT_CHANNEL_CAPACITY: usize = 1;
 
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
-        _state_reporter: ComponentStateReporter,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         loop {
-            let Some(item) = input.recv().await else {
+            state_reporter.enter_state(GenericComponentState::Idle);
+
+            let Some(item) = input.recv_and_record_picked(&state_reporter).await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
+
+            state_reporter.enter_state(GenericComponentState::Active);
 
             // Only `SendToL1` batches go through the gate; already-committed `Passthrough`
             // batches are forwarded unconditionally.
@@ -81,10 +83,7 @@ impl PipelineComponent for MigrationGate {
                 );
             }
 
-            if output.send(item).await.is_err() {
-                tracing::info!("outbound channel closed");
-                return Ok(());
-            }
+            output.send_and_record(item, &state_reporter)?;
         }
     }
 }
