@@ -56,7 +56,7 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
         mut self,
         _input: PeekableReceiver<()>,
         output: mpsc::Sender<BlockCommand>,
-        _state_reporter: ComponentStateReporter,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         let last_block_in_wal = self.block_replay_storage.latest_record();
 
@@ -100,14 +100,18 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 
         tracing::info!("All WAL blocks replayed. Starting main loop.");
 
-        self.run_loop(output).await
+        self.run_loop(output, state_reporter).await
     }
 }
 
 impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
     /// This method kicks in after all local canonized Replayed Records (WAL) are replayed.
     /// Produces `Produce` commands only when the node is the leader.
-    async fn run_loop(mut self, output: mpsc::Sender<BlockCommand>) -> anyhow::Result<()> {
+    async fn run_loop(
+        mut self,
+        output: mpsc::Sender<BlockCommand>,
+        state_reporter: ComponentStateReporter,
+    ) -> anyhow::Result<()> {
         let mut leadership = self.leadership.clone();
         let mut role = leadership.current_role();
         tracing::info!(?role, "Consensus role initialized");
@@ -129,8 +133,10 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                         tracing::info!("inbound channel closed");
                         return Ok(());
                     };
+                    let block_number = record.block_context.block_number;
+                    let timestamp = record.block_context.timestamp;
                     tracing::info!(
-                        block_number = record.block_context.block_number,
+                        block_number,
                         role = ?role,
                         "Received canonized block from consensus",
                     );
@@ -142,6 +148,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                         tracing::info!("Command output channel closed, stopping source");
                         break;
                     }
+                    state_reporter.record_processed(block_number, Some(timestamp), None);
                 }
                 send_res = output.send(BlockCommand::Produce(ProduceCommand)), if role == ConsensusRole::Leader => {
                     if send_res.is_err() {
@@ -204,10 +211,11 @@ impl PipelineComponent for ExternalNodeCommandSource {
         mut self,
         _input: PeekableReceiver<()>,
         output: mpsc::Sender<BlockCommand>,
-        _state_reporter: ComponentStateReporter,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         while let Some(record) = self.replays_for_sequencer.recv().await {
             let block_number = record.block_context.block_number;
+            let timestamp = record.block_context.timestamp;
             let txs = record.transactions.len();
             let force_preimages = record.force_preimages.len();
             let force_preimage_bytes = record
@@ -240,6 +248,7 @@ impl PipelineComponent for ExternalNodeCommandSource {
                 tracing::info!("Command output channel closed, stopping source");
                 break;
             }
+            state_reporter.record_processed(block_number, Some(timestamp), None);
         }
 
         Ok(())
