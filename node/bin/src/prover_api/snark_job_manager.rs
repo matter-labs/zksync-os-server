@@ -3,7 +3,8 @@ use crate::prover_api::metrics::{ProverStage, ProverType};
 use crate::prover_api::prover_job_map::ProverJobMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::{Permit, Sender};
 use zksync_os_batch_types::batcher_model::{
     FriProof, RealSnarkProof, SignedBatchEnvelope, SnarkProof,
 };
@@ -109,6 +110,25 @@ impl SnarkJobManager {
         //     anyhow::bail!("proof validation failed")
         // }
 
+        // Prover should generate the proof with VK received from server. These must always match.
+        // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
+        //
+        // This should never happen, but we double-check to guarantee it's the case.
+        let Some(batch_metadata) = self.jobs.get_job_batch_metadata(batch_from).await else {
+            anyhow::bail!("race condition: some batches were completed earlier")
+        };
+        let server_vk = batch_metadata
+            .verification_key_hash()
+            .expect("verification key hash must be present as it was set by server");
+        let prover_vk = proving_version.vk_hash();
+        anyhow::ensure!(
+            server_vk == prover_vk,
+            "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
+        );
+
+        // Ensure we can send downstream before consuming jobs from the retryable map.
+        let permit = self.try_reserve_permit_downstream()?;
+
         // prove is valid - consuming proven batches
         let Some(consumed_batches_proven) = self
             .jobs
@@ -118,33 +138,18 @@ impl SnarkJobManager {
             anyhow::bail!("race condition: some batches were completed earlier")
         };
 
-        // Prover should generate the proof with VK received from server. These must always match.
-        // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
-        //
-        // This should never happen, but we double-check to guarantee it's the case.
-        let server_vk = consumed_batches_proven[0]
-            .batch
-            .verification_key_hash()
-            .expect("verification key hash must be present as it was set by server");
-        let prover_vk = proving_version.vk_hash();
-        anyhow::ensure!(
-            server_vk == prover_vk,
-            "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
-        );
-
         let consumed_batches_proven: Vec<_> = consumed_batches_proven
             .into_iter()
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
 
-        self.send_downstream(ProofCommand::new(
+        permit.send(ProofCommand::new(
             consumed_batches_proven,
             SnarkProof::Real(RealSnarkProof::V2 {
                 proof: payload,
                 proving_execution_version: proving_version as u32,
             }),
-        ))
-        .await?;
+        ));
         Ok(())
     }
 
@@ -186,16 +191,21 @@ impl SnarkJobManager {
                 assigned.len() - real_proofs_count,
             );
 
-            let mut completed = Vec::default();
-            for (job, _) in assigned {
-                if let Some(envelope) = self
-                    .jobs
-                    .complete_job(job.batch_number, ProverType::Fake, "fake_prover")
-                    .await
-                {
-                    completed.push(envelope);
-                }
-            }
+            let batch_from = assigned.first().unwrap().0.batch_number;
+            let batch_to = assigned.last().unwrap().0.batch_number;
+            let permit = self.try_reserve_permit_downstream()?;
+            let Some(completed) = self
+                .jobs
+                .complete_many_jobs(batch_from, batch_to, ProverType::Fake, "fake_prover")
+                .await
+            else {
+                tracing::info!(
+                    batch_from,
+                    batch_to,
+                    "skipping fake SNARK proof because another prover completed part of the range"
+                );
+                continue;
+            };
 
             // Add observability traces
             let batches_with_fake_proofs = completed
@@ -203,21 +213,29 @@ impl SnarkJobManager {
                 .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedFake))
                 .collect();
 
-            self.send_downstream(ProofCommand::new(
+            permit.send(ProofCommand::new(
                 batches_with_fake_proofs,
                 SnarkProof::Fake,
-            ))
-            .await?;
+            ));
         }
     }
 
-    async fn send_downstream(&self, proof_command: ProofCommand) -> anyhow::Result<()> {
-        self.latency_tracker
-            .enter_state(GenericComponentState::WaitingSend);
-        self.prove_batches_sender.send(proof_command).await?;
-        self.latency_tracker
-            .enter_state(GenericComponentState::ProcessingOrWaitingRecv);
-        Ok(())
+    fn try_reserve_permit_downstream(&self) -> anyhow::Result<Permit<'_, ProofCommand>> {
+        Ok(match self.prove_batches_sender.try_reserve() {
+            Ok(permit) => {
+                self.latency_tracker
+                    .enter_state(GenericComponentState::ProcessingOrWaitingRecv);
+                permit
+            }
+            Err(TrySendError::Full(_)) => {
+                self.latency_tracker
+                    .enter_state(GenericComponentState::WaitingSend);
+                anyhow::bail!("downstream backpressure");
+            }
+            Err(TrySendError::Closed(_)) => {
+                anyhow::bail!("server is shutting down");
+            }
+        })
     }
 }
 
