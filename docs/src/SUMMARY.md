@@ -29,6 +29,7 @@
   - [Base token price updater](design/base_token_price_updater.md)
   - [Fees](design/fees.md)
   - [zks_getProof](design/zks_getProof.md)
+  - [Gateway Migration](design/migration.md)
 
 ---
 

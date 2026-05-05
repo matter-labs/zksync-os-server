@@ -87,6 +87,7 @@ pub fn dummy_batch_metadata(batch_number: u64, from: u64, to: u64) -> BatchMetad
         logs: vec![],
         messages: vec![],
         multichain_root: Default::default(),
+        set_sl_chain_id_migration_number: None,
     }
 }
 

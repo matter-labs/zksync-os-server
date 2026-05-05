@@ -1,7 +1,7 @@
 use crate::watcher::L1WatcherError;
 use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
-use alloy::primitives::{Address, BlockNumber, TxHash};
+use alloy::primitives::{Address, BlockNumber, TxHash, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
@@ -11,12 +11,53 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
+use zksync_os_contract_interface::IChainAssetHandler;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
 use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
 use zksync_os_types::ProtocolSemanticVersion;
 
 pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
+
+/// Finds the first block where `IChainAssetHandler::migrationNumber(chain_id) >= migration_number`
+/// using binary search.
+///
+/// Used by both [`GatewayMigrationWatcher`][crate::GatewayMigrationWatcher] (on L1) and
+/// [`MigrationCompleteWatcher`][crate::MigrationCompleteWatcher] (on the current settlement layer)
+/// to determine the block from which to start scanning for migration events.
+pub async fn find_block_by_migration_number(
+    zk_chain: ZkChain<DynProvider>,
+    chain_asset_handler: Address,
+    chain_id: u64,
+    migration_number: u64,
+) -> anyhow::Result<BlockNumber> {
+    let instance = Arc::new(IChainAssetHandler::new(
+        chain_asset_handler,
+        zk_chain.provider().clone(),
+    ));
+    let target = U256::from(migration_number);
+
+    find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| {
+        let instance = instance.clone();
+        async move {
+            let code = zk
+                .provider()
+                .get_code_at(*instance.address())
+                .block_id(block.into())
+                .await?;
+            if code.0.is_empty() {
+                return Ok(false);
+            }
+            let res = instance
+                .migrationNumber(U256::from(chain_id))
+                .block(block.into())
+                .call()
+                .await?;
+            Ok(res >= target)
+        }
+    })
+    .await
+}
 
 /// Maximum number of L1 blocks that we can scan in a reasonable amount of time.
 ///

@@ -11,6 +11,12 @@ ignore = [
     # `rand` unsoundness with custom logger using `rand::rng()`. Too many
     # transitive deps still pin 0.8.5, so upgrading is not feasible right now.
     "RUSTSEC-2026-0097",
+    # hickory-proto 0.25.2 is pulled in transitively via reth-dns-discovery.
+    # DNS discovery is explicitly disabled in our network config, so neither
+    # code path is reachable. Proper fix requires upgrading reth to v2.2.0+
+    # which is a significant effort (alloy 1.x → 2.x migration).
+    "RUSTSEC-2026-0118",
+    "RUSTSEC-2026-0119",
 ]
 
 [bans]

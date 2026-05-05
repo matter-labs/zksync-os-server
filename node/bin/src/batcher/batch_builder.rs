@@ -7,7 +7,7 @@ use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_multichain_root};
-use zksync_os_types::{ProvingVersion, PubdataMode};
+use zksync_os_types::{ProvingVersion, PubdataMode, SystemTxType, ZkEnvelope};
 
 /// Takes a vector of blocks and produces a batch envelope.
 #[allow(clippy::too_many_arguments)]
@@ -88,6 +88,25 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         );
     }
 
+    // Detect any `SetSLChainId` system transaction across all blocks in the batch.
+    // Excludes the sentinel value `u64::MAX` which is used during protocol upgrades and is
+    // unrelated to gateway migrations.
+    // Detect any `SetSLChainId` system transaction across all blocks in the batch.
+    // Excludes the sentinel value `u64::MAX` which is used during protocol upgrades and is
+    // unrelated to gateway migrations.
+    let set_sl_chain_id_migration_number = blocks.iter().find_map(|(_, replay_record, _, _)| {
+        replay_record.transactions.iter().find_map(|tx| {
+            if let ZkEnvelope::System(system_tx) = tx.envelope()
+                && let SystemTxType::SetSLChainId(n) = system_tx.system_subtype()
+                && *n != u64::MAX
+            {
+                Some(*n)
+            } else {
+                None
+            }
+        })
+    });
+
     let batch_envelope = BatchEnvelope::new(
         BatchMetadata {
             previous_stored_batch_info: prev_batch_info,
@@ -110,6 +129,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             logs,
             messages,
             multichain_root,
+            set_sl_chain_id_migration_number,
         },
         batch_prover_input,
     )

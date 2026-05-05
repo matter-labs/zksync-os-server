@@ -1,7 +1,7 @@
 //! Support for representing the version of the `zks` protocol.
 
 use crate::wire::message::ZksMessageId;
-use crate::wire::replays::{WireReplayRecord, v0, v1, v2};
+use crate::wire::replays::{WireReplayRecord, v0, v1, v2, v3};
 use alloy::primitives::bytes::BufMut;
 use alloy::rlp::{Decodable, Encodable, Error as RlpError};
 use std::fmt::Debug;
@@ -58,6 +58,16 @@ impl ZksProtocolVersionSpec for ZksProtocolV3 {
     const VERSION: ZksVersion = ZksVersion::Zks3;
 }
 
+/// Protocol version 4 keeps the replay transport from v3 but upgrades the replay record encoding.
+#[derive(Debug, Clone)]
+pub struct ZksProtocolV4;
+
+impl ZksProtocolVersionSpec for ZksProtocolV4 {
+    type Record = v3::ReplayRecord;
+
+    const VERSION: ZksVersion = ZksVersion::Zks4;
+}
+
 /// Error thrown when failed to parse a valid [`ZksVersion`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("Unknown zks protocol version: {0}")]
@@ -75,14 +85,17 @@ pub enum ZksVersion {
     Zks2 = 2,
     /// The `zks` protocol version 3.
     Zks3 = 3,
+    /// The `zks` protocol version 4.
+    Zks4 = 4,
 }
 
 impl ZksVersion {
     /// The latest known zks version
-    pub const LATEST: Self = Self::Zks3;
+    pub const LATEST: Self = Self::Zks4;
 
     /// All known zks versions
-    pub const ALL_VERSIONS: &'static [Self] = &[Self::Zks0, Self::Zks1, Self::Zks2, Self::Zks3];
+    pub const ALL_VERSIONS: &'static [Self] =
+        &[Self::Zks0, Self::Zks1, Self::Zks2, Self::Zks3, Self::Zks4];
 
     /// Returns the max message id for the given version.
     const fn max_message_id(&self) -> u8 {
@@ -91,6 +104,7 @@ impl ZksVersion {
             ZksVersion::Zks1 => ZksMessageId::BlockReplays as u8,
             ZksVersion::Zks2 => ZksMessageId::BlockReplays as u8,
             ZksVersion::Zks3 => ZksMessageId::VerifyBatchResult as u8,
+            ZksVersion::Zks4 => ZksMessageId::VerifyBatchResult as u8,
         }
     }
 
@@ -164,6 +178,7 @@ impl From<ZksVersion> for &'static str {
             ZksVersion::Zks1 => "1",
             ZksVersion::Zks2 => "2",
             ZksVersion::Zks3 => "3",
+            ZksVersion::Zks4 => "4",
         }
     }
 }

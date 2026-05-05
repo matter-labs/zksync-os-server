@@ -1,14 +1,11 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessRawEvents, util};
-use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
+use alloy::primitives::{B256, ChainId, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
-use std::sync::Arc;
 use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
-use zksync_os_contract_interface::{
-    Bridgehub, IChainAssetHandler, ServerNotifier::MigrateToGateway, ZkChain,
-};
+use zksync_os_contract_interface::{Bridgehub, ServerNotifier::MigrateToGateway, ZkChain};
 use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_types::SystemTxEnvelope;
 
@@ -29,6 +26,9 @@ pub struct GatewayMigrationWatcher {
     /// New settlement layer chain ID when a `MigrateFromGateway` event fires.
     l1_chain_id: ChainId,
     sl_chain_id_subpool: SlChainIdSubpool,
+    /// The next migration number to be processed.  This is incremented by 1 after every
+    /// non-duplicate migration event.
+    next_migration_number: u64,
 }
 
 impl GatewayMigrationWatcher {
@@ -47,7 +47,7 @@ impl GatewayMigrationWatcher {
         let chain_asset_handler_address = bridgehub.chain_asset_handler_address().await?;
 
         let current_l1_block = zk_chain.provider().get_block_number().await?;
-        let next_l1_block = find_l1_block_by_migration_number(
+        let next_l1_block = util::find_block_by_migration_number(
             zk_chain.clone(),
             chain_asset_handler_address,
             l2_chain_id,
@@ -71,7 +71,7 @@ impl GatewayMigrationWatcher {
             starting_l1_block = next_l1_block,
             l1_chain_id,
             gw_chain_id,
-            "gateway migration watcher starting"
+            "gateway migration watcher starting from migration #{next_migration_number}"
         );
 
         let this = Self {
@@ -79,6 +79,8 @@ impl GatewayMigrationWatcher {
             l1_chain_id,
             gw_chain_id,
             sl_chain_id_subpool,
+            // Due to legacy reasons we saved first migration number as 0 when it should have been 1.
+            next_migration_number: next_migration_number.max(1),
         };
 
         L1Watcher::new(
@@ -142,51 +144,24 @@ impl ProcessRawEvents for GatewayMigrationWatcher {
             }
         };
 
+        if migration_number < self.next_migration_number {
+            // This can happen if server was notified multiple times about the same migration.
+            tracing::warn!(
+                migration_number,
+                "skipping duplicate migration event ({migration_number})",
+            );
+            return Ok(());
+        }
+
         tracing::info!(
-            new_sl_chain_id,
             migration_number,
-            "gateway migration event caught"
+            "gateway migration #{migration_number} event caught; migrating to SL {new_sl_chain_id}"
         );
+
+        self.next_migration_number += 1;
 
         let envelope = SystemTxEnvelope::set_sl_chain_id(new_sl_chain_id, migration_number);
         self.sl_chain_id_subpool.insert(envelope).await;
         Ok(())
     }
-}
-
-/// Finds the first L1 block where `migrationNumber(_chainId) + 1 >= migration_number` on the
-/// `IChainAssetHandler` contract, using binary search. This is used to determine the starting
-/// L1 block for the gateway migration watcher.
-async fn find_l1_block_by_migration_number(
-    zk_chain: ZkChain<DynProvider>,
-    chain_asset_handler: Address,
-    chain_id: u64,
-    next_migration_number: u64,
-) -> anyhow::Result<BlockNumber> {
-    let instance = Arc::new(IChainAssetHandler::new(
-        chain_asset_handler,
-        zk_chain.provider().clone(),
-    ));
-    let target = U256::from(next_migration_number);
-
-    util::find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| {
-        let instance = instance.clone();
-        async move {
-            let code = zk
-                .provider()
-                .get_code_at(*instance.address())
-                .block_id(block.into())
-                .await?;
-            if code.0.is_empty() {
-                return Ok(false);
-            }
-            let res = instance
-                .migrationNumber(U256::from(chain_id))
-                .block(block.into())
-                .call()
-                .await?;
-            Ok(res + U256::ONE >= target)
-        }
-    })
-    .await
 }
