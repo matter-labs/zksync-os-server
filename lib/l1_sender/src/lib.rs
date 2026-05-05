@@ -612,17 +612,14 @@ async fn tx_request_with_gas_fields(
         "estimated priority and max fees"
     );
     // Use the minimum of estimated and configured values for gas fields
-    let capped_max_fee_per_gas = if eip1559_est.max_fee_per_gas > max_fee_per_gas {
+    if eip1559_est.max_fee_per_gas > max_fee_per_gas {
         tracing::warn!(
             "L1 sender's configured maxFeePerGas ({max_fee_per_gas}) \
              is lower than the one estimated from network  ({}), \
              using the configured base fee value ({max_fee_per_gas}) - this may result in inclusion delay.",
             eip1559_est.max_fee_per_gas
         );
-        max_fee_per_gas
-    } else {
-        eip1559_est.max_fee_per_gas
-    };
+    }
     let capped_max_priority_fee_per_gas = if eip1559_est.max_priority_fee_per_gas
         > max_priority_fee_per_gas
     {
@@ -639,7 +636,7 @@ async fn tx_request_with_gas_fields(
 
     let tx = TransactionRequest::default()
         .with_from(operator_address)
-        .with_max_fee_per_gas(capped_max_fee_per_gas)
+        .with_max_fee_per_gas(max_fee_per_gas)
         .with_max_priority_fee_per_gas(capped_max_priority_fee_per_gas)
         .with_gas_limit(15000000);
     Ok(tx)
