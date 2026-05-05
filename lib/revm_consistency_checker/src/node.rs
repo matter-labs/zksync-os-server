@@ -4,7 +4,6 @@ use reth_revm::ExecuteCommitEvm;
 use reth_revm::context::{Context, ContextTr};
 use reth_revm::db::CacheDB;
 use std::collections::HashSet;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;

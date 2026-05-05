@@ -209,8 +209,8 @@ pub async fn main() {
         task_manager_result = task_manager_handle => {
             if let Ok(Err(err)) = task_manager_result {
                 tracing::error!(%err, "shutting down due to critical task error");
-                /// Graceful shutdown for push exporter. Very fast.
-                /// This is needed for REVM alert.
+                // Graceful shutdown for push exporter. Very fast.
+                // This is needed for REVM alert.
                 wait_for_prometheus_push_shutdown(prometheus_push_shutdown).await;
                 eprintln!("Error: {err:?}");
                 std::process::exit(1);
