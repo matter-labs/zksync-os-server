@@ -4,5 +4,6 @@ mod debug;
 mod deployment_filter;
 mod filter;
 mod pubsub;
+mod simulate;
 mod storage_proof;
 mod transactions;
