@@ -16,6 +16,7 @@ path = "src/main.rs"
 [features]
 default = ["jemalloc"]
 jemalloc = ["dep:tikv-jemallocator"]
+jemalloc-prof = ["jemalloc", "tikv-jemallocator/profiling"]
 
 [dependencies]
 zksync_os_l1_sender.workspace = true
