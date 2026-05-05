@@ -104,6 +104,19 @@ fn assert_pubdata_exhaustion_call_frame(call_frame: &CallFrame) {
     );
 }
 
+fn custom_js_trace_value(trace: GethTrace) -> serde_json::Value {
+    match trace {
+        GethTrace::JS(value) => value,
+        // `GethTrace` is untagged, so object-shaped JS tracer results can deserialize as a mux
+        // trace after the upstream reth/alloy upgrade. Serialize it back into the original JSON
+        // payload before asserting on the contents.
+        GethTrace::MuxTracer(value) => {
+            serde_json::to_value(value).expect("mux tracer result should serialize back to JSON")
+        }
+        other => panic!("expected JS trace result, got {other:?}"),
+    }
+}
+
 #[test_multisetup([CURRENT_TO_L1])]
 async fn call_trace_transaction(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can call trace an existing transaction. Manually asserts call trace output.
@@ -604,17 +617,14 @@ async fn debug_trace_call_js_tracer(tester: Tester) -> anyhow::Result<()> {
         .debug_trace_call(call_request, BlockId::latest(), opts)
         .await?;
 
-    let addresses = match trace {
-        GethTrace::JS(value) => value
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
-                    .collect::<Vec<_>>()
-            })
-            .expect("tracer result missing addresses"),
-        other => panic!("expected JS trace result, got {other:?}"),
-    };
+    let addresses = custom_js_trace_value(trace)
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
+                .collect::<Vec<_>>()
+        })
+        .expect("tracer result missing addresses");
 
     let expected_primary = format!("{:#x}", primary_contract.address()).to_lowercase();
     let expected_secondary = format!("{:#x}", secondary_contract.address()).to_lowercase();
@@ -662,17 +672,14 @@ async fn debug_trace_call_js_tracer_with_db(tester: Tester) -> anyhow::Result<()
         .debug_trace_call(call_request, BlockId::latest(), opts)
         .await?;
 
-    let values = match trace {
-        GethTrace::JS(value) => value
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
-                    .collect::<Vec<_>>()
-            })
-            .expect("tracer result missing addresses"),
-        other => panic!("expected JS trace result, got {other:?}"),
-    };
+    let values = custom_js_trace_value(trace)
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
+                .collect::<Vec<_>>()
+        })
+        .expect("tracer result missing addresses");
 
     assert_eq!(values.len(), 2, "expected exactly two values from tracer");
     assert_eq!(
@@ -755,42 +762,41 @@ async fn debug_trace_call_stack(tester: Tester) -> anyhow::Result<()> {
         .debug_trace_call(call_request, BlockId::latest(), opts)
         .await?;
 
-    let stacks = match trace {
-        GethTrace::JS(value) => value
-            .as_object()
-            .expect("tracer result missing addresses")
-            .get("logs")
-            .expect("geth tracer result missing data")
-            .as_array()
-            .expect("tracer logs is not an array")
-            .iter()
-            .map(|entry| {
-                entry
-                    .as_object()
-                    .expect("tracer log entry is not an object")
-                    .get("stack")
-                    .expect("tracer log entry missing stack")
-                    .as_array()
-                    .expect("tracer log stack is not an array")
-                    .iter()
-                    .map(|value| {
-                        value
-                            .as_str()
-                            .expect("tracer stack value is not a string")
-                            .to_lowercase()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>(),
-        other => panic!("expected JS trace result, got {other:?}"),
-    };
+    let stacks = custom_js_trace_value(trace)
+        .as_object()
+        .expect("tracer result missing addresses")
+        .get("logs")
+        .expect("geth tracer result missing data")
+        .as_array()
+        .expect("tracer logs is not an array")
+        .iter()
+        .map(|entry| {
+            entry
+                .as_object()
+                .expect("tracer log entry is not an object")
+                .get("stack")
+                .expect("tracer log entry missing stack")
+                .as_array()
+                .expect("tracer log stack is not an array")
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .expect("tracer stack value is not a string")
+                        .to_lowercase()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
 
-    let res = secondary_data * calculate_value;
-    let expected = format!("{res:x}").to_lowercase();
+    let expected = secondary_data * calculate_value;
     assert!(!stacks.is_empty(), "tracer logs are empty");
     assert!(
-        stacks.iter().flatten().any(|value| value == &expected),
-        "expected value {expected} not found in traced log stacks: {stacks:?}"
+        stacks.iter().flatten().any(|value| {
+            U256::from_str_radix(value.trim_start_matches("0x"), 16)
+                .is_ok_and(|stack_value| stack_value == expected)
+        }),
+        "expected value {expected:#x} not found in traced log stacks: {stacks:?}"
     );
 
     Ok(())
