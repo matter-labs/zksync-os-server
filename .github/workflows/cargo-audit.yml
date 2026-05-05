@@ -34,7 +34,9 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # 'RUSTSEC-2025-0055' todo: waiting for ark-relations to release a patch https://github.com/arkworks-rs/snark/issues/413
-          ignore: 'RUSTSEC-2025-0055'
+          # 'RUSTSEC-2026-0118', 'RUSTSEC-2026-0119': hickory-proto 0.25.2 via reth-dns-discovery; DNS discovery
+          # is disabled in our network config so neither path is reachable. Fix requires reth v2.2.0+ (alloy 1.x→2.x).
+          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2026-0118,RUSTSEC-2026-0119'
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
