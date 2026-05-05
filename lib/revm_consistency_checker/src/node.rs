@@ -61,13 +61,7 @@ where
         );
         tracing::warn!(message);
 
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX epoch")
-            .as_secs() as i64;
-        PUSH_METRICS
-            .last_revm_divergence_timestamp_push
-            .set(timestamp);
+        PUSH_METRICS.revm_divergences_detected.inc();
 
         if self.revert_enabled {
             let mut config = self.internal_config_manager.read_config()?;

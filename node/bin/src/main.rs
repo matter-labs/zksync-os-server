@@ -25,7 +25,11 @@ static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemall
 
 const IMMEDIATE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-const PROMETHEUS_PUSH_INTERVAL: Duration = Duration::from_secs(5);
+/// Push interval for push exporter (almost all metrics are pull)
+/// We don't have to report it frequently, because final push is guaranteed.
+const PROMETHEUS_PUSH_INTERVAL: Duration = Duration::from_secs(60);
+/// Push exporter graceful shutdown timeout, the shutdown is nearly instant
+/// We need a graceful shutdown because push metrics can be used for alerts
 const PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Subcommand)]
@@ -200,18 +204,19 @@ pub async fn main() {
     let task_manager_handle = runtime
         .take_task_manager_handle()
         .expect("Runtime must contain a TaskManager handle");
-    let runtime_for_signal = runtime.clone();
 
     tokio::select! {
         task_manager_result = task_manager_handle => {
             if let Ok(Err(err)) = task_manager_result {
                 tracing::error!(%err, "shutting down due to critical task error");
+                /// Graceful shutdown for push exporter. Very fast.
+                /// This is needed for REVM alert.
                 wait_for_prometheus_push_shutdown(prometheus_push_shutdown).await;
                 eprintln!("Error: {err:?}");
                 std::process::exit(1);
             }
         },
-        _ = handle_delayed_termination(runtime_for_signal) => {},
+        _ = handle_delayed_termination(runtime) => {},
     }
 }
 

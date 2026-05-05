@@ -53,6 +53,7 @@ impl PrometheusExporterConfig {
         format!("{base_url}/metrics/job/{job_id}/namespace/{namespace}/pod/{pod}")
     }
 
+    /// Get the list of metrics that use this type of exporter (Push vs Pull)
     fn registry(&self) -> Registry {
         let is_push_exporter = matches!(self.transport, PrometheusTransport::Push { .. });
         MetricsCollection::lazy()
@@ -64,6 +65,7 @@ impl PrometheusExporterConfig {
     pub async fn run(self, shutdown: GracefulShutdown) -> anyhow::Result<()> {
         tokio_runtime::register_monitor();
         let registry = self.registry();
+        /// ignore_guard will drop the guard too ealry, so clone is used.
         let metrics_exporter = MetricsExporter::new(registry.into())
             .with_graceful_shutdown(shutdown.clone().ignore_guard());
 
@@ -85,6 +87,7 @@ impl PrometheusExporterConfig {
                 metrics_exporter.push_to_gateway(endpoint, interval).await;
             }
         }
+        /// We can drop it now because shutdown is complete.
         drop(shutdown);
         Ok(())
     }
@@ -144,7 +147,7 @@ mod tests {
             request_sender.send(body).ok();
         });
 
-        PUSH_METRICS.last_revm_divergence_timestamp_push.set(1);
+        PUSH_METRICS.revm_divergences_detected.set(1);
 
         let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
             .build()
