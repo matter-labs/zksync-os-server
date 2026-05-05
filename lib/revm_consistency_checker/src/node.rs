@@ -61,6 +61,7 @@ where
         );
         tracing::warn!(message);
 
+        // Update metric for the divergence alert
         PUSH_METRICS.revm_divergences_detected.inc();
 
         if self.revert_enabled {
