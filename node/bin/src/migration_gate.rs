@@ -70,9 +70,15 @@ impl PipelineComponent for MigrationGate {
                 // the executed-batch precondition.
                 let _ = self.migration_triggered.send(Some(trigger_batch_number));
 
-                self.last_finalized_migration
+                if self
+                    .last_finalized_migration
                     .wait_for(|n| *n >= migration_number)
-                    .await?;
+                    .await
+                    .is_err()
+                {
+                    tracing::info!("last finalized migration channel closed");
+                    return Ok(());
+                }
                 tracing::info!(
                     migration_number,
                     "migration finalized; resuming commit pipeline"
