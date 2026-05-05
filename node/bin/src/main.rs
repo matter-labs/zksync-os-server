@@ -220,6 +220,7 @@ pub async fn main() {
     }
 }
 
+/// Exports metric groups with `PushMetrics` suffix
 fn spawn_prometheus_push_exporter(
     runtime: &Runtime,
     prometheus_config: &PrometheusConfig,

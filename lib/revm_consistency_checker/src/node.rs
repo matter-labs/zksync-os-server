@@ -7,13 +7,14 @@ use std::collections::HashSet;
 use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState, PUSH_METRICS};
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_revm::{DefaultZk, ZkBuilder};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ExecutionVersion;
 
 use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
+use crate::metrics::PUSH_METRICS;
 use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
 

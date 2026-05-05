@@ -30,18 +30,3 @@ pub struct GeneralMetrics {
 
 #[vise::register]
 pub static GENERAL_METRICS: vise::Global<GeneralMetrics> = vise::Global::new();
-
-/// These metrics are exported with push exporter
-/// Use case: report something right before stopping the node, without waiting for scrape
-/// so these metrics can be used for alerts
-///
-/// Be careful: There can be  some differences in how the metrics are handled by prometheus compared
-/// To pull exporter
-#[derive(Debug, Metrics)]
-pub struct PushMetrics {
-    /// Number of REVM divergences detected during this run. Used for alerts.
-    pub revm_divergences_detected: Counter,
-}
-
-#[vise::register]
-pub static PUSH_METRICS: vise::Global<PushMetrics> = vise::Global::new();

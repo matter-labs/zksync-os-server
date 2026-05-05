@@ -28,7 +28,7 @@ pub mod component_state_reporter;
 pub use component_state_reporter::{ComponentStateHandle, ComponentStateReporter, StateLabel};
 
 mod metrics;
-pub use metrics::{GENERAL_METRICS, PUSH_METRICS};
+pub use metrics::GENERAL_METRICS;
 
 pub mod tokio_runtime;
 
