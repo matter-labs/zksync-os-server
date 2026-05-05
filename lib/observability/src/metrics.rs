@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::GenericComponentState;
 use vise::{Counter, Gauge, LabeledFamily, Metrics};
 
@@ -35,18 +33,9 @@ pub static GENERAL_METRICS: vise::Global<GeneralMetrics> = vise::Global::new();
 
 #[derive(Debug, Metrics)]
 pub struct PushMetrics {
-    /// Unix timestamp of the latest unexpected event by event type.
-    #[metrics(labels = ["event"])]
-    pub unexpected_events_push: LabeledFamily<&'static str, Gauge<i64>, 1>,
+    /// Unix timestamp of the latest REVM divergence.
+    pub last_revm_divergence_timestamp_push: Gauge<i64>,
 }
 
 #[vise::register]
 pub static PUSH_METRICS: vise::Global<PushMetrics> = vise::Global::new();
-
-pub fn record_unexpected_event(event: &'static str) {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before UNIX epoch")
-        .as_secs() as i64;
-    PUSH_METRICS.unexpected_events_push[&event].set(timestamp);
-}

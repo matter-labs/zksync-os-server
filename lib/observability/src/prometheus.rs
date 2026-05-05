@@ -4,7 +4,7 @@ use std::{env, net::Ipv4Addr, time::Duration};
 
 use anyhow::Context as _;
 use reth_tasks::shutdown::GracefulShutdown;
-use vise::{MetricsCollection, Registry, descriptors::MetricGroupDescriptor};
+use vise::{MetricsCollection, Registry};
 use vise_exporter::MetricsExporter;
 
 use crate::tokio_runtime;
@@ -56,16 +56,8 @@ impl PrometheusExporterConfig {
     fn registry(&self) -> Registry {
         let is_push_exporter = matches!(self.transport, PrometheusTransport::Push { .. });
         MetricsCollection::lazy()
-            .filter(|group| Self::is_push_metrics_group(group) == is_push_exporter)
+            .filter(|group| (group.name == "PushMetrics") == is_push_exporter)
             .collect()
-    }
-
-    fn is_push_metrics_group(group: &MetricGroupDescriptor) -> bool {
-        !group.metrics.is_empty()
-            && group
-                .metrics
-                .iter()
-                .all(|metric| metric.name.ends_with("_push"))
     }
 
     /// Runs the exporter. This future should be spawned in a separate Tokio task.
@@ -123,13 +115,13 @@ mod tests {
         assert!(
             pull_registry
                 .descriptors()
-                .metric("unexpected_events_push")
+                .metric("last_revm_divergence_timestamp_push")
                 .is_none()
         );
         assert!(
             push_registry
                 .descriptors()
-                .metric("unexpected_events_push")
+                .metric("last_revm_divergence_timestamp_push")
                 .is_some()
         );
         assert!(pull_registry.descriptors().metric("chain_id").is_some());
@@ -152,7 +144,7 @@ mod tests {
             request_sender.send(body).ok();
         });
 
-        PUSH_METRICS.unexpected_events_push[&"test_shutdown"].set(1);
+        PUSH_METRICS.last_revm_divergence_timestamp_push.set(1);
 
         let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
             .build()
@@ -182,8 +174,7 @@ mod tests {
             .expect("timed out waiting for push request")
             .unwrap();
         let body = str::from_utf8(&body).unwrap();
-        assert!(body.contains("unexpected_events_push"));
-        assert!(body.contains("test_shutdown"));
+        assert!(body.contains("last_revm_divergence_timestamp_push"));
 
         tokio::time::timeout(Duration::from_secs(5), completion_receiver)
             .await
