@@ -14,6 +14,7 @@ use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ExecutionVersion;
 
 use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
+use crate::metrics::{METRICS, RevmDivergenceOutcome};
 use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
 
@@ -49,7 +50,18 @@ where
         report: &CompareReport,
     ) -> anyhow::Result<()> {
         report.log_tracing(20);
-        if self.revert_enabled && !report.is_empty() {
+        if report.is_empty() {
+            return Ok(());
+        }
+
+        let message = format!(
+            "REVM consistency check failed for block number {}, block hash {}",
+            replay_record.block_context.block_number,
+            block_output.header.hash(),
+        );
+        tracing::warn!(message);
+
+        if self.revert_enabled {
             let mut config = self.internal_config_manager.read_config()?;
             config.failing_block = Some(replay_record.block_context.block_number);
 
@@ -59,19 +71,15 @@ where
             }
             let new_blacklist_size = config.l2_signer_blacklist.len();
             tracing::info!(
-                "Adding {} new addresses to L2 signer blacklist due to REVM inconsistency",
+                "Adding {} new addresses to L2 signer blacklist due to REVM divergence",
                 new_blacklist_size - initial_blacklist_size
             );
 
-            let message = format!(
-                "REVM consistency check failed for block number {}, block hash {}",
-                replay_record.block_context.block_number,
-                block_output.header.hash(),
-            );
             self.internal_config_manager
                 .write_config_and_panic(&config, &message)?;
         }
 
+        METRICS.record_divergence(RevmDivergenceOutcome::Accepted);
         Ok(())
     }
 }
