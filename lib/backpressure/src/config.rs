@@ -38,6 +38,7 @@ fn default_condition_for(id: ComponentId) -> PipelineCondition {
         | ComponentId::SnarkJobManager
         | ComponentId::GaplessCommitter
         | ComponentId::UpgradeGatekeeper
+        | ComponentId::MigrationGate
         | ComponentId::L1SenderCommit
         | ComponentId::L1SenderProve
         | ComponentId::L1SenderExecute

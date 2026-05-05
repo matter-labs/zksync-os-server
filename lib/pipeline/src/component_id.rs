@@ -27,6 +27,7 @@ pub enum ComponentId {
     PriorityTree,
     L1SenderExecute,
     RevmConsistencyChecker,
+    MigrationGate,
 }
 
 impl ComponentId {
@@ -55,6 +56,7 @@ impl ComponentId {
             Self::PriorityTree => "priority_tree",
             Self::L1SenderExecute => "l1_sender_execute",
             Self::RevmConsistencyChecker => "revm_consistency_checker",
+            Self::MigrationGate => "migration_gate",
         }
     }
 }

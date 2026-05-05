@@ -35,3 +35,9 @@ pub use persist_batch_watcher::L1PersistBatchWatcher;
 
 mod gateway_migration_watcher;
 pub use gateway_migration_watcher::GatewayMigrationWatcher;
+
+mod migration_finalized_watcher;
+pub use migration_finalized_watcher::MigrationFinalizedWatcher;
+
+mod settlement_layer_watcher;
+pub use settlement_layer_watcher::SettlementLayerWatcher;

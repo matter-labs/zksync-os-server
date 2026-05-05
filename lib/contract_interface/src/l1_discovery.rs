@@ -43,6 +43,9 @@ pub struct L1State {
     pub da_input_mode: BatchDaInputMode,
     pub l1_chain_id: u64,
     pub sl_chain_id: u64,
+    /// The address returned by `getSettlementLayer()` on the L1 diamond proxy at startup.
+    /// `Address::ZERO` means the chain is settling on L1; any other address is the Gateway.
+    pub settlement_layer_address: Address,
     /// Settlement layer intervals discovered on startup. Can be used to route batch lookups to the
     /// diamond proxy of the SL the batch was committed to.
     pub settlement_layer_intervals: SettlementLayerIntervals,
@@ -183,6 +186,7 @@ impl L1State {
             da_input_mode,
             l1_chain_id,
             sl_chain_id,
+            settlement_layer_address,
             settlement_layer_intervals,
         })
     }
@@ -254,6 +258,7 @@ impl L1State {
             da_input_mode: this.da_input_mode,
             l1_chain_id: this.l1_chain_id,
             sl_chain_id: this.sl_chain_id,
+            settlement_layer_address: this.settlement_layer_address,
             settlement_layer_intervals: this.settlement_layer_intervals,
         })
     }
