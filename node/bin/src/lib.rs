@@ -240,11 +240,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         check_required_operator_keys(&config, settles_on_gateway);
     }
 
-    if node_role.is_main() {
-        let pubdata_mode = config
-            .l1_sender_config
-            .pubdata_mode
-            .expect("l1_sender_pubdata_mode must be set on the Main Node");
+    // Effective pubdata mode used by all block-producing components: read from config only when
+    // the chain settles on L1. When settling on Gateway, it is always
+    // `PubdataMode::RelayedL2Calldata` regardless of what is configured.
+    let effective_pubdata_mode: Option<PubdataMode> = if node_role.is_main() {
+        Some(effective_main_node_pubdata_mode(
+            &config,
+            settles_on_gateway,
+        ))
+    } else {
+        // External nodes do not produce blocks; pubdata mode is irrelevant for them.
+        None
+    };
+    if let (Some(pubdata_mode), true) = (effective_pubdata_mode, node_role.is_main()) {
         match (pubdata_mode, l1_state.da_input_mode) {
             (
                 PubdataMode::Calldata | PubdataMode::Blobs | PubdataMode::RelayedL2Calldata,
@@ -253,19 +261,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             | (PubdataMode::Validium, BatchDaInputMode::Rollup) => {
                 panic!(
                     "Pubdata mode doesn't correspond to pricing mode from the l1. \
-                    L1 mode: {:?}, configured pubdata mode: {:?}",
+                    L1 mode: {:?}, effective pubdata mode: {:?}",
                     l1_state.da_input_mode, pubdata_mode
                 );
             }
             _ => {}
-        };
-        if let (PubdataMode::Blobs | PubdataMode::Calldata, true) =
-            (pubdata_mode, settles_on_gateway)
-        {
-            panic!(
-                "Pubdata mode {:?} cannot be used when settling on Gateway",
-                pubdata_mode
-            );
         }
     }
 
@@ -721,10 +721,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // Channel for Batcher->GasAdjuster communication. Batcher send sidecar to gas adjuster to estimate blob fill ratio.
     let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::channel(10);
     if node_role.is_main() {
-        let pubdata_mode = config
-            .l1_sender_config
-            .pubdata_mode
-            .expect("l1_sender_pubdata_mode must be set on the Main Node");
+        let pubdata_mode =
+            effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node");
         let gas_adjuster_config = gas_adjuster_config(
             config.gas_adjuster_config.clone(),
             pubdata_mode,
@@ -782,7 +780,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         pubdata_price_receiver,
         blob_fill_ratio_receiver,
         token_price_receiver,
-        config.l1_sender_config.pubdata_mode,
+        effective_pubdata_mode,
     );
 
     let pool = Pool::new(
@@ -963,6 +961,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             last_finalized_migration_receiver,
             migration_triggered_sender,
             settles_on_gateway,
+            effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
         )
         .await;
     } else {
@@ -1057,11 +1056,8 @@ async fn run_main_node_pipeline(
     last_finalized_migration: watch::Receiver<u64>,
     migration_triggered: watch::Sender<Option<u64>>,
     settles_on_gateway: bool,
+    pubdata_mode: PubdataMode,
 ) {
-    let pubdata_mode = config
-        .l1_sender_config
-        .pubdata_mode
-        .expect("l1_sender_pubdata_mode must be set on the Main Node");
     let priority_tree_db_path = config
         .general_config
         .rocks_db_path
@@ -1465,6 +1461,21 @@ fn check_batch_verification_mismatch(
         return true;
     }
     false
+}
+
+/// Returns the pubdata mode used by all block-producing components on the Main Node, taking
+/// settlement-layer discovery into account: when the chain settles on Gateway it is always
+/// [`PubdataMode::RelayedL2Calldata`]; when it settles on L1, the configured
+/// `l1_sender.pubdata_mode` is used (and its presence is enforced here).
+fn effective_main_node_pubdata_mode(config: &Config, settles_on_gateway: bool) -> PubdataMode {
+    if settles_on_gateway {
+        PubdataMode::RelayedL2Calldata
+    } else {
+        config
+            .l1_sender_config
+            .pubdata_mode
+            .expect("`l1_sender.pubdata_mode` is required on the Main Node when settling on L1")
+    }
 }
 
 /// Validates that the operator keys required for the L1Sender pipeline are present in config,

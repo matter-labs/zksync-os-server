@@ -883,9 +883,10 @@ pub struct L1SenderConfig {
     #[config(default_t = true)]
     pub enabled: bool,
 
-    /// Pubdata mode is used by block-producing components on the Main Node.
-    /// External Nodes only replay blocks, so they may leave this unset.
-    #[config_validate(required_if = NodeRole::MainNode)]
+    /// Pubdata mode used by block-producing components on the Main Node. Only read from config
+    /// when the chain settles on L1; when settling on Gateway, the effective mode is always
+    /// [`PubdataMode::RelayedL2Calldata`] regardless of this value. Required at runtime only
+    /// for Main Nodes settling on L1; External Nodes never produce blocks and may leave it unset.
     #[config(with = Serde![str])]
     pub pubdata_mode: Option<PubdataMode>,
 }
@@ -1835,7 +1836,6 @@ mod tests {
         config.genesis_config.bytecode_supplier_address = None;
         config.genesis_config.chain_id = None;
         config.genesis_config.genesis_input_path = None;
-        config.l1_sender_config.pubdata_mode = None;
         config.external_price_api_client_config = None;
 
         let err = config.validate().await.unwrap_err().to_string();
@@ -1850,7 +1850,6 @@ mod tests {
         assert!(
             err.contains("`genesis.genesis_input_path` is required when `general.node_role=main`")
         );
-        assert!(err.contains("`l1_sender.pubdata_mode` is required when `general.node_role=main`"));
         assert!(
             err.contains("`external_price_api_client` is required when `general.node_role=main`")
         );
@@ -1858,12 +1857,13 @@ mod tests {
 
     #[tokio::test]
     async fn main_node_can_omit_all_operator_keys_at_config_time() {
-        // Operator-key presence is enforced at runtime once the settlement layer is discovered,
-        // not at config time. Only `pubdata_mode` is statically required.
+        // Operator-key presence (and `pubdata_mode`) is enforced at runtime once the settlement
+        // layer is discovered, not at config time.
         let mut config = base_config(NodeRole::MainNode);
         config.l1_sender_config.operator_commit_sk = None;
         config.l1_sender_config.operator_prove_sk = None;
         config.l1_sender_config.operator_execute_sk = None;
+        config.l1_sender_config.pubdata_mode = None;
 
         config.validate().await.unwrap();
     }
