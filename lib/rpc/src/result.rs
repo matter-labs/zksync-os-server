@@ -116,6 +116,7 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
             | EthCallError::SimulateInvalidBlockOverride(_) => {
                 invalid_params_rpc_err(err.to_string())
             }
+            // Error codes -380xx follow the reth implementation of the eth_simulateV1 spec.
             EthCallError::SimulateBlockNumberInvalid { .. } => {
                 rpc_error_with_code(-38020, err.to_string())
             }

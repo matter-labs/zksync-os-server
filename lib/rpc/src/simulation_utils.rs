@@ -1,4 +1,4 @@
-use super::EthCallError;
+use crate::eth_call_handler::EthCallError;
 use crate::eth_impl::{build_api_log, build_api_tx};
 use crate::result::RevertError;
 use alloy::consensus::Transaction as _;
@@ -16,13 +16,13 @@ use zksync_os_storage_api::state_override_view::OwnedOverrides;
 use zksync_os_types::{ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
 
 #[derive(Debug)]
-pub(super) struct SimulationStartContext {
-    pub(super) block_context: BlockContext,
-    pub(super) parent_block_number: u64,
-    pub(super) parent_timestamp: u64,
+pub(crate) struct SimulationStartContext {
+    pub(crate) block_context: BlockContext,
+    pub(crate) parent_block_number: u64,
+    pub(crate) parent_timestamp: u64,
 }
 
-pub(super) fn build_simulated_block_response(
+pub(crate) fn build_simulated_block_response(
     block_context: BlockContext,
     txs: Vec<ZkTransaction>,
     block_output: BlockOutput,
@@ -144,7 +144,7 @@ fn build_simulated_receipt(
     )
 }
 
-pub(super) fn next_block_context(
+pub(crate) fn next_block_context(
     mut block_context: BlockContext,
     parent_hash: B256,
 ) -> BlockContext {
@@ -155,11 +155,12 @@ pub(super) fn next_block_context(
     block_context
 }
 
-pub(super) fn apply_simulate_block_overrides(
+pub(crate) fn apply_simulate_block_overrides(
     block_context: &mut BlockContext,
     overrides: BlockOverrides,
     previous_block_number: u64,
     previous_timestamp: u64,
+    max_block_gas_limit: u64,
 ) -> Result<(), EthCallError> {
     if let Some(number) = overrides.number {
         let number = u64::try_from(number)
@@ -193,6 +194,9 @@ pub(super) fn apply_simulate_block_overrides(
         block_context.timestamp = time;
     }
     if let Some(gas_limit) = overrides.gas_limit {
+        if max_block_gas_limit != 0 && gas_limit > max_block_gas_limit {
+            return Err(EthCallError::SimulateBlockGasLimitExceeded);
+        }
         block_context.gas_limit = gas_limit;
     }
     if let Some(coinbase) = overrides.coinbase {
@@ -212,15 +216,11 @@ pub(super) fn apply_simulate_block_overrides(
     // TODO: difficulty override is not propagated to BlockContext (ZKsync OS uses mix_hash
     // for prevrandao), so it is silently ignored.
     if let Some(block_hash_overrides) = overrides.block_hash {
-        for (block_number, block_hash) in block_hash_overrides {
-            if block_number >= block_context.block_number {
-                continue;
-            }
+        let range_start = block_context.block_number.saturating_sub(256);
+        for (block_number, block_hash) in
+            block_hash_overrides.range(range_start..block_context.block_number)
+        {
             let distance = block_context.block_number - block_number;
-            if distance > 256 {
-                continue;
-            }
-
             let index = 256 - distance as usize;
             block_context.block_hashes.0[index] = U256::from_be_bytes(block_hash.0);
         }
@@ -229,10 +229,9 @@ pub(super) fn apply_simulate_block_overrides(
     Ok(())
 }
 
-pub(super) fn simulation_default_gas_limit(
+pub(crate) fn simulation_default_gas_limit(
     calls: &[TransactionRequest],
     block_gas_limit: u64,
-    call_gas_limit: u64,
 ) -> Result<u64, EthCallError> {
     let total_specified_gas =
         calls
@@ -251,12 +250,7 @@ pub(super) fn simulation_default_gas_limit(
         return Ok(0);
     }
 
-    let gas_per_call = (block_gas_limit - total_specified_gas) / calls_without_gas;
-    Ok(if call_gas_limit == 0 {
-        gas_per_call
-    } else {
-        gas_per_call.min(call_gas_limit)
-    })
+    Ok((block_gas_limit - total_specified_gas) / calls_without_gas)
 }
 
 struct SimulatedTx {
@@ -283,16 +277,15 @@ impl SimulatedTx {
         match &self.result {
             SimulatedTxResult::Executed { output, receipt } => {
                 let logs = self.api_logs(block_hash, block_context, receipt);
-                let (return_data, status, error) = match &output.execution_result {
+                let (return_data, error) = match &output.execution_result {
                     ExecutionResult::Success(
                         ExecutionOutput::Call(return_bytes)
                         | ExecutionOutput::Create(return_bytes, _),
-                    ) => (Bytes::from(return_bytes.clone()), true, None),
+                    ) => (Bytes::from(return_bytes.clone()), None),
                     ExecutionResult::Revert(return_bytes) => {
                         let return_data = Bytes::from(return_bytes.clone());
                         (
                             return_data.clone(),
-                            false,
                             Some(SimulateError {
                                 code: -32000,
                                 message: RevertError::new(return_data).to_string(),
@@ -305,7 +298,7 @@ impl SimulatedTx {
                     return_data,
                     logs,
                     gas_used: output.gas_used,
-                    status,
+                    status: error.is_none(),
                     error,
                 }
             }
@@ -329,7 +322,7 @@ impl SimulatedTx {
     ) -> zksync_os_rpc_api::types::ZkApiTransaction {
         build_api_tx(
             self.tx.clone(),
-            Some(&self.tx_meta(block_hash, block_context, self.gas_used())),
+            Some(&self.tx_meta(block_hash, block_context)),
         )
     }
 
@@ -340,7 +333,7 @@ impl SimulatedTx {
         receipt: &ZkReceiptEnvelope,
     ) -> Vec<alloy::rpc::types::Log> {
         let tx_hash = *self.tx.hash();
-        let meta = self.tx_meta(block_hash, block_context, self.gas_used());
+        let meta = self.tx_meta(block_hash, block_context);
         receipt
             .logs()
             .iter()
@@ -354,7 +347,6 @@ impl SimulatedTx {
         &self,
         block_hash: B256,
         block_context: BlockContext,
-        gas_used: u64,
     ) -> zksync_os_storage_api::TxMeta {
         zksync_os_storage_api::TxMeta {
             block_hash,
@@ -367,7 +359,7 @@ impl SimulatedTx {
                 .inner()
                 .effective_gas_price(Some(block_context.eip1559_basefee.saturating_to())),
             number_of_logs_before_this_tx: self.number_of_logs_before_this_tx,
-            gas_used,
+            gas_used: self.gas_used(),
             contract_address: match &self.result {
                 SimulatedTxResult::Executed { output, .. } => output.contract_address,
                 SimulatedTxResult::Invalid(_) => None,
@@ -403,6 +395,7 @@ mod tests {
             },
             10,
             100,
+            0,
         )
         .unwrap_err();
         assert!(matches!(
@@ -418,6 +411,7 @@ mod tests {
             },
             10,
             100,
+            0,
         )
         .unwrap_err();
         assert!(matches!(
@@ -447,6 +441,7 @@ mod tests {
             },
             10,
             100,
+            0,
         )
         .unwrap();
 

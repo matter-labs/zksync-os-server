@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::ViewState;
 use alloy::primitives::B256;
@@ -49,16 +48,6 @@ impl OverrideProvider for OwnedOverrides {
 
     fn get_preimage_override(&self, hash: &B256) -> Option<Vec<u8>> {
         self.preimages.get(hash).cloned()
-    }
-}
-
-impl<T: OverrideProvider> OverrideProvider for Arc<T> {
-    fn get_storage_override(&self, key: &B256) -> Option<B256> {
-        self.as_ref().get_storage_override(key)
-    }
-
-    fn get_preimage_override(&self, hash: &B256) -> Option<Vec<u8>> {
-        self.as_ref().get_preimage_override(hash)
     }
 }
 

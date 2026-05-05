@@ -4,6 +4,7 @@ use crate::js_tracer;
 use crate::result::RevertError;
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
 use crate::sandbox::{call_trace_simulate, execute};
+use crate::simulation_utils;
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::BlockId;
@@ -38,9 +39,6 @@ use zksync_os_types::{
     REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, SYSTEM_TX_TYPE_ID, UpgradeTxType, ZkEnvelope,
     ZkTransaction, ZkTxType,
 };
-
-#[path = "simulation_utils.rs"]
-mod simulation_utils;
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
 #[derive(Clone, Debug)]
@@ -792,6 +790,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                     block_overrides,
                     previous_block_number,
                     previous_timestamp,
+                    self.config.eth_call_gas as u64,
                 )?;
             }
 
@@ -919,11 +918,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         block_context: BlockContext,
         mut state_view: V,
     ) -> Result<Vec<ZkTransaction>, EthCallError> {
-        let default_gas_limit = simulation_utils::simulation_default_gas_limit(
-            &calls,
-            block_context.gas_limit,
-            self.config.eth_call_gas as u64,
-        )?;
+        let default_gas_limit =
+            simulation_utils::simulation_default_gas_limit(&calls, block_context.gas_limit)?;
         let mut next_nonces = HashMap::new();
 
         calls
