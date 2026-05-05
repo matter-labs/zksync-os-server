@@ -5,7 +5,7 @@ use crate::protocol::{
 };
 use crate::raft::protocol::RaftProtocolHandler;
 use crate::session::PeerSessionStore;
-use crate::version::{ZksProtocolV1, ZksProtocolV2, ZksProtocolV3};
+use crate::version::{ZksProtocolV1, ZksProtocolV2, ZksProtocolV3, ZksProtocolV4};
 use crate::wire::message::ZksMessage;
 use crate::{VerifyBatch, VerifyBatchResult};
 use alloy::eips::eip2124::Head;
@@ -332,6 +332,12 @@ impl NetworkService {
                 connection_registry.clone(),
             ))
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV3, _>::for_main_node(
+                replay.clone(),
+                protocol.clone(),
+                state.clone(),
+                connection_registry.clone(),
+            ))
+            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV4, _>::for_main_node(
                 replay,
                 protocol,
                 state,
@@ -361,6 +367,12 @@ impl NetworkService {
                 connection_registry.clone(),
             ))
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV3, _>::for_external_node(
+                replay.clone(),
+                protocol.clone(),
+                state.clone(),
+                connection_registry.clone(),
+            ))
+            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV4, _>::for_external_node(
                 replay,
                 protocol,
                 state,

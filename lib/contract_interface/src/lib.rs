@@ -183,6 +183,12 @@ alloy::sol! {
         }
 
         function migrationNumber(uint256 _chainId) external view returns (uint256);
+        event MigrationFinalized(
+            uint256 indexed chainId,
+            uint256 migrationNumber,
+            bytes32 indexed assetId,
+            address indexed zkChain
+        );
         function migrationInterval(
             uint256 _chainId,
             uint256 _migrationNumber

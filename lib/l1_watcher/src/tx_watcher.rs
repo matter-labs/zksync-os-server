@@ -1,7 +1,7 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::BlockNumber;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
 use std::sync::Arc;
@@ -17,7 +17,6 @@ use zksync_os_types::L1PriorityEnvelope;
 /// priority request is visible from the settlement layer, and then inserts the corresponding
 /// `L1PriorityEnvelope` into `L1Subpool`.
 pub struct L1TxWatcher {
-    contract_address: Address,
     next_l1_priority_id: u64,
     zk_chain_sl: ZkChain<DynProvider>,
     cached_total_priority_ops_resp: Option<u64>,
@@ -46,24 +45,21 @@ impl L1TxWatcher {
         tracing::info!(next_l1_block, "resolved on L1");
 
         let this = Self {
-            contract_address: *zk_chain_l1.address(),
             next_l1_priority_id,
             zk_chain_sl,
             cached_total_priority_ops_resp: None,
             l1_subpool,
         };
-        let l1_watcher = L1Watcher::new(
+        L1Watcher::new(
+            config,
             zk_chain_l1.provider().clone(),
+            (*zk_chain_l1.address()).into(),
             next_l1_block,
-            config.max_blocks_to_process,
-            config.confirmations,
+            None,
             zk_chain_l1.provider().get_chain_id().await?,
-            config.poll_interval,
-            this.into(),
+            Box::new(this),
         )
-        .await?;
-
-        Ok(l1_watcher)
+        .await
     }
 }
 
@@ -85,12 +81,9 @@ impl ProcessL1Event for L1TxWatcher {
     type SolEvent = NewPriorityRequest;
     type WatchedEvent = L1PriorityEnvelope;
 
-    fn contract_address(&self) -> Address {
-        self.contract_address
-    }
-
     async fn process_event(
         &mut self,
+        _provider: &DynProvider,
         tx: L1PriorityEnvelope,
         _log: Log,
     ) -> Result<(), L1WatcherError> {
