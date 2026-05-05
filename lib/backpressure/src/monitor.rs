@@ -270,6 +270,8 @@ impl BackpressureMonitor {
             MONITOR_METRICS.component_order[id].set(index as u64);
             MONITOR_METRICS.backpressure_active[id]
                 .set(active_components.contains(id.as_str()) as u64);
+            let picked_block = h.picked.as_ref().map(|c| c.block_number).unwrap_or(0);
+            MONITOR_METRICS.component_last_picked_block[id].set(picked_block);
             MONITOR_METRICS.component_last_processed_block[id].set(comp_block);
             MONITOR_METRICS.component_block_diff_to_head[id]
                 .set(head_block.saturating_sub(comp_block));

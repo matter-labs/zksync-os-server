@@ -4,6 +4,9 @@ use std::time::Duration;
 pub use zksync_os_pipeline::ComponentId;
 
 const DEFAULT_BLOCK_DIFF_LIMIT: u64 = 256;
+// Higher than the block-pipeline default: the Batcher seals at batch granularity, so its
+// block diff naturally grows to ~(blocks per batch) while a batch is being assembled.
+const DEFAULT_BATCHER_BLOCK_DIFF_LIMIT: u64 = 512;
 const DEFAULT_BATCH_DIFF_LIMIT: u64 = 128;
 
 /// Backpressure thresholds for a single component.
@@ -28,9 +31,12 @@ fn default_condition_for(id: ComponentId) -> PipelineCondition {
         | ComponentId::BlockApplier
         | ComponentId::RevmConsistencyChecker
         | ComponentId::TreeManager
-        | ComponentId::ProverInputGenerator
-        | ComponentId::Batcher => PipelineCondition {
+        | ComponentId::ProverInputGenerator => PipelineCondition {
             max_block_diff_to_upstream: Some(DEFAULT_BLOCK_DIFF_LIMIT),
+            ..Default::default()
+        },
+        ComponentId::Batcher => PipelineCondition {
+            max_block_diff_to_upstream: Some(DEFAULT_BATCHER_BLOCK_DIFF_LIMIT),
             ..Default::default()
         },
         ComponentId::BatchVerification

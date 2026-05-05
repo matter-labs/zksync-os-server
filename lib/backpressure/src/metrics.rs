@@ -10,6 +10,8 @@ pub struct MonitorMetrics {
     pub component_block_diff_to_head: Family<ComponentId, Gauge<u64>>,
     /// Block-timestamp lag in seconds vs pipeline head (0 if timestamp unavailable for head or component).
     pub component_time_diff_to_head_seconds: Family<ComponentId, Gauge<f64>>,
+    /// Last block number dequeued from the input channel by this component.
+    pub component_last_picked_block: Family<ComponentId, Gauge<u64>>,
     /// Last block number successfully processed by this component.
     pub component_last_processed_block: Family<ComponentId, Gauge<u64>>,
     /// Processing lag in blocks between this component and its upstream neighbour.
@@ -23,10 +25,10 @@ pub struct MonitorMetrics {
     /// Computed as upstream.batch_processed − this.batch_processed.
     /// Only set for batch-pipeline components with batch tracking.
     pub component_batch_diff_to_upstream: Family<ComponentId, Gauge<u64>>,
-    /// Last batch number fully processed by this component (high-watermark).
+    /// Last batch number fully processed by this component.
     /// Only set for batch-pipeline components that call `record_processed` with a batch arg.
     pub component_last_processed_batch: Family<ComponentId, Gauge<u64>>,
-    /// Last batch number dequeued from the input channel by this component (high-watermark).
+    /// Last batch number dequeued from the input channel by this component.
     /// Only set for batch-pipeline components that call `record_picked` with a batch arg.
     pub component_last_picked_batch: Family<ComponentId, Gauge<u64>>,
     /// Counts transitions from Accepting to NotAccepting (transaction acceptance suspended).
