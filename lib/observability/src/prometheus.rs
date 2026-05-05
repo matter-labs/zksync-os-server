@@ -65,7 +65,7 @@ impl PrometheusExporterConfig {
     pub async fn run(self, shutdown: GracefulShutdown) -> anyhow::Result<()> {
         tokio_runtime::register_monitor();
         let registry = self.registry();
-        /// ignore_guard will drop the guard too ealry, so clone is used.
+        // ignore_guard will drop the guard too ealry, so clone is used.
         let metrics_exporter = MetricsExporter::new(registry.into())
             .with_graceful_shutdown(shutdown.clone().ignore_guard());
 
@@ -87,7 +87,7 @@ impl PrometheusExporterConfig {
                 metrics_exporter.push_to_gateway(endpoint, interval).await;
             }
         }
-        /// We can drop it now because shutdown is complete.
+        // We can drop it now because shutdown is complete.
         drop(shutdown);
         Ok(())
     }
