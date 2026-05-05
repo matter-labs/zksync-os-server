@@ -356,6 +356,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         txs: all_processed_txs.clone(),
         error: e.context("seal_block()").to_string(),
     })?;
+    let unique_reads_count = output_with_reads.read_keys().len();
     let output = output_with_reads.inner_mut();
 
     // Since we've overridden the state, we need to insert any forced preimages into the output as well.
@@ -392,19 +393,18 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
     tracing::info!(
         block_number = output.header.number,
-        "Block {} ({}) sealed because of {seal_reason:?} in block executor with {} transactions ({} purged) and {} gas. \
-        Block hash output: {block_hash_output:?}, canonical hash: {:?}. \
-        storage_writes: {}, preimages: {}, pubdata bytes: {}. \
-        ",
-        output.header.number,
-        command.metrics_label,
-        executed_txs.len(),
-        purged_txs.len(),
-        cumulative_gas_used,
-        output.header.hash(),
-        output.storage_writes.len(),
-        output.published_preimages.len(),
-        output.pubdata.len(),
+        "Block {block_number} ({label}) sealed because of {seal_reason:?} in block executor \
+        with {tx_count} transactions ({purged_tx_count} purged) and {cumulative_gas_used} gas. \
+        Block hash output: {block_hash_output:?}, canonical hash: {canonical_hash:?}. \
+        storage writes: {write_count}, unique reads: {unique_reads_count}, preimages: {preimages_count}, pubdata bytes: {pubdata_len}.",
+        block_number = output.header.number,
+        label = command.metrics_label,
+        tx_count = executed_txs.len(),
+        purged_tx_count = purged_txs.len(),
+        canonical_hash = output.header.hash(),
+        write_count = output.storage_writes.len(),
+        preimages_count = output.published_preimages.len(),
+        pubdata_len = output.pubdata.len(),
     );
 
     tracing::debug!(

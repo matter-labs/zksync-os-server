@@ -34,6 +34,10 @@ impl BlockOutputWithReads {
     pub(crate) fn inner_mut(&mut self) -> &mut BlockOutput {
         &mut self.inner
     }
+
+    pub(crate) fn read_keys(&self) -> &HashSet<B256> {
+        &self.read_keys
+    }
 }
 
 impl AsRef<BlockOutput> for BlockOutputWithReads {
