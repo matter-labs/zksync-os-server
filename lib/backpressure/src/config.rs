@@ -6,7 +6,7 @@ pub use zksync_os_pipeline::ComponentId;
 const DEFAULT_BLOCK_DIFF_LIMIT: u64 = 256;
 // Higher than the block-pipeline default: the Batcher seals at batch granularity, so its
 // block diff naturally grows to ~(blocks per batch) while a batch is being assembled.
-const DEFAULT_BATCHER_BLOCK_DIFF_LIMIT: u64 = 512;
+const DEFAULT_BATCHER_BLOCK_DIFF_LIMIT: u64 = 2048;
 const DEFAULT_BATCH_DIFF_LIMIT: u64 = 128;
 
 /// Backpressure thresholds for a single component.
