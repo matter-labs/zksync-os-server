@@ -1,6 +1,8 @@
 use vise::{Counter, Metrics};
 
 /// These metrics are exported with push exporter.
+/// The `PushMetrics` suffix is required for this to work.
+///
 /// Use case: report something right before stopping the node, without waiting for a scrape,
 /// so these metrics can be used for alerts.
 ///

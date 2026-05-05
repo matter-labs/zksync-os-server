@@ -184,20 +184,15 @@ pub async fn main() {
         StateBackendConfig::Compacted => run::<StateHandle>(&runtime, config).await,
     };
 
-    runtime.spawn_critical_with_graceful_shutdown_signal("prometheus", |shutdown| async move {
-        if ephemeral_enabled {
-            tracing::info!("Ephemeral mode enabled, skipping Prometheus exporter");
-        } else {
-            let prometheus: PrometheusExporterConfig =
-                PrometheusExporterConfig::pull(prometheus_port);
-            prometheus.run(shutdown).await.expect("prometheus failed");
-        }
-    });
-
     let prometheus_push_shutdown = if ephemeral_enabled {
         tracing::info!("Ephemeral mode enabled, skipping Prometheus push exporter");
         None
     } else {
+        runtime.spawn_critical_with_graceful_shutdown_signal("prometheus", |shutdown| async move {
+            let prometheus: PrometheusExporterConfig =
+                PrometheusExporterConfig::pull(prometheus_port);
+            prometheus.run(shutdown).await.expect("prometheus failed");
+        });
         spawn_prometheus_push_exporter(&runtime, &prometheus_config)
     };
 
