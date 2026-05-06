@@ -819,19 +819,20 @@ pub struct ForceTransactionResubmissionConfig {
     pub enabled: bool,
 
     /// Multiplier applied to `max_fee_per_gas` when force transaction resubmission is enabled.
-    #[config(default_t = 1.0)]
-    #[config_validate(custom(|_: &Config, value: &f64| value.is_sign_positive(), "must be positive"))]
+    #[config(default_t = 1.1, validate(is_positive_f64, "must be positive"))]
     pub max_fee_per_gas_replacement_multiplier: f64,
 
     /// Multiplier applied to `max_priority_fee_per_gas` when force transaction resubmission is enabled.
-    #[config(default_t = 1.0)]
-    #[config_validate(custom(|_: &Config, value: &f64| value.is_sign_positive(), "must be positive"))]
+    #[config(default_t = 1.1, validate(is_positive_f64, "must be positive"))]
     pub max_priority_fee_per_gas_replacement_multiplier: f64,
 
     /// Multiplier applied to `max_fee_per_blob_gas` when force transaction resubmission is enabled.
-    #[config(default_t = 1.0)]
-    #[config_validate(custom(|_: &Config, value: &f64| value.is_sign_positive(), "must be positive"))]
+    #[config(default_t = 2.0, validate(is_positive_f64, "must be positive"))]
     pub max_fee_per_blob_gas_replacement_multiplier: f64,
+}
+
+fn is_positive_f64(&val: &f64) -> bool {
+    val > 0.0
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
