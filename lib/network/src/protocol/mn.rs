@@ -1,6 +1,7 @@
 use super::MAX_BLOCKS_PER_MESSAGE;
 use super::ProtocolEvent;
 use super::config::MainNodeProtocolConfig;
+use crate::metrics::MN_CONNECTION_METRICS;
 use crate::service::PeerVerifyBatchResult;
 use crate::version::ZksProtocolVersionSpec;
 use crate::wire::auth::recover_verifier_signer;
@@ -161,7 +162,28 @@ pub(super) async fn run_mn_connection<P: ZksProtocolVersionSpec, Replay: ReadRep
                     .iter()
                     .map(|record| record.block_context.block_number)
                     .collect();
+                let records_count = block_numbers.len() as u64;
                 let encoded = ZksMessage::<P>::block_replays(records).encoded();
+                let encoded_len = encoded.len() as u64;
+                let pending = outbound_tx
+                    .max_capacity()
+                    .saturating_sub(outbound_tx.capacity()) as u64;
+                MN_CONNECTION_METRICS
+                    .outbound_replay_bytes
+                    .observe(encoded_len);
+                MN_CONNECTION_METRICS
+                    .records_per_outbound_message
+                    .observe(records_count);
+                MN_CONNECTION_METRICS
+                    .outbound_queue_pending_at_send
+                    .observe(pending);
+                tracing::debug!(
+                    %peer_id,
+                    encoded_bytes = encoded_len,
+                    records = records_count,
+                    pending,
+                    "outbound replay batch"
+                );
                 if outbound_tx.send(encoded).await.is_err() {
                     return;
                 }

@@ -1,6 +1,6 @@
 use metrics::{CounterFn, GaugeFn, Key, KeyName, Metadata, Recorder, SharedString, Unit};
 use std::sync::Arc;
-use vise::{Counter, Gauge, Metrics};
+use vise::{Buckets, Counter, Gauge, Histogram, Metrics};
 
 /// Metrics for the entire network, handled by `NetworkManager`.
 ///
@@ -246,6 +246,23 @@ pub struct NetworkActiveSessionMetrics {
     pub(crate) back_pressure_total: Counter,
 }
 
+/// Per-message instrumentation for outbound `BlockReplays` traffic on the main-node side.
+/// Used to attribute heap residency to per-peer mpsc backlog vs encoded-message size.
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "zks_protocol_mn")]
+pub struct MnConnectionMetrics {
+    /// Encoded byte length of an outbound `BlockReplays` message at the moment it is enqueued.
+    #[metrics(buckets = Buckets::exponential(1024.0..=1_073_741_824.0, 4.0))]
+    pub outbound_replay_bytes: Histogram<u64>,
+    /// Number of `BlockReplays` already buffered in the per-peer outbound mpsc when the next
+    /// message is offered (capacity - available_permits at observation time).
+    #[metrics(buckets = Buckets::linear(0.0..=32.0, 1.0))]
+    pub outbound_queue_pending_at_send: Histogram<u64>,
+    /// Number of replay records batched into a single outbound message.
+    #[metrics(buckets = Buckets::linear(1.0..=64.0, 1.0))]
+    pub records_per_outbound_message: Histogram<u64>,
+}
+
 /// Installs [`ViseRecorder`] as the global recorder for the `metrics` crate.
 ///
 /// This bridges reth-network metrics (which use the `metrics` crate) to the `vise` collector.
@@ -291,6 +308,8 @@ pub(crate) static DISCV5_ADVERTISED_CHAIN_METRICS: vise::Global<Discv5Advertised
 #[vise::register]
 pub(crate) static NETWORK_ACTIVE_SESSION_METRICS: vise::Global<NetworkActiveSessionMetrics> =
     vise::Global::new();
+#[vise::register]
+pub(crate) static MN_CONNECTION_METRICS: vise::Global<MnConnectionMetrics> = vise::Global::new();
 
 /// A recorder that wraps `vise` metrics into `metrics`-compatible structs.
 pub(crate) struct ViseRecorder;
