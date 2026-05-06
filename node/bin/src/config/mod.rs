@@ -679,9 +679,9 @@ pub struct DeploymentFilterConfig {
 /// service).
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
-#[config(validate(Self::check_url, "URL must use scheme `http`, `https`, or `unix`"))]
+#[config(validate(Self::check_url, "URL must use scheme `http` or `unix`"))]
 pub struct PolicyServiceConfig {
-    /// `http://host:port`, `https://host:port`, or `unix:///path/to/socket`.
+    /// `http://host:port` or `unix:///path/to/socket`.
     #[config(with = Serde![str])]
     pub url: Option<url::Url>,
 
@@ -1359,10 +1359,10 @@ impl PolicyServiceConfig {
     fn check_url(&self) -> Result<(), ErrorWithOrigin> {
         let Some(url) = &self.url else { return Ok(()) };
         match url.scheme() {
-            "http" | "https" | "unix" => {}
+            "http" | "unix" => {}
             other => {
                 return Err(ErrorWithOrigin::custom(format!(
-                    "unsupported URL scheme `{other}`; expected `http`, `https`, or `unix`"
+                    "unsupported URL scheme `{other}`; expected `http` or `unix`"
                 )));
             }
         }

@@ -424,8 +424,8 @@ fn http_url_accepted_at_construction() {
 }
 
 #[test]
-fn https_url_accepted_at_construction() {
-    assert!(PolicyClient::new(base_config("https://policy.local:9000".into())).is_ok());
+fn https_url_rejected_at_construction() {
+    assert!(PolicyClient::new(base_config("https://policy.local:9000".into())).is_err());
 }
 
 #[tokio::test]
