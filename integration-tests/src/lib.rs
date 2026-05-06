@@ -31,8 +31,8 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
-use zksync_os_server::config::Config;
 pub use zksync_os_server::config::DeploymentFilterConfig;
+use zksync_os_server::config::{Config, ProviderConfig};
 use zksync_os_server::default_protocol_version::{
     NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
 };
@@ -53,6 +53,15 @@ pub mod rpc_recorder;
 pub mod test_config;
 pub mod upgrade;
 mod utils;
+
+fn gateway_provider_config(rpc_url: String) -> ProviderConfig {
+    ProviderConfig {
+        rpc_url,
+        rpc_poll_interval: Duration::from_millis(100),
+        max_retries: 2,
+        retry_backoff: Duration::from_millis(200),
+    }
+}
 
 /// L1 chain id as expected by contracts deployed in `l1-state.json.gz`
 const L1_CHAIN_ID: u64 = 31337;
@@ -193,7 +202,7 @@ impl TestEnvironment {
     pub async fn default_config(&self) -> anyhow::Result<Config> {
         let mut config = build_node_config(&self.l1, self.chain_layout).await?;
         if let Some(gateway) = &self.gateway {
-            config.general_config.gateway_rpc_url = Some(gateway.rpc_url.clone());
+            config.gateway_provider_config = Some(gateway_provider_config(gateway.rpc_url.clone()));
         }
         Tester::bind_runtime_config(
             &self.l1,
@@ -220,10 +229,10 @@ impl TestEnvironment {
             &self.prepared_runtime.ports,
         );
         let supporting_gateway = if let Some(gateway) = self.gateway.take() {
-            config
-                .general_config
-                .gateway_rpc_url
-                .get_or_insert_with(|| gateway.rpc_url.clone());
+            if config.gateway_provider_config.is_none() {
+                config.gateway_provider_config =
+                    Some(gateway_provider_config(gateway.rpc_url.clone()));
+            }
             wait_for_gateway_readiness(&self.l1, &gateway.rpc_url, &config).await?;
             Some(gateway.node)
         } else {
@@ -313,7 +322,7 @@ impl Tester {
         config.general_config.node_role = NodeRole::ExternalNode;
         config.network_config.boot_nodes = vec![self.node_record.into()];
         config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
-        config.general_config.gateway_rpc_url = self.gateway_rpc_url.clone();
+        config.gateway_provider_config = self.gateway_rpc_url.clone().map(gateway_provider_config);
         config.prover_api_config.fake_fri_provers.enabled = true;
         config.prover_api_config.fake_snark_provers.enabled = true;
         config.prover_input_generator_config.logging_enabled = false;
@@ -521,7 +530,7 @@ impl Tester {
 
     fn bind_runtime_config(l1: &AnvilL1, tempdir: &TempDir, config: &mut Config, ports: &Ports) {
         config.general_config.rocks_db_path = tempdir.path().join("rocksdb");
-        config.general_config.l1_rpc_url = l1.address.clone();
+        config.l1_provider_config.rpc_url = l1.address.clone();
         config.rpc_config.address = format!("0.0.0.0:{}", ports.l2_rpc.port);
         config.prover_api_config.address = format!("0.0.0.0:{}", ports.prover_api.port);
         config.prover_api_config.proof_storage.path = tempdir.path().join("proof_storage_path");
@@ -574,7 +583,10 @@ impl Tester {
         let node_role = config.general_config.node_role;
         let log_state = log_state.unwrap_or_else(|| NodeLogState::fresh(node_role));
         let log_tag = log_state.tag();
-        let gateway_rpc_url = config.general_config.gateway_rpc_url.clone();
+        let gateway_rpc_url = config
+            .gateway_provider_config
+            .as_ref()
+            .map(|config| config.rpc_url.clone());
         #[cfg(feature = "prover-tests")]
         let prover_api_address = config.prover_api_config.address.clone();
 
@@ -1108,7 +1120,7 @@ impl GatewayTesterBuilder {
             if !prover_input_generation_enabled() {
                 disable_prover_input_generation(&mut tester_config);
             }
-            tester_config.general_config.gateway_rpc_url = Some(gateway_rpc_url);
+            tester_config.gateway_provider_config = Some(gateway_provider_config(gateway_rpc_url));
             if let Some(deployment_filter) = deployment_filter {
                 tester_config
                     .sequencer_config

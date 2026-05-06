@@ -18,9 +18,11 @@ pub(crate) async fn build_node_config(
     chain_layout: ChainLayout<'static>,
 ) -> anyhow::Result<Config> {
     let mut config = load_chain_config(chain_layout).await;
-    config.general_config.l1_rpc_url = l1.address.clone();
-    config.general_config.l1_rpc_poll_interval = Duration::from_millis(100);
-    config.general_config.gateway_rpc_poll_interval = Duration::from_millis(100);
+    config.l1_provider_config.rpc_url = l1.address.clone();
+    config.l1_provider_config.rpc_poll_interval = Duration::from_millis(100);
+    if let Some(gateway_provider_config) = &mut config.gateway_provider_config {
+        gateway_provider_config.rpc_poll_interval = Duration::from_millis(100);
+    }
     config.sequencer_config.fee_collector_address = Address::random();
     config.rpc_config.send_raw_transaction_sync_timeout = Duration::from_secs(10);
     config.prover_api_config.fake_fri_provers.enabled = true;

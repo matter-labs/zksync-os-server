@@ -1,3 +1,4 @@
+use super::ProviderKind;
 use super::metrics::METRICS;
 use alloy::rpc::json_rpc::{RequestPacket, ResponsePacket};
 use alloy::transports::layers::{RateLimitRetryPolicy, RetryPolicy};
@@ -8,23 +9,32 @@ use tokio::time::sleep;
 use tower::{Layer, Service};
 use tracing::trace;
 
-const MAX_RETRIES: u32 = 2;
-const INITIAL_BACKOFF: Duration = Duration::from_millis(200);
-
 #[derive(Debug, Clone, Copy)]
-pub(super) struct RetryLayer;
+pub(super) struct RetryLayer {
+    pub(super) provider: ProviderKind,
+    pub(super) max_retries: u32,
+    pub(super) backoff: Duration,
+}
 
 impl<S> Layer<S> for RetryLayer {
     type Service = RetryService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        RetryService { inner }
+        RetryService {
+            inner,
+            provider: self.provider,
+            max_retries: self.max_retries,
+            backoff: self.backoff,
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct RetryService<S> {
     inner: S,
+    provider: ProviderKind,
+    max_retries: u32,
+    backoff: Duration,
 }
 
 impl<S> RetryService<S> {
@@ -75,6 +85,9 @@ where
     fn call(&mut self, request: RequestPacket) -> Self::Future {
         let inner = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, inner);
+        let provider = self.provider;
+        let max_retries = self.max_retries;
+        let backoff = self.backoff;
         Box::pin(async move {
             let mut retry_number = 0;
             loop {
@@ -94,16 +107,15 @@ where
 
                 if Self::should_retry(&err) {
                     retry_number += 1;
-                    if retry_number > MAX_RETRIES {
+                    if retry_number > max_retries {
                         return Err(TransportErrorKind::custom_str(&format!(
                             "Max retries exceeded {err}"
                         )));
                     }
-                    METRICS.retry_count.inc();
+                    METRICS[&provider].retry_count.inc();
                     trace!(%err, "retrying request");
 
-                    let backoff = Self::backoff_hint(&err).unwrap_or(INITIAL_BACKOFF);
-                    sleep(backoff).await;
+                    sleep(Self::backoff_hint(&err).unwrap_or(backoff)).await;
                 } else {
                     return Err(err);
                 }

@@ -1,3 +1,4 @@
+use super::ProviderKind;
 use super::metrics::METRICS;
 use alloy::rpc::json_rpc::{RequestPacket, ResponsePacket};
 use alloy::transports::{TransportError, TransportFut};
@@ -8,19 +9,25 @@ use tower::{Layer, Service};
 const BATCH_REQUEST_METHOD: &str = "batch_request";
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct LatencyLayer;
+pub(super) struct LatencyLayer {
+    pub(super) provider: ProviderKind,
+}
 
 impl<S> Layer<S> for LatencyLayer {
     type Service = LatencyService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        LatencyService { inner }
+        LatencyService {
+            inner,
+            provider: self.provider,
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct LatencyService<S> {
     inner: S,
+    provider: ProviderKind,
 }
 
 impl<S> Service<RequestPacket> for LatencyService<S>
@@ -44,12 +51,13 @@ where
             RequestPacket::Single(request) => request.method().to_owned(),
             RequestPacket::Batch(_) => BATCH_REQUEST_METHOD.to_owned(),
         };
+        let provider = self.provider;
         let inner = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, inner);
         Box::pin(async move {
             let started_at = Instant::now();
             let result = inner.call(request).await;
-            METRICS.response_time[&method].observe(started_at.elapsed());
+            METRICS[&provider].response_time[&method].observe(started_at.elapsed());
             result
         })
     }

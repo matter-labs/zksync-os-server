@@ -50,6 +50,8 @@ pub use build_external_config::{build_external_config, load_config_file_sources}
 #[config_validate(root)]
 pub struct Config {
     pub general_config: GeneralConfig,
+    pub l1_provider_config: ProviderConfig,
+    pub gateway_provider_config: Option<ProviderConfig>,
     pub network_config: NetworkConfig,
     pub genesis_config: GenesisConfig,
     pub rpc_config: RpcConfig,
@@ -178,6 +180,12 @@ impl Config {
         schema
             .insert(&GeneralConfig::DESCRIPTION, "general")
             .expect("Failed to insert general config");
+        schema
+            .insert(&ProviderConfig::DESCRIPTION, "l1_provider")
+            .expect("Failed to insert L1 provider config");
+        schema
+            .insert(&ProviderConfig::DESCRIPTION, "gateway_provider")
+            .expect("Failed to insert Gateway provider config");
         schema
             .insert(&NetworkConfig::DESCRIPTION, "network")
             .expect("Failed to insert network config");
@@ -364,24 +372,6 @@ pub struct GeneralConfig {
     #[config(default_t = NodeRole::MainNode, with = Serde![str])]
     pub node_role: NodeRole,
 
-    /// L1's JSON RPC API.
-    #[config(default_t = "http://localhost:8545".into())]
-    pub l1_rpc_url: String,
-
-    /// Poll interval used by the L1 alloy provider when waiting for transaction receipts.
-    /// Alloy's default is 7 seconds for HTTP transports, using the same criteria here.
-    #[config(default_t = 7 * TimeUnit::Seconds)]
-    pub l1_rpc_poll_interval: Duration,
-
-    /// Gateway's JSON RPC API.
-    /// Must be present if the chain is currently settling to Gateway.
-    pub gateway_rpc_url: Option<String>,
-
-    /// Poll interval used by the Gateway alloy provider when waiting for transaction receipts.
-    /// Alloy's default is 7 seconds for HTTP transports, using the same criteria here.
-    #[config(default_t = 7 * TimeUnit::Seconds)]
-    pub gateway_rpc_poll_interval: Duration,
-
     /// Gateway chain ID. Used by the migration watcher to construct `SetSLChainId` system
     /// transactions when a `MigrateToGateway` event fires. Defaults to 506 (ZKsync Gateway).
     #[config(default_t = 506)]
@@ -449,6 +439,28 @@ pub struct GeneralConfig {
         "requires `general.ephemeral=true`"
     ))]
     pub ephemeral_state: Option<PathBuf>,
+}
+
+/// Config for L1 or Gateway provider
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+pub struct ProviderConfig {
+    /// JSON RPC API URL.
+    #[config(default_t = "http://localhost:8545".into())]
+    pub rpc_url: String,
+
+    /// Poll interval used by the alloy provider when waiting for transaction receipts.
+    /// Alloy's default is 7 seconds for HTTP transports, using the same criteria here.
+    #[config(default_t = 7 * TimeUnit::Seconds)]
+    pub rpc_poll_interval: Duration,
+
+    /// Maximum number of retry attempts, excluding the initial attempt.
+    #[config(default_t = 2)]
+    pub max_retries: u32,
+
+    /// Backoff used between retry attempts.
+    #[config(default_t = Duration::from_millis(200))]
+    pub retry_backoff: Duration,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
@@ -1604,6 +1616,8 @@ mod tests {
                 run_priority_tree: true,
                 ..Default::default()
             },
+            l1_provider_config: ProviderConfig::default(),
+            gateway_provider_config: None,
             network_config: NetworkConfig::default(),
             genesis_config: GenesisConfig {
                 bridgehub_address: Some(Address::ZERO),
