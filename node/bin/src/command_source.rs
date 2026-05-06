@@ -100,6 +100,11 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 
         tracing::info!("All WAL blocks replayed. Starting main loop.");
 
+        // Seed watermark so block_diff_to_head starts at 0; leader mode never fires maybe_record.
+        if let Some(ctx) = self.block_replay_storage.get_context(last_block_in_wal) {
+            state_reporter.record_processed(last_block_in_wal, Some(ctx.timestamp), None);
+        }
+
         self.run_loop(output, state_reporter).await
     }
 }
@@ -154,6 +159,11 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                     if send_res.is_err() {
                         tracing::info!("Command output channel closed, stopping source");
                         break;
+                    }
+                    // Advance watermark to the last sealed block so diff stays near 0.
+                    let latest = self.block_replay_storage.latest_record();
+                    if let Some(ctx) = self.block_replay_storage.get_context(latest) {
+                        state_reporter.record_processed(latest, Some(ctx.timestamp), None);
                     }
                 }
             }
