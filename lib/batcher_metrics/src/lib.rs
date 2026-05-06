@@ -59,7 +59,7 @@ pub struct BatcherSubsystemMetrics {
 
     /// Sum of raw EIP-2718 envelope bytes across all transactions in the batch. Approximates the
     /// wire-format payload that the main-node ships in `BlockReplays` messages.
-    #[metrics(buckets = Buckets::exponential(1_024.0..=1_073_741_824.0, 4.0))]
+    #[metrics(buckets = Buckets::exponential(16_384.0..=268_435_456.0, 2.0))]
     pub tx_data_bytes_per_batch: Histogram<u64>,
 }
 

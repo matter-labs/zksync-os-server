@@ -252,7 +252,7 @@ pub struct NetworkActiveSessionMetrics {
 #[metrics(prefix = "zks_protocol_mn")]
 pub struct MnConnectionMetrics {
     /// Encoded byte length of an outbound `BlockReplays` message at the moment it is enqueued.
-    #[metrics(buckets = Buckets::exponential(1024.0..=1_073_741_824.0, 4.0))]
+    #[metrics(buckets = Buckets::exponential(1024.0..=268_435_456.0, 2.0))]
     pub outbound_replay_bytes: Histogram<u64>,
     /// Number of `BlockReplays` already buffered in the per-peer outbound mpsc when the next
     /// message is offered (capacity - available_permits at observation time).
