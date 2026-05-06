@@ -104,6 +104,17 @@ impl ComponentStateReporter {
                 highest_seen = state.picked.as_ref().map(|c| c.block_number);
                 return false;
             }
+            // On the first pick, seed processed one behind so the monitor sees a non-zero
+            // diff immediately - without this, processed stays None and the fallback
+            // `processed.or(picked)` yields diff=0 for components that never call
+            // record_processed (e.g. provers when disabled).
+            if state.processed.is_none() {
+                state.processed = Some(TrackingCoordinates {
+                    block_number: block_number.saturating_sub(1),
+                    timestamp,
+                    batch_number: batch_number.map(|n| n.saturating_sub(1)),
+                });
+            }
             state.picked = Some(TrackingCoordinates {
                 block_number,
                 timestamp,

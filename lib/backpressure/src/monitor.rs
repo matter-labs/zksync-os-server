@@ -33,30 +33,15 @@ fn compute_adjacent_snapshots(
         .filter_map(|w| {
             let (upstream, downstream) = (&w[0], &w[1]);
             let up = upstream.1.processed.as_ref()?;
-            // Fall back to picked if the downstream hasn't finished its first item yet —
-            // otherwise the pair would be invisible until the first processed watermark is set.
-            let down = downstream
-                .1
-                .processed
-                .as_ref()
-                .or(downstream.1.picked.as_ref())?;
+            let down = downstream.1.processed.as_ref()?;
             let block_diff = up.block_number.saturating_sub(down.block_number);
             let time_diff = match (up.timestamp, down.timestamp) {
                 (Some(u), Some(d)) => Some(Duration::from_secs(u.saturating_sub(d))),
                 _ => None,
             };
-            let down_batch = downstream
-                .1
-                .processed
-                .as_ref()
-                .and_then(|c| c.batch_number)
-                .or(downstream.1.picked.as_ref().and_then(|c| c.batch_number));
-            let batch_diff = upstream
-                .1
-                .processed
-                .as_ref()
-                .and_then(|c| c.batch_number)
-                .zip(down_batch)
+            let batch_diff = up
+                .batch_number
+                .zip(down.batch_number)
                 .map(|(u, d)| u.saturating_sub(d));
             Some((
                 downstream.0,

@@ -37,15 +37,10 @@ impl PipelineComponent for BatchSink {
     ) -> anyhow::Result<()> {
         let mut internal_config = self.internal_config_manager.read_config()?;
         loop {
-            let Some(envelope) = input.recv().await else {
+            let Some(envelope) = input.recv_and_record_picked(&state_reporter).await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
-            state_reporter.record_picked(
-                envelope.batch.last_block_number,
-                None,
-                Some(envelope.batch_number()),
-            );
             tracing::info!(
                 batch_number = envelope.batch_number(),
                 latency_tracker = %envelope.latency_tracker,
