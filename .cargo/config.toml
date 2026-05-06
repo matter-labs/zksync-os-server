@@ -1,5 +1,5 @@
 [build]
-rustflags = ["--cfg", "tokio_unstable"]
+rustflags = ["--cfg", "tokio_unstable", "-C", "force-frame-pointers=yes"]
 
 [env]
 # Workspace directory to properly resolve artifacts relative paths

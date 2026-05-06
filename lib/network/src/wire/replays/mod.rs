@@ -46,6 +46,7 @@ pub struct BlockReplays<T: WireReplayRecord> {
 }
 
 impl<T: WireReplayRecord> BlockReplays<T> {
+    #[inline(never)]
     pub fn new(records: Vec<StorageReplayRecord>) -> Self {
         let records = records.into_iter().map(T::from).collect();
         Self { records }

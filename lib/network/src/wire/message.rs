@@ -90,6 +90,7 @@ impl<P: ZksProtocolVersionSpec> ZksMessage<P> {
     }
 
     /// Return RLP encoded message.
+    #[inline(never)]
     pub fn encoded(&self) -> BytesMut {
         let mut buf = BytesMut::with_capacity(self.length());
         self.encode(&mut buf);
@@ -97,6 +98,7 @@ impl<P: ZksProtocolVersionSpec> ZksMessage<P> {
     }
 
     /// Decodes a `ZksMessage` from the given message buffer.
+    #[inline(never)]
     pub fn decode_message(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
         let message_type = ZksMessageId::decode(buf)?;
         if !P::VERSION.supports_message(message_type) {

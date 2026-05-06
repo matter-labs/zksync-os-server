@@ -18,6 +18,7 @@ use zksync_os_storage_api::{ReadReplay, ReadReplayExt};
 ///
 /// Waits for a `GetBlockReplays` request from the EN, then streams replay records from storage to
 /// the EN indefinitely.
+#[inline(never)]
 pub(super) async fn run_mn_connection<P: ZksProtocolVersionSpec, Replay: ReadReplay + Clone>(
     mut conn: impl Stream<Item = ZksMessage<P>> + Unpin,
     outbound_tx: mpsc::Sender<BytesMut>,

@@ -229,11 +229,12 @@ impl<P: ZksProtocolVersionSpec, Replay: ReadReplay + Clone> ConnectionHandler
 ///
 /// Each incoming byte frame is decoded as a `ZksMessage`. Decode errors are logged and terminate
 /// the stream (by returning `None`), matching the behaviour of a closed connection.
+#[inline(never)]
 fn into_message_stream<P: ZksProtocolVersionSpec>(
     conn: ProtocolConnection,
 ) -> impl Stream<Item = ZksMessage<P>> + Unpin + Send + 'static {
     Box::pin(conn.scan((), |_, raw| {
-        let result = ZksMessage::<P>::decode_message(&mut &raw[..]);
+        let result = decode_inbound_frame::<P>(&raw[..]);
         async move {
             match result {
                 Ok(msg) => {
@@ -247,4 +248,16 @@ fn into_message_stream<P: ZksProtocolVersionSpec>(
             }
         }
     }))
+}
+
+/// Per-frame inbound decode site. Pulled out of the scan closure and marked `inline(never)` so
+/// jeprof attributes inbound `ZksMessage<P>::decode_message` allocations to a stable address per
+/// protocol version (otherwise the closure gets inlined into the tokio task harness and the
+/// hot stack collapses to an opaque `run_*_connection<P>::{closure}` site).
+#[inline(never)]
+fn decode_inbound_frame<P: ZksProtocolVersionSpec>(
+    raw: &[u8],
+) -> alloy_rlp::Result<ZksMessage<P>> {
+    let mut slice = raw;
+    ZksMessage::<P>::decode_message(&mut slice)
 }
