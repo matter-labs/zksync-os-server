@@ -188,6 +188,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .leak();
     GENERAL_METRICS.fee_collector_address[&fee_collector_address].set(1);
     GENERAL_METRICS.chain_id.set(chain_id);
+    report_static_config_limits(&config);
 
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
@@ -1391,6 +1392,71 @@ fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashe
         .expect("Missing genesis block in repositories");
     block_hashes.0[255] = U256::from_be_slice(genesis_block.hash().as_slice());
     block_hashes
+}
+
+/// Publishes static config limits (block seal / batch seal / RPC) as gauges so they're
+/// observable in Prometheus alongside the runtime metrics they bound. Set once at startup;
+/// values do not change at runtime.
+fn report_static_config_limits(config: &Config) {
+    // Block seal criteria.
+    let sequencer = &config.sequencer_config;
+    GENERAL_METRICS
+        .block_seal_block_time
+        .set(sequencer.block_time.as_secs_f64());
+    GENERAL_METRICS
+        .block_seal_max_transactions_in_block
+        .set(sequencer.max_transactions_in_block as u64);
+    GENERAL_METRICS
+        .block_seal_block_gas_limit
+        .set(sequencer.block_gas_limit);
+    GENERAL_METRICS
+        .block_seal_block_pubdata_limit
+        .set(sequencer.block_pubdata_limit_bytes);
+
+    // Batch seal criteria.
+    let batcher = &config.batcher_config;
+    GENERAL_METRICS
+        .batch_seal_batch_timeout
+        .set(batcher.batch_timeout.as_secs_f64());
+    GENERAL_METRICS
+        .batch_seal_tx_per_batch_limit
+        .set(batcher.tx_per_batch_limit);
+    GENERAL_METRICS
+        .batch_seal_interop_roots_per_batch_limit
+        .set(batcher.interop_roots_per_batch_limit);
+
+    // RPC request limits.
+    let rpc = &config.rpc_config;
+    GENERAL_METRICS
+        .rpc_eth_call_gas
+        .set(rpc.eth_call_gas as u64);
+    GENERAL_METRICS
+        .rpc_max_connections
+        .set(rpc.max_connections as u64);
+    GENERAL_METRICS
+        .rpc_max_request_size
+        .set((rpc.max_request_size as u64) * 1024 * 1024);
+    GENERAL_METRICS
+        .rpc_max_response_size
+        .set((rpc.max_response_size as u64) * 1024 * 1024);
+    GENERAL_METRICS
+        .rpc_max_blocks_per_filter
+        .set(rpc.max_blocks_per_filter);
+    GENERAL_METRICS
+        .rpc_max_logs_per_response
+        .set(rpc.max_logs_per_response as u64);
+    GENERAL_METRICS
+        .rpc_stale_filter_ttl
+        .set(rpc.stale_filter_ttl.as_secs_f64());
+    GENERAL_METRICS
+        .rpc_send_raw_transaction_sync_timeout
+        .set(rpc.send_raw_transaction_sync_timeout.as_secs_f64());
+    GENERAL_METRICS
+        .rpc_gas_price_scale_factor
+        .set(rpc.gas_price_scale_factor);
+    GENERAL_METRICS
+        .rpc_estimate_gas_pubdata_price_factor
+        .set(rpc.estimate_gas_pubdata_price_factor);
 }
 
 fn init_and_report_internal_config_manager(
