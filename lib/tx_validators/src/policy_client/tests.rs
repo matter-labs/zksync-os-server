@@ -1,18 +1,12 @@
 //! Unit + integration tests for `PolicyClient` / `PolicySession`.
 //!
-//! Two transports are exercised:
-//!   - **UDS** (`unix:///`) covers the bulk of the request/response
-//!     surface (allow, deny, fail-closed, bypass, serialization, timeout,
-//!     protocol-version). The transport-independent client logic all
-//!     flows through here.
-//!   - **mTLS over TCP** (`https://`) covers handshake correctness only:
-//!     pinned-CA happy path and rejection paths (server cert signed by a
-//!     CA the client doesn't trust; client cert that the server's
-//!     CA-pinned verifier rejects). Construction-level URL/TLS-pairing
-//!     checks are covered separately and don't need a server.
+//! Transport exercised: **UDS** (`unix:///`) covers the full request/response
+//! surface (allow, deny, fail-closed, bypass, serialization, timeout,
+//! protocol-version, bearer-token injection). Construction-level URL checks
+//! are covered separately and don't need a server.
 //!
-//! Real HTTP round trips in both cases (no mocked transport), so serde,
-//! timeout, and TLS code paths run end-to-end.
+//! Real HTTP round trips over UDS (no mocked transport), so serde, timeout,
+//! and bearer-token code paths run end-to-end.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -35,7 +29,7 @@ use zksync_os_interface::tracing::{
     BeginTxContext, CallModifier, EvmRequest, EvmResources, EvmTracer, TxValidator,
 };
 
-use super::{AccessType, Config, PolicyClient, PolicySession, TlsConfig, Tracer};
+use super::{AccessType, Config, PolicyClient, PolicySession, Tracer};
 
 const FROM: Address = address!("0x1111111111111111111111111111111111111111");
 const TO: Address = address!("0x2222222222222222222222222222222222222222");
@@ -58,7 +52,7 @@ fn base_config(url: String) -> Config {
         protocol_version: "1".into(),
         expected_protocol_version: None,
         bypass_from: Default::default(),
-        tls: None,
+        auth_token: None,
     }
 }
 
@@ -122,6 +116,7 @@ struct MockHandle {
     base_url: String,
     captured: Arc<Mutex<HashMap<String, Vec<Vec<u8>>>>>,
     counts: Arc<Mutex<HashMap<String, AtomicUsize>>>,
+    headers: Arc<Mutex<HashMap<String, Vec<HashMap<String, String>>>>>,
     _tmp: Option<TempDir>,
 }
 
@@ -144,6 +139,14 @@ impl MockHandle {
             .get(path)
             .and_then(|v| v.last().cloned())
     }
+    fn last_header(&self, path: &str, header: &str) -> Option<String> {
+        self.headers
+            .lock()
+            .unwrap()
+            .get(path)
+            .and_then(|v| v.last())
+            .and_then(|h| h.get(header).cloned())
+    }
 }
 
 async fn start_uds_mock(routes: MockRoutes) -> MockHandle {
@@ -152,10 +155,13 @@ async fn start_uds_mock(routes: MockRoutes) -> MockHandle {
     let listener = UnixListener::bind(&socket_path).unwrap();
     let captured: Arc<Mutex<HashMap<String, Vec<Vec<u8>>>>> = Arc::new(Mutex::new(HashMap::new()));
     let counts: Arc<Mutex<HashMap<String, AtomicUsize>>> = Arc::new(Mutex::new(HashMap::new()));
+    let headers: Arc<Mutex<HashMap<String, Vec<HashMap<String, String>>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     let routes = Arc::new(routes);
 
     let captured_clone = captured.clone();
     let counts_clone = counts.clone();
+    let headers_clone = headers.clone();
     tokio::spawn(async move {
         loop {
             let stream = match listener.accept().await {
@@ -165,6 +171,7 @@ async fn start_uds_mock(routes: MockRoutes) -> MockHandle {
             let routes = routes.clone();
             let captured = captured_clone.clone();
             let counts = counts_clone.clone();
+            let headers = headers_clone.clone();
             tokio::spawn(async move {
                 let io = TokioIo::new(stream);
                 let _ = hyper::server::conn::http1::Builder::new()
@@ -174,8 +181,18 @@ async fn start_uds_mock(routes: MockRoutes) -> MockHandle {
                             let routes = routes.clone();
                             let captured = captured.clone();
                             let counts = counts.clone();
+                            let headers = headers.clone();
                             async move {
                                 let path = req.uri().path().to_string();
+                                let hdrs: HashMap<String, String> = req
+                                    .headers()
+                                    .iter()
+                                    .filter_map(|(k, v)| {
+                                        v.to_str()
+                                            .ok()
+                                            .map(|s| (k.as_str().to_owned(), s.to_owned()))
+                                    })
+                                    .collect();
                                 let body = req.into_body().collect().await.unwrap().to_bytes();
                                 captured
                                     .lock()
@@ -189,6 +206,12 @@ async fn start_uds_mock(routes: MockRoutes) -> MockHandle {
                                     .entry(path.clone())
                                     .or_default()
                                     .fetch_add(1, Ordering::SeqCst);
+                                headers
+                                    .lock()
+                                    .unwrap()
+                                    .entry(path.clone())
+                                    .or_default()
+                                    .push(hdrs);
                                 respond(routes.by_path.get(&path).cloned()).await
                             }
                         }),
@@ -203,6 +226,7 @@ async fn start_uds_mock(routes: MockRoutes) -> MockHandle {
         base_url,
         captured,
         counts,
+        headers,
         _tmp: Some(tmp),
     }
 }
@@ -362,6 +386,28 @@ async fn admit_serializes_access_type_read() {
     assert_eq!(parsed["accessType"].as_str().unwrap(), "read");
 }
 
+#[tokio::test]
+async fn bearer_token_sent_when_configured() {
+    let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
+    let mut cfg = base_config(mock.url().into());
+    cfg.auth_token = Some("secret-token".into());
+    let client = PolicyClient::new(cfg).unwrap();
+    let _ = run_begin_tx(client.session(AccessType::Write), test_context()).await;
+    assert_eq!(
+        mock.last_header("/admit", "authorization").as_deref(),
+        Some("Bearer secret-token")
+    );
+}
+
+#[tokio::test]
+async fn no_authorization_header_when_token_unset() {
+    let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
+    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let _ = run_begin_tx(client.session(AccessType::Write), test_context()).await;
+    let auth = mock.last_header("/admit", "authorization");
+    assert!(auth.is_none(), "expected no Authorization header, got {auth:?}");
+}
+
 #[test]
 fn unsupported_scheme_rejected_at_construction() {
     assert!(PolicyClient::new(base_config("ftp://example.com".into())).is_err());
@@ -373,20 +419,13 @@ fn invalid_url_rejected_at_construction() {
 }
 
 #[test]
-fn plain_http_rejected_at_construction() {
-    assert!(PolicyClient::new(base_config("http://policy.local:9000".into())).is_err());
+fn http_url_accepted_at_construction() {
+    assert!(PolicyClient::new(base_config("http://policy.local:9000".into())).is_ok());
 }
 
 #[test]
-fn https_without_tls_rejected_at_construction() {
-    assert!(PolicyClient::new(base_config("https://policy.local:9000".into())).is_err());
-}
-
-#[test]
-fn unix_with_tls_is_accepted_at_construction() {
-    let mut cfg = base_config("unix:///tmp/policy.sock".into());
-    cfg.tls = Some(generate_test_pki());
-    PolicyClient::new(cfg).unwrap(); // tls is silently ignored for UDS
+fn https_url_accepted_at_construction() {
+    assert!(PolicyClient::new(base_config("https://policy.local:9000".into())).is_ok());
 }
 
 #[tokio::test]
@@ -833,38 +872,3 @@ async fn concurrent_sessions_dont_share_slot() {
     assert_eq!(mock.calls("/judge"), 2);
 }
 
-// ---------- mTLS handshake tests ----------
-//
-// These tests exercise the actual TLS handshake path — they're not about
-// the policy logic (covered above over UDS), only about whether the client
-// can negotiate mTLS with the server. We cover:
-//   - happy path: matched CA on both sides → admit succeeds
-//   - server cert signed by an untrusted CA → handshake fails
-//   - client cert from a CA the server doesn't trust → handshake fails
-// Construction-time URL/TLS pairing checks live in the UDS section above.
-
-fn generate_test_pki() -> TlsConfig {
-    let mut ca_params = rcgen::CertificateParams::default();
-    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-    ca_params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, "policy-test-ca");
-    let ca_key = rcgen::KeyPair::generate().unwrap();
-    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
-
-    let mut client_params =
-        rcgen::CertificateParams::new(vec!["policy-client".to_string()]).unwrap();
-    client_params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, "policy-client");
-    let client_key = rcgen::KeyPair::generate().unwrap();
-    let client_cert = client_params
-        .signed_by(&client_key, &ca_cert, &ca_key)
-        .unwrap();
-
-    TlsConfig {
-        client_cert: client_cert.pem(),
-        client_key: client_key.serialize_pem(),
-        server_ca: ca_cert.pem(),
-    }
-}
