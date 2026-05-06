@@ -661,20 +661,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .run(),
         );
 
-        if settles_on_gateway {
-            runtime.spawn_critical_task(
-                "interop roots watcher",
-                InteropWatcher::create_watcher(
-                    node_startup_state.l1_state.bridgehub_sl.clone(),
-                    config.l1_watcher_config.clone().into(),
-                    next_cursors.interop_root_id,
-                    interop_roots_subpool.clone(),
-                    node_startup_state.l1_state.l1_chain_id,
-                )
-                .await
-                .expect("failed to start L1 interop roots watcher")
-                .run(),
-            );
+        if let Some(interop_watcher) = InteropWatcher::create_watcher(
+            node_startup_state
+                .l1_state
+                .settlement_layer_intervals
+                .clone(),
+            gateway_provider.as_ref().map(|p| p.clone().erased()),
+            config.l1_watcher_config.clone().into(),
+            chain_id,
+            next_cursors.interop_root_id,
+            interop_roots_subpool.clone(),
+        )
+        .await
+        .expect("failed to start L1 interop roots watcher")
+        {
+            runtime.spawn_critical_task("interop roots watcher", interop_watcher.run());
         }
     }
 
@@ -853,6 +854,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .clone(),
             persistent_batch_storage.clone(),
         )
+        .await
         .expect("failed to start L1 batch persist watcher")
         .run(),
     );

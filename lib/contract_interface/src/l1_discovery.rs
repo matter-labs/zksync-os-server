@@ -1,6 +1,6 @@
 use crate::metrics::L1_STATE_METRICS;
 use crate::models::BatchDaInputMode;
-use crate::settlement_layer_intervals::SettlementLayerIntervals;
+use crate::settlement_layer_intervals::{IntervalSettlementLayer, SettlementLayerIntervals};
 use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256, address};
@@ -61,9 +61,11 @@ struct BatchFinality {
 impl L1State {
     /// Fetches L1 ecosystem contracts along with batch finality status as of latest block.
     ///
-    /// `gateway_provider` must be `Some` when the chain is settling on the Gateway and `None`
-    /// when settling on L1. An error is returned if the chain is found to be on the Gateway but
-    /// no provider was supplied.
+    /// `gateway_provider` must be `Some` when the chain is currently settling on the Gateway
+    /// (an error is returned if missing). It may also be passed when the chain is currently
+    /// settling on L1 but has historical Gateway intervals — in that case the Gateway diamond
+    /// proxy is resolved from it so historical batches committed on the Gateway can still be
+    /// looked up via [`SettlementLayerIntervals::resolve_proxy`].
     pub async fn fetch(
         l1_provider: DynProvider,
         gateway_provider: Option<DynProvider>,
@@ -87,7 +89,7 @@ impl L1State {
             (l1_chain_id, bridgehub_l1.clone())
         } else {
             // Settling on Gateway: require a dedicated Gateway RPC provider.
-            let gateway_provider = gateway_provider.with_context(|| {
+            let gateway_provider = gateway_provider.as_ref().with_context(|| {
                 format!(
                     "chain is settling on Gateway (settlement layer: {settlement_layer_address}) \
                      but no gateway RPC URL is configured"
@@ -98,7 +100,8 @@ impl L1State {
                 sl_chain_id != l1_chain_id,
                 "settling on Gateway but SL chain ID is identical to L1 chain ID"
             );
-            let bridgehub_sl = Bridgehub::new(L2_BRIDGEHUB_ADDRESS, gateway_provider, l2_chain_id);
+            let bridgehub_sl =
+                Bridgehub::new(L2_BRIDGEHUB_ADDRESS, gateway_provider.clone(), l2_chain_id);
             (sl_chain_id, bridgehub_sl)
         };
 
@@ -153,18 +156,38 @@ impl L1State {
         };
 
         let chain_asset_handler = bridgehub_l1.chain_asset_handler_address().await?;
-        let diamond_proxy_gw = if sl_chain_id == l1_chain_id {
-            None
-        } else {
-            Some((sl_chain_id, diamond_proxy_sl.clone()))
-        };
-        let settlement_layer_intervals = SettlementLayerIntervals::discover(
+        let intervals = SettlementLayerIntervals::discover_intervals(
             chain_asset_handler,
-            diamond_proxy_l1.clone(),
-            diamond_proxy_gw,
+            diamond_proxy_l1.provider().clone(),
             l2_chain_id,
         )
         .await?;
+
+        // Resolve the Gateway diamond proxy used to route batch lookups:
+        // - currently on Gateway: it is the active SL diamond proxy
+        // - currently on L1 with a `gateway_rpc_url` configured AND historical Gateway intervals
+        //   exist: resolve the chain's diamond proxy on that Gateway so historical batches can
+        //   still be looked up after migrating back to L1
+        // - otherwise: `None`
+        let has_historical_gateway = intervals
+            .iter()
+            .any(|i| matches!(i.settlement_layer, IntervalSettlementLayer::Gateway(_)));
+        let diamond_proxy_gw = if sl_chain_id != l1_chain_id {
+            Some((sl_chain_id, diamond_proxy_sl.clone()))
+        } else if has_historical_gateway && let Some(gateway_provider) = &gateway_provider {
+            let gw_chain_id = gateway_provider.get_chain_id().await?;
+            let bridgehub_gw =
+                Bridgehub::new(L2_BRIDGEHUB_ADDRESS, gateway_provider.clone(), l2_chain_id);
+            let historical_diamond_proxy_gw = bridgehub_gw
+                .zk_chain()
+                .await
+                .context("failed to resolve historical Gateway diamond proxy")?;
+            Some((gw_chain_id, historical_diamond_proxy_gw))
+        } else {
+            None
+        };
+        let settlement_layer_intervals =
+            SettlementLayerIntervals::new(intervals, diamond_proxy_l1.clone(), diamond_proxy_gw);
         tracing::info!(
             "discovered {} settlement layer intervals",
             settlement_layer_intervals.intervals().len()

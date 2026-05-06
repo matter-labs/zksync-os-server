@@ -1,6 +1,6 @@
 use crate::util;
 use alloy::primitives::BlockNumber;
-use alloy::providers::DynProvider;
+use alloy::providers::{DynProvider, Provider};
 use anyhow::Context;
 use futures::stream::{self, StreamExt};
 use rangemap::RangeInclusiveMap;
@@ -227,6 +227,8 @@ async fn fetch_batch(
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<DiscoveredCommittedBatch> {
+    let chain_id = diamond_proxy_sl.provider().get_chain_id().await?;
+    tracing::info!("trying to fetch batch #{batch_number} from SL at chain {chain_id}");
     let sl_block_with_commit = util::find_l1_commit_block_by_batch_number(
         diamond_proxy_sl.clone(),
         batch_number,

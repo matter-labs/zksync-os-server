@@ -66,6 +66,34 @@ pub struct SettlementLayerIntervals {
 }
 
 impl SettlementLayerIntervals {
+    /// Discovers the on-chain settlement layer intervals via
+    /// `IL1ChainAssetHandler.migrationInterval` without resolving any Gateway diamond proxy.
+    /// Useful when the caller wants to inspect the intervals before deciding whether to spend
+    /// extra RPC calls fetching the historical Gateway diamond proxy.
+    pub async fn discover_intervals(
+        chain_asset_handler: Address,
+        provider: DynProvider,
+        chain_id: u64,
+    ) -> anyhow::Result<Vec<SettlementLayerInterval>> {
+        find_settlement_layer_intervals(chain_asset_handler, provider, chain_id)
+            .await
+            .context("failed to discover settlement layer intervals")
+    }
+
+    /// Constructs from pre-discovered intervals together with the diamond proxies needed to
+    /// route batch lookups to the right RPC.
+    pub fn new(
+        intervals: Vec<SettlementLayerInterval>,
+        diamond_proxy_l1: ZkChain<DynProvider>,
+        diamond_proxy_gw: Option<(u64, ZkChain<DynProvider>)>,
+    ) -> Self {
+        Self {
+            intervals: Arc::new(intervals),
+            diamond_proxy_l1,
+            diamond_proxy_gw,
+        }
+    }
+
     /// Discovers the intervals on-chain from `IL1ChainAssetHandler.migrationInterval` and stores
     /// the diamond proxies needed to resolve future lookups.
     pub async fn discover(
@@ -74,18 +102,20 @@ impl SettlementLayerIntervals {
         diamond_proxy_gw: Option<(u64, ZkChain<DynProvider>)>,
         chain_id: u64,
     ) -> anyhow::Result<Self> {
-        let intervals = find_settlement_layer_intervals(
+        let intervals = Self::discover_intervals(
             chain_asset_handler,
             diamond_proxy_l1.provider().clone(),
             chain_id,
         )
-        .await
-        .context("failed to discover settlement layer intervals")?;
-        Ok(Self {
-            intervals: Arc::new(intervals),
-            diamond_proxy_l1,
-            diamond_proxy_gw,
-        })
+        .await?;
+        Ok(Self::new(intervals, diamond_proxy_l1, diamond_proxy_gw))
+    }
+
+    /// Returns `true` when at least one historical interval recorded a Gateway settlement.
+    pub fn has_gateway_interval(&self) -> bool {
+        self.intervals
+            .iter()
+            .any(|i| matches!(i.settlement_layer, IntervalSettlementLayer::Gateway(_)))
     }
 
     pub fn intervals(&self) -> &[SettlementLayerInterval] {
@@ -159,6 +189,7 @@ async fn find_settlement_layer_intervals(
     chain_id: u64,
 ) -> anyhow::Result<Vec<SettlementLayerInterval>> {
     let cah = IChainAssetHandler::new(chain_asset_handler, provider);
+    tracing::info!("trying to fetch SL interval from L1 chain {chain_id}");
     let total_migrations: u64 = match cah.migrationNumber(U256::from(chain_id)).call().await {
         Ok(n) => n
             .try_into()
@@ -222,6 +253,7 @@ async fn find_settlement_layer_intervals(
             first_batch: cursor,
             last_batch: Some(to_batch),
         });
+        tracing::info!("Found SL interval (L1): {:?}", intervals.last());
         cursor = to_batch + 1;
 
         if raw.isActive {
@@ -230,6 +262,7 @@ async fn find_settlement_layer_intervals(
                 first_batch: cursor,
                 last_batch: None,
             });
+            tracing::info!("Found final SL interval (GW): {:?}", intervals.last());
             on_active_gw = true;
             break;
         }
@@ -242,6 +275,7 @@ async fn find_settlement_layer_intervals(
             first_batch: cursor,
             last_batch: Some(from_batch),
         });
+        tracing::info!("Found SL interval (GW): {:?}", intervals.last());
         cursor = from_batch + 1;
     }
     if !on_active_gw {
@@ -250,6 +284,7 @@ async fn find_settlement_layer_intervals(
             first_batch: cursor,
             last_batch: None,
         });
+        tracing::info!("Found final SL interval (L1): {:?}", intervals.last());
     }
     Ok(intervals)
 }
