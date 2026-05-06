@@ -4,6 +4,7 @@ use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use crate::model::debug_formatting::BlockOutputDebug;
 use alloy::consensus::Transaction;
+use alloy::eips::Encodable2718;
 use alloy::primitives::TxHash;
 use futures::StreamExt;
 use std::pin::Pin;
@@ -384,6 +385,13 @@ pub async fn execute_block_in_vm<V: ViewState>(
     EXECUTION_METRICS
         .computational_native_used_per_block
         .observe(output.computational_native_used);
+    let tx_data_bytes: u64 = executed_txs
+        .iter()
+        .map(|tx| tx.inner.encode_2718_len() as u64)
+        .sum();
+    EXECUTION_METRICS
+        .tx_data_bytes_per_block
+        .observe(tx_data_bytes);
 
     let block_hash_output = hash_block_output(&output);
 

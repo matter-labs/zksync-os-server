@@ -110,6 +110,11 @@ pub struct ExecutionMetrics {
     #[metrics(buckets = Buckets::exponential(1_000.0..=500_000.0, 4.0))]
     pub pubdata_per_block: Histogram<u64>,
 
+    /// Sum of raw EIP-2718 envelope bytes across all transactions in the block. Approximates the
+    /// per-block contribution to wire-format `BlockReplays` payload.
+    #[metrics(buckets = Buckets::exponential(1.0..=16_777_216.0, 4.0))]
+    pub tx_data_bytes_per_block: Histogram<u64>,
+
     pub executed_transactions: Counter,
 
     #[metrics(buckets = Buckets::exponential(1.0..=1_000.0, 1.7))]

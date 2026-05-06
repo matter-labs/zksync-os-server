@@ -1,3 +1,4 @@
+use alloy::eips::Encodable2718;
 use std::collections::HashSet;
 use zk_ee::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL};
 use zksync_os_batcher_metrics::BATCHER_METRICS;
@@ -10,6 +11,7 @@ pub(crate) struct BatchInfoAccumulator {
     // Accumulated values
     pub native_cycles: u64,
     pub pubdata_bytes: u64,
+    pub tx_data_bytes: u64,
     pub l2_to_l1_logs_count: u64,
     pub block_count: u64,
     pub tx_count: u64,
@@ -43,6 +45,11 @@ impl BatchInfoAccumulator {
     pub fn add(&mut self, block_output: &BlockOutput, replay_record: &ReplayRecord) -> &Self {
         self.native_cycles += block_output.computational_native_used;
         self.pubdata_bytes += block_output.pubdata.len() as u64;
+        self.tx_data_bytes += replay_record
+            .transactions
+            .iter()
+            .map(|tx| tx.inner.encode_2718_len() as u64)
+            .sum::<u64>();
         self.l2_to_l1_logs_count += block_output
             .tx_results
             .iter()
@@ -179,5 +186,8 @@ impl BatchInfoAccumulator {
         BATCHER_METRICS
             .pubdata_per_batch
             .observe(self.pubdata_bytes);
+        BATCHER_METRICS
+            .tx_data_bytes_per_batch
+            .observe(self.tx_data_bytes);
     }
 }
