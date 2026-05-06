@@ -4,30 +4,14 @@ use alloy::rpc::json_rpc::{RequestPacket, ResponsePacket};
 use alloy::transports::{TransportError, TransportFut};
 use std::task::{Context, Poll};
 use std::time::Instant;
-use tower::{Layer, Service};
+use tower::Service;
 
 const BATCH_REQUEST_METHOD: &str = "batch_request";
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct LatencyLayer {
-    pub(super) provider: ProviderKind,
-}
-
-impl<S> Layer<S> for LatencyLayer {
-    type Service = LatencyService<S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        LatencyService {
-            inner,
-            provider: self.provider,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct LatencyService<S> {
-    inner: S,
-    provider: ProviderKind,
+    pub(super) inner: S,
+    pub(super) provider: ProviderKind,
 }
 
 impl<S> Service<RequestPacket> for LatencyService<S>

@@ -20,13 +20,13 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .expect("Failed to parse general config");
 
     let l1_provider_config = repo
-        .single::<ProviderConfig>()
+        .get::<ProviderConfig>("l1_provider")
         .expect("Failed to load L1 provider config")
         .parse()
         .expect("Failed to parse L1 provider config");
 
     let gateway_provider_config = repo
-        .single::<ProviderConfig>()
+        .get::<ProviderConfig>("gateway_provider")
         .expect("Failed to load Gateway provider config")
         .parse_opt()
         .expect("Failed to parse Gateway provider config");

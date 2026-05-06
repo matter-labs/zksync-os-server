@@ -6,35 +6,15 @@ use alloy::transports::{TransportError, TransportErrorKind, TransportFut};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::time::sleep;
-use tower::{Layer, Service};
+use tower::Service;
 use tracing::trace;
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct RetryLayer {
-    pub(super) provider: ProviderKind,
-    pub(super) max_retries: u32,
-    pub(super) backoff: Duration,
-}
-
-impl<S> Layer<S> for RetryLayer {
-    type Service = RetryService<S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        RetryService {
-            inner,
-            provider: self.provider,
-            max_retries: self.max_retries,
-            backoff: self.backoff,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(super) struct RetryService<S> {
-    inner: S,
-    provider: ProviderKind,
-    max_retries: u32,
-    backoff: Duration,
+    pub(super) inner: S,
+    pub(super) provider: ProviderKind,
+    pub(super) max_retries: u32,
+    pub(super) backoff: Duration,
 }
 
 impl<S> RetryService<S> {
