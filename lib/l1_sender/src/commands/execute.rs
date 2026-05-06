@@ -1,9 +1,9 @@
-use crate::batcher_metrics::BatchExecutionStage;
-use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::SendToL1;
 use alloy::primitives::{Address, Bytes, U256};
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
+use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
+use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 use zksync_os_contract_interface::{IExecutor, InteropRoot};
 
@@ -38,7 +38,7 @@ impl SendToL1 for ExecuteCommand {
 
     fn solidity_call(&self, gateway: bool, operator: &Address) -> Bytes {
         IExecutor::executeBatchesSharedBridgeCall::new((
-            self.batches.first().unwrap().batch.batch_info.chain_address,
+            self.batches.first().unwrap().batch.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
             U256::from(self.batches.last().unwrap().batch_number()),
             self.to_calldata_suffix(gateway, operator).into(),
@@ -83,13 +83,7 @@ impl ExecuteCommand {
         let stored_batch_infos = self
             .batches
             .iter()
-            .map(|batch| {
-                batch
-                    .batch
-                    .batch_info
-                    .clone()
-                    .into_stored(&batch.batch.protocol_version)
-            })
+            .map(|batch| batch.batch.batch_info.clone().into_stored())
             .map(|batch| IExecutor::StoredBatchInfo::from(&batch))
             .collect::<Vec<_>>();
         let priority_ops = self
@@ -100,8 +94,15 @@ impl ExecuteCommand {
             .collect::<Vec<_>>();
         let interop_roots = self.interop_roots.clone();
 
-        let encoded_data: Vec<u8> = match self.batches.first().unwrap().batch.protocol_version.minor
-        {
+        let protocol_version_minor = self
+            .batches
+            .first()
+            .unwrap()
+            .batch
+            .batch_info
+            .protocol_version
+            .minor;
+        let encoded_data: Vec<u8> = match protocol_version_minor {
             29 | 30 => (stored_batch_infos, priority_ops, interop_roots).abi_encode_params(),
             31 | 32 => {
                 let mut logs = Vec::new();
@@ -143,10 +144,7 @@ impl ExecuteCommand {
                 )
                     .abi_encode_params()
             }
-            _ => panic!(
-                "Unsupported protocol version: {}",
-                self.batches.first().unwrap().batch.protocol_version
-            ),
+            _ => panic!("Unsupported protocol version: {}", protocol_version_minor),
         };
 
         /// Current commitment encoding version as per protocol.

@@ -10,22 +10,32 @@ use backon::{ConstantBuilder, Retryable};
 use zksync_os_integration_tests::BATCH_VERIFICATION_KEYS;
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::{
-    CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, TesterBuilder, assert_traits::ReceiptAssert,
+    CURRENT_TO_L1, NEXT_TO_GATEWAY, TestEnvironment, Tester, assert_traits::ReceiptAssert,
     contracts::EventEmitter, test_multisetup,
 };
 use zksync_os_server::config::Config;
 
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-async fn batch_verification_works(builder: TesterBuilder) -> anyhow::Result<()> {
-    let builder = builder.batch_verification(1);
-    let main_node = builder.build().await?;
+async fn launch_en(
+    main_node: &Tester,
+    configure: impl FnOnce(&mut Config),
+) -> anyhow::Result<Tester> {
+    let mut config = main_node.external_node_config();
+    configure(&mut config);
+    main_node.launch_from_config(config).await
+}
 
-    let _en1 = main_node
-        .launch_external_node_overrides(|config: &mut Config| {
-            let bv_config = &mut config.batch_verification_config;
-            bv_config.client_enabled = true;
-        })
-        .await?;
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+async fn batch_verification_works(env: TestEnvironment) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    config.batch_verification_config.server_enabled = true;
+    config.batch_verification_config.threshold = 1;
+    let main_node = env.launch(config).await?;
+
+    let _en1 = launch_en(&main_node, |config: &mut Config| {
+        let bv_config = &mut config.batch_verification_config;
+        bv_config.client_enabled = true;
+    })
+    .await?;
 
     let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
         .send()
@@ -45,16 +55,17 @@ async fn batch_verification_works(builder: TesterBuilder) -> anyhow::Result<()> 
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-async fn batch_verification_without_enough_ens(builder: TesterBuilder) -> anyhow::Result<()> {
-    let builder = builder.batch_verification(2);
-    let main_node = builder.build().await?;
+async fn batch_verification_without_enough_ens(env: TestEnvironment) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    config.batch_verification_config.server_enabled = true;
+    config.batch_verification_config.threshold = 2;
+    let main_node = env.launch(config).await?;
 
-    let _en1 = main_node
-        .launch_external_node_overrides(|config: &mut Config| {
-            let bv_config = &mut config.batch_verification_config;
-            bv_config.client_enabled = true;
-        })
-        .await?;
+    let _en1 = launch_en(&main_node, |config: &mut Config| {
+        let bv_config = &mut config.batch_verification_config;
+        bv_config.client_enabled = true;
+    })
+    .await?;
 
     // Do some random transaction
     let _deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
@@ -73,17 +84,18 @@ async fn batch_verification_without_enough_ens(builder: TesterBuilder) -> anyhow
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-async fn batch_verification_with_2_ens(builder: TesterBuilder) -> anyhow::Result<()> {
-    let builder = builder.batch_verification(2);
-    let main_node = builder.build().await?;
+async fn batch_verification_with_2_ens(env: TestEnvironment) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    config.batch_verification_config.server_enabled = true;
+    config.batch_verification_config.threshold = 2;
+    let main_node = env.launch(config).await?;
 
-    let _en1 = main_node
-        .launch_external_node_overrides(|config: &mut Config| {
-            let bv_config = &mut config.batch_verification_config;
-            bv_config.client_enabled = true;
-            bv_config.signing_key = BATCH_VERIFICATION_KEYS[0].into();
-        })
-        .await?;
+    let _en1 = launch_en(&main_node, |config: &mut Config| {
+        let bv_config = &mut config.batch_verification_config;
+        bv_config.client_enabled = true;
+        bv_config.signing_key = BATCH_VERIFICATION_KEYS[0].into();
+    })
+    .await?;
 
     // First block should not get finalized because 2 EN with 2FA are needed.
     // Use a shorter timeout: if finalization hasn't happened in 20s, it won't.
@@ -92,13 +104,12 @@ async fn batch_verification_with_2_ens(builder: TesterBuilder) -> anyhow::Result
         .wait_not_finalized(1, Duration::from_secs(20))
         .await?;
 
-    let _en2 = main_node
-        .launch_external_node_overrides(|config: &mut Config| {
-            let bv_config = &mut config.batch_verification_config;
-            bv_config.client_enabled = true;
-            bv_config.signing_key = BATCH_VERIFICATION_KEYS[1].into();
-        })
-        .await?;
+    let _en2 = launch_en(&main_node, |config: &mut Config| {
+        let bv_config = &mut config.batch_verification_config;
+        bv_config.client_enabled = true;
+        bv_config.signing_key = BATCH_VERIFICATION_KEYS[1].into();
+    })
+    .await?;
 
     // Do some random transaction
     let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
@@ -119,9 +130,8 @@ async fn batch_verification_with_2_ens(builder: TesterBuilder) -> anyhow::Result
 }
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-#[test_builder(|builder| builder.enable_p2p())]
 async fn transaction_replay(main_node: Tester) -> anyhow::Result<()> {
-    let en1 = main_node.launch_external_node().await?;
+    let en1 = launch_en(&main_node, |_| {}).await?;
 
     let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
         .send()
@@ -134,7 +144,7 @@ async fn transaction_replay(main_node: Tester) -> anyhow::Result<()> {
 
     check_contract_present(&en1, contract_address).await?;
 
-    let en2 = main_node.launch_external_node().await?;
+    let en2 = launch_en(&main_node, |_| {}).await?;
 
     check_contract_present(&en2, contract_address).await?;
 
@@ -156,10 +166,9 @@ async fn transaction_replay(main_node: Tester) -> anyhow::Result<()> {
 /// It is easy to write to a channel that the EN doesn't need
 /// which leads to the EN getting stuck when the channel is full.
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_builder(|builder| builder.enable_p2p())]
 #[test_runtime(flavor = "multi_thread")]
 async fn does_not_get_stuck(main_node: Tester) -> anyhow::Result<()> {
-    let en1 = main_node.launch_external_node().await?;
+    let en1 = launch_en(&main_node, |_| {}).await?;
 
     let (send, mut recv) = tokio::sync::mpsc::channel(100);
 
@@ -215,9 +224,8 @@ async fn check_contract_present(en: &Tester, contract_address: Address) -> anyho
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-#[test_builder(|builder| builder.enable_p2p())]
 async fn forward_transactions(main_node: Tester) -> anyhow::Result<()> {
-    let en = main_node.launch_external_node().await?;
+    let en = launch_en(&main_node, |_| {}).await?;
     let alice = en.l2_wallet.default_signer().address();
 
     // Alice's initial nonce

@@ -9,7 +9,6 @@ use alloy::rpc::types::trace::geth::{
     GethDebugTracingOptions, GethTrace, TraceResult,
 };
 use alloy::rpc::types::{Bundle, StateContext, TransactionRequest};
-use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use std::ops::Range;
 use zksync_os_rpc_api::debug::DebugApiServer;
@@ -194,29 +193,28 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
     }
 }
 
-#[async_trait]
 impl<RpcStorage: ReadRpcStorage> DebugApiServer for DebugNamespace<RpcStorage> {
-    async fn raw_header(&self, _block_id: BlockId) -> RpcResult<Bytes> {
+    fn raw_header(&self, _block_id: BlockId) -> RpcResult<Bytes> {
         Err(unimplemented_rpc_err())
     }
 
-    async fn raw_block(&self, _block_id: BlockId) -> RpcResult<Bytes> {
+    fn raw_block(&self, _block_id: BlockId) -> RpcResult<Bytes> {
         Err(unimplemented_rpc_err())
     }
 
-    async fn raw_transaction(&self, _hash: TxHash) -> RpcResult<Option<Bytes>> {
+    fn raw_transaction(&self, _hash: TxHash) -> RpcResult<Option<Bytes>> {
         Err(unimplemented_rpc_err())
     }
 
-    async fn raw_transactions(&self, _block_id: BlockId) -> RpcResult<Vec<Bytes>> {
+    fn raw_transactions(&self, _block_id: BlockId) -> RpcResult<Vec<Bytes>> {
         Err(unimplemented_rpc_err())
     }
 
-    async fn raw_receipts(&self, _block_id: BlockId) -> RpcResult<Vec<Bytes>> {
+    fn raw_receipts(&self, _block_id: BlockId) -> RpcResult<Vec<Bytes>> {
         Err(unimplemented_rpc_err())
     }
 
-    async fn debug_trace_block(
+    fn debug_trace_block(
         &self,
         _rlp_block: Bytes,
         _opts: Option<GethDebugTracingOptions>,
@@ -224,7 +222,7 @@ impl<RpcStorage: ReadRpcStorage> DebugApiServer for DebugNamespace<RpcStorage> {
         Err(unimplemented_rpc_err())
     }
 
-    async fn debug_trace_block_by_hash(
+    fn debug_trace_block_by_hash(
         &self,
         block: BlockHash,
         opts: Option<GethDebugTracingOptions>,
@@ -233,7 +231,7 @@ impl<RpcStorage: ReadRpcStorage> DebugApiServer for DebugNamespace<RpcStorage> {
             .to_rpc_result()
     }
 
-    async fn debug_trace_block_by_number(
+    fn debug_trace_block_by_number(
         &self,
         block: BlockNumberOrTag,
         opts: Option<GethDebugTracingOptions>,
@@ -242,7 +240,7 @@ impl<RpcStorage: ReadRpcStorage> DebugApiServer for DebugNamespace<RpcStorage> {
             .to_rpc_result()
     }
 
-    async fn debug_trace_transaction(
+    fn debug_trace_transaction(
         &self,
         tx_hash: TxHash,
         opts: Option<GethDebugTracingOptions>,
@@ -251,7 +249,7 @@ impl<RpcStorage: ReadRpcStorage> DebugApiServer for DebugNamespace<RpcStorage> {
             .to_rpc_result()
     }
 
-    async fn debug_trace_call(
+    fn debug_trace_call(
         &self,
         request: TransactionRequest,
         block_id: Option<BlockId>,
@@ -261,7 +259,7 @@ impl<RpcStorage: ReadRpcStorage> DebugApiServer for DebugNamespace<RpcStorage> {
             .to_rpc_result()
     }
 
-    async fn debug_trace_call_many(
+    fn debug_trace_call_many(
         &self,
         _bundles: Vec<Bundle>,
         _state_context: Option<StateContext>,
@@ -270,11 +268,11 @@ impl<RpcStorage: ReadRpcStorage> DebugApiServer for DebugNamespace<RpcStorage> {
         Err(unimplemented_rpc_err())
     }
 
-    async fn debug_chain_config(&self) -> RpcResult<ChainConfig> {
+    fn debug_chain_config(&self) -> RpcResult<ChainConfig> {
         Err(unimplemented_rpc_err())
     }
 
-    async fn debug_code_by_hash(
+    fn debug_code_by_hash(
         &self,
         _hash: B256,
         _block_id: Option<BlockId>,

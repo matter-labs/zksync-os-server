@@ -13,11 +13,11 @@ categories.workspace = true
 zksync_os_types.workspace = true
 zksync_os_observability.workspace = true
 zksync_os_contract_interface.workspace = true
-zksync_os_l1_sender.workspace = true
 zksync_os_merkle_tree.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_pipeline.workspace = true
 zksync_os_batch_types.workspace = true
+zksync_os_batcher_metrics.workspace = true
 zksync_os_network.workspace = true
 
 zksync_os_interface.workspace = true

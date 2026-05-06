@@ -484,8 +484,8 @@ async fn test_interop_l2_to_l1_message_verification() -> anyhow::Result<()> {
     // 2 L2 chains + gateway.
     let multi_chain = GatewayTester::setup(2).await?;
 
-    let chain_a = multi_chain.chain_a();
-    let chain_b = multi_chain.chain_b();
+    let chain_a = multi_chain.chain(0);
+    let chain_b = multi_chain.chain(1);
     let gateway = multi_chain.gateway();
 
     let chain_a_id = chain_a.l2_provider.get_chain_id().await?;
@@ -561,8 +561,8 @@ async fn test_interop_bundle_send() -> Result<()> {
 
     let multi_chain = GatewayTester::setup(2).await?;
 
-    let chain_a = multi_chain.chain_a();
-    let chain_b = multi_chain.chain_b();
+    let chain_a = multi_chain.chain(0);
+    let chain_b = multi_chain.chain(1);
     let gateway = multi_chain.gateway();
 
     let chain_a_id = chain_a.l2_provider.get_chain_id().await?;

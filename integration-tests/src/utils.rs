@@ -3,7 +3,7 @@ use fs2::FileExt;
 use std::{
     fs::File,
     io::ErrorKind,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddrV4, UdpSocket},
 };
 use tokio::net::TcpListener;
 
@@ -17,13 +17,16 @@ impl LockedPort {
     /// Returns the unused port (same value as input, except for `0`).
     async fn check_port_is_unused(port: u16) -> anyhow::Result<u16> {
         let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-        let listener = TcpListener::bind(addr)
+        let tcp_listener = TcpListener::bind(addr)
             .await
             .with_context(|| format!("failed to bind to port={port}"))?;
-        let port = listener
+        let port = tcp_listener
             .local_addr()
             .context("failed to get local address for random port")?
             .port();
+        let udp_socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
+            .with_context(|| format!("failed to bind UDP socket to port={port}"))?;
+        drop(udp_socket);
         Ok(port)
     }
 
@@ -38,18 +41,34 @@ impl LockedPort {
     pub async fn acquire_unused() -> anyhow::Result<Self> {
         loop {
             let port = Self::pick_unused_port().await?;
-            let lockpath = std::env::temp_dir().join(format!("zksync-os-port{port}.lock"));
-            let lockfile = match File::create(lockpath) {
-                Ok(lockfile) => lockfile,
-                Err(err) if err.kind() == ErrorKind::PermissionDenied => continue,
-                Err(err) => {
-                    return Err(err)
-                        .with_context(|| format!("failed to create lockfile for port={port}"));
-                }
-            };
-            if lockfile.try_lock_exclusive().is_ok() {
-                break Ok(Self { port, lockfile });
+            if let Ok(locked_port) = Self::try_lock(port).await {
+                break Ok(locked_port);
             }
+        }
+    }
+
+    /// Acquire a specific port and lock it. Lock lasts until the returned `LockedPort` is dropped.
+    pub async fn acquire(port: u16) -> anyhow::Result<Self> {
+        Self::try_lock(port).await
+    }
+
+    async fn try_lock(port: u16) -> anyhow::Result<Self> {
+        let port = Self::check_port_is_unused(port).await?;
+        let lockpath = std::env::temp_dir().join(format!("zksync-os-port{port}.lock"));
+        let lockfile = match File::create(lockpath) {
+            Ok(lockfile) => lockfile,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                anyhow::bail!("failed to create lockfile for port={port}: permission denied");
+            }
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to create lockfile for port={port}"));
+            }
+        };
+        if lockfile.try_lock_exclusive().is_ok() {
+            Ok(Self { port, lockfile })
+        } else {
+            anyhow::bail!("failed to lock port={port}")
         }
     }
 }

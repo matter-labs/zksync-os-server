@@ -7,6 +7,7 @@ mod command_source;
 pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
+mod migration_gate;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
 pub mod prover_api;
@@ -70,7 +71,8 @@ use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
-    L1TxWatcher, L1UpgradeTxWatcher,
+    L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, MigrationFinalizedWatcher,
+    SettlementLayerWatcher,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
@@ -324,8 +326,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let zk_provider_factory = ZkProviderFactory::new(state.clone(), repositories.clone(), chain_id);
 
-    let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
-        commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider).await;
+    let (
+        last_l1_committed_block,
+        last_l1_proved_block,
+        last_l1_executed_block,
+        last_l1_finalized_executed_block,
+    ) = commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider).await;
 
     let node_startup_state = NodeStateOnStartup {
         node_role,
@@ -362,6 +368,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_committed_batch: l1_state.last_committed_batch,
         last_executed_block: last_l1_executed_block,
         last_executed_batch: l1_state.last_executed_batch,
+        last_finalized_executed_block: last_l1_finalized_executed_block,
+        last_finalized_executed_batch: l1_state.last_finalized_executed_batch,
     });
 
     // `starting_block` - the block number to go through the pipeline.
@@ -426,6 +434,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory.clone(),
+                None,
             )
             .await
         } else {
@@ -443,6 +452,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 ZksProtocolConfig::ExternalNode(ExternalNodeProtocolConfig {
                     starting_block: Arc::new(RwLock::new(starting_block)),
                     record_overrides,
+                    max_blocks_per_message: config
+                        .sequencer_config
+                        .en_max_blocks_per_replay_message,
                     replay_sender,
                     verification: config.batch_verification_config.client_enabled.then(|| {
                         ExternalNodeVerifierConfig {
@@ -454,6 +466,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory.clone(),
+                None,
             )
             .await
         }
@@ -507,6 +520,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .await
         .expect("failed to start L1 execute watcher")
+        .run(),
+    );
+
+    runtime.spawn_critical_task(
+        "l1 finalized execute watcher",
+        L1FinalizedExecuteWatcher::create_finalized_watcher(
+            config.l1_watcher_config.clone().into(),
+            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            committed_batch_provider.clone(),
+            finality_storage.clone(),
+        )
+        .await
+        .expect("failed to start finalized L1 execute watcher")
         .run(),
     );
 
@@ -574,6 +600,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         upgrade_subpool.insert(upgrade_tx).await;
     }
 
+    // Last-finalized migration counter, the sole input to `MigrationGate`'s pause decision.
+    // Always created so the gate has a stable receiver regardless of protocol version; on
+    // pre-v31 chains it stays at 0 (no migrations exist) and the gate is transparent.
+    let (last_finalized_migration_sender, last_finalized_migration_receiver) =
+        watch::channel::<u64>(0);
+
+    // Carries the trigger batch number from MigrationGate to SettlementLayerWatcher.
+    // None until MigrationGate detects the SetSLChainId batch; Some(N) after detection.
+    let (migration_triggered_sender, migration_triggered_receiver) =
+        watch::channel::<Option<u64>>(None);
+
     if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
         runtime.spawn_critical_task(
             "gateway migration watcher",
@@ -589,6 +626,38 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             )
             .await
             .expect("failed to start gateway migration watcher")
+            .run(),
+        );
+
+        // Initializes `last_finalized_migration` from the SL's `migrationNumber(chainId)` and,
+        // if the current SL interval migration has not yet finalized, spawns a watcher to track
+        // future `MigrationFinalized` events. When the migration is already finalized at startup
+        // the watcher is skipped — the seeded counter alone keeps the gate transparent.
+        let migration_finalized_watcher = MigrationFinalizedWatcher::create_watcher(
+            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            node_startup_state.l1_state.bridgehub_sl.clone(),
+            &node_startup_state.l1_state.settlement_layer_intervals,
+            chain_id,
+            node_startup_state.l1_state.l1_chain_id,
+            config.l1_watcher_config.clone().into(),
+            last_finalized_migration_sender,
+        )
+        .await
+        .expect("failed to start migration finalized watcher");
+        if let Some(watcher) = migration_finalized_watcher {
+            runtime.spawn_critical_task("migration finalized watcher", watcher.run());
+        }
+
+        // Crashes the node when getSettlementLayer() changes, forcing a restart against the
+        // new settlement layer.
+        runtime.spawn_critical_task(
+            "settlement layer watcher",
+            SettlementLayerWatcher::new(
+                node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                node_startup_state.l1_state.settlement_layer_address,
+                config.l1_watcher_config.poll_interval,
+                migration_triggered_receiver,
+            )
             .run(),
         );
 
@@ -751,6 +820,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 upgrade transaction watcher",
         L1UpgradeTxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
+            chain_id,
+            node_startup_state.l1_state.bridgehub_l1.clone(),
             node_startup_state.l1_state.diamond_proxy_l1.clone(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             bytecode_supplier_address,
@@ -778,11 +849,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 batch persist watcher",
         L1PersistBatchWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            node_startup_state
+                .l1_state
+                .settlement_layer_intervals
+                .clone(),
             persistent_batch_storage.clone(),
-            node_startup_state.l1_state.l1_chain_id,
         )
-        .await
         .expect("failed to start L1 batch persist watcher")
         .run(),
     );
@@ -888,6 +960,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             commit_submitted_tx,
             verify_request_tx,
             verify_result_rx,
+            last_finalized_migration_receiver,
+            migration_triggered_sender,
         )
         .await;
     } else {
@@ -979,6 +1053,8 @@ async fn run_main_node_pipeline(
     commit_submitted_tx: watch::Sender<u64>,
     verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
+    last_finalized_migration: watch::Receiver<u64>,
+    migration_triggered: watch::Sender<Option<u64>>,
 ) {
     let pubdata_mode = config
         .l1_sender_config
@@ -1146,6 +1222,10 @@ async fn run_main_node_pipeline(
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy_sl.clone(),
         ))
+        .pipe(migration_gate::MigrationGate {
+            last_finalized_migration,
+            migration_triggered,
+        })
         .pipe(L1Sender::<_, _, CommitCommand> {
             provider: sl_provider.clone(),
             config: config.l1_sender_config.clone().into(),
@@ -1365,7 +1445,7 @@ fn check_batch_verification_mismatch(
 async fn commit_proof_execute_block_numbers(
     l1_state: &L1State,
     committed_batch_provider: &CommittedBatchProvider,
-) -> (u64, u64, u64) {
+) -> (u64, u64, u64, u64) {
     let last_committed_block = if l1_state.last_committed_batch == 0 {
         0
     } else {
@@ -1393,7 +1473,20 @@ async fn commit_proof_execute_block_numbers(
             .expect("last_executed_batch is expected to be loaded")
             .last_block_number()
     };
-    (last_committed_block, last_proved_block, last_executed_block)
+    let last_finalized_executed_block = if l1_state.last_finalized_executed_batch == 0 {
+        0
+    } else {
+        committed_batch_provider
+            .get(l1_state.last_finalized_executed_batch)
+            .expect("last_finalized_executed_batch is expected to be loaded")
+            .last_block_number()
+    };
+    (
+        last_committed_block,
+        last_proved_block,
+        last_executed_block,
+        last_finalized_executed_block,
+    )
 }
 
 fn run_fake_snark_provers(

@@ -104,7 +104,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                     break reason;
                 }
 
-                tracing::info!(
+                tracing::debug!(
                     block_number=command.block_context.block_number,
                     "Executing transaction {:?} ({:?}) in block {} at index {} signer {:?} nonce {} with gas limit {} and cumulative gas used {cumulative_gas_used}...",
                     tx.hash(),
@@ -147,7 +147,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         EXECUTION_METRICS.transaction_pubdata_used.observe(res.pubdata_used);
                         let status_str = if res.status  {"success"} else {"failure"};
                         EXECUTION_METRICS.transaction_status[&status_str].inc();
-                        tracing::info!(
+                        tracing::debug!(
                             block_number=command.block_context.block_number,
                             output=?res,
                             "Transaction {:?} executed with status {status_str} in block {}",
@@ -404,7 +404,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         output.pubdata.len(),
     );
 
-    tracing::info!(
+    tracing::debug!(
         output = ?BlockOutputDebug(&output),
         block_number = output.header.number,
         "Full block {} output",

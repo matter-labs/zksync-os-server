@@ -82,6 +82,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     wait_for_db: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
+    metrics::register_task_monitor();
 
     let mut rpc = RpcModule::new(());
     let eth_call_handler = EthCallHandler::new(

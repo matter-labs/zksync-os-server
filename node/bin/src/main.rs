@@ -18,6 +18,10 @@ use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
+#[cfg(all(feature = "jemalloc", target_family = "unix"))]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 const IMMEDIATE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 

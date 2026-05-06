@@ -1,7 +1,8 @@
-use crate::{IChainAssetHandler, ZkChain};
+use crate::{IChainAssetHandler, ZkChain, is_method_missing};
 use alloy::primitives::{Address, U256};
 use alloy::providers::DynProvider;
 use anyhow::Context;
+use std::fmt;
 use std::sync::Arc;
 
 /// Settlement layer that a chain was committing to during a given batch range.
@@ -13,6 +14,15 @@ pub enum IntervalSettlementLayer {
     Gateway(u64),
 }
 
+impl fmt::Display for IntervalSettlementLayer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IntervalSettlementLayer::L1 => f.write_str("L1"),
+            IntervalSettlementLayer::Gateway(chain_id) => write!(f, "Gateway({chain_id})"),
+        }
+    }
+}
+
 /// Inclusive batch-number range during which the chain committed to a single settlement layer.
 ///
 /// `last_batch` is `None` for the currently-active (open-ended) interval.
@@ -21,6 +31,23 @@ pub struct SettlementLayerInterval {
     pub settlement_layer: IntervalSettlementLayer,
     pub first_batch: u64,
     pub last_batch: Option<u64>,
+}
+
+impl fmt::Display for SettlementLayerInterval {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.last_batch {
+            Some(last) => write!(
+                f,
+                "{} batches {}..={}",
+                self.settlement_layer, self.first_batch, last
+            ),
+            None => write!(
+                f,
+                "{} batches {}..",
+                self.settlement_layer, self.first_batch
+            ),
+        }
+    }
 }
 
 /// Settlement layer intervals for a chain paired with the diamond proxies needed to route batch
@@ -207,15 +234,4 @@ async fn find_settlement_layer_intervals(
         });
     }
     Ok(intervals)
-}
-
-/// Returns `true` if the error came from the contract itself (empty return data or a revert),
-/// which is how an EVM reports a call to a function selector that the deployed code does not
-/// implement. Network / transport failures return `false` so they can be propagated.
-fn is_method_missing(err: &alloy::contract::Error) -> bool {
-    match err {
-        alloy::contract::Error::ZeroData(..) => true,
-        alloy::contract::Error::TransportError(te) => te.as_error_resp().is_some(),
-        _ => false,
-    }
 }

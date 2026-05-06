@@ -1,8 +1,11 @@
 use alloy::rpc::types::Filter;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
+
+use tokio_metrics::TaskMonitor;
 use vise::{
-    Buckets, Counter, EncodeLabelSet, EncodeLabelValue, Family, Histogram, LabeledFamily, Metrics,
-    Unit,
+    Buckets, Collector, Counter, EncodeLabelSet, EncodeLabelValue, Family, Gauge, Global,
+    Histogram, LabeledFamily, Metrics, Unit,
 };
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.000001..=32.0, 2.0);
@@ -92,7 +95,7 @@ pub struct Api {
 }
 
 #[vise::register]
-pub static API_METRICS: vise::Global<Api> = vise::Global::new();
+pub static API_METRICS: Global<Api> = Global::new();
 
 /// Metrics for the transaction submission pipeline.
 #[derive(Debug, Metrics)]
@@ -109,7 +112,7 @@ pub struct TxSubmission {
 }
 
 #[vise::register]
-pub static TX_SUBMISSION: vise::Global<TxSubmission> = vise::Global::new();
+pub static TX_SUBMISSION: Global<TxSubmission> = Global::new();
 
 /// Reason why an `eth_sendRawTransaction` was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue, EncodeLabelSet)]
@@ -167,4 +170,48 @@ pub enum TxRejectionReason {
     PoolEip7702Error,
     /// Other pool error.
     PoolOther,
+}
+
+/// Single task monitor covering all RPC request futures.
+/// Tracks worker-thread scheduling lag and poll behaviour across the entire RPC surface,
+/// giving a global health signal for the tokio worker pool.
+pub static RPC_TASK_MONITOR: LazyLock<TaskMonitor> = LazyLock::new(TaskMonitor::new);
+
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "rpc_task")]
+struct RpcTaskMetrics {
+    /// Mean time a handler task waits in the scheduler queue before a worker thread picks it up.
+    /// Rising values indicate worker saturation — tasks are ready but no thread is free.
+    #[metrics(unit = Unit::Seconds)]
+    mean_scheduled_duration: Gauge<f64>,
+    /// Mean handler execution time (time actually spent on-CPU or blocked on I/O).
+    /// Together with `mean_scheduled_duration` this decomposes `api_response_time_seconds`
+    /// into queue-wait vs. actual work.
+    #[metrics(unit = Unit::Seconds)]
+    mean_poll_duration: Gauge<f64>,
+    /// Number of polls exceeding the 10µs threshold in the last sample interval.
+    slow_polls_count: Gauge<u64>,
+}
+
+#[vise::register]
+static RPC_TASK_METRICS: Collector<RpcTaskMetrics> = Collector::new();
+
+/// Registers a Prometheus collector that samples RPC task metrics on each scrape.
+///
+/// The sampling window exactly matches the scrape interval — no hardcoded sleep needed.
+pub fn register_task_monitor() {
+    let intervals = Mutex::new(RPC_TASK_MONITOR.intervals());
+
+    RPC_TASK_METRICS
+        .before_scrape(move || {
+            let metrics = intervals.lock().unwrap().next().expect("infinite iterator");
+            let m = RpcTaskMetrics::default();
+            m.mean_scheduled_duration
+                .set(metrics.mean_scheduled_duration().as_secs_f64());
+            m.mean_poll_duration
+                .set(metrics.mean_poll_duration().as_secs_f64());
+            m.slow_polls_count.set(metrics.total_slow_poll_count);
+            m
+        })
+        .ok();
 }

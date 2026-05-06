@@ -9,7 +9,8 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::time::Instant;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
+use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
+use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, test_multisetup};
 use zksync_os_server::config::RebuildBlocksConfig;
 
 const BLOCKS_TO_MINE_BEFORE_REBUILD: u64 = 10;
@@ -18,13 +19,16 @@ const TRANSACTION_SEND_INTERVAL: Duration = Duration::from_millis(5);
 
 #[test_multisetup([CURRENT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
-async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs() -> anyhow::Result<()>
-{
-    let tester = Tester::setup_with_overrides(|config| {
+async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
+    env: TestEnvironment,
+) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    {
         config.batcher_config.enabled = false;
         config.sequencer_config.block_time = Duration::from_millis(50);
-    })
-    .await?;
+    }
+    let tester = env.launch(config).await?;
+    let rpc_recorder = tester.record_l2_http_rpc(RpcRecordConfig::default());
 
     // This test empties an older block from the main sender, which makes that sender's later
     // transactions invalid because their nonces become too high. A second sender contributes the
@@ -111,15 +115,13 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs() ->
         .header
         .hash;
 
-    let restarted = tester
-        .restart_with_overrides(|config| {
-            config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
-                from_block: block_to_empty,
-                blocks_to_empty: vec![block_to_empty],
-                reset_timestamps: false,
-            });
-        })
-        .await?;
+    let mut restarted_config = tester.config().clone();
+    restarted_config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
+        from_block: block_to_empty,
+        blocks_to_empty: vec![block_to_empty],
+        reset_timestamps: false,
+    });
+    let restarted = tester.restart_with_config(restarted_config).await?;
     let rebuild_started_at = Instant::now();
 
     let rebuilt_last_block = (|| async {
@@ -210,5 +212,13 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs() ->
         second_sender_receipt.transaction_hash,
         rebuilt_last_tx.block_number,
     );
+
+    let rpc_report = rpc_recorder.stop().await;
+    rpc_report.assert_eventually_ready()?;
+    tracing::info!(
+        timeline = %rpc_report.format_detailed_timeline(),
+        "Observed HTTP RPC detailed timeline during rebuild"
+    );
+
     Ok(())
 }

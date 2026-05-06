@@ -15,7 +15,7 @@ use zksync_os_integration_tests::contracts::{
     Counter, EventEmitter, TracingPrimary, TracingSecondary,
 };
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
-use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, TesterBuilder, test_multisetup};
+use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
 use zksync_os_server::config::FeeConfig;
 
 fn check_call_frame(
@@ -191,12 +191,11 @@ async fn call_trace_transaction(tester: Tester) -> anyhow::Result<()> {
 
 #[test_multisetup([CURRENT_TO_L1])]
 async fn call_trace_transaction_reports_pubdata_exhaustion(
-    builder: TesterBuilder,
+    env: TestEnvironment,
 ) -> anyhow::Result<()> {
-    let tester = builder
-        .fee_config(pubdata_exhaustion_fee_config())
-        .build()
-        .await?;
+    let mut config = env.default_config().await?;
+    config.fee_config = pubdata_exhaustion_fee_config();
+    let tester = env.launch(config).await?;
     let counter = Counter::deploy(tester.l2_provider.clone()).await?;
 
     let receipt = counter
@@ -229,12 +228,11 @@ async fn call_trace_transaction_reports_pubdata_exhaustion(
 
 #[test_multisetup([CURRENT_TO_L1])]
 async fn call_trace_transaction_reports_pubdata_exhaustion_with_only_top_call(
-    builder: TesterBuilder,
+    env: TestEnvironment,
 ) -> anyhow::Result<()> {
-    let tester = builder
-        .fee_config(pubdata_exhaustion_fee_config())
-        .build()
-        .await?;
+    let mut config = env.default_config().await?;
+    config.fee_config = pubdata_exhaustion_fee_config();
+    let tester = env.launch(config).await?;
     let counter = Counter::deploy(tester.l2_provider.clone()).await?;
 
     let receipt = counter
@@ -273,11 +271,10 @@ async fn call_trace_transaction_reports_pubdata_exhaustion_with_only_top_call(
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
-async fn call_trace_block_reports_pubdata_exhaustion(builder: TesterBuilder) -> anyhow::Result<()> {
-    let tester = builder
-        .fee_config(pubdata_exhaustion_fee_config())
-        .build()
-        .await?;
+async fn call_trace_block_reports_pubdata_exhaustion(env: TestEnvironment) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    config.fee_config = pubdata_exhaustion_fee_config();
+    let tester = env.launch(config).await?;
     let counter = Counter::deploy(tester.l2_provider.clone()).await?;
 
     let receipt = counter

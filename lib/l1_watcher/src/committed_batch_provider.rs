@@ -80,6 +80,7 @@ impl CommittedBatchProvider {
             l1_state.last_committed_batch,
             l1_state.last_proved_batch,
             l1_state.last_executed_batch,
+            l1_state.last_finalized_executed_batch,
         );
         provider
             .load_batch_numbers(max_l1_blocks_to_scan, prioritized_batch_numbers)
@@ -89,12 +90,14 @@ impl CommittedBatchProvider {
         let last_committed = l1_state.last_committed_batch;
         let last_proved = l1_state.last_proved_batch;
         let last_executed = l1_state.last_executed_batch;
+        let last_finalized_executed = l1_state.last_finalized_executed_batch;
         runtime.spawn_critical_task("committed batch provider init", async move {
             provider_for_init
                 .init(
                     last_committed,
                     last_proved,
                     last_executed,
+                    last_finalized_executed,
                     max_l1_blocks_to_scan,
                 )
                 .await
@@ -110,10 +113,15 @@ impl CommittedBatchProvider {
         last_committed_batch: u64,
         last_proved_batch: u64,
         last_executed_batch: u64,
+        last_finalized_executed_batch: u64,
         max_l1_blocks_to_scan: u64,
     ) -> anyhow::Result<()> {
-        let (_, remaining_batch_numbers) =
-            startup_batch_numbers(last_committed_batch, last_proved_batch, last_executed_batch);
+        let (_, remaining_batch_numbers) = startup_batch_numbers(
+            last_committed_batch,
+            last_proved_batch,
+            last_executed_batch,
+            last_finalized_executed_batch,
+        );
         self.load_batch_numbers(max_l1_blocks_to_scan, remaining_batch_numbers)
             .await?;
         Ok(())
@@ -192,18 +200,23 @@ impl Inner {
 
 /// Returns startup frontier batches first, then the remaining committed startup range.
 ///
-/// The prioritized vector preserves the bookkeeping order most likely to unblock startup:
-/// committed, proved, then executed.
+/// The prioritized vector contains every batch needed for immediate startup bookkeeping:
+/// committed, proved, operational executed, and finalized executed.
 fn startup_batch_numbers(
     last_committed_batch: u64,
     last_proved_batch: u64,
     last_executed_batch: u64,
+    last_finalized_executed_batch: u64,
 ) -> (Vec<u64>, Vec<u64>) {
-    let prioritized = [last_committed_batch, last_proved_batch, last_executed_batch];
+    let prioritized = [
+        last_committed_batch,
+        last_proved_batch,
+        last_executed_batch,
+        last_finalized_executed_batch,
+    ];
     let (prioritized_in_range, remaining_batch_numbers): (Vec<_>, Vec<_>) =
-        (last_executed_batch.max(1)..=last_committed_batch)
+        (last_finalized_executed_batch.max(1)..=last_committed_batch)
             .partition(|batch_number| prioritized.contains(batch_number));
-
     (prioritized_in_range, remaining_batch_numbers)
 }
 
@@ -231,14 +244,14 @@ mod tests {
 
     #[test]
     fn prioritizes_frontier_batches_once() {
-        assert_eq!(startup_batch_numbers(10, 8, 8), (vec![8, 10], vec![9]));
+        assert_eq!(startup_batch_numbers(10, 8, 8, 8), (vec![8, 10], vec![9]));
     }
 
     #[test]
     fn excludes_prioritized_batches_from_remaining_range() {
         assert_eq!(
-            startup_batch_numbers(10, 8, 6),
-            (vec![6, 8, 10], vec![7, 9])
+            startup_batch_numbers(10, 8, 6, 4),
+            (vec![4, 6, 8, 10], vec![5, 7, 9])
         );
     }
 }

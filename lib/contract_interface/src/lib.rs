@@ -94,7 +94,7 @@ alloy::sol! {
 
         function addInteropRootsInBatch(InteropRoot[] calldata interopRootsInput);
 
-        uint256 public totalPublishedInteropRoots;
+        uint256 public interopRootLogId;
 
         function getChainTree(uint256 chainId) public view returns (Bytes32PushTree);
 
@@ -183,6 +183,12 @@ alloy::sol! {
         }
 
         function migrationNumber(uint256 _chainId) external view returns (uint256);
+        event MigrationFinalized(
+            uint256 indexed chainId,
+            uint256 migrationNumber,
+            bytes32 indexed assetId,
+            address indexed zkChain
+        );
         function migrationInterval(
             uint256 _chainId,
             uint256 _migrationNumber
@@ -242,6 +248,28 @@ alloy::sol! {
 
         /// Address of the L1 bytecodes supplier used for upgrades (v31+).
         function L1_BYTECODES_SUPPLIER() external view returns (address);
+
+        /// The block number on the CTM's chain where `setUpgradeDiamondCutInner` ran for the
+        /// given (old) protocol version. Non-zero means this CTM owns the upgrade cut data for
+        /// that version. Populated starting with the V31 ChainTypeManager.
+        function upgradeCutDataBlock(uint256 protocolVersion) external view returns (uint256);
+    }
+
+    // `SettlementLayerV31UpgradeBase.sol` — the per-chain upgrade init contract.
+    // `NewUpgradeCutData` carries a placeholder `additionalForceDeploymentsData`
+    // that `upgradeChainFromVersion` rewrites per-chain inside the delegatecall
+    // via `getL2UpgradeTxData(bridgehub, chainId, existingTxData)`. The server
+    // must call this before executing the L2 upgrade tx — otherwise the
+    // placeholder's empty `additionalForceDeploymentsData` would revert inside
+    // `performForceDeployedContractsInit`.
+    #[sol(rpc)]
+    interface ISettlementLayerV31Upgrade {
+        function getL2UpgradeTxData(
+            address _bridgehub,
+            uint256 _chainId,
+            bool _zksyncOS,
+            bytes memory _existingTxData
+        ) external view returns (bytes memory);
     }
 
     // `IZKChain.sol`
@@ -470,14 +498,14 @@ impl<P: Provider> MessageRoot<P> {
         self.instance.provider()
     }
 
-    pub async fn total_published_interop_roots(&self, block_id: BlockId) -> Result<u64> {
+    pub async fn interop_root_log_id(&self, block_id: BlockId) -> Result<u64> {
         self.instance
-            .totalPublishedInteropRoots()
+            .interopRootLogId()
             .block(block_id)
             .call()
             .await
             .map(|n| n.saturating_to())
-            .enrich("totalPublishedInteropRoots", Some(block_id))
+            .enrich("interopRootLogId", Some(block_id))
     }
 
     pub async fn code_exists_at_block(&self, block_id: BlockId) -> alloy::contract::Result<bool> {
@@ -913,6 +941,17 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .enrich("serverNotifierAddress", None)
+    }
+}
+
+/// Returns `true` if the error came from the contract itself (empty return data or a revert),
+/// which is how an EVM reports a call to a function selector that the deployed code does not
+/// implement. Network / transport failures return `false` so they can be propagated.
+pub fn is_method_missing(err: &alloy::contract::Error) -> bool {
+    match err {
+        alloy::contract::Error::ZeroData(..) => true,
+        alloy::contract::Error::TransportError(te) => te.as_error_resp().is_some(),
+        _ => false,
     }
 }
 

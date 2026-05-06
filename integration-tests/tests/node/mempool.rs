@@ -8,9 +8,7 @@ use futures::FutureExt;
 use std::time::Duration;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
-use zksync_os_integration_tests::{
-    CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, TesterBuilder, test_multisetup,
-};
+use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, TestEnvironment, Tester, test_multisetup};
 use zksync_os_server::config::FeeConfig;
 
 #[test_multisetup([CURRENT_TO_L1])]
@@ -120,7 +118,7 @@ async fn sensitive_to_balance_changes(mut tester: Tester) -> anyhow::Result<()> 
 /// (check on); on V6 this also exercises the `basefee > max_fee_per_gas` short-circuit in
 /// the validator that lets such txs into the pool instead of rejecting at ingress.
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-async fn low_fee_tx_does_not_hang_block_executor(builder: TesterBuilder) -> anyhow::Result<()> {
+async fn low_fee_tx_does_not_hang_block_executor(env: TestEnvironment) -> anyhow::Result<()> {
     // Use a deterministic base fee so the "low fee" value is unambiguous.
     let known_base_fee: u128 = 100_000_000; // 100M wei = 0.1 gwei
     let fee_config = FeeConfig {
@@ -131,11 +129,10 @@ async fn low_fee_tx_does_not_hang_block_executor(builder: TesterBuilder) -> anyh
         native_price_override: Some(U128::from(1_000_000u64)),
         pubdata_price_cap: None,
     };
-    let mut tester = builder
-        .fee_config(fee_config)
-        .block_time(Duration::from_millis(500))
-        .build()
-        .await?;
+    let mut config = env.default_config().await?;
+    config.fee_config = fee_config.clone();
+    config.sequencer_config.block_time = Duration::from_millis(500);
+    let mut tester = env.launch(config).await?;
 
     let alice = tester.l2_wallet.default_signer().address();
     let chain_id = tester.l2_provider.get_chain_id().await?;
@@ -251,11 +248,10 @@ fn intrinsic_native_test_fee_config() -> FeeConfig {
 /// Negative case: on V6, a tx whose `gas_limit` covers the EVM intrinsic gas (100_000) but not
 /// the V6 intrinsic native cost is rejected at mempool ingress with `intrinsic gas too low`.
 #[test_multisetup([NEXT_TO_GATEWAY])]
-async fn intrinsic_native_check_rejects_underpaid_tx(builder: TesterBuilder) -> anyhow::Result<()> {
-    let tester = builder
-        .fee_config(intrinsic_native_test_fee_config())
-        .build()
-        .await?;
+async fn intrinsic_native_check_rejects_underpaid_tx(env: TestEnvironment) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    config.fee_config = intrinsic_native_test_fee_config();
+    let mut tester = env.launch(config).await?;
     let alice = tester.l2_wallet.default_signer().address();
     let chain_id = tester.l2_provider.get_chain_id().await?;
     let nonce = tester.l2_provider.get_transaction_count(alice).await?;
@@ -289,12 +285,11 @@ async fn intrinsic_native_check_rejects_underpaid_tx(builder: TesterBuilder) -> 
 /// the new validator and is mined successfully.
 #[test_multisetup([NEXT_TO_GATEWAY])]
 async fn intrinsic_native_check_accepts_well_funded_tx(
-    builder: TesterBuilder,
+    env: TestEnvironment,
 ) -> anyhow::Result<()> {
-    let tester = builder
-        .fee_config(intrinsic_native_test_fee_config())
-        .build()
-        .await?;
+    let mut config = env.default_config().await?;
+    config.fee_config = intrinsic_native_test_fee_config();
+    let mut tester = env.launch(config).await?;
     let alice = tester.l2_wallet.default_signer().address();
     let chain_id = tester.l2_provider.get_chain_id().await?;
     let nonce = tester.l2_provider.get_transaction_count(alice).await?;
@@ -326,11 +321,10 @@ async fn intrinsic_native_check_accepts_well_funded_tx(
 /// Gating: on V5 the V6 intrinsic-native check is bypassed. The same low-gas tx that the
 /// negative test rejects on V6 must be accepted at mempool ingress here.
 #[test_multisetup([CURRENT_TO_L1])]
-async fn intrinsic_native_check_disabled_pre_v6(builder: TesterBuilder) -> anyhow::Result<()> {
-    let tester = builder
-        .fee_config(intrinsic_native_test_fee_config())
-        .build()
-        .await?;
+async fn intrinsic_native_check_disabled_pre_v6(env: TestEnvironment) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    config.fee_config = intrinsic_native_test_fee_config();
+    let mut tester = env.launch(config).await?;
     let alice = tester.l2_wallet.default_signer().address();
     let chain_id = tester.l2_provider.get_chain_id().await?;
     let nonce = tester.l2_provider.get_transaction_count(alice).await?;

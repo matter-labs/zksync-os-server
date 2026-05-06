@@ -287,7 +287,7 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         }))
     }
 
-    async fn get_block_metadata_by_number_impl(
+    fn get_block_metadata_by_number_impl(
         &self,
         block_number: u64,
     ) -> ZksResult<Option<BlockMetadata>> {
@@ -309,7 +309,7 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         }))
     }
 
-    async fn get_proof_impl(
+    fn get_proof_impl(
         &self,
         address: Address,
         keys: &[B256],
@@ -419,11 +419,11 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
 
 #[async_trait]
 impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
-    async fn get_bridgehub_contract(&self) -> RpcResult<Address> {
+    fn get_bridgehub_contract(&self) -> RpcResult<Address> {
         Ok(self.bridgehub_address)
     }
 
-    async fn get_bytecode_supplier_contract(&self) -> RpcResult<Address> {
+    fn get_bytecode_supplier_contract(&self) -> RpcResult<Address> {
         Ok(self.bytecode_supplier_address)
     }
 
@@ -446,23 +446,18 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
             .to_rpc_result()
     }
 
-    async fn get_block_metadata_by_number(
-        &self,
-        block_number: u64,
-    ) -> RpcResult<Option<BlockMetadata>> {
+    fn get_block_metadata_by_number(&self, block_number: u64) -> RpcResult<Option<BlockMetadata>> {
         self.get_block_metadata_by_number_impl(block_number)
-            .await
             .to_rpc_result()
     }
 
-    async fn get_proof(
+    fn get_proof(
         &self,
         account: Address,
         keys: Vec<B256>,
         batch_number: u64,
     ) -> RpcResult<Option<BatchStorageProof>> {
         self.get_proof_impl(account, &keys, batch_number)
-            .await
             .to_rpc_result()
     }
 }

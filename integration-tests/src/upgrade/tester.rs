@@ -31,8 +31,8 @@ use zksync_os_types::{
 /// Tester assumes that governance is an EOA account, and uses impersonation
 /// to execute the upgrade with it.
 #[derive(Debug)]
-pub struct UpgradeTester {
-    pub tester: Tester,
+pub struct UpgradeTester<'a> {
+    pub tester: &'a Tester,
     // Bridgehub contract on L1
     pub bridgehub_l1: zksync_os_contract_interface::Bridgehub<DynProvider>,
     // Bridgehub contract on SL
@@ -61,9 +61,9 @@ pub struct UpgradeTester {
     pub settles_to_gateway: bool,
 }
 
-impl UpgradeTester {
+impl<'a> UpgradeTester<'a> {
     /// Prepares tester for the default upgrade scenario.
-    pub async fn for_default_upgrade(tester: Tester) -> anyhow::Result<Self> {
+    pub async fn for_default_upgrade(tester: &'a Tester) -> anyhow::Result<Self> {
         let upgrade_tester = Self::fetch(tester).await?;
         upgrade_tester.enable_impersonation().await?;
         upgrade_tester.wait_for_genesis_upgrade().await?;
@@ -174,7 +174,7 @@ impl UpgradeTester {
     }
 
     // Fetch the contracts configuration from the tester.
-    async fn fetch(tester: Tester) -> anyhow::Result<Self> {
+    async fn fetch(tester: &'a Tester) -> anyhow::Result<Self> {
         let chain_config: Config = load_chain_config(tester.chain_layout).await;
         let chain_id = chain_config
             .genesis_config

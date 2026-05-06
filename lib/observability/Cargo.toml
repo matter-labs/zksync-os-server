@@ -39,4 +39,5 @@ opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
 opentelemetry-otlp = { workspace = true }
 opentelemetry-appender-tracing.workspace = true
 
+tokio-metrics.workspace = true
 reth-tasks.workspace = true

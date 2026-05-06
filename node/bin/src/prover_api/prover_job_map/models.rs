@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
-use zksync_os_l1_sender::batcher_model::SignedBatchEnvelope;
+use zksync_os_batch_types::batcher_model::SignedBatchEnvelope;
 use zksync_os_types::ProvingVersion;
 
 #[derive(Debug)]

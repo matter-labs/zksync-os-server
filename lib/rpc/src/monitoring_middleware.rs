@@ -1,4 +1,4 @@
-use crate::metrics::API_METRICS;
+use crate::metrics::{API_METRICS, RPC_TASK_MONITOR};
 use crate::result::internal_rpc_err;
 use futures::FutureExt as _;
 use jsonrpsee::core::middleware::{Batch, BatchEntry, Notification};
@@ -170,7 +170,7 @@ impl RpcServiceT for Monitoring {
 
         async move {
             let id = request.id.clone().into_owned();
-            let handler = async move { inner.call(request).await };
+            let handler = RPC_TASK_MONITOR.instrument(async move { inner.call(request).await });
             let on_panic = || MethodResponse::error(id, internal_rpc_err("Internal error"));
             CallGuard::new(CallKind::Call, method, request_size)
                 .handle_result(handler, on_panic)

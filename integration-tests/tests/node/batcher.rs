@@ -6,7 +6,7 @@ use std::time::Duration;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert};
 use zksync_os_integration_tests::provider::{ZksyncApi, ZksyncTestingProvider};
-use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
+use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
 
 const TRANSACTIONS_TO_SEND_BEFORE_RESTART: usize = 5;
 
@@ -29,17 +29,18 @@ async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
 ///   1. Start with `batcher.enabled = false` — blocks execute and are stored locally but
 ///      nothing is batched or submitted to L1.
 ///   2. Mine several blocks and confirm that L1 commitment count did not move.
-///   3. Restart in normal mode (batcher + fake provers enabled by default).
+///   3. Restart with overrides that re-enable the batcher.
 ///   4. Wait for the last pre-restart block to be finalized (= executed on L1), proving the
 ///      node settled all pending blocks after re-enabling the batcher.
 #[test_multisetup([CURRENT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
-async fn uncommitted_blocks_are_settled_after_batcher_reenabled() -> anyhow::Result<()> {
-    let tester = Tester::setup_with_overrides(|config| {
-        config.batcher_config.enabled = false;
-        config.sequencer_config.block_time = Duration::from_millis(50);
-    })
-    .await?;
+async fn uncommitted_blocks_are_settled_after_batcher_reenabled(
+    env: TestEnvironment,
+) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    config.batcher_config.enabled = false;
+    config.sequencer_config.block_time = Duration::from_millis(50);
+    let tester = env.launch(config).await?;
 
     let initial_committed = fetch_l1_state(&tester).await?.last_committed_batch;
 
@@ -65,9 +66,10 @@ async fn uncommitted_blocks_are_settled_after_batcher_reenabled() -> anyhow::Res
         "no new batches should be committed while the batcher is disabled"
     );
 
-    // Restart in normal mode. Batcher is enabled by default; fake provers are enabled by
-    // default in the test harness (enable_prover = false → fake_*_provers.enabled = true).
-    let restarted = tester.restart().await?;
+    // Plain restart preserves config, so explicitly re-enable the batcher on restart.
+    let mut restarted_config = tester.config().clone();
+    restarted_config.batcher_config.enabled = true;
+    let restarted = tester.restart_with_config(restarted_config).await?;
 
     // The restarted node must pick up all pending uncommitted blocks and settle them on L1.
     // Wait until the last pre-restart block is finalized (= executed on L1).
