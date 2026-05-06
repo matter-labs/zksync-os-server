@@ -8,7 +8,9 @@ use futures::FutureExt;
 use std::time::Duration;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
-use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, TestEnvironment, Tester, test_multisetup};
+use zksync_os_integration_tests::{
+    CURRENT_TO_L1, NEXT_TO_GATEWAY, TestEnvironment, Tester, test_multisetup,
+};
 use zksync_os_server::config::FeeConfig;
 
 #[test_multisetup([CURRENT_TO_L1])]
@@ -284,9 +286,7 @@ async fn intrinsic_native_check_rejects_underpaid_tx(env: TestEnvironment) -> an
 /// Positive case: on V6, a tx with enough gas_limit to cover the intrinsic native cost passes
 /// the new validator and is mined successfully.
 #[test_multisetup([NEXT_TO_GATEWAY])]
-async fn intrinsic_native_check_accepts_well_funded_tx(
-    env: TestEnvironment,
-) -> anyhow::Result<()> {
+async fn intrinsic_native_check_accepts_well_funded_tx(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
     config.fee_config = intrinsic_native_test_fee_config();
     let mut tester = env.launch(config).await?;
