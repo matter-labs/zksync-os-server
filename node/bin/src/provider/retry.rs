@@ -7,8 +7,8 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::time::sleep;
 use tower::Service;
-use tracing::trace;
 
+/// Retry RPC requests & track retry count metric
 #[derive(Debug, Clone)]
 pub(super) struct RetryService<S> {
     pub(super) inner: S,
@@ -93,7 +93,6 @@ where
                         )));
                     }
                     METRICS[&provider].retry_count.inc();
-                    trace!(%err, "retrying request");
 
                     sleep(Self::backoff_hint(&err).unwrap_or(backoff)).await;
                 } else {

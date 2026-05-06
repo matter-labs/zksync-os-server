@@ -8,6 +8,7 @@ use tower::Service;
 
 const BATCH_REQUEST_METHOD: &str = "batch_request";
 
+/// Measures end to end request latency
 #[derive(Debug, Clone)]
 pub(super) struct LatencyService<S> {
     pub(super) inner: S,
