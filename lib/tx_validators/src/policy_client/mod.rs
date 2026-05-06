@@ -39,8 +39,7 @@ pub enum AccessType {
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// `https://host:port` (mTLS required) or `unix:///path/to.sock`.
-    /// Plain `http://` is rejected at construction.
+    /// `http://host:port`, `https://host:port`, or `unix:///path/to.sock`.
     pub url: String,
     pub request_timeout: Duration,
     pub protocol_version: String,
@@ -51,20 +50,10 @@ pub struct Config {
     /// protocol-internal senders (bootloader, force-deployer) the chain
     /// cannot let an external service refuse without bricking startup.
     pub bypass_from: HashSet<Address>,
-    /// mTLS material. Required for `https://`; silently ignored for `unix:///`.
-    pub tls: Option<TlsConfig>,
-}
-
-/// Inline PEM material validated once at [`PolicyClient::new`] so a
-/// misconfiguration fails fast at startup.
-#[derive(Clone, Debug)]
-pub struct TlsConfig {
-    /// PEM-encoded client cert chain, leaf first.
-    pub client_cert: String,
-    /// PEM-encoded private key (PKCS#8 or RSA) matching `client_cert`.
-    pub client_key: String,
-    /// PEM-encoded CA bundle the client trusts. System roots are not loaded.
-    pub server_ca: String,
+    /// Bearer token sent as `Authorization: Bearer <token>` on every request.
+    /// Set for TCP transports; leave `None` when using `unix://` on a
+    /// network-isolated host where the socket path is the access control.
+    pub auth_token: Option<String>,
 }
 
 
@@ -86,19 +75,20 @@ impl PolicyClient {
         let parsed = url::Url::parse(&config.url)
             .map_err(|e| anyhow::anyhow!("invalid policy service URL: {e}"))?;
         let transport_config = match parsed.scheme() {
-            "https" => TransportConfig::Https {
+            "http" | "https" => TransportConfig::Http {
                 url: parsed,
-                tls: config
-                    .tls
-                    .ok_or_else(|| anyhow::anyhow!("TLS config required for https://"))?,
+                auth_token: config.auth_token.clone(),
             },
             "unix" => TransportConfig::Unix {
                 socket_path: std::path::PathBuf::from(parsed.path()),
+                auth_token: config.auth_token.clone(),
             },
-            other => anyhow::bail!("unsupported URL scheme `{other}` (expected `https` or `unix`)"),
+            other => anyhow::bail!(
+                "unsupported URL scheme `{other}` (expected `http`, `https`, or `unix`)"
+            ),
         };
         let transport = Transport::from_config(transport_config)
-            .map_err(|e| anyhow::anyhow!("failed to build TLS transport: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("failed to build transport: {e}"))?;
         Ok(Self(Arc::new(PolicyClientInner {
             transport,
             request_timeout: config.request_timeout,
@@ -282,7 +272,6 @@ impl TxValidator for PolicySession {
 fn classify_error(err: &TransportError) -> ErrorReason {
     match err {
         TransportError::Timeout(_) => ErrorReason::Timeout,
-        TransportError::TlsConfig(_) => ErrorReason::Connect,
         TransportError::NonSuccessStatus(_) => ErrorReason::Status,
         TransportError::Request(e) => {
             if e.is_connect() {

@@ -884,9 +884,9 @@ pub struct DeploymentFilterConfig {
 /// service).
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
-#[config(validate(Self::check_url, "URL must use scheme `https` or `unix`; `https` requires a `tls` block"))]
+#[config(validate(Self::check_url, "URL must use scheme `http`, `https`, or `unix`"))]
 pub struct PolicyServiceConfig {
-    /// `https://host:port` (mTLS) or `unix:///path/to/socket` (kernel perms).
+    /// `http://host:port`, `https://host:port`, or `unix:///path/to/socket`.
     #[config(with = Serde![str])]
     pub url: Option<url::Url>,
 
@@ -911,21 +911,11 @@ pub struct PolicyServiceConfig {
     ])]
     pub bypass_from: Vec<Address>,
 
-    /// mTLS material. Required when `url` is `https://`; silently ignored
-    /// when `url` is `unix:///` (kernel permissions govern access instead).
-    #[config(nest)]
-    pub tls: Option<PolicyServiceTlsConfig>,
-}
-
-/// Inline PEM material for mTLS with the policy service.
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-pub struct PolicyServiceTlsConfig {
-    /// Client cert chain (PEM, leaf first).
-    pub client_cert: String,
-    /// Private key (PEM, PKCS#8 or RSA) matching `client_cert`.
-    pub client_key: SecretString,
-    /// CA bundle (PEM) the client trusts. System roots are not loaded.
-    pub server_ca: String,
+    /// Bearer token sent as `Authorization: Bearer <token>` on every request.
+    /// Set for TCP transports; leave `None` when using `unix://` on a
+    /// network-isolated host where the socket path is the access control.
+    #[config(secret)]
+    pub auth_token: Option<SecretString>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1727,17 +1717,10 @@ impl PolicyServiceConfig {
     fn check_url(&self) -> Result<(), ErrorWithOrigin> {
         let Some(url) = &self.url else { return Ok(()) };
         match url.scheme() {
-            "https" => {
-                if self.tls.is_none() {
-                    return Err(ErrorWithOrigin::custom(
-                        "`tls` block is required when `url` is `https://`",
-                    ));
-                }
-            }
-            "unix" => {}
+            "http" | "https" | "unix" => {}
             other => {
                 return Err(ErrorWithOrigin::custom(format!(
-                    "unsupported URL scheme `{other}`; expected `https` or `unix`"
+                    "unsupported URL scheme `{other}`; expected `http`, `https`, or `unix`"
                 )));
             }
         }
@@ -1755,21 +1738,14 @@ impl PolicyServiceConfig {
                     protocol_version: self.protocol_version.clone(),
                     expected_protocol_version: self.expected_protocol_version.clone(),
                     bypass_from: self.bypass_from.iter().copied().collect(),
-                    tls: self.tls.clone().map(Into::into),
+                    auth_token: self
+                        .auth_token
+                        .as_ref()
+                        .map(|s| s.expose_secret().to_owned()),
                 },
             )
             .expect("failed to build PolicyClient from `policy_service`")
         })
-    }
-}
-
-impl From<PolicyServiceTlsConfig> for zksync_os_tx_validators::policy_client::TlsConfig {
-    fn from(c: PolicyServiceTlsConfig) -> Self {
-        Self {
-            client_cert: c.client_cert,
-            client_key: c.client_key.expose_secret().to_owned(),
-            server_ca: c.server_ca,
-        }
     }
 }
 
@@ -2341,40 +2317,20 @@ mod tests {
     }
 
     #[test]
-    fn policy_service_rejects_plain_http_url() {
-        let err = parse_policy_service_config([("POLICY_SERVICE_URL", "http://policy.local:9000")])
+    fn policy_service_accepts_http_url() {
+        let result =
+            parse_policy_service_config([("POLICY_SERVICE_URL", "http://policy.local:9000")]);
+        assert!(result.is_ok(), "http URL should be accepted, got: {:?}", result.unwrap_err());
+    }
+
+    #[test]
+    fn policy_service_rejects_unsupported_scheme() {
+        let err = parse_policy_service_config([("POLICY_SERVICE_URL", "ftp://policy.local:9000")])
             .unwrap_err()
             .to_string();
         assert!(
             err.contains("unsupported URL scheme"),
             "expected scheme rejection, got: {err}"
-        );
-    }
-
-    #[test]
-    fn policy_service_https_requires_tls_material() {
-        let err =
-            parse_policy_service_config([("POLICY_SERVICE_URL", "https://policy.local:9000")])
-                .unwrap_err()
-                .to_string();
-        assert!(
-            err.contains("`tls` block is required when `url` is `https://`"),
-            "expected TLS-required error, got: {err}"
-        );
-    }
-
-    #[test]
-    fn policy_service_unix_with_tls_is_accepted() {
-        let result = parse_policy_service_config([
-            ("POLICY_SERVICE_URL", "unix:///tmp/policy.sock"),
-            ("POLICY_SERVICE_TLS_CLIENT_CERT", "/dev/null"),
-            ("POLICY_SERVICE_TLS_CLIENT_KEY", "/dev/null"),
-            ("POLICY_SERVICE_TLS_SERVER_CA", "/dev/null"),
-        ]);
-        assert!(
-            result.is_ok(),
-            "unix + tls should be accepted, got: {:?}",
-            result.unwrap_err()
         );
     }
 }
