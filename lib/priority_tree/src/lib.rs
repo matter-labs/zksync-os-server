@@ -14,7 +14,7 @@ use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, SendAndRecordExt};
+use zksync_os_pipeline::{HasBlockRangeEnd, PeekableReceiver, SendAndRecordExt};
 use zksync_os_storage_api::{ReadFinality, ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
 
@@ -141,13 +141,14 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
             main_node_channels.unzip();
         let mut last_processed_batch = self.last_executed_batch_on_init;
 
-        async fn take_n<T: Send + 'static>(
+        async fn take_n<T: HasBlockRangeEnd>(
             receiver: &mut PeekableReceiver<T>,
             n: usize,
+            state_reporter: &ComponentStateReporter,
         ) -> anyhow::Result<Option<Vec<T>>> {
             let mut out = Vec::default();
             while out.len() < n {
-                match receiver.recv().await {
+                match receiver.recv_and_record_picked(state_reporter).await {
                     Some(v) => out.push(v),
                     None => return Ok(None),
                 }
@@ -163,7 +164,7 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                     //             aggregation seal criteria yet.
                     //             Addressing this includes reworking L1SenderCommand::Passthrough logic -
                     //             Aggregation is only possible AFTER the last_executed_batch_on_init.
-                    let Some(mut envelopes) = take_n(r, 1).await? else {
+                    let Some(mut envelopes) = take_n(r, 1, &state_reporter).await? else {
                         tracing::info!("inbound channel closed");
                         return Ok(());
                     };
@@ -172,15 +173,6 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                         tracing::info!(
                             batch_number = envelope.batch_number(),
                             "Passing through batch that was already executed"
-                        );
-                        let passthrough_last_block = envelope.batch.last_block_number;
-                        let passthrough_last_ts =
-                            Some(envelope.batch.batch_info.last_block_timestamp);
-                        let passthrough_batch_num = envelope.batch_number();
-                        state_reporter.record_picked(
-                            passthrough_last_block,
-                            passthrough_last_ts,
-                            Some(passthrough_batch_num),
                         );
                         if let Some(sender) = &execute_batches_sender {
                             sender.send_and_record(
@@ -222,6 +214,8 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                         .wait_for_batch(next_batch_number)
                         .await
                         .block_range;
+                    let last_block = *range.end();
+                    state_reporter.record_picked(last_block, None, Some(next_batch_number));
                     let ranges = vec![(next_batch_number, range)];
                     (None, ranges)
                 }
@@ -232,7 +226,6 @@ impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
                 .as_ref()
                 .and_then(|v| v.last())
                 .map(|e| e.batch.batch_info.last_block_timestamp);
-            state_reporter.record_picked(last_block, last_block_timestamp, Some(last_batch_number));
             state_reporter.enter_state(GenericComponentState::Active);
 
             // Phase 1: fetch all replay data before taking the tree lock.
