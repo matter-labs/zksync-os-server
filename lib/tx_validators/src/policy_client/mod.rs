@@ -39,7 +39,7 @@ pub enum AccessType {
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// `http://host:port`, `https://host:port`, or `unix:///path/to.sock`.
+    /// `http://host:port` or `unix:///path/to.sock`.
     pub url: String,
     pub request_timeout: Duration,
     pub protocol_version: String,
@@ -75,7 +75,7 @@ impl PolicyClient {
         let parsed = url::Url::parse(&config.url)
             .map_err(|e| anyhow::anyhow!("invalid policy service URL: {e}"))?;
         let transport_config = match parsed.scheme() {
-            "http" | "https" => TransportConfig::Http {
+            "http" => TransportConfig::Http {
                 url: parsed,
                 auth_token: config.auth_token.clone(),
             },
@@ -84,7 +84,7 @@ impl PolicyClient {
                 auth_token: config.auth_token.clone(),
             },
             other => anyhow::bail!(
-                "unsupported URL scheme `{other}` (expected `http`, `https`, or `unix`)"
+                "unsupported URL scheme `{other}` (expected `http` or `unix`)"
             ),
         };
         let transport = Transport::from_config(transport_config)
