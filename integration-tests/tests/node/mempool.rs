@@ -134,7 +134,7 @@ async fn low_fee_tx_does_not_hang_block_executor(env: TestEnvironment) -> anyhow
     let mut config = env.default_config().await?;
     config.fee_config = fee_config.clone();
     config.sequencer_config.block_time = Duration::from_millis(500);
-    let mut tester = env.launch(config).await?;
+    let tester = env.launch(config).await?;
 
     let alice = tester.l2_wallet.default_signer().address();
     let chain_id = tester.l2_provider.get_chain_id().await?;
@@ -253,7 +253,7 @@ fn intrinsic_native_test_fee_config() -> FeeConfig {
 async fn intrinsic_native_check_rejects_underpaid_tx(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
     config.fee_config = intrinsic_native_test_fee_config();
-    let mut tester = env.launch(config).await?;
+    let tester = env.launch(config).await?;
     let alice = tester.l2_wallet.default_signer().address();
     let chain_id = tester.l2_provider.get_chain_id().await?;
     let nonce = tester.l2_provider.get_transaction_count(alice).await?;
@@ -289,7 +289,7 @@ async fn intrinsic_native_check_rejects_underpaid_tx(env: TestEnvironment) -> an
 async fn intrinsic_native_check_accepts_well_funded_tx(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
     config.fee_config = intrinsic_native_test_fee_config();
-    let mut tester = env.launch(config).await?;
+    let tester = env.launch(config).await?;
     let alice = tester.l2_wallet.default_signer().address();
     let chain_id = tester.l2_provider.get_chain_id().await?;
     let nonce = tester.l2_provider.get_transaction_count(alice).await?;
@@ -324,7 +324,7 @@ async fn intrinsic_native_check_accepts_well_funded_tx(env: TestEnvironment) -> 
 async fn intrinsic_native_check_disabled_pre_v6(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
     config.fee_config = intrinsic_native_test_fee_config();
-    let mut tester = env.launch(config).await?;
+    let tester = env.launch(config).await?;
     let alice = tester.l2_wallet.default_signer().address();
     let chain_id = tester.l2_provider.get_chain_id().await?;
     let nonce = tester.l2_provider.get_transaction_count(alice).await?;
