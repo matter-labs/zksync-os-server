@@ -134,7 +134,7 @@ async fn low_fee_tx_does_not_hang_block_executor(env: TestEnvironment) -> anyhow
     let mut config = env.default_config().await?;
     config.fee_config = fee_config.clone();
     config.sequencer_config.block_time = Duration::from_millis(500);
-    let tester = env.launch(config).await?;
+    let mut tester = env.launch(config).await?;
 
     let alice = tester.l2_wallet.default_signer().address();
     let chain_id = tester.l2_provider.get_chain_id().await?;
