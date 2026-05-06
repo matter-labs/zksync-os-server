@@ -322,13 +322,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let state = State::new(&config.general_config, &genesis).await;
 
-    tracing::info!("Initializing mempools");
     let zk_provider_factory = ZkProviderFactory::new(state.clone(), repositories.clone(), chain_id);
-    let l2_subpool = zksync_os_mempool::subpools::l2::in_memory(
-        zk_provider_factory.clone(),
-        config.mempool_config.clone().into(),
-        config.tx_validator_config.clone().into(),
-    );
 
     let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
         commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider).await;
@@ -431,7 +425,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                     verify_result_tx: verify_result_tx.clone(),
                 }),
                 block_replay_storage.clone(),
-                zk_provider_factory,
+                zk_provider_factory.clone(),
             )
             .await
         } else {
@@ -459,7 +453,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                     }),
                 }),
                 block_replay_storage.clone(),
-                zk_provider_factory,
+                zk_provider_factory.clone(),
             )
             .await
         }
@@ -534,20 +528,29 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         &genesis.genesis_upgrade_tx().await.protocol_version
     };
 
+    let exec_version = ExecutionVersion::try_from(current_protocol_version)
+        .expect("Cannot determine execution version");
+
     if config
         .sequencer_config
         .tx_validator
         .deployment_filter
         .enabled
     {
-        let exec_version = ExecutionVersion::try_from(current_protocol_version)
-            .expect("Cannot determine execution version");
         assert!(
             exec_version >= ExecutionVersion::V6,
             "Deployment filter requires execution version V6 or later (protocol >= v31.0), \
              but current protocol version {current_protocol_version} uses {exec_version:?}"
         );
     }
+
+    tracing::info!("Initializing mempools");
+    let l2_subpool = zksync_os_mempool::subpools::l2::in_memory(
+        zk_provider_factory.clone(),
+        config.mempool_config.clone().into(),
+        config.tx_validator_config.clone().into(),
+        exec_version,
+    );
 
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();

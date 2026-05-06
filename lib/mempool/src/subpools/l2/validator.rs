@@ -11,14 +11,14 @@ use reth_transaction_pool::{
 };
 use std::sync::RwLock;
 use zk_os_api_dev::helpers::validate_l2_tx_intrinsic_native_resources;
-use zksync_os_types::FeeParams;
+use zksync_os_types::{ExecutionVersion, FeeParams};
 
 /// A wrapper around [`EthTransactionValidator`] that adds ZKSync OS specific
 /// stateless validation on top of the standard Ethereum checks.
 ///
-/// The extra L2 checks rely only on the transaction and the latest fee params cached on
-/// `self` (see [`Self::fee_params`]), so they don't need access to on-chain state and run
-/// during the stateless phase.
+/// The extra L2 checks rely only on the transaction and the latest fee params /
+/// execution version cached on `self`, so they don't need access to on-chain state and
+/// run during the stateless phase.
 ///
 /// The validation pipeline mirrors reth's own call chain:
 ///
@@ -33,10 +33,16 @@ use zksync_os_types::FeeParams;
 pub(crate) struct ZkTransactionValidator<Client, Tx> {
     inner: EthTransactionValidator<Client, Tx, EthEvmConfig>,
     fee_params: RwLock<FeeParams>,
+    /// Execution version expected for the next produced block. Drives version-gated
+    /// stateless checks (e.g. intrinsic native resources, available from V6).
+    execution_version: RwLock<ExecutionVersion>,
 }
 
 impl<Client, Tx> ZkTransactionValidator<Client, Tx> {
-    pub(crate) fn new(inner: EthTransactionValidator<Client, Tx, EthEvmConfig>) -> Self {
+    pub(crate) fn new(
+        inner: EthTransactionValidator<Client, Tx, EthEvmConfig>,
+        execution_version: ExecutionVersion,
+    ) -> Self {
         // Before the first `update_fee_params` call, treat the chain as a 0 gas price chain with
         // unlimited native resource: basefee/pubdata are 0, native_price is 1 (not 0) so that any
         // divisions by native_price remain well-defined.
@@ -48,11 +54,16 @@ impl<Client, Tx> ZkTransactionValidator<Client, Tx> {
         Self {
             inner,
             fee_params: RwLock::new(fee_params),
+            execution_version: RwLock::new(execution_version),
         }
     }
 
     pub(crate) fn update_fee_params(&self, fee_params: FeeParams) {
         *self.fee_params.write().expect("lock poisoned") = fee_params;
+    }
+
+    pub(crate) fn update_execution_version(&self, execution_version: ExecutionVersion) {
+        *self.execution_version.write().expect("lock poisoned") = execution_version;
     }
 }
 
@@ -81,6 +92,12 @@ where
             .authorization_list()
             .map(|l| l.len())
             .unwrap_or(0) as u64;
+        // if base_fee > max_fee_per_gas, gas_price and correspondingly native limit can't be calculated
+        // We can try to calculate native limit using some estimated inclusion params, but for now
+        // just skipping native validation. It's uncommon case.
+        if fee_params.eip1559_basefee > U256::from(transaction.max_fee_per_gas()) {
+            return Ok(());
+        }
         validate_l2_tx_intrinsic_native_resources(
             fee_params.eip1559_basefee,
             fee_params.native_price,
@@ -109,7 +126,10 @@ where
         origin: TransactionOrigin,
         transaction: Tx,
     ) -> Result<Tx, TransactionValidationOutcome<Tx>> {
-        if let Err(err) = self.validate_intrinsic_native_resources(&transaction) {
+        let execution_version = *self.execution_version.read().expect("lock poisoned");
+        if execution_version >= ExecutionVersion::V6
+            && let Err(err) = self.validate_intrinsic_native_resources(&transaction)
+        {
             return Err(TransactionValidationOutcome::Invalid(transaction, err));
         }
         self.inner.validate_stateless(origin, transaction)

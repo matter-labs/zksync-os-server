@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 use validator::ZkTransactionValidator;
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_storage_api::{ReadRepository, ReadStateHistory};
-use zksync_os_types::{FeeParams, L2Transaction, ZkTransaction};
+use zksync_os_types::{ExecutionVersion, FeeParams, L2Transaction, ZkTransaction};
 
 pub(crate) type RethPool<State, Repository> = Pool<
     ZkTransactionValidator<ZkProviderFactory<State, Repository>, L2PooledTransaction>,
@@ -45,6 +45,10 @@ pub trait L2Subpool:
     /// Propagates the latest pending block fee params to the validator so that subsequent
     /// validations use up-to-date prices.
     fn update_pending_fee_params(&self, fee_params: FeeParams);
+
+    /// Propagates the execution version expected for the next produced block to the
+    /// validator, so version-gated stateless checks can be enabled accordingly.
+    fn update_pending_execution_version(&self, execution_version: ExecutionVersion);
 
     /// Convenience method to add a local L2 transaction
     fn add_l2_transaction(
@@ -74,6 +78,10 @@ impl<State: ReadStateHistory + Clone, Repository: ReadRepository + Clone> L2Subp
 {
     fn update_pending_fee_params(&self, fee_params: FeeParams) {
         self.validator().update_fee_params(fee_params);
+    }
+
+    fn update_pending_execution_version(&self, execution_version: ExecutionVersion) {
+        self.validator().update_execution_version(execution_version);
     }
 }
 
@@ -146,6 +154,7 @@ pub fn in_memory(
     >,
     pool_config: PoolConfig,
     validator_config: TxValidatorConfig,
+    execution_version: ExecutionVersion,
 ) -> impl L2Subpool {
     let blob_store = NoopBlobStore::default();
     // Use `ViseRecorder` during mempool initialization to register metrics. This will make sure
@@ -162,7 +171,7 @@ pub fn in_memory(
                 .set_tx_fee_cap(0)
                 .build(blob_store);
         RethPool::new(
-            ZkTransactionValidator::new(eth_validator),
+            ZkTransactionValidator::new(eth_validator, execution_version),
             CoinbaseTipOrdering::default(),
             blob_store,
             pool_config,
