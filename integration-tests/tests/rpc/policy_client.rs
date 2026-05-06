@@ -6,9 +6,6 @@ use anyhow::Result;
 use httpmock::{Method, MockServer};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
-use tempfile::TempDir;
-use tokio::io::copy_bidirectional;
-use tokio::net::{TcpStream, UnixListener};
 use tokio::time::Duration;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::{TracingPrimary, TracingSecondary};
@@ -16,72 +13,23 @@ use zksync_os_integration_tests::{GatewayTester, PolicyServiceConfig};
 use zksync_os_tx_validators::deployment_filter::FORCE_DEPLOYER_ADDRESS;
 use zksync_os_types::BOOTLOADER_FORMAL_ADDRESS;
 
-/// `PolicyClient` only accepts `https://` (mTLS-required) or `unix:///`
-/// schemes; the test harness uses `httpmock`, which only serves plain HTTP
-/// over TCP. To bridge the two without dragging the test suite onto a
-/// real-cert mTLS server, we run a tiny UDS-to-TCP proxy in front of every
-/// `MockServer` and hand the policy client a `unix://` URL.
-struct PolicyMockBridge {
-    /// `unix:///path/to.sock`
-    url: String,
-    /// Holds the tempdir alive — drop closes the socket and cleans up.
-    _tmp: TempDir,
-}
-
-impl PolicyMockBridge {
-    async fn in_front_of(server: &MockServer) -> Self {
-        let tmp = tempfile::tempdir().unwrap();
-        let socket_path = tmp.path().join("policy.sock");
-        let listener = UnixListener::bind(&socket_path).unwrap();
-        let target = format!("{}:{}", server.host(), server.port());
-
-        tokio::spawn(async move {
-            loop {
-                let (mut uds_stream, _) = match listener.accept().await {
-                    Ok(p) => p,
-                    Err(_) => break,
-                };
-                let target = target.clone();
-                tokio::spawn(async move {
-                    let mut tcp_stream = match TcpStream::connect(&target).await {
-                        Ok(s) => s,
-                        Err(_) => return,
-                    };
-                    let _ = copy_bidirectional(&mut uds_stream, &mut tcp_stream).await;
-                });
-            }
-        });
-
-        Self {
-            url: format!("unix://{}", socket_path.display()),
-            _tmp: tmp,
-        }
-    }
-
-    fn url(&self) -> &str {
-        &self.url
-    }
-}
-
-fn policy_service(url: String) -> PolicyServiceConfig {
+fn policy_service(server: &MockServer) -> PolicyServiceConfig {
     PolicyServiceConfig {
-        url: Some(url),
+        url: Some(format!("http://{}:{}", server.host(), server.port()).parse().unwrap()),
         request_timeout: Duration::from_secs(5),
         protocol_version: "1".into(),
         expected_protocol_version: None,
         bypass_from: vec![BOOTLOADER_FORMAL_ADDRESS, FORCE_DEPLOYER_ADDRESS],
-        tls: None,
+        auth_token: None,
     }
 }
 
-async fn setup_with_bridge(server: &MockServer) -> Result<(GatewayTester, PolicyMockBridge)> {
-    let bridge = PolicyMockBridge::in_front_of(server).await;
-    let gateway = GatewayTester::builder()
-        .policy_service(policy_service(bridge.url().to_string()))
+async fn setup(server: &MockServer) -> Result<GatewayTester> {
+    GatewayTester::builder()
+        .policy_service(policy_service(server))
         .num_chains(1)
         .build()
-        .await?;
-    Ok((gateway, bridge))
+        .await
 }
 
 /// Install allow-everything mocks for both `/admit` and `/judge`. Used by
@@ -108,7 +56,7 @@ async fn allow_response_lets_tx_through() -> Result<()> {
     let server = MockServer::start_async().await;
     let [admit_mock, judge_mock] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
 
     mc.chain(0)
         .l2_provider
@@ -150,7 +98,7 @@ async fn deny_response_rejects_send_raw_transaction() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
 
@@ -189,7 +137,7 @@ async fn deny_response_rejects_eth_call() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
 
@@ -225,7 +173,7 @@ async fn deny_response_rejects_eth_estimate_gas() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
 
@@ -347,7 +295,7 @@ async fn allow_response_lets_eth_call_through() -> Result<()> {
     let server = MockServer::start_async().await;
     let [admit_mock, judge_mock] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
 
     // Admit + judge allow should land the call on the VM; an empty-target
     // call executes cleanly against an EOA and returns empty bytes.
@@ -375,7 +323,7 @@ async fn allow_response_lets_eth_estimate_gas_through() -> Result<()> {
     let server = MockServer::start_async().await;
     let [admit_mock, judge_mock] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
 
     let estimate = mc
         .chain(0)
@@ -420,7 +368,7 @@ async fn rpc_judge_deny_matches_captured_trace_callee() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
 
     // Deploy two contracts so the test call produces a 2-frame trace
     // (Primary.calculate -> Secondary.multiply). Allow everything during
@@ -486,7 +434,7 @@ async fn rpc_judge_first_body_has_frames_for_contract_call() -> Result<()> {
         })
         .await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
     let provider = mc.chain(0).l2_provider.clone();
     let secondary = TracingSecondary::deploy(provider.clone(), U256::from(0)).await?;
     let primary = TracingPrimary::deploy(provider.clone(), *secondary.address()).await?;
@@ -533,7 +481,7 @@ async fn rpc_judge_deny_blocks_eth_call_at_callee() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
 
     let provider = mc.chain(0).l2_provider.clone();
     let secondary = TracingSecondary::deploy(provider.clone(), U256::from(0)).await?;
@@ -575,7 +523,7 @@ async fn l1_priority_eth_call_skips_admit_and_judge() -> Result<()> {
     let server = MockServer::start_async().await;
     let [admit_mock, judge_mock] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
 
     // Snapshot post-setup call counts; the test call must not increment.
     let admit_before = admit_mock.calls_async().await;
@@ -613,7 +561,7 @@ async fn judge_deny_rejects_send_raw_transaction() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
     let signer = mc.chain(0).l2_wallet.default_signer().address();
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
@@ -663,7 +611,7 @@ async fn judge_deny_rejects_eth_call() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
     let signer = mc.chain(0).l2_wallet.default_signer().address();
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
@@ -709,7 +657,7 @@ async fn judge_deny_rejects_eth_estimate_gas() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let (mc, _bridge) = setup_with_bridge(&server).await?;
+    let mc = setup(&server).await?;
     let signer = mc.chain(0).l2_wallet.default_signer().address();
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
