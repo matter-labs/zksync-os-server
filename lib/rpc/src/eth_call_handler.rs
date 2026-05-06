@@ -762,10 +762,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         }
 
         if trace_transfers {
-            // Reth implements this with `TransferInspector`, which records all native value moves,
-            // including internal CALL/CREATE/SELFDESTRUCT. The ZKsync OS VM path used here does not
-            // expose an equivalent transfer stream, so fail explicitly rather than returning a
-            // partial trace.
             return Err(EthCallError::SimulateInvalidParams(
                 "traceTransfers is not implemented".to_string(),
             ));
@@ -794,11 +790,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 )?;
             }
 
-            // `validation=false` is supposed to disable both fee and nonce validation. We zero
-            // the basefee to satisfy fee checks, but nonce checks are not disabled — the VM still
-            // enforces them. Callers that rely on sending transactions with arbitrary nonces when
-            // `validation=false` will see unexpected failures. Nonces without an explicit value are
-            // auto-filled from state, so the common case works correctly.
             let response_context = block_context;
             let mut execution_context = response_context;
             if !validation {
