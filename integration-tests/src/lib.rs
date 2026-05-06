@@ -5,7 +5,9 @@ use crate::node_log::NodeLogState;
 use crate::prover_tester::ProverTester;
 use crate::provider::{ZksyncApi, ZksyncTestingProvider};
 use crate::rpc_recorder::{HttpRpcRecorder, RpcRecordConfig};
-use crate::test_config::{build_node_config, disable_prover_input_generation};
+use crate::test_config::{
+    TEST_PROVIDER_POLL_INTERVAL, build_node_config, disable_prover_input_generation,
+};
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
 use alloy::primitives::U256;
@@ -53,15 +55,6 @@ pub mod rpc_recorder;
 pub mod test_config;
 pub mod upgrade;
 mod utils;
-
-fn gateway_provider_config(rpc_url: String) -> ProviderConfig {
-    ProviderConfig {
-        rpc_url,
-        rpc_poll_interval: Duration::from_millis(100),
-        max_retries: 2,
-        retry_backoff: Duration::from_millis(200),
-    }
-}
 
 /// L1 chain id as expected by contracts deployed in `l1-state.json.gz`
 const L1_CHAIN_ID: u64 = 31337;
@@ -202,7 +195,10 @@ impl TestEnvironment {
     pub async fn default_config(&self) -> anyhow::Result<Config> {
         let mut config = build_node_config(&self.l1, self.chain_layout).await?;
         if let Some(gateway) = &self.gateway {
-            config.gateway_provider_config = Some(gateway_provider_config(gateway.rpc_url.clone()));
+            config.gateway_provider_config = Some(ProviderConfig::new(
+                gateway.rpc_url.clone(),
+                TEST_PROVIDER_POLL_INTERVAL,
+            ));
         }
         Tester::bind_runtime_config(
             &self.l1,
@@ -230,8 +226,10 @@ impl TestEnvironment {
         );
         let supporting_gateway = if let Some(gateway) = self.gateway.take() {
             if config.gateway_provider_config.is_none() {
-                config.gateway_provider_config =
-                    Some(gateway_provider_config(gateway.rpc_url.clone()));
+                config.gateway_provider_config = Some(ProviderConfig::new(
+                    gateway.rpc_url.clone(),
+                    TEST_PROVIDER_POLL_INTERVAL,
+                ));
             }
             wait_for_gateway_readiness(&self.l1, &gateway.rpc_url, &config).await?;
             Some(gateway.node)
@@ -322,7 +320,10 @@ impl Tester {
         config.general_config.node_role = NodeRole::ExternalNode;
         config.network_config.boot_nodes = vec![self.node_record.into()];
         config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
-        config.gateway_provider_config = self.gateway_rpc_url.clone().map(gateway_provider_config);
+        config.gateway_provider_config = self
+            .gateway_rpc_url
+            .clone()
+            .map(|rpc_url| ProviderConfig::new(rpc_url, TEST_PROVIDER_POLL_INTERVAL));
         config.prover_api_config.fake_fri_provers.enabled = true;
         config.prover_api_config.fake_snark_provers.enabled = true;
         config.prover_input_generator_config.logging_enabled = false;
@@ -1120,7 +1121,10 @@ impl GatewayTesterBuilder {
             if !prover_input_generation_enabled() {
                 disable_prover_input_generation(&mut tester_config);
             }
-            tester_config.gateway_provider_config = Some(gateway_provider_config(gateway_rpc_url));
+            tester_config.gateway_provider_config = Some(ProviderConfig::new(
+                gateway_rpc_url,
+                TEST_PROVIDER_POLL_INTERVAL,
+            ));
             if let Some(deployment_filter) = deployment_filter {
                 tester_config
                     .sequencer_config

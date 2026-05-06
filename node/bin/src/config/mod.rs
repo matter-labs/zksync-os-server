@@ -463,6 +463,16 @@ pub struct ProviderConfig {
     pub retry_backoff: Duration,
 }
 
+impl ProviderConfig {
+    pub fn new(rpc_url: impl Into<String>, rpc_poll_interval: Duration) -> Self {
+        Self {
+            rpc_url: rpc_url.into(),
+            rpc_poll_interval,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct NetworkConfig {
