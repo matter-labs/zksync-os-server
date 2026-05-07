@@ -82,7 +82,7 @@ impl PipelineComponent for UpgradeGatekeeper {
     type Output = L1SenderCommand<CommitCommand>;
 
     const NAME: &'static str = "upgrade_gatekeeper";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const OUTPUT_BUFFER_SIZE: usize = 30;
 
     async fn run(
         self,

@@ -772,6 +772,7 @@ pub struct L1SenderConfig {
     pub max_fee_per_blob_gas: EtherAmount,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
+    /// For this to work properly `OUTPUT_BUFFER_SIZE`s have to be large enough
     #[config(default_t = 16)]
     pub command_limit: usize,
 

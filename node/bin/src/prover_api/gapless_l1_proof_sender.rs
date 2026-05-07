@@ -26,7 +26,7 @@ impl PipelineComponent for GaplessL1ProofSender {
     type Output = L1SenderCommand<ProofCommand>;
 
     const NAME: &'static str = "gapless_l1_proof_sender";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const OUTPUT_BUFFER_SIZE: usize = 30;
 
     async fn run(
         self,
