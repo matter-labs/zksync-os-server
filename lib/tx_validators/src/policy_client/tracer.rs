@@ -78,6 +78,7 @@ pub(super) fn new_slot() -> TraceSlot {
 /// frame. `deploys` lists the deployed addresses of CREATE/CREATE2 frames
 /// opened directly inside this frame. Storage reads/writes and events
 /// are out of scope. Always paired with a [`super::PolicyClient`].
+#[repr(transparent)]
 pub struct Tracer {
     slot: TraceSlot,
 }
