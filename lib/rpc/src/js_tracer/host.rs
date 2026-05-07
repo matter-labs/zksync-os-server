@@ -275,7 +275,7 @@ fn host_get_nonce<V: ViewState + 'static>(
     let nonce = env
         .state_view
         .borrow_mut()
-        .account_nonce(address)
+        .nonce(address)
         .ok_or(anyhow::anyhow!("Account {address:?} not found in a state"))?;
 
     Ok(format!("0x{nonce:x}"))

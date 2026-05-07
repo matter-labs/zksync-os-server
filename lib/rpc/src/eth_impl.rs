@@ -308,7 +308,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         let on_chain_account_nonce = self
             .storage
             .state_at_block_id_or_latest(block_id)?
-            .account_nonce(address)
+            .nonce(address)
             .unwrap_or(0);
 
         if block_id == Some(BlockId::pending())

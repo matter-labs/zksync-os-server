@@ -23,7 +23,7 @@ pub trait ViewState: ReadStorage + PreimageSource + Send + Clone {
     /// Get account's nonce by its address.
     ///
     /// Returns `None` if the account doesn't exist
-    fn account_nonce(&mut self, address: Address) -> Option<u64> {
+    fn nonce(&mut self, address: Address) -> Option<u64> {
         self.get_account(address).map(|a| a.nonce)
     }
 }
