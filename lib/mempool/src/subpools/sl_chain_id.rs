@@ -1,3 +1,4 @@
+use alloy::primitives::ChainId;
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -6,6 +7,19 @@ use std::task::{Context, Poll, ready};
 use tokio::sync::{Notify, RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{SystemTxEnvelope, SystemTxType, ZkTransaction};
+
+/// Result of reconciling a block's transactions with the [`SlChainIdSubpool`].
+///
+/// Both fields refer to the most recent non-placeholder `SetSLChainId` system tx observed in
+/// the block (one block contains at most one such tx in practice — the subpool serves them
+/// individually).
+#[derive(Clone, Copy, Debug)]
+pub struct SlChainIdOutcome {
+    /// Migration number of the last observed `SetSLChainId` tx.
+    pub last_migration_number: u64,
+    /// Target settlement-layer chain id of that same tx.
+    pub last_sl_chain_id_target: ChainId,
+}
 
 #[derive(Clone)]
 pub struct SlChainIdSubpool {
@@ -49,7 +63,7 @@ impl SlChainIdSubpool {
 
     pub async fn insert(&self, tx: SystemTxEnvelope) {
         assert!(
-            matches!(tx.system_subtype(), SystemTxType::SetSLChainId(_)),
+            matches!(tx.system_subtype(), SystemTxType::SetSLChainId(_, _)),
             "tried to insert unrelated system tx ({:?}) into `SlChainIdSubpool`",
             tx.system_subtype()
         );
@@ -77,15 +91,18 @@ impl SlChainIdSubpool {
         }
     }
 
-    pub async fn on_canonical_state_change(&self, txs: Vec<&SystemTxEnvelope>) -> Option<u64> {
+    /// Returns the migration_number and the target SL chain id of the most recent
+    /// non-placeholder `SetSLChainId` tx observed across `txs`.
+    pub async fn on_canonical_state_change(
+        &self,
+        txs: Vec<&SystemTxEnvelope>,
+    ) -> Option<SlChainIdOutcome> {
         if txs.is_empty() {
             return None;
         }
 
-        let mut last_migration_number = None;
-
         for tx in txs {
-            if matches!(tx.system_subtype(), SystemTxType::SetSLChainId(u64::MAX)) {
+            if matches!(tx.system_subtype(), SystemTxType::SetSLChainId(_, u64::MAX)) {
                 // If we received a transaction with migration number `u64::MAX`, it means
                 // that this is the transaction we executed along with upgrade, so it is not present in the subpool and we should not expect it from the stream.
                 // The migration number should not be updated then, so we need to just skip the transaction.
@@ -95,11 +112,16 @@ impl SlChainIdSubpool {
             let pending_tx = self.pop_wait().await;
             assert_eq!(tx, &pending_tx);
 
-            if let SystemTxType::SetSLChainId(migration_number) = *tx.system_subtype() {
-                last_migration_number = Some(migration_number);
+            if let SystemTxType::SetSLChainId(target_sl_chain_id, migration_number) =
+                *tx.system_subtype()
+            {
+                return Some(SlChainIdOutcome {
+                    last_migration_number: migration_number,
+                    last_sl_chain_id_target: target_sl_chain_id,
+                });
             }
         }
-        last_migration_number
+        None
     }
 }
 

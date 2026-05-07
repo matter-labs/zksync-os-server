@@ -810,6 +810,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.service_block_delay,
         current_protocol_version.clone(),
         node_startup_state.l1_state.sl_chain_id,
+        node_startup_state.l1_state.l1_chain_id,
         config.sequencer_config.fee_collector_address,
         last_constructed_block_ctx_sender,
         fee_provider,
