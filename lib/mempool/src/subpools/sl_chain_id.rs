@@ -1,3 +1,4 @@
+use alloy::primitives::ChainId;
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -6,6 +7,23 @@ use std::task::{Context, Poll, ready};
 use tokio::sync::{Notify, RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{SystemTxEnvelope, SystemTxType, ZkTransaction};
+
+/// Result of reconciling a block's transactions with the [`SlChainIdSubpool`].
+///
+/// Both fields refer to the most recent non-placeholder `SetSLChainId` system tx observed in
+/// the block (one block contains at most one such tx in practice — the subpool serves them
+/// individually).
+#[derive(Default, Clone, Copy, Debug)]
+pub struct SlChainIdOutcome {
+    /// Migration number of the last observed `SetSLChainId` tx, used to advance
+    /// `next_cursors.migration_number` in the [`BlockContextProvider`][crate::pool].
+    pub last_migration_number: Option<u64>,
+    /// Target settlement-layer chain id of that same tx. `None` means no `SetSLChainId` tx
+    /// (other than the `u64::MAX` upgrade placeholder, which is skipped) was applied in this
+    /// block. Used to flip the runtime "settles on Gateway" decision so subsequent blocks stop
+    /// including interop-root / interop-fee system txs once the chain has migrated to L1.
+    pub last_sl_chain_id_target: Option<ChainId>,
+}
 
 #[derive(Clone)]
 pub struct SlChainIdSubpool {
@@ -49,7 +67,7 @@ impl SlChainIdSubpool {
 
     pub async fn insert(&self, tx: SystemTxEnvelope) {
         assert!(
-            matches!(tx.system_subtype(), SystemTxType::SetSLChainId(_)),
+            matches!(tx.system_subtype(), SystemTxType::SetSLChainId(_, _)),
             "tried to insert unrelated system tx ({:?}) into `SlChainIdSubpool`",
             tx.system_subtype()
         );
@@ -77,15 +95,19 @@ impl SlChainIdSubpool {
         }
     }
 
-    pub async fn on_canonical_state_change(&self, txs: Vec<&SystemTxEnvelope>) -> Option<u64> {
+    /// Returns the migration_number and the target SL chain id of the most recent
+    /// non-placeholder `SetSLChainId` tx observed across `txs`. The `u64::MAX` upgrade
+    /// placeholder is intentionally skipped — it does not advance the migration counter, and
+    /// the target chain id it carries is the same as `L1State.sl_chain_id` already known at
+    /// startup (the constructor seeds the runtime state from there).
+    pub async fn on_canonical_state_change(&self, txs: Vec<&SystemTxEnvelope>) -> SlChainIdOutcome {
+        let mut outcome = SlChainIdOutcome::default();
         if txs.is_empty() {
-            return None;
+            return outcome;
         }
 
-        let mut last_migration_number = None;
-
         for tx in txs {
-            if matches!(tx.system_subtype(), SystemTxType::SetSLChainId(u64::MAX)) {
+            if matches!(tx.system_subtype(), SystemTxType::SetSLChainId(_, u64::MAX)) {
                 // If we received a transaction with migration number `u64::MAX`, it means
                 // that this is the transaction we executed along with upgrade, so it is not present in the subpool and we should not expect it from the stream.
                 // The migration number should not be updated then, so we need to just skip the transaction.
@@ -95,11 +117,14 @@ impl SlChainIdSubpool {
             let pending_tx = self.pop_wait().await;
             assert_eq!(tx, &pending_tx);
 
-            if let SystemTxType::SetSLChainId(migration_number) = *tx.system_subtype() {
-                last_migration_number = Some(migration_number);
+            if let SystemTxType::SetSLChainId(target_sl_chain_id, migration_number) =
+                *tx.system_subtype()
+            {
+                outcome.last_migration_number = Some(migration_number);
+                outcome.last_sl_chain_id_target = Some(target_sl_chain_id);
             }
         }
-        last_migration_number
+        outcome
     }
 }
 
