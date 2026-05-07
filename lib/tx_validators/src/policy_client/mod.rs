@@ -51,8 +51,8 @@ pub struct Config {
     /// cannot let an external service refuse without bricking startup.
     pub bypass_from: HashSet<Address>,
     /// Bearer token sent as `Authorization: Bearer <token>` on every request.
-    /// Set for TCP transports; leave `None` when using `unix://` on a
-    /// network-isolated host where the socket path is the access control.
+    /// Required for `http://`; ignored (with a warning) for `unix://` where
+    /// socket-path permissions are the access control.
     pub auth_token: Option<String>,
 }
 
@@ -77,12 +77,20 @@ impl PolicyClient {
         let transport_config = match parsed.scheme() {
             "http" => TransportConfig::Http {
                 url: parsed,
-                auth_token: config.auth_token.clone(),
+                auth_token: config.auth_token.clone()
+                    .expect("auth_token is required for http://; enforced by config validation"),
             },
-            "unix" => TransportConfig::Unix {
-                socket_path: std::path::PathBuf::from(parsed.path()),
-                auth_token: config.auth_token.clone(),
-            },
+            "unix" => {
+                if config.auth_token.is_some() {
+                    tracing::warn!(
+                        "policy service auth_token is set but has no effect with unix:// \
+                         transport; socket-path permissions are the access control"
+                    );
+                }
+                TransportConfig::Unix {
+                    socket_path: std::path::PathBuf::from(parsed.path()),
+                }
+            }
             other => anyhow::bail!(
                 "unsupported URL scheme `{other}` (expected `http` or `unix`)"
             ),
