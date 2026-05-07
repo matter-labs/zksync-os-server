@@ -549,7 +549,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
         // Execute the transaction with the highest possible gas limit.
         let mut res = try_at(highest_gas_limit)?.map_err(EthCallError::InvalidTransaction)?;
-        tracing::trace!("Executed tx in estimate_gas with highest gas limit {highest_gas_limit}, result {res:?}");
+        tracing::trace!(
+            "Executed tx in estimate_gas with highest gas limit {highest_gas_limit}, result {res:?}"
+        );
         match res.execution_result {
             ExecutionResult::Success(_) => {
                 // Transaction succeeded with the highest possible gas limit, we can proceed with
@@ -580,7 +582,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let optimistic_gas_limit = (gas_used + res.gas_refunded + 2_300) * 64 / 63;
         if optimistic_gas_limit < highest_gas_limit {
             res = try_at(optimistic_gas_limit)?.map_err(EthCallError::InvalidTransaction)?;
-            tracing::trace!("Executed tx in estimate_gas with optimistic gas limit {optimistic_gas_limit}, result {res:?}");
+            tracing::trace!(
+                "Executed tx in estimate_gas with optimistic gas limit {optimistic_gas_limit}, result {res:?}"
+            );
 
             // Update the gas used based on the new result.
             gas_used = res.gas_used;
@@ -638,7 +642,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 ethres => {
                     // Unpack the result and environment if the transaction was successful.
                     res = ethres.map_err(EthCallError::InvalidTransaction)?;
-                    tracing::trace!("Executed tx in estimate_gas with gas limit {mid_gas_limit}, result {res:?}");
+                    tracing::trace!(
+                        "Executed tx in estimate_gas with gas limit {mid_gas_limit}, result {res:?}"
+                    );
                     // Update the estimated gas range based on the transaction result.
                     update_estimated_gas_range(
                         res.execution_result,
