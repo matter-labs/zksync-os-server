@@ -485,41 +485,14 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
         let mut highest_gas_limit = request.gas.unwrap_or(block_gas_limit).min(block_gas_limit);
 
-        // Check funds of the sender (only useful to check if transaction gas price is more than 0).
-        //
-        // The caller allowance is check by doing `(account.balance - tx.value) / tx.gas_price`
-        if request
+        let effective_gas_price = request
             .gas_price
             .or(request.max_fee_per_gas)
-            .unwrap_or_default()
-            > 0
-        {
-            let balance = storage_view
-                .get_account(request.from.unwrap_or_default())
-                .as_ref()
-                .map(get_balance)
-                .unwrap_or_default();
-
-            let value = request.value.unwrap_or_default();
-            // Subtract transferred value from the caller balance. Return error if the caller has
-            // insufficient funds.
-            let balance = balance
-                .checked_sub(value)
-                .ok_or(EthCallError::InvalidTransaction(
-                    InvalidTransaction::LackOfFundForMaxFee {
-                        fee: value,
-                        balance,
-                    },
-                ))?;
-            // Cap the highest gas limit by max gas caller can afford with given gas price
-            highest_gas_limit = highest_gas_limit.min(
-                // Calculate the amount of gas the caller can afford with the specified gas price.
-                balance
-                    .checked_div(block_context.eip1559_basefee)
-                    // This will be 0 if gas price is 0. It is fine, because we check it before.
-                    .unwrap_or_default()
-                    .saturating_to(),
-            );
+            .unwrap_or_default();
+        if effective_gas_price > 0 {
+            let gas_limit_from_balance =
+                max_gas_from_balance(&request, block_context.eip1559_basefee, &mut storage_view)?;
+            highest_gas_limit = highest_gas_limit.min(gas_limit_from_balance);
         }
         request.set_gas_limit(highest_gas_limit);
         let tx = self.create_tx_from_request(request, &block_context, true)?;
@@ -752,6 +725,34 @@ pub fn update_estimated_gas_range(
             *lowest_gas_limit = tx_gas_limit;
         }
     }
+}
+
+/// Returns how much gas the sender can afford: `(balance - value) / gas_price`.
+fn max_gas_from_balance<V: ViewState>(
+    request: &TransactionRequest,
+    gas_price: U256,
+    storage_view: &mut V,
+) -> Result<u64, EthCallError> {
+    let balance = storage_view
+        .get_account(request.from.unwrap_or_default())
+        .as_ref()
+        .map(get_balance)
+        .unwrap_or_default();
+
+    let value = request.value.unwrap_or_default();
+    let balance = balance
+        .checked_sub(value)
+        .ok_or(EthCallError::InvalidTransaction(
+            InvalidTransaction::LackOfFundForMaxFee {
+                fee: value,
+                balance,
+            },
+        ))?;
+
+    Ok(balance
+        .checked_div(gas_price)
+        .unwrap_or_default()
+        .saturating_to())
 }
 
 /// Error types returned by `eth_call` implementation
