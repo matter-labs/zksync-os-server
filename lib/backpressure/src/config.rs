@@ -3,11 +3,8 @@ use std::time::Duration;
 
 pub use zksync_os_pipeline::ComponentId;
 
-const DEFAULT_BLOCK_DIFF_LIMIT: u64 = 256;
-// Higher than the block-pipeline default: the Batcher seals at batch granularity, so its
-// block diff naturally grows to ~(blocks per batch) while a batch is being assembled.
-const DEFAULT_BATCHER_BLOCK_DIFF_LIMIT: u64 = 2048;
-const DEFAULT_BATCH_DIFF_LIMIT: u64 = 128;
+pub const DEFAULT_BLOCK_DIFF_LIMIT: u64 = 256;
+pub const DEFAULT_BATCH_DIFF_LIMIT: u64 = 128;
 
 /// Backpressure thresholds for a single component.
 #[derive(Default, Clone, Debug)]
@@ -20,49 +17,60 @@ pub struct PipelineCondition {
 /// Internal backpressure configuration — one optional threshold condition per component.
 ///
 /// Presence in the map means the component has a threshold and can trigger backpressure.
-#[derive(Clone, Debug, Default)]
+/// Global defaults apply to all block- and batch-pipeline components that do not have a
+/// per-component override set via [`BackpressureConfig::set`].
+#[derive(Clone, Debug)]
 pub struct BackpressureConfig {
     conditions: HashMap<ComponentId, PipelineCondition>,
+    pub default_block_diff_limit: u64,
+    pub default_batch_diff_limit: u64,
 }
 
-fn default_condition_for(id: ComponentId) -> PipelineCondition {
-    match id {
-        ComponentId::BlockCanonizer
-        | ComponentId::BlockApplier
-        | ComponentId::RevmConsistencyChecker
-        | ComponentId::TreeManager
-        | ComponentId::ProverInputGenerator => PipelineCondition {
-            max_block_diff_to_upstream: Some(DEFAULT_BLOCK_DIFF_LIMIT),
-            ..Default::default()
-        },
-        ComponentId::Batcher => PipelineCondition {
-            max_block_diff_to_upstream: Some(DEFAULT_BATCHER_BLOCK_DIFF_LIMIT),
-            ..Default::default()
-        },
-        ComponentId::BatchVerification
-        | ComponentId::FriJobManager
-        | ComponentId::SnarkJobManager
-        | ComponentId::GaplessCommitter
-        | ComponentId::UpgradeGatekeeper
-        | ComponentId::MigrationGate
-        | ComponentId::L1SenderCommit
-        | ComponentId::L1SenderProve
-        | ComponentId::L1SenderExecute
-        | ComponentId::GaplessL1ProofSender
-        | ComponentId::PriorityTree => PipelineCondition {
-            max_batch_diff_to_upstream: Some(DEFAULT_BATCH_DIFF_LIMIT),
-            ..Default::default()
-        },
-        ComponentId::ConsensusNodeCommandSource
-        | ComponentId::ExternalNodeCommandSource
-        | ComponentId::BlockExecutor
-        | ComponentId::BatchSink
-        | ComponentId::NoopSink
-        | ComponentId::BatchVerificationResponder => PipelineCondition::default(),
+impl Default for BackpressureConfig {
+    fn default() -> Self {
+        Self {
+            conditions: HashMap::new(),
+            default_block_diff_limit: DEFAULT_BLOCK_DIFF_LIMIT,
+            default_batch_diff_limit: DEFAULT_BATCH_DIFF_LIMIT,
+        }
     }
 }
 
 impl BackpressureConfig {
+    fn default_condition_for(&self, id: ComponentId) -> PipelineCondition {
+        match id {
+            ComponentId::BlockCanonizer
+            | ComponentId::BlockApplier
+            | ComponentId::RevmConsistencyChecker
+            | ComponentId::TreeManager
+            | ComponentId::ProverInputGenerator => PipelineCondition {
+                max_block_diff_to_upstream: Some(self.default_block_diff_limit),
+                ..Default::default()
+            },
+            ComponentId::BatchVerification
+            | ComponentId::FriJobManager
+            | ComponentId::SnarkJobManager
+            | ComponentId::GaplessCommitter
+            | ComponentId::UpgradeGatekeeper
+            | ComponentId::MigrationGate
+            | ComponentId::L1SenderCommit
+            | ComponentId::L1SenderProve
+            | ComponentId::L1SenderExecute
+            | ComponentId::GaplessL1ProofSender
+            | ComponentId::PriorityTree => PipelineCondition {
+                max_batch_diff_to_upstream: Some(self.default_batch_diff_limit),
+                ..Default::default()
+            },
+            ComponentId::ConsensusNodeCommandSource
+            | ComponentId::ExternalNodeCommandSource
+            | ComponentId::BlockExecutor
+            | ComponentId::Batcher
+            | ComponentId::BatchSink
+            | ComponentId::NoopSink
+            | ComponentId::BatchVerificationResponder => PipelineCondition::default(),
+        }
+    }
+
     pub fn set(&mut self, id: ComponentId, condition: PipelineCondition) {
         self.conditions.insert(id, condition);
     }
@@ -72,7 +80,7 @@ impl BackpressureConfig {
         self.conditions
             .get(&id)
             .cloned()
-            .unwrap_or_else(|| default_condition_for(id))
+            .unwrap_or_else(|| self.default_condition_for(id))
     }
 }
 

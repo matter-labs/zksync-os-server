@@ -70,6 +70,12 @@ fields are optional and expressed in **batch units**. When unset the built-in
 defaults apply (see table below).
 
 ```yaml
+# Global defaults for all block- and batch-pipeline components.
+# These can be raised or lowered without touching per-component overrides.
+backpressure:
+  default_block_diff_limit: 256   # blocks; applies to block-pipeline stages
+  default_batch_diff_limit: 128   # batches; applies to batch-pipeline stages
+
 prover_api:
   # Applied to both fri_job_manager and snark_job_manager.
   max_batch_diff_to_upstream: 100
@@ -83,13 +89,24 @@ l1_sender:
   max_batch_diff_to_upstream: 100
 ```
 
+Per-component overrides (e.g. `prover_api.max_batch_diff_to_upstream`) take
+precedence over the global defaults.
+
 ### Built-in defaults (no explicit config required)
 
 | Category | Default threshold | Signal |
 |---|---|---|
-| Block-pipeline stages (`BlockCanonizer`, `BlockApplier`, `TreeManager`, `ProverInputGenerator`, `Batcher`, `RevmConsistencyChecker`) | 256 blocks | `block_diff_to_upstream` |
+| Block-pipeline stages (`BlockCanonizer`, `BlockApplier`, `TreeManager`, `ProverInputGenerator`, `RevmConsistencyChecker`) | 256 blocks | `block_diff_to_upstream` |
 | Batch-pipeline stages (`BatchVerification`, `FriJobManager`, `SnarkJobManager`, `GaplessCommitter`, `UpgradeGatekeeper`, `L1SenderCommit/Prove/Execute`, `GaplessL1ProofSender`, `PriorityTree`) | 128 batches | `batch_diff_to_upstream` |
+| `Batcher` | none — see note below | — |
 | Pipeline sources / sinks | none | — |
+
+> **Why `Batcher` has no block-diff threshold:** the Batcher's `processed`
+> watermark advances per *batch*, not per block, so its `block_diff_to_upstream`
+> grows naturally to O(blocks-per-batch) during every accumulation cycle.
+> A block-diff threshold would either fire spuriously or need an arbitrary large
+> value. Genuine Batcher stalls are caught by the downstream batch-pipeline
+> components via their `batch_diff_to_upstream` thresholds.
 
 A `PipelineCondition` can also carry `max_time_diff_to_upstream` (wall-clock lag)
 as an additional or standalone signal; this is not yet exposed in the YAML config

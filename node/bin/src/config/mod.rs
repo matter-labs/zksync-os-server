@@ -73,6 +73,7 @@ pub struct Config {
     #[config_validate(required_if = NodeRole::MainNode, skip_nested)]
     pub external_price_api_client_config: Option<ExternalPriceApiClientConfig>,
     pub fee_config: FeeConfig,
+    pub backpressure_config: BackpressureConfig,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -244,6 +245,9 @@ impl Config {
         schema
             .insert(&FeeConfig::DESCRIPTION, "fee")
             .expect("Failed to insert fee config");
+        schema
+            .insert(&BackpressureConfig::DESCRIPTION, "backpressure")
+            .expect("Failed to insert backpressure config");
         schema
     }
 
@@ -1281,6 +1285,21 @@ pub struct FeeConfig {
     pub native_price_override: Option<U128>,
 }
 
+/// Backpressure configuration.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct BackpressureConfig {
+    /// Stop accepting transactions when a block-pipeline component falls this many blocks behind
+    /// its upstream neighbour.
+    #[config(default_t = zksync_os_backpressure::DEFAULT_BLOCK_DIFF_LIMIT)]
+    pub default_block_diff_limit: u64,
+
+    /// Stop accepting transactions when a batch-pipeline component falls this many batches
+    /// behind its upstream neighbour.
+    #[config(default_t = zksync_os_backpressure::DEFAULT_BATCH_DIFF_LIMIT)]
+    pub default_batch_diff_limit: u64,
+}
+
 impl Config {
     pub fn build_backpressure_config(&self) -> zksync_os_backpressure::BackpressureConfig {
         use zksync_os_backpressure::{ComponentId, PipelineCondition};
@@ -1289,6 +1308,8 @@ impl Config {
             ..Default::default()
         };
         let mut cfg = zksync_os_backpressure::BackpressureConfig::default();
+        cfg.default_block_diff_limit = self.backpressure_config.default_block_diff_limit;
+        cfg.default_batch_diff_limit = self.backpressure_config.default_batch_diff_limit;
         if let Some(v) = self.prover_api_config.max_batch_diff_to_upstream {
             cfg.set(ComponentId::FriJobManager, condition(Some(v)));
             cfg.set(ComponentId::GaplessCommitter, condition(Some(v)));
@@ -1686,6 +1707,7 @@ mod tests {
                 forced: ForcedPriceClientConfig::default(),
             }),
             fee_config: FeeConfig::default(),
+            backpressure_config: BackpressureConfig::default(),
         }
     }
 
