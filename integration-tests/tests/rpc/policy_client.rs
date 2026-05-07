@@ -20,7 +20,7 @@ fn policy_service(server: &MockServer) -> PolicyServiceConfig {
         protocol_version: "1".into(),
         expected_protocol_version: None,
         bypass_from: vec![BOOTLOADER_FORMAL_ADDRESS, FORCE_DEPLOYER_ADDRESS],
-        auth_token: None,
+        auth_token: Some("test-token".into()),
     }
 }
 

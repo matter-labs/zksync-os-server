@@ -420,8 +420,11 @@ fn invalid_url_rejected_at_construction() {
 
 #[test]
 fn http_url_accepted_at_construction() {
-    assert!(PolicyClient::new(base_config("http://policy.local:9000".into())).is_ok());
+    let mut cfg = base_config("http://policy.local:9000".into());
+    cfg.auth_token = Some("token".into());
+    assert!(PolicyClient::new(cfg).is_ok());
 }
+
 
 #[test]
 fn https_url_rejected_at_construction() {

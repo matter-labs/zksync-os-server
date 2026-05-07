@@ -884,7 +884,7 @@ pub struct DeploymentFilterConfig {
 /// service).
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
-#[config(validate(Self::check_url, "URL must use scheme `http` or `unix`"))]
+#[config(validate(Self::check_url, "URL must use scheme `http` or `unix`; `http://` requires auth_token"))]
 pub struct PolicyServiceConfig {
     /// `http://host:port` or `unix:///path/to/socket`.
     #[config(with = Serde![str])]
@@ -912,8 +912,8 @@ pub struct PolicyServiceConfig {
     pub bypass_from: Vec<Address>,
 
     /// Bearer token sent as `Authorization: Bearer <token>` on every request.
-    /// Set for TCP transports; leave `None` when using `unix://` on a
-    /// network-isolated host where the socket path is the access control.
+    /// Required for `http://` transports. Ignored for `unix://` transports,
+    /// where socket-path filesystem permissions are the access control.
     #[config(secret)]
     pub auth_token: Option<SecretString>,
 }
@@ -1717,7 +1717,14 @@ impl PolicyServiceConfig {
     fn check_url(&self) -> Result<(), ErrorWithOrigin> {
         let Some(url) = &self.url else { return Ok(()) };
         match url.scheme() {
-            "http" | "unix" => {}
+            "http" => {
+                if self.auth_token.is_none() {
+                    return Err(ErrorWithOrigin::custom(
+                        "auth_token is required when using `http://` transport",
+                    ));
+                }
+            }
+            "unix" => {}
             other => {
                 return Err(ErrorWithOrigin::custom(format!(
                     "unsupported URL scheme `{other}`; expected `http` or `unix`"
@@ -2317,10 +2324,30 @@ mod tests {
     }
 
     #[test]
-    fn policy_service_accepts_http_url() {
+    fn policy_service_accepts_http_url_with_token() {
+        let result = parse_policy_service_config([
+            ("POLICY_SERVICE_URL", "http://policy.local:9000"),
+            ("POLICY_SERVICE_AUTH_TOKEN", "secret"),
+        ]);
+        assert!(result.is_ok(), "http URL with token should be accepted, got: {:?}", result.unwrap_err());
+    }
+
+    #[test]
+    fn policy_service_rejects_http_url_without_token() {
+        let err = parse_policy_service_config([("POLICY_SERVICE_URL", "http://policy.local:9000")])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("auth_token is required"),
+            "expected token-required error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn policy_service_accepts_unix_url_without_token() {
         let result =
-            parse_policy_service_config([("POLICY_SERVICE_URL", "http://policy.local:9000")]);
-        assert!(result.is_ok(), "http URL should be accepted, got: {:?}", result.unwrap_err());
+            parse_policy_service_config([("POLICY_SERVICE_URL", "unix:///run/policy.sock")]);
+        assert!(result.is_ok(), "unix URL without token should be accepted, got: {:?}", result.unwrap_err());
     }
 
     #[test]

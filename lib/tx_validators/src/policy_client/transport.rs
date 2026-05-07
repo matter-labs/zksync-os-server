@@ -1,7 +1,7 @@
 //! HTTP transport for `PolicyClient` calls to the policy service.
 //!
-//! Two transports are supported: `http://host:port` / `https://host:port`
-//! (TCP) and `unix:///path/to.sock` (UDS). Both are built into a single
+//! Two transports are supported: `http://host:port` (TCP) and
+//! `unix:///path/to.sock` (UDS). Both are built into a single
 //! `reqwest::Client`; `PolicyClient` is unaware of the underlying scheme.
 
 use std::path::PathBuf;
@@ -30,15 +30,15 @@ pub enum TransportError {
 /// invariants so that `Transport::from_config` can rely on them without
 /// further validation.
 pub(crate) enum TransportConfig {
-    /// HTTP or HTTPS over TCP. Bearer token injected if set.
+    /// HTTP over TCP. Bearer token is required and always injected.
     Http {
         url: url::Url,
-        auth_token: Option<String>,
+        auth_token: String,
     },
-    /// Unix domain socket. Bearer token injected if set.
+    /// Unix domain socket. Socket-path filesystem permissions are the access
+    /// control; bearer token is not applicable and not sent.
     Unix {
         socket_path: PathBuf,
-        auth_token: Option<String>,
     },
 }
 
@@ -62,13 +62,10 @@ impl Transport {
                 Ok(Self {
                     client,
                     base_url,
-                    auth_token,
+                    auth_token: Some(auth_token),
                 })
             }
-            TransportConfig::Unix {
-                socket_path,
-                auth_token,
-            } => {
+            TransportConfig::Unix { socket_path } => {
                 let client = reqwest::Client::builder()
                     .unix_socket(socket_path)
                     .build()
@@ -76,7 +73,7 @@ impl Transport {
                 Ok(Self {
                     client,
                     base_url: "http://localhost".to_owned(),
-                    auth_token,
+                    auth_token: None,
                 })
             }
         }
