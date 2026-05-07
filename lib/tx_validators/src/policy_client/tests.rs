@@ -660,37 +660,31 @@ async fn judge_serialized_request_carries_captured_frames() {
     let body = mock.last_body("/judge").expect("body captured");
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(parsed["protocolVersion"], "1");
-    let frames_json = parsed["trace"]["frames"].as_array().expect("frames array");
-    assert_eq!(frames_json.len(), 2);
+    let root = &parsed["trace"]["frame"];
+    assert!(!root.is_null(), "trace.frame should be non-null");
     assert_eq!(
-        frames_json[0]["caller"]
-            .as_str()
-            .unwrap()
-            .to_ascii_lowercase(),
+        root["caller"].as_str().unwrap().to_ascii_lowercase(),
         format!("{FROM:#x}")
     );
     assert_eq!(
-        frames_json[0]["callee"]
-            .as_str()
-            .unwrap()
-            .to_ascii_lowercase(),
+        root["callee"].as_str().unwrap().to_ascii_lowercase(),
         format!("{TO:#x}")
     );
-    assert_eq!(frames_json[0]["value"].as_str().unwrap(), "0x3e8");
-    assert_eq!(frames_json[0]["calldata"].as_str().unwrap(), "0xdeadbeef");
-    let deploys = frames_json[0]["deploys"].as_array().unwrap();
+    assert_eq!(root["value"].as_str().unwrap(), "0x3e8");
+    assert_eq!(root["calldata"].as_str().unwrap(), "0xdeadbeef");
+    let deploys = root["deploys"].as_array().unwrap();
     assert_eq!(deploys.len(), 1);
     assert_eq!(
         deploys[0].as_str().unwrap().to_ascii_lowercase(),
         format!("{deployed:#x}")
     );
-    // Constructor frame itself records no deploy.
-    assert!(frames_json[1]["deploys"].as_array().unwrap().is_empty());
-    assert_eq!(frames_json[1]["calldata"].as_str().unwrap(), "0xabcd");
-    // Per-frame call kinds: top-level frame is a regular call, the inner
-    // CREATE frame is the constructor.
-    assert_eq!(frames_json[0]["callKind"].as_str().unwrap(), "call");
-    assert_eq!(frames_json[1]["callKind"].as_str().unwrap(), "constructor");
+    assert_eq!(root["callKind"].as_str().unwrap(), "call");
+    // Constructor frame is a child of the root, not a sibling.
+    let children = root["children"].as_array().unwrap();
+    assert_eq!(children.len(), 1);
+    assert!(children[0]["deploys"].as_array().unwrap().is_empty());
+    assert_eq!(children[0]["calldata"].as_str().unwrap(), "0xabcd");
+    assert_eq!(children[0]["callKind"].as_str().unwrap(), "constructor");
     assert_eq!(parsed["accessType"].as_str().unwrap(), "write");
 }
 
@@ -742,11 +736,14 @@ async fn judge_serialized_frames_carry_call_kind_for_delegatecall_and_static() {
 
     let body = mock.last_body("/judge").expect("body captured");
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let frames = parsed["trace"]["frames"].as_array().unwrap();
-    assert_eq!(frames.len(), 3);
-    assert_eq!(frames[0]["callKind"].as_str().unwrap(), "call");
-    assert_eq!(frames[1]["callKind"].as_str().unwrap(), "delegateCall");
-    assert_eq!(frames[2]["callKind"].as_str().unwrap(), "staticCall");
+    let root = &parsed["trace"]["frame"];
+    assert_eq!(root["callKind"].as_str().unwrap(), "call");
+    let children = root["children"].as_array().unwrap();
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0]["callKind"].as_str().unwrap(), "delegateCall");
+    let grandchildren = children[0]["children"].as_array().unwrap();
+    assert_eq!(grandchildren.len(), 1);
+    assert_eq!(grandchildren[0]["callKind"].as_str().unwrap(), "staticCall");
 }
 
 #[tokio::test]
@@ -803,11 +800,11 @@ async fn session_isolates_slot_from_sibling() {
     let body_a = mock.last_body("/judge").expect("judge called for session_a");
     let parsed_a: serde_json::Value = serde_json::from_slice(&body_a).unwrap();
     assert_eq!(parsed_a["accessType"].as_str().unwrap(), "read");
-    let frames_a = parsed_a["trace"]["frames"].as_array().unwrap();
-    assert_eq!(frames_a.len(), 1);
-    assert_eq!(frames_a[0]["calldata"].as_str().unwrap(), "0xcc");
+    let frame_a = &parsed_a["trace"]["frame"];
+    assert!(!frame_a.is_null(), "session_a should have a root frame");
+    assert_eq!(frame_a["calldata"].as_str().unwrap(), "0xcc");
 
-    // session_b's judge body has zero frames (session_a's frame did not
+    // session_b's judge body has no root frame (session_a's frame did not
     // bleed into session_b's slot). session_b defaults to Write intent.
     spawn_blocking(move || session_b.finish_tx())
         .await
@@ -816,12 +813,7 @@ async fn session_isolates_slot_from_sibling() {
     let body_b = mock.last_body("/judge").expect("judge called for session_b");
     let parsed_b: serde_json::Value = serde_json::from_slice(&body_b).unwrap();
     assert_eq!(parsed_b["accessType"].as_str().unwrap(), "write");
-    assert!(
-        parsed_b["trace"]["frames"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(parsed_b["trace"]["frame"].is_null(), "session_b should have no root frame");
 }
 
 /// Two concurrent sessions must not see each other's frames at `/judge`.

@@ -67,7 +67,7 @@ pub(super) struct JudgeRequest<'a> {
 
 #[derive(Debug, Serialize)]
 pub(super) struct JudgeTrace<'a> {
-    pub frames: Vec<JudgeFrame<'a>>,
+    pub frame: Option<JudgeFrame<'a>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,30 +80,33 @@ pub(super) struct JudgeFrame<'a> {
     pub calldata: &'a [u8],
     pub deploys: &'a [Address],
     pub call_kind: CallKind,
+    pub children: Vec<JudgeFrame<'a>>,
+}
+
+fn to_wire_frame(f: &CapturedFrame) -> JudgeFrame<'_> {
+    JudgeFrame {
+        caller: f.caller,
+        callee: f.callee,
+        value: f.value,
+        calldata: &f.calldata,
+        deploys: &f.deploys,
+        call_kind: f.call_kind,
+        children: f.children.iter().map(to_wire_frame).collect(),
+    }
 }
 
 impl<'a> JudgeRequest<'a> {
     pub(super) fn new(
         protocol_version: &'a str,
         from: Option<Address>,
-        frames: &'a [CapturedFrame],
+        root: Option<&'a CapturedFrame>,
         access_type: AccessType,
     ) -> Self {
         Self {
             protocol_version,
             from,
             trace: JudgeTrace {
-                frames: frames
-                    .iter()
-                    .map(|f| JudgeFrame {
-                        caller: f.caller,
-                        callee: f.callee,
-                        value: f.value,
-                        calldata: &f.calldata,
-                        deploys: &f.deploys,
-                        call_kind: f.call_kind,
-                    })
-                    .collect(),
+                frame: root.map(to_wire_frame),
             },
             access_type,
         }
