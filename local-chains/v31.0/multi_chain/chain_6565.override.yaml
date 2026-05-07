@@ -5,6 +5,6 @@ general:
 sequencer:
   tx_validator:
     policy_service:
-      url: http://localhost:8000
+      url: http://localhost:8001
       protocol_version: '1'
       auth_token: dev-secret
