@@ -590,7 +590,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 optimistic_gas_limit,
                 &mut highest_gas_limit,
                 &mut lowest_gas_limit,
-            )?;
+            );
         };
 
         if tx.tx_type() == ZkTxType::L1 {
@@ -645,7 +645,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                         mid_gas_limit,
                         &mut highest_gas_limit,
                         &mut lowest_gas_limit,
-                    )?;
+                    );
                 }
             }
 
@@ -744,7 +744,7 @@ pub fn update_estimated_gas_range(
     tx_gas_limit: u64,
     highest_gas_limit: &mut u64,
     lowest_gas_limit: &mut u64,
-) -> Result<(), EthCallError> {
+) {
     match result {
         ExecutionResult::Success { .. } => {
             // Cap the highest gas limit with the succeeding gas limit.
@@ -761,9 +761,7 @@ pub fn update_estimated_gas_range(
             // <https://github.com/OpenZeppelin/openzeppelin-contracts/blob/94697be8a3f0dfcd95dfb13ffbd39b5973f5c65d/contracts/metatx/ERC2771Forwarder.sol#L360-L367>
             *lowest_gas_limit = tx_gas_limit;
         }
-    };
-
-    Ok(())
+    }
 }
 
 /// Error types returned by `eth_call` implementation
