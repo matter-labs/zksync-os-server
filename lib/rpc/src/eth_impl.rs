@@ -25,7 +25,7 @@ use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use tokio::sync::watch;
 use zk_ee::common_structs::derive_flat_storage_key;
-use zk_os_api::helpers::{get_balance, get_code};
+use zk_os_api::helpers::get_code;
 use zksync_os_interface::traits::ReadStorage;
 use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::subpools::l2::L2Subpool;
@@ -269,13 +269,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthError::BlockNotFound(block_id));
         };
-        Ok(self
-            .storage
-            .state_view_at(block_number)?
-            .get_account(address)
-            .as_ref()
-            .map(get_balance)
-            .unwrap_or(U256::ZERO))
+        Ok(self.storage.state_view_at(block_number)?.balance(address))
     }
 
     fn storage_at_impl(

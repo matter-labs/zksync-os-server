@@ -393,12 +393,7 @@ fn resolve_balance<V: ViewState + 'static>(
             .map(|entry| entry.value.clone())
     };
 
-    let mut balance = env
-        .state_view
-        .borrow_mut()
-        .get_account(address)
-        .map(|props| props.balance)
-        .unwrap_or_default();
+    let mut balance = env.state_view.borrow_mut().balance(address);
 
     if let Some(delta) = delta {
         let (with_add, overflow) = balance.overflowing_add(delta.added);

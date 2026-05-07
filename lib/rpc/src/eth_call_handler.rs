@@ -16,7 +16,7 @@ use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use serde_json::Value as JsonValue;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
-use zk_os_api::helpers::{get_balance, get_nonce};
+use zk_os_api::helpers::get_nonce;
 use zksync_os_interface::types::{BlockHashes, ExecutionOutput, TxOutput};
 use zksync_os_interface::{
     error::InvalidTransaction,
@@ -733,11 +733,7 @@ fn max_gas_from_balance<V: ViewState>(
     gas_price: U256,
     storage_view: &mut V,
 ) -> Result<u64, EthCallError> {
-    let balance = storage_view
-        .get_account(request.from.unwrap_or_default())
-        .as_ref()
-        .map(get_balance)
-        .unwrap_or_default();
+    let balance = storage_view.balance(request.from.unwrap_or_default());
 
     let value = request.value.unwrap_or_default();
     let balance = balance
