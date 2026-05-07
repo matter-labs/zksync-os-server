@@ -483,18 +483,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         // the gas limit of the corresponding block
         let block_gas_limit = block_context.gas_limit;
 
-        // Determine the highest possible gas limit, considering both the request's specified limit
-        // and the block's limit.
-        let mut highest_gas_limit = request
-            .gas
-            .map(|mut tx_gas_limit| {
-                if block_gas_limit < tx_gas_limit {
-                    // requested gas limit is higher than the allowed gas limit, capping
-                    tx_gas_limit = block_gas_limit;
-                }
-                tx_gas_limit
-            })
-            .unwrap_or(block_gas_limit);
+        let mut highest_gas_limit = request.gas.unwrap_or(block_gas_limit).min(block_gas_limit);
 
         // Check funds of the sender (only useful to check if transaction gas price is more than 0).
         //
