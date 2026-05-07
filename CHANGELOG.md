@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.1](https://github.com/matter-labs/zksync-os-server/compare/v0.20.0...v0.20.1) (2026-05-07)
+
+
+### Features
+
+* add backpressure monitor and pipeline wiring ([#1206](https://github.com/matter-labs/zksync-os-server/issues/1206)) ([66861de](https://github.com/matter-labs/zksync-os-server/commit/66861dea0a703df9700c8ec5d66fc6890f9efb77))
+
 ## [0.20.0](https://github.com/matter-labs/zksync-os-server/compare/v0.19.3...v0.20.0) (2026-05-07)
 
 
