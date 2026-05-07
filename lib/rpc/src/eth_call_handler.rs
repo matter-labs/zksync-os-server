@@ -521,12 +521,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                     .saturating_to(),
             );
         }
-        request.set_gas_limit(
-            request
-                .gas
-                .unwrap_or(highest_gas_limit)
-                .min(highest_gas_limit),
-        );
+        request.set_gas_limit(highest_gas_limit);
         let tx = self.create_tx_from_request(request, &block_context, true)?;
 
         let try_at = |gas_limit: u64| {
