@@ -455,11 +455,11 @@ pub struct ProviderConfig {
     pub rpc_poll_interval: Duration,
 
     /// Maximum number of retry attempts, excluding the initial attempt.
-    #[config(default_t = 2)]
+    #[config(default_t = 5)]
     pub max_retries: u32,
 
     /// Backoff used between retry attempts.
-    #[config(default_t = Duration::from_millis(200))]
+    #[config(default_t = Duration::from_millis(1000))]
     pub retry_backoff: Duration,
 }
 
