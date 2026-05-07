@@ -48,8 +48,6 @@ impl<C: SendToL1> L1SenderCommand<C> {
     }
 
     /// Last block number in this command's final batch.
-    /// Use this (not first_batch_number) for record_processed — the monitor lag
-    /// computation is block-based, not batch-based.
     pub fn last_block_number(&self) -> u64 {
         self.last_block().batch.last_block_number
     }

@@ -45,7 +45,7 @@ pub enum SubmitError {
     ProvingVersionMismatch(ProvingVersion, ProvingVersion),
     #[error("server is shutting down")]
     ShuttingDown,
-    #[error("{0}")]
+    #[error("internal error: {0}")]
     Other(String),
 }
 
