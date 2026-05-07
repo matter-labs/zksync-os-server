@@ -37,7 +37,7 @@ use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_api::snark_proving_pipeline_step::SnarkProvingPipelineStep;
 use crate::prover_input_generator::ProverInputGenerator;
-use crate::provider::build_node_provider;
+use crate::provider::{ProviderKind, build_node_provider};
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
@@ -194,16 +194,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
-    let l1_provider = build_node_provider(
-        &config.general_config.l1_rpc_url,
-        config.general_config.l1_rpc_poll_interval,
-    )
-    .await;
-    let gateway_provider = match &config.general_config.gateway_rpc_url {
-        Some(url) => {
-            Some(build_node_provider(url, config.general_config.gateway_rpc_poll_interval).await)
-        }
-        None => None,
+    let l1_provider = build_node_provider(&config.l1_provider_config, ProviderKind::L1).await;
+    let gateway_provider = if let Some(config) = &config.gateway_provider_config {
+        Some(build_node_provider(config, ProviderKind::Gateway).await)
+    } else {
+        None
     };
 
     tracing::info!("Reading L1 state");
@@ -260,10 +255,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             }
             _ => {}
         };
-        if let (PubdataMode::Blobs | PubdataMode::Calldata, true) = (
-            pubdata_mode,
-            config.general_config.gateway_rpc_url.is_some(),
-        ) {
+        if let (PubdataMode::Blobs | PubdataMode::Calldata, true) =
+            (pubdata_mode, config.gateway_provider_config.is_some())
+        {
             panic!(
                 "Pubdata mode {:?} cannot be used when settling on Gateway",
                 pubdata_mode
@@ -583,10 +577,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
     let interop_fee_subpool = InteropFeeSubpool::new(next_cursors.interop_fee_number);
-    let interop_roots_subpool = InteropRootsSubpool::new(
-        // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
-        1,
-    );
+    let interop_roots_subpool =
+        InteropRootsSubpool::new(config.sequencer_config.interop_roots_per_tx);
 
     // If we start from the very first block, we should start by sending upgrade tx for genesis.
     if starting_block == 1 {
@@ -663,7 +655,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .run(),
         );
 
-        if config.general_config.gateway_rpc_url.is_some() {
+        if config.gateway_provider_config.is_some() {
             runtime.spawn_critical_task(
                 "interop roots watcher",
                 InteropWatcher::create_watcher(
@@ -913,7 +905,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     if node_role.is_main()
-        && config.general_config.gateway_rpc_url.is_some()
+        && config.gateway_provider_config.is_some()
         && current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
     {
         let eth_call_handler = EthCallHandler::new(
@@ -1257,7 +1249,7 @@ async fn run_main_node_pipeline(
             provider: sl_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: config.general_config.gateway_rpc_url.is_some(),
+            gateway: config.gateway_provider_config.is_some(),
             commit_submitted_tx: Some(commit_submitted_tx),
             sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })
@@ -1269,7 +1261,7 @@ async fn run_main_node_pipeline(
             provider: sl_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: config.general_config.gateway_rpc_url.is_some(),
+            gateway: config.gateway_provider_config.is_some(),
             commit_submitted_tx: None,
             sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })
@@ -1286,7 +1278,7 @@ async fn run_main_node_pipeline(
             provider: sl_provider,
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: config.general_config.gateway_rpc_url.is_some(),
+            gateway: config.gateway_provider_config.is_some(),
             commit_submitted_tx: None,
             sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })

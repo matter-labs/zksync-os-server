@@ -6,11 +6,12 @@ use std::{path::Path, path::PathBuf, str::FromStr, time::Duration};
 use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::task::JoinHandle;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
-    Config, ConfigArgs, ConfigValidate, ProofStorageConfig, RebuildBlocksConfig,
+    Config, ConfigArgs, ConfigValidate, PrometheusConfig, ProofStorageConfig, RebuildBlocksConfig,
     StateBackendConfig, build_external_config, load_config_file_sources,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
@@ -24,6 +25,12 @@ static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemall
 
 const IMMEDIATE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+/// Push interval for push exporter (almost all metrics are pull)
+/// We don't have to report it frequently, because final push is guaranteed.
+const PROMETHEUS_PUSH_INTERVAL: Duration = Duration::from_secs(60);
+/// Push exporter graceful shutdown timeout, the shutdown is nearly instant
+/// We need a graceful shutdown because push metrics can be used for alerts
+const PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
@@ -169,22 +176,25 @@ pub async fn main() {
     // ======= Run tasks ===========
     let ephemeral_enabled = config.general_config.ephemeral;
     let _ephemeral_guard = ephemeral_enabled.then(|| enable_ephemeral_mode(&mut config));
-    let prometheus_port = config.observability_config.prometheus.port;
+    let prometheus_config = config.observability_config.prometheus.clone();
+    let prometheus_port = prometheus_config.port;
 
     match config.general_config.state_backend {
         StateBackendConfig::FullDiffs => run::<FullDiffsState>(&runtime, config).await,
         StateBackendConfig::Compacted => run::<StateHandle>(&runtime, config).await,
     };
 
-    runtime.spawn_critical_with_graceful_shutdown_signal("prometheus", |shutdown| async move {
-        if ephemeral_enabled {
-            tracing::info!("Ephemeral mode enabled, skipping Prometheus exporter");
-        } else {
+    let prometheus_push_shutdown = if ephemeral_enabled {
+        tracing::info!("Ephemeral mode enabled, skipping Prometheus push exporter");
+        None
+    } else {
+        runtime.spawn_critical_with_graceful_shutdown_signal("prometheus", |shutdown| async move {
             let prometheus: PrometheusExporterConfig =
                 PrometheusExporterConfig::pull(prometheus_port);
             prometheus.run(shutdown).await.expect("prometheus failed");
-        }
-    });
+        });
+        spawn_prometheus_push_exporter(&runtime, &prometheus_config)
+    };
 
     let task_manager_handle = runtime
         .take_task_manager_handle()
@@ -193,12 +203,66 @@ pub async fn main() {
     tokio::select! {
         task_manager_result = task_manager_handle => {
             if let Ok(Err(err)) = task_manager_result {
-                tracing::error!("shutting down due to error");
+                tracing::error!(%err, "shutting down due to critical task error");
+                // Graceful shutdown for push exporter. Very fast.
+                // This is needed for REVM alert.
+                wait_for_prometheus_push_shutdown(prometheus_push_shutdown).await;
                 eprintln!("Error: {err:?}");
                 std::process::exit(1);
             }
         },
         _ = handle_delayed_termination(runtime) => {},
+    }
+}
+
+/// Exports metric groups with `PushMetrics` suffix
+fn spawn_prometheus_push_exporter(
+    runtime: &Runtime,
+    prometheus_config: &PrometheusConfig,
+) -> Option<JoinHandle<()>> {
+    let Some(push_gateway_url) = prometheus_config.push_gateway_url.clone() else {
+        tracing::warn!(
+            "Prometheus push gateway URL is not configured; push-only metrics will not be exported"
+        );
+        return None;
+    };
+
+    let handle = runtime.spawn_critical_with_graceful_shutdown_signal(
+        "prometheus push",
+        |shutdown| async move {
+            let push_gateway_endpoint =
+                PrometheusExporterConfig::gateway_endpoint(&push_gateway_url);
+            let prometheus =
+                PrometheusExporterConfig::push(push_gateway_endpoint, PROMETHEUS_PUSH_INTERVAL);
+            prometheus
+                .run(shutdown)
+                .await
+                .expect("prometheus push failed");
+        },
+    );
+
+    Some(handle)
+}
+
+async fn wait_for_prometheus_push_shutdown(handle: Option<JoinHandle<()>>) {
+    let Some(handle) = handle else {
+        tracing::warn!("Prometheus push exporter was not configured; nothing to wait for");
+        return;
+    };
+
+    match tokio::time::timeout(PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT, handle).await {
+        Ok(Ok(())) => {
+            tracing::info!("Prometheus push exporter shutdown completed");
+        }
+        Ok(Err(err)) => {
+            tracing::warn!(%err, "Prometheus push exporter task did not complete cleanly");
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout = ?PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT,
+                "Timed out waiting for Prometheus push exporter shutdown"
+            );
+        }
     }
 }
 
