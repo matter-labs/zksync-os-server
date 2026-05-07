@@ -73,6 +73,81 @@ pub struct GeneralMetrics {
     pub rpc_gas_price_scale_factor: Gauge<f64>,
     /// RPC: pubdata price multiplier used during gas limit estimation (`eth_estimateGas`).
     pub rpc_estimate_gas_pubdata_price_factor: Gauge<f64>,
+
+    // -- Fee policy (from `FeeConfig`) -------------------------------------------------------
+    /// Fee policy: configured USD price for one native resource unit.
+    pub fee_native_price_usd: Gauge<f64>,
+    /// Fee policy: native resource units equivalent to one gas unit.
+    pub fee_native_per_gas: Gauge<u64>,
+    /// Fee policy: whether `fee.base_fee_override` is configured.
+    pub fee_base_fee_override_enabled: Gauge<u64>,
+    /// Fee policy: configured base fee override, in base token units.
+    pub fee_base_fee_override_wei: Gauge<f64>,
+    /// Fee policy: whether `fee.native_price_override` is configured.
+    pub fee_native_price_override_enabled: Gauge<u64>,
+    /// Fee policy: configured native price override, in base token units.
+    pub fee_native_price_override_wei: Gauge<f64>,
+    /// Fee policy: whether `fee.pubdata_price_override` is configured.
+    pub fee_pubdata_price_override_enabled: Gauge<u64>,
+    /// Fee policy: configured pubdata price override, in base token units.
+    pub fee_pubdata_price_override_wei: Gauge<f64>,
+    /// Fee policy: whether `fee.pubdata_price_cap` is configured.
+    pub fee_pubdata_price_cap_enabled: Gauge<u64>,
+    /// Fee policy: configured pubdata price cap, in base token units.
+    pub fee_pubdata_price_cap_wei: Gauge<f64>,
+
+    // -- Proving policy (from `ProverApiConfig`) ---------------------------------------------
+    /// Proving policy: whether in-process fake FRI provers are enabled.
+    pub proving_fake_fri_provers_enabled: Gauge<u64>,
+    /// Proving policy: whether in-process fake SNARK provers are enabled.
+    pub proving_fake_snark_provers_enabled: Gauge<u64>,
+
+    // -- L1 submission policy (from `L1SenderConfig`) ----------------------------------------
+    /// L1 submission policy: max fee per gas, in wei.
+    pub l1_sender_max_fee_per_gas_wei: Gauge<f64>,
+    /// L1 submission policy: max priority fee per gas, in wei.
+    pub l1_sender_max_priority_fee_per_gas_wei: Gauge<f64>,
+    /// L1 submission policy: max fee per blob gas, in wei.
+    pub l1_sender_max_fee_per_blob_gas_wei: Gauge<f64>,
+
+    // -- Transaction admission policy --------------------------------------------------------
+    /// Tx admission policy: max pending mempool transactions.
+    pub mempool_max_pending_txs: Gauge<usize>,
+    /// Tx admission policy: max pending mempool size.
+    #[metrics(unit = Unit::Bytes)]
+    pub mempool_max_pending_size: Gauge<usize>,
+    /// Tx admission policy: minimal protocol base fee accepted by mempool.
+    pub mempool_minimal_protocol_basefee: Gauge<u64>,
+    /// Tx admission policy: max transaction input size accepted by the validator.
+    #[metrics(unit = Unit::Bytes)]
+    pub tx_validator_max_input_bytes: Gauge<usize>,
+
+    // -- Price source policy -----------------------------------------------------------------
+    /// Price source policy: selected external price source. Gauge is always set to one.
+    #[metrics(labels = ["source"])]
+    pub external_price_api_source: LabeledFamily<&'static str, Gauge, 1>,
+    /// Price source policy: number of configured fallback token prices.
+    pub base_token_price_fallback_prices_count: Gauge<usize>,
+    /// Price source policy: whether base token address override is configured.
+    pub base_token_price_base_token_addr_override_enabled: Gauge<u64>,
+    /// Price source policy: configured base token address override. Gauge is always set to one.
+    #[metrics(labels = ["address"])]
+    pub base_token_price_base_token_addr_override: LabeledFamily<&'static str, Gauge, 1>,
+    /// Price source policy: whether base token decimals override is configured.
+    pub base_token_price_base_token_decimals_override_enabled: Gauge<u64>,
+    /// Price source policy: configured base token decimals override.
+    pub base_token_price_base_token_decimals_override: Gauge<u64>,
+    /// Price source policy: whether gateway base token address override is configured.
+    pub base_token_price_gateway_base_token_addr_override_enabled: Gauge<u64>,
+    /// Price source policy: configured gateway base token address override. Gauge is always set to one.
+    #[metrics(labels = ["address"])]
+    pub base_token_price_gateway_base_token_addr_override: LabeledFamily<&'static str, Gauge, 1>,
+
+    // -- Batch verification policy -----------------------------------------------------------
+    /// Batch verification policy: whether the main-node verification server is enabled.
+    pub batch_verification_server_enabled: Gauge<u64>,
+    /// Batch verification policy: whether the external-node verification client is enabled.
+    pub batch_verification_client_enabled: Gauge<u64>,
 }
 
 #[vise::register]

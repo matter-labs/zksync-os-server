@@ -21,7 +21,8 @@ use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ConsensusNodeCommandSource, ExternalNodeCommandSource};
 use crate::config::{
-    Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
+    Config, ExternalPriceApiClientConfig, ProverApiConfig, base_token_price_updater_config,
+    gas_adjuster_config,
 };
 use crate::en_remote_config::load_remote_config;
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -1394,11 +1395,20 @@ fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashe
     block_hashes
 }
 
-/// Publishes static config limits (block seal / batch seal / RPC) as gauges so they're
-/// observable in Prometheus alongside the runtime metrics they bound. Set once at startup;
-/// values do not change at runtime.
+/// Publishes static config limits and hosted-chain policy values as gauges.
 fn report_static_config_limits(config: &Config) {
-    // Block seal criteria.
+    report_block_seal_config(config);
+    report_batch_seal_config(config);
+    report_rpc_config(config);
+    report_fee_policy_config(config);
+    report_proving_policy_config(config);
+    report_l1_submission_policy_config(config);
+    report_tx_admission_policy_config(config);
+    report_price_source_policy_config(config);
+    report_batch_verification_policy_config(config);
+}
+
+fn report_block_seal_config(config: &Config) {
     let sequencer = &config.sequencer_config;
     GENERAL_METRICS
         .block_seal_block_time
@@ -1412,8 +1422,9 @@ fn report_static_config_limits(config: &Config) {
     GENERAL_METRICS
         .block_seal_block_pubdata_limit
         .set(sequencer.block_pubdata_limit_bytes);
+}
 
-    // Batch seal criteria.
+fn report_batch_seal_config(config: &Config) {
     let batcher = &config.batcher_config;
     GENERAL_METRICS
         .batch_seal_batch_timeout
@@ -1424,8 +1435,9 @@ fn report_static_config_limits(config: &Config) {
     GENERAL_METRICS
         .batch_seal_interop_roots_per_batch_limit
         .set(batcher.interop_roots_per_batch_limit);
+}
 
-    // RPC request limits.
+fn report_rpc_config(config: &Config) {
     let rpc = &config.rpc_config;
     GENERAL_METRICS
         .rpc_eth_call_gas
@@ -1457,6 +1469,159 @@ fn report_static_config_limits(config: &Config) {
     GENERAL_METRICS
         .rpc_estimate_gas_pubdata_price_factor
         .set(rpc.estimate_gas_pubdata_price_factor);
+}
+
+fn report_fee_policy_config(config: &Config) {
+    let fee = &config.fee_config;
+    GENERAL_METRICS
+        .fee_native_price_usd
+        .set(fee.native_price_usd);
+    GENERAL_METRICS.fee_native_per_gas.set(fee.native_per_gas);
+    report_optional_f64_gauge(
+        fee.base_fee_override.map(u128_metric_value),
+        &GENERAL_METRICS.fee_base_fee_override_enabled,
+        &GENERAL_METRICS.fee_base_fee_override_wei,
+    );
+    report_optional_f64_gauge(
+        fee.native_price_override.map(u128_metric_value),
+        &GENERAL_METRICS.fee_native_price_override_enabled,
+        &GENERAL_METRICS.fee_native_price_override_wei,
+    );
+    report_optional_f64_gauge(
+        fee.pubdata_price_override.map(u128_metric_value),
+        &GENERAL_METRICS.fee_pubdata_price_override_enabled,
+        &GENERAL_METRICS.fee_pubdata_price_override_wei,
+    );
+    report_optional_f64_gauge(
+        fee.pubdata_price_cap.map(u128_metric_value),
+        &GENERAL_METRICS.fee_pubdata_price_cap_enabled,
+        &GENERAL_METRICS.fee_pubdata_price_cap_wei,
+    );
+}
+
+fn report_proving_policy_config(config: &Config) {
+    let fake_provers = &config.prover_api_config;
+    GENERAL_METRICS
+        .proving_fake_fri_provers_enabled
+        .set(bool_metric_value(fake_provers.fake_fri_provers.enabled));
+    GENERAL_METRICS
+        .proving_fake_snark_provers_enabled
+        .set(bool_metric_value(fake_provers.fake_snark_provers.enabled));
+}
+
+fn report_l1_submission_policy_config(config: &Config) {
+    let l1_sender = &config.l1_sender_config;
+    GENERAL_METRICS
+        .l1_sender_max_fee_per_gas_wei
+        .set(l1_sender.max_fee_per_gas.0 as f64);
+    GENERAL_METRICS
+        .l1_sender_max_priority_fee_per_gas_wei
+        .set(l1_sender.max_priority_fee_per_gas.0 as f64);
+    GENERAL_METRICS
+        .l1_sender_max_fee_per_blob_gas_wei
+        .set(l1_sender.max_fee_per_blob_gas.0 as f64);
+}
+
+fn report_tx_admission_policy_config(config: &Config) {
+    let mempool = &config.mempool_config;
+    GENERAL_METRICS
+        .mempool_max_pending_txs
+        .set(mempool.max_pending_txs);
+    GENERAL_METRICS
+        .mempool_max_pending_size
+        .set(mempool.max_pending_size);
+    GENERAL_METRICS
+        .mempool_minimal_protocol_basefee
+        .set(mempool.minimal_protocol_basefee);
+    GENERAL_METRICS
+        .tx_validator_max_input_bytes
+        .set(config.tx_validator_config.max_input_bytes);
+}
+
+fn report_price_source_policy_config(config: &Config) {
+    let price_updater = &config.base_token_price_updater_config;
+    let source = external_price_source_name(&config.external_price_api_client_config);
+    GENERAL_METRICS.external_price_api_source[&source].set(1);
+    GENERAL_METRICS
+        .base_token_price_fallback_prices_count
+        .set(price_updater.fallback_prices.len());
+    report_optional_address_override(
+        price_updater.base_token_addr_override,
+        &GENERAL_METRICS.base_token_price_base_token_addr_override_enabled,
+        |address| {
+            GENERAL_METRICS.base_token_price_base_token_addr_override[&address].set(1);
+        },
+    );
+    report_optional_u8_gauge(
+        price_updater.base_token_decimals_override,
+        &GENERAL_METRICS.base_token_price_base_token_decimals_override_enabled,
+        &GENERAL_METRICS.base_token_price_base_token_decimals_override,
+    );
+    report_optional_address_override(
+        price_updater.gateway_base_token_addr_override,
+        &GENERAL_METRICS.base_token_price_gateway_base_token_addr_override_enabled,
+        |address| {
+            GENERAL_METRICS.base_token_price_gateway_base_token_addr_override[&address].set(1);
+        },
+    );
+}
+
+fn report_batch_verification_policy_config(config: &Config) {
+    let batch_verification = &config.batch_verification_config;
+    GENERAL_METRICS
+        .batch_verification_server_enabled
+        .set(bool_metric_value(batch_verification.server_enabled));
+    GENERAL_METRICS
+        .batch_verification_client_enabled
+        .set(bool_metric_value(batch_verification.client_enabled));
+}
+
+fn report_optional_f64_gauge(
+    value: Option<f64>,
+    enabled_gauge: &vise::Gauge<u64>,
+    value_gauge: &vise::Gauge<f64>,
+) {
+    enabled_gauge.set(bool_metric_value(value.is_some()));
+    value_gauge.set(value.unwrap_or_default());
+}
+
+fn report_optional_u8_gauge(
+    value: Option<u8>,
+    enabled_gauge: &vise::Gauge<u64>,
+    value_gauge: &vise::Gauge<u64>,
+) {
+    enabled_gauge.set(bool_metric_value(value.is_some()));
+    value_gauge.set(u64::from(value.unwrap_or_default()));
+}
+
+fn report_optional_address_override(
+    value: Option<alloy::primitives::Address>,
+    enabled_gauge: &vise::Gauge<u64>,
+    report_label: impl FnOnce(&'static str),
+) {
+    enabled_gauge.set(bool_metric_value(value.is_some()));
+    if let Some(value) = value {
+        report_label(value.to_string().leak());
+    }
+}
+
+fn external_price_source_name(
+    external_price_api_client: &Option<ExternalPriceApiClientConfig>,
+) -> &'static str {
+    match external_price_api_client {
+        Some(ExternalPriceApiClientConfig::Forced { .. }) => "forced",
+        Some(ExternalPriceApiClientConfig::CoinGecko { .. }) => "coingecko",
+        Some(ExternalPriceApiClientConfig::CoinMarketCap { .. }) => "coinmarketcap",
+        None => "none",
+    }
+}
+
+fn u128_metric_value(value: alloy::primitives::U128) -> f64 {
+    value.to::<u128>() as f64
+}
+
+fn bool_metric_value(value: bool) -> u64 {
+    u64::from(value)
 }
 
 fn init_and_report_internal_config_manager(
