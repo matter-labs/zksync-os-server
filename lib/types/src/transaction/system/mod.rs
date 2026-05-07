@@ -127,8 +127,8 @@ impl SystemTxEnvelope {
                 SystemTxInput::ImportInteropRoots(roots) => {
                     SystemTxType::ImportInteropRoots(roots.len() as u64)
                 }
-                SystemTxInput::SetSLChainId(_, migration_number) => {
-                    SystemTxType::SetSLChainId(migration_number)
+                SystemTxInput::SetSLChainId(chain_id, migration_number) => {
+                    SystemTxType::SetSLChainId(chain_id, migration_number)
                 }
                 SystemTxInput::SetInteropFee(_, interop_fee_number) => {
                     SystemTxType::SetInteropFee(interop_fee_number)

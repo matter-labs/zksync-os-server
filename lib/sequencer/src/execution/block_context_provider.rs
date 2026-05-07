@@ -251,7 +251,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                         matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
                             && matches!(
                                 window[1].as_system_tx_type(),
-                                Some(SystemTxType::SetSLChainId(_))
+                                Some(SystemTxType::SetSLChainId(_, _))
                             )
                     })
                     .is_some();
@@ -351,7 +351,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                         matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
                             && matches!(
                                 window[1].as_system_tx_type(),
-                                Some(SystemTxType::SetSLChainId(_))
+                                Some(SystemTxType::SetSLChainId(_, _))
                             )
                     })
                     .is_some();
