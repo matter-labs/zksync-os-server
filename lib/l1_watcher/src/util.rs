@@ -12,8 +12,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::IChainAssetHandler;
-use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
-use zksync_os_contract_interface::calldata::CommitCalldata;
+use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
+use zksync_os_contract_interface::calldata::{CommitCalldata, ExecuteCalldata};
 use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
 use zksync_os_types::ProtocolSemanticVersion;
 
@@ -369,6 +369,102 @@ pub async fn find_l1_block_by_interop_root_id(
     }
 
     Ok(lo)
+}
+
+/// Finds the SL block at which the chain consumed its **last** interop dependency root before a
+/// migration boundary, by inspecting the calldata of the `executeBatchesSharedBridge` call that
+/// processed `last_batch`.
+///
+/// `MessageRootBase._emitRoot` increments `interopRootLogId` at most once per SL block and emits
+/// `NewInteropRoot(chainId, block.number, currentCount, sides)`, so `block.number` uniquely
+/// identifies a root group on the SL. The execute calldata's per-batch `dependencyRoots` lists
+/// each consumed root by `(chainId, blockOrBatchNumber, sides)` where `blockOrBatchNumber` is
+/// exactly that SL block. Walking the bundle from the last batch backward and returning
+/// `max(blockOrBatchNumber)` from the first non-empty deps array yields the deterministic upper
+/// bound for the chain's interop activity on this SL — anything emitted in later SL blocks was
+/// never imported into the chain's history (e.g. roots emitted between last commit and last
+/// execute, which the chain had no opportunity to include).
+///
+/// Returns `None` when no batch in the bundle had any dependency roots — i.e. the chain consumed
+/// no interop roots in this execute. The caller decides what to do (typically: walk to a
+/// preceding execute, or skip the segment entirely).
+pub async fn find_last_consumed_root_block(
+    zk_chain: &ZkChain<DynProvider>,
+    last_batch: u64,
+) -> anyhow::Result<Option<BlockNumber>> {
+    let execute_block = find_l1_execute_block_by_batch_number(zk_chain.clone(), last_batch)
+        .await
+        .with_context(|| format!("failed to find execute block for batch #{last_batch}"))?;
+
+    // Find the BlockExecution log for `last_batch` at `execute_block`. Multiple batches can be
+    // executed at the same SL block via different txs; we only want the one for our batch.
+    let logs = zk_chain
+        .provider()
+        .get_logs(
+            &Filter::new()
+                .address(*zk_chain.address())
+                .event_signature(BlockExecution::SIGNATURE_HASH)
+                .from_block(execute_block)
+                .to_block(execute_block),
+        )
+        .await
+        .with_context(|| {
+            format!("failed to fetch BlockExecution logs at SL block {execute_block}")
+        })?;
+    let target_batch = U256::from(last_batch);
+    let log = logs
+        .into_iter()
+        .find(|log| {
+            BlockExecution::decode_log(&log.inner)
+                .map(|decoded| decoded.data.batchNumber == target_batch)
+                .unwrap_or(false)
+        })
+        .with_context(|| {
+            format!(
+                "BlockExecution log for batch #{last_batch} not found at SL block {execute_block}"
+            )
+        })?;
+    let tx_hash = log
+        .transaction_hash
+        .context("BlockExecution log missing tx hash")?;
+
+    // Fetch the tx and decode `executeBatchesSharedBridge(_chainAddress, _processFrom,
+    // _processTo, _executeData)`.
+    let tx = zk_chain
+        .provider()
+        .get_transaction_by_hash(tx_hash)
+        .await
+        .with_context(|| format!("failed to fetch execute tx {tx_hash}"))?
+        .with_context(|| format!("execute tx {tx_hash} not found"))?;
+    let execute = ExecuteCalldata::decode(tx.input())
+        .with_context(|| format!("failed to decode execute calldata for tx {tx_hash}"))?;
+
+    // The execute may bundle several batches. Our last_batch sits at index
+    // `last_batch - process_from` inside `dependency_roots`. Walk backward over
+    // `[0..=that_index]` and return the max block from the first non-empty entry — that is the
+    // latest SL block whose root was consumed by some batch up to and including `last_batch`.
+    anyhow::ensure!(
+        execute.process_from <= last_batch && last_batch <= execute.process_to,
+        "execute tx {tx_hash} bundle [{}..={}] does not cover batch #{last_batch}",
+        execute.process_from,
+        execute.process_to,
+    );
+    let last_idx = (last_batch - execute.process_from) as usize;
+    anyhow::ensure!(
+        last_idx < execute.dependency_roots.len(),
+        "execute tx {tx_hash} dependency_roots has {} entries; expected at least {}",
+        execute.dependency_roots.len(),
+        last_idx + 1,
+    );
+    for batch_deps in execute.dependency_roots[..=last_idx].iter().rev() {
+        if let Some(max_block) = batch_deps.iter().map(|root| root.blockOrBatchNumber).max() {
+            let max_block: u64 = max_block
+                .try_into()
+                .with_context(|| format!("blockOrBatchNumber overflow in execute tx {tx_hash}"))?;
+            return Ok(Some(max_block));
+        }
+    }
+    Ok(None)
 }
 
 /// Fetches and decodes stored batch data for batch `batch_number` that is expected to have been

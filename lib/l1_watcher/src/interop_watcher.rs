@@ -15,7 +15,7 @@ use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
 use zksync_os_types::IndexedInteropRoot;
 
 use crate::sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};
-use crate::util::{find_l1_block_by_interop_root_id, find_l1_execute_block_by_batch_number};
+use crate::util::{find_l1_block_by_interop_root_id, find_last_consumed_root_block};
 use crate::watcher::L1WatcherError;
 use crate::{L1WatcherConfig, ProcessRawEvents};
 
@@ -96,16 +96,40 @@ impl InteropWatcher {
                     interval.settlement_layer
                 )
             })?;
+            // For closed Gateway intervals, derive the segment's deterministic upper bound from
+            // the chain's actual interop consumption: the last `executeBatchesSharedBridge` call
+            // for `interval.last_batch` lists, per batch, the dependency interop roots the chain
+            // imported (`InteropRoot[][]`). The highest `blockOrBatchNumber` across the bundle's
+            // last batch's deps is exactly the SL block of the last root the chain consumed —
+            // anything emitted in later SL blocks (e.g. between last commit and last execute)
+            // was never imported and should NOT be replayed into the subpool. If no batch in the
+            // execute bundle consumed any roots (rare: chain finished its GW tenure with no
+            // interop traffic in the last execute), fall back to the execute block as a safe
+            // upper bound — there is nothing past that point on this Gateway anyway.
             let end_block = match interval.last_batch {
                 Some(last_batch) => Some(
-                    find_l1_execute_block_by_batch_number(gw_zk_chain.clone(), last_batch)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to find Gateway execute block for batch #{last_batch} \
-                                 in interval {interval}"
+                    match find_last_consumed_root_block(&gw_zk_chain, last_batch).await? {
+                        Some(block) => block,
+                        None => {
+                            tracing::warn!(
+                                ?interval,
+                                last_batch,
+                                "no dependency roots in execute bundle for last GW batch; falling back \
+                                 to execute block as segment upper bound"
+                            );
+                            crate::util::find_l1_execute_block_by_batch_number(
+                                gw_zk_chain.clone(),
+                                last_batch,
                             )
-                        })?,
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "failed to find Gateway execute block for batch #{last_batch} \
+                                     in interval {interval}"
+                                )
+                            })?
+                        }
+                    },
                 ),
                 None => None,
             };
