@@ -540,14 +540,16 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         );
         let tx = self.create_tx_from_request(request, &block_context, true)?;
 
+        let try_at = |gas_limit: u64| {
+            let mut attempt = tx.clone();
+            set_gas_limit(&mut attempt, gas_limit);
+            execute(attempt, block_context, storage_view.clone())
+                .map_err(EthCallError::ForwardSubsystemError)
+        };
+
         // Execute the transaction with the highest possible gas limit.
-        let mut res = execute(tx.clone(), block_context, storage_view.clone())
-            .map_err(EthCallError::ForwardSubsystemError)?
-            .map_err(EthCallError::InvalidTransaction)?;
-        tracing::trace!(
-            "Executed tx in estimate_gas with highest gas limit {}, result {res:?}",
-            tx.gas_limit(),
-        );
+        let mut res = try_at(highest_gas_limit)?.map_err(EthCallError::InvalidTransaction)?;
+        tracing::trace!("Executed tx in estimate_gas with highest gas limit {highest_gas_limit}, result {res:?}");
         match res.execution_result {
             ExecutionResult::Success(_) => {
                 // Transaction succeeded with the highest possible gas limit, we can proceed with
@@ -577,19 +579,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         // then applying a 64/63 multiplier to account for gas forwarding rules.
         let optimistic_gas_limit = (gas_used + res.gas_refunded + 2_300) * 64 / 63;
         if optimistic_gas_limit < highest_gas_limit {
-            // Set the transaction's gas limit to the calculated optimistic gas limit.
-            let mut optimistic_tx = tx.clone();
-            set_gas_limit(&mut optimistic_tx, optimistic_gas_limit);
-
-            // Re-execute the transaction with the new gas limit and update the result and
-            // environment.
-            res = execute(optimistic_tx, block_context, storage_view.clone())
-                .map_err(EthCallError::ForwardSubsystemError)?
-                .map_err(EthCallError::InvalidTransaction)?;
-            tracing::trace!(
-                "Executed tx in estimate_gas with optimistic gas limit {}, result {res:?}",
-                tx.gas_limit()
-            );
+            res = try_at(optimistic_gas_limit)?.map_err(EthCallError::InvalidTransaction)?;
+            tracing::trace!("Executed tx in estimate_gas with optimistic gas limit {optimistic_gas_limit}, result {res:?}");
 
             // Update the gas used based on the new result.
             gas_used = res.gas_used;
@@ -627,17 +618,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 break;
             };
 
-            let mut mid_tx = tx.clone();
-            set_gas_limit(&mut mid_tx, mid_gas_limit);
-            tracing::trace!(
-                "trying to simulate transaction with gas_limit {}",
-                mid_tx.gas_limit()
-            );
+            tracing::trace!("trying to simulate transaction with gas_limit {mid_gas_limit}");
 
             // Execute transaction and handle potential gas errors, adjusting limits accordingly.
-            match execute(mid_tx, block_context, storage_view.clone())
-                .map_err(EthCallError::ForwardSubsystemError)?
-            {
+            match try_at(mid_gas_limit)? {
                 Err(InvalidTransaction::CallerGasLimitMoreThanBlock) => {
                     // Decrease the highest gas limit if gas is too high
                     highest_gas_limit = mid_gas_limit;
@@ -654,10 +638,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 ethres => {
                     // Unpack the result and environment if the transaction was successful.
                     res = ethres.map_err(EthCallError::InvalidTransaction)?;
-                    tracing::trace!(
-                        "Executed tx in estimate_gas with gas limit {}, result {res:?}",
-                        tx.gas_limit(),
-                    );
+                    tracing::trace!("Executed tx in estimate_gas with gas limit {mid_gas_limit}, result {res:?}");
                     // Update the estimated gas range based on the transaction result.
                     update_estimated_gas_range(
                         res.execution_result,
