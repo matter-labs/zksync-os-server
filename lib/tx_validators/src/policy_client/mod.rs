@@ -155,7 +155,7 @@ impl PolicySession {
         }
     }
 
-    async fn judge(&self, from: Option<Address>, frames: Vec<CapturedFrame>) -> TxValidationResult {
+    async fn judge(&self, from: Option<Address>, root: Option<CapturedFrame>) -> TxValidationResult {
         if let Some(from) = from
             && self.client.bypass_from.contains(&from)
         {
@@ -163,7 +163,7 @@ impl PolicySession {
             return Ok(());
         }
         let request =
-            JudgeRequest::new(&self.client.protocol_version, from, &frames, self.access_type);
+            JudgeRequest::new(&self.client.protocol_version, from, root.as_ref(), self.access_type);
         let started = Instant::now();
         let result = self.post_and_parse(Endpoint::Judge, &request).await;
         POLICY_CLIENT_METRICS.judge_latency.observe(started.elapsed());
@@ -259,13 +259,13 @@ impl TxValidator for PolicySession {
     }
 
     fn finish_tx(&mut self) -> TxValidationResult {
-        let frames = self
+        let root = self
             .slot
             .lock()
             .expect("policy tracer slot mutex poisoned")
-            .take_frames();
+            .take_root();
         let from = self.pending_tx_from.take();
-        tokio::runtime::Handle::current().block_on(self.judge(from, frames))
+        tokio::runtime::Handle::current().block_on(self.judge(from, root))
     }
 }
 

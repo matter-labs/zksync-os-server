@@ -48,20 +48,23 @@ pub struct CapturedFrame {
     pub calldata: Vec<u8>,
     pub deploys: Vec<Address>,
     pub call_kind: CallKind,
+    pub children: Vec<CapturedFrame>,
 }
 
 /// Mutable trace state shared between the tracer (writer) and the consuming
 /// `PolicyClient::finish_tx` (reader).
 #[derive(Default)]
 pub(super) struct TraceState {
-    frames: Vec<CapturedFrame>,
-    open: Vec<usize>,
+    /// Stack of open (not yet completed) frames, innermost last.
+    frame_stack: Vec<CapturedFrame>,
+    /// The single root frame, set when the outermost frame completes.
+    root: Option<CapturedFrame>,
 }
 
 impl TraceState {
-    pub(super) fn take_frames(&mut self) -> Vec<CapturedFrame> {
-        self.open.clear();
-        std::mem::take(&mut self.frames)
+    pub(super) fn take_root(&mut self) -> Option<CapturedFrame> {
+        self.frame_stack.clear();
+        std::mem::take(&mut self.root)
     }
 }
 
@@ -111,30 +114,34 @@ impl EvmTracer for Tracer {
         let calldata = request.input().to_vec();
 
         let mut state = self.lock();
-        if modifier == CallModifier::Constructor
-            && let Some(parent_index) = state.open.last().copied()
-        {
+        if modifier == CallModifier::Constructor {
             // Record the deployed address on the parent frame. Top-level
             // deployments have no parent; the recipient sees them as a
             // top-level frame whose `callee` is the deployed address.
-            state.frames[parent_index].deploys.push(callee);
+            if let Some(parent) = state.frame_stack.last_mut() {
+                parent.deploys.push(callee);
+            }
         }
-        let new_index = state.frames.len();
-        state.frames.push(CapturedFrame {
+        state.frame_stack.push(CapturedFrame {
             caller,
             callee,
             value,
             calldata,
             deploys: Vec::new(),
             call_kind: CallKind::from(modifier),
+            children: Vec::new(),
         });
-        state.open.push(new_index);
     }
 
     fn after_execution_frame_completed(&mut self, _result: Option<(EvmResources, CallResult)>) {
-        // Frames complete LIFO; drop the topmost open index.
         let mut state = self.lock();
-        state.open.pop();
+        if let Some(completed) = state.frame_stack.pop() {
+            if let Some(parent) = state.frame_stack.last_mut() {
+                parent.children.push(completed);
+            } else {
+                state.root = Some(completed);
+            }
+        }
     }
 
     fn on_storage_read(&mut self, _: bool, _: Address, _: B256, _: B256) {}
@@ -144,16 +151,16 @@ impl EvmTracer for Tracer {
 
     fn begin_tx(&mut self, _calldata: &[u8]) {
         let mut state = self.lock();
-        state.frames.clear();
-        state.open.clear();
+        state.frame_stack.clear();
+        state.root = None;
     }
 
     fn finish_tx(&mut self) {
-        // Leave captured frames in the slot for `PolicyClient::finish_tx`
-        // to drain. Only clear the open-frame stack so a tx that aborted
-        // mid-frame doesn't mis-parent the next tx's first frame.
+        // Leave the completed root in the slot for `PolicyClient::finish_tx`
+        // to drain. Only clear the open stack so a tx that aborted mid-frame
+        // doesn't mis-parent the next tx's first frame.
         let mut state = self.lock();
-        state.open.clear();
+        state.frame_stack.clear();
     }
 
     fn before_evm_interpreter_execution_step(&mut self, _: u8, _: impl EvmFrameInterface) {}
@@ -240,14 +247,14 @@ mod tests {
         t.on_new_execution_frame(&frame(A, B, CallModifier::NoModifier, &[1, 2, 3], 7));
         t.after_execution_frame_completed(None);
 
-        let frames = slot.lock().unwrap().take_frames();
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].caller, A);
-        assert_eq!(frames[0].callee, B);
-        assert_eq!(frames[0].calldata, vec![1, 2, 3]);
-        assert_eq!(frames[0].value, U256::from(7));
-        assert!(frames[0].deploys.is_empty());
-        assert_eq!(frames[0].call_kind, CallKind::Call);
+        let root = slot.lock().unwrap().take_root().expect("expected root");
+        assert_eq!(root.caller, A);
+        assert_eq!(root.callee, B);
+        assert_eq!(root.calldata, vec![1, 2, 3]);
+        assert_eq!(root.value, U256::from(7));
+        assert!(root.deploys.is_empty());
+        assert!(root.children.is_empty());
+        assert_eq!(root.call_kind, CallKind::Call);
     }
 
     #[test]
@@ -261,14 +268,14 @@ mod tests {
         t.after_execution_frame_completed(None);
         t.after_execution_frame_completed(None);
 
-        let frames = slot.lock().unwrap().take_frames();
-        assert_eq!(frames.len(), 2);
-        assert_eq!(frames[0].deploys, vec![C]);
-        assert_eq!(frames[0].call_kind, CallKind::Call);
+        let root = slot.lock().unwrap().take_root().expect("expected root");
+        assert_eq!(root.deploys, vec![C]);
+        assert_eq!(root.call_kind, CallKind::Call);
+        assert_eq!(root.children.len(), 1);
         // The constructor frame itself records no deploy (it *is* the deploy)
         // but does carry the Constructor call_kind.
-        assert!(frames[1].deploys.is_empty());
-        assert_eq!(frames[1].call_kind, CallKind::Constructor);
+        assert!(root.children[0].deploys.is_empty());
+        assert_eq!(root.children[0].call_kind, CallKind::Constructor);
     }
 
     #[test]
@@ -282,10 +289,10 @@ mod tests {
         t.after_execution_frame_completed(None);
         t.after_execution_frame_completed(None);
 
-        let frames = slot.lock().unwrap().take_frames();
-        assert_eq!(frames.len(), 2);
-        assert_eq!(frames[0].call_kind, CallKind::Call);
-        assert_eq!(frames[1].call_kind, CallKind::DelegateCall);
+        let root = slot.lock().unwrap().take_root().expect("expected root");
+        assert_eq!(root.call_kind, CallKind::Call);
+        assert_eq!(root.children.len(), 1);
+        assert_eq!(root.children[0].call_kind, CallKind::DelegateCall);
     }
 
     #[test]
@@ -295,9 +302,8 @@ mod tests {
         t.on_new_execution_frame(&frame(A, B, CallModifier::Static, &[0xab], 0));
         t.after_execution_frame_completed(None);
 
-        let frames = slot.lock().unwrap().take_frames();
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].call_kind, CallKind::StaticCall);
+        let root = slot.lock().unwrap().take_root().expect("expected root");
+        assert_eq!(root.call_kind, CallKind::StaticCall);
     }
 
     #[test]
@@ -310,8 +316,8 @@ mod tests {
         t.on_new_execution_frame(&frame(A, B, CallModifier::EVMCallcode, &[0xcd], 0));
         t.after_execution_frame_completed(None);
 
-        let frames = slot.lock().unwrap().take_frames();
-        assert_eq!(frames[0].call_kind, CallKind::DelegateCall);
+        let root = slot.lock().unwrap().take_root().expect("expected root");
+        assert_eq!(root.call_kind, CallKind::DelegateCall);
     }
 
     #[test]
@@ -321,10 +327,9 @@ mod tests {
         t.on_new_execution_frame(&frame(A, B, CallModifier::Constructor, &[0xcc], 0));
         t.after_execution_frame_completed(None);
 
-        let frames = slot.lock().unwrap().take_frames();
-        assert_eq!(frames.len(), 1);
+        let root = slot.lock().unwrap().take_root().expect("expected root");
         // Top-level deployment: no parent to record into.
-        assert!(frames[0].deploys.is_empty());
+        assert!(root.deploys.is_empty());
     }
 
     #[test]
@@ -335,7 +340,7 @@ mod tests {
         // No after_execution_frame_completed: simulate a tx that aborted mid-flight.
         t.begin_tx(&[]);
         let state = slot.lock().unwrap();
-        assert!(state.frames.is_empty());
-        assert!(state.open.is_empty());
+        assert!(state.frame_stack.is_empty());
+        assert!(state.root.is_none());
     }
 }
