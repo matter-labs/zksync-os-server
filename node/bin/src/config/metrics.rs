@@ -79,10 +79,18 @@ fn flat_config_metric_entries<C: DescribeConfig>(
 }
 
 fn stringify_config_value(value: Value) -> String {
-    match value {
+    let value = match value {
         Value::String(value) => value,
         value => value.to_string(),
-    }
+    };
+    sanitize_label_value(value)
+}
+
+fn sanitize_label_value(value: String) -> String {
+    value
+        .replace('"', "'")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[cfg(test)]
@@ -95,7 +103,9 @@ mod tests {
     use zksync_os_operator_signer::SignerConfig;
     use zksync_os_types::PubdataMode;
 
-    use crate::config::{ForceTransactionResubmissionConfig, GeneralConfig, L1SenderConfig};
+    use crate::config::{
+        BatchVerificationConfig, ForceTransactionResubmissionConfig, GeneralConfig, L1SenderConfig,
+    };
 
     use super::flat_config_metric_entries;
 
@@ -135,6 +145,19 @@ mod tests {
             .collect();
 
         assert_eq!(entries["l1_sender_operator_commit_sk"], "<secret>");
+    }
+
+    #[test]
+    fn flat_config_metric_entries_sanitize_structured_values() {
+        let entries: HashMap<_, _> =
+            flat_config_metric_entries(&BatchVerificationConfig::default(), "batch_verification")
+                .into_iter()
+                .collect();
+
+        assert_eq!(
+            entries["batch_verification_accepted_signers"],
+            "['0x36615Cf349d7F6344891B1e7CA7C72883F5dc049']"
+        );
     }
 
     fn local_signer() -> SignerConfig {
