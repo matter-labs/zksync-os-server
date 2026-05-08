@@ -480,9 +480,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         // original geth logic. Source:
         // https://github.com/paradigmxyz/reth/blob/5bc8589162b6e23b07919d82a57eee14353f2862/crates/rpc/rpc-eth-api/src/helpers/estimate.rs
 
-        // the gas limit of the corresponding block
         let block_gas_limit = block_context.gas_limit;
-
         let mut highest_gas_limit = request.gas.unwrap_or(block_gas_limit).min(block_gas_limit);
 
         let effective_gas_price = request
@@ -505,117 +503,73 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         };
 
         // Execute the transaction with the highest possible gas limit.
-        let mut res = try_at(highest_gas_limit)?.map_err(EthCallError::InvalidTransaction)?;
+        let res = try_at(tx.gas_limit())?.map_err(EthCallError::InvalidTransaction)?;
         tracing::trace!(
-            "Executed tx in estimate_gas with highest gas limit {highest_gas_limit}, result {res:?}"
+            "Executed tx in estimate_gas with highest gas limit {}, result {res:?}",
+            tx.gas_limit()
         );
-        match res.execution_result {
-            ExecutionResult::Success(_) => {
-                // Transaction succeeded with the highest possible gas limit, we can proceed with
-                // binary search
-            }
-            ExecutionResult::Revert(output) => {
-                let error = RevertError::new(Bytes::from(output));
-                return Err(EthCallError::Revert(error));
-            }
+        if let ExecutionResult::Revert(output) = res.execution_result {
+            return Err(EthCallError::Revert(RevertError::new(Bytes::from(output))));
         }
-
-        // we know the tx succeeded with the configured gas limit, so we can use that as the
-        // highest, in case we applied a gas cap due to caller allowance above
-        highest_gas_limit = tx.gas_limit();
 
         // NOTE: this is the gas the transaction used, which is less than the
         // transaction requires to succeed.
         let mut gas_used = res.gas_used;
-        // the lowest value is capped by the gas used by the unconstrained transaction
-        let mut lowest_gas_limit = gas_used.saturating_sub(1);
+        let mut range = GasRange::new(gas_used.saturating_sub(1), tx.gas_limit());
 
         // As stated in Geth, there is a good chance that the transaction will pass if we set the
-        // gas limit to the execution gas used plus the gas refund, so we check this first
-        // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L135
-        //
-        // Calculate the optimistic gas limit by adding gas used and gas refund,
-        // then applying a 64/63 multiplier to account for gas forwarding rules.
+        // gas limit to the execution gas used plus the gas refund, so we check this first.
+        // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L135>
+        // The 64/63 multiplier accounts for gas forwarding rules (EIP-150).
         let optimistic_gas_limit = (gas_used + res.gas_refunded + 2_300) * 64 / 63;
-        if optimistic_gas_limit < highest_gas_limit {
-            res = try_at(optimistic_gas_limit)?.map_err(EthCallError::InvalidTransaction)?;
+        if optimistic_gas_limit < range.highest {
+            let res = try_at(optimistic_gas_limit)?.map_err(EthCallError::InvalidTransaction)?;
             tracing::trace!(
                 "Executed tx in estimate_gas with optimistic gas limit {optimistic_gas_limit}, result {res:?}"
             );
-
-            // Update the gas used based on the new result.
             gas_used = res.gas_used;
-            // Update the gas limit estimates (highest and lowest) based on the execution result.
-            update_estimated_gas_range(
-                res.execution_result,
-                optimistic_gas_limit,
-                &mut highest_gas_limit,
-                &mut lowest_gas_limit,
-            );
-        };
+            range.update(res.execution_result, optimistic_gas_limit);
+        }
 
         if tx.tx_type() == ZkTxType::L1 {
             // L1 contracts enforce a higher minimal limit for extra security
             gas_used = gas_used.max(L1_TX_MINIMAL_GAS_LIMIT);
-            lowest_gas_limit = lowest_gas_limit.max(L1_TX_MINIMAL_GAS_LIMIT);
-            highest_gas_limit = highest_gas_limit.max(L1_TX_MINIMAL_GAS_LIMIT);
+            range.apply_floor(L1_TX_MINIMAL_GAS_LIMIT);
         }
-
-        // Pick a point that's close to the estimated gas
-        let mut mid_gas_limit = std::cmp::min(
-            gas_used * 3,
-            ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64,
-        );
 
         // Binary search narrows the range to find the minimum gas limit needed for the transaction
         // to succeed.
-        while lowest_gas_limit + 1 < highest_gas_limit {
-            // An estimation error is allowed once the current gas limit range used in the binary
-            // search is small enough (less than 1.5% of the highest gas limit)
-            // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L152
-            if (highest_gas_limit - lowest_gas_limit) as f64 / (highest_gas_limit as f64)
-                < ESTIMATE_GAS_ERROR_RATIO
-            {
+        // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L152>
+        let mut mid = range.biased_midpoint(gas_used);
+        while !range.is_empty() {
+            // Stop once error is within 1.5% of the highest gas limit.
+            if range.is_narrow_enough() {
                 break;
-            };
+            }
+            tracing::trace!("trying to simulate transaction with gas_limit {mid}");
 
-            tracing::trace!("trying to simulate transaction with gas_limit {mid_gas_limit}");
-
-            // Execute transaction and handle potential gas errors, adjusting limits accordingly.
-            match try_at(mid_gas_limit)? {
+            match try_at(mid)? {
                 Err(InvalidTransaction::CallerGasLimitMoreThanBlock) => {
-                    // Decrease the highest gas limit if gas is too high
-                    highest_gas_limit = mid_gas_limit;
+                    range.highest = mid;
                 }
                 Err(
                     InvalidTransaction::CallGasCostMoreThanGasLimit
                     | InvalidTransaction::OutOfGasDuringValidation
                     | InvalidTransaction::OutOfNativeResourcesDuringValidation,
                 ) => {
-                    // Increase the lowest gas limit if gas is too low
-                    lowest_gas_limit = mid_gas_limit;
+                    range.lowest = mid;
                 }
-                // Handle other cases, including successful transactions.
                 ethres => {
-                    // Unpack the result and environment if the transaction was successful.
-                    res = ethres.map_err(EthCallError::InvalidTransaction)?;
+                    let res = ethres.map_err(EthCallError::InvalidTransaction)?;
                     tracing::trace!(
-                        "Executed tx in estimate_gas with gas limit {mid_gas_limit}, result {res:?}"
+                        "Executed tx in estimate_gas with gas limit {mid}, result {res:?}"
                     );
-                    // Update the estimated gas range based on the transaction result.
-                    update_estimated_gas_range(
-                        res.execution_result,
-                        mid_gas_limit,
-                        &mut highest_gas_limit,
-                        &mut lowest_gas_limit,
-                    );
+                    range.update(res.execution_result, mid);
                 }
             }
-
-            // New midpoint
-            mid_gas_limit = ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64;
+            mid = range.midpoint();
         }
-        tracing::trace!("Estimated gas limit: {highest_gas_limit}");
+        tracing::trace!("Estimated gas limit: {}", range.highest);
 
         // Re-execute the resolved gas limit once with the validator wired in.
         // The binary search runs without the validator (one round-trip per
@@ -626,7 +580,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             && tx_type_runs_policy(tx.tx_type())
         {
             let mut judged_tx = tx.clone();
-            set_gas_limit(&mut judged_tx, highest_gas_limit);
+            set_gas_limit(&mut judged_tx, range.highest);
             let mut policy_session = policy_client.session(AccessType::Write);
             simulate_with_optional_policy(
                 judged_tx,
@@ -638,7 +592,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .map_err(map_simulate_invalid_to_call_error)?;
         }
 
-        Ok(U256::from(highest_gas_limit))
+        Ok(U256::from(range.highest))
     }
 
     pub fn last_constructed_block_context(&self) -> Option<BlockContext> {
@@ -682,6 +636,45 @@ fn tx_type_runs_policy(tx_type: ZkTxType) -> bool {
     }
 }
 
+struct GasRange {
+    lowest: u64,
+    highest: u64,
+}
+
+impl GasRange {
+    fn new(lowest: u64, highest: u64) -> Self {
+        Self { lowest, highest }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.lowest + 1 >= self.highest
+    }
+
+    fn is_narrow_enough(&self) -> bool {
+        (self.highest - self.lowest) as f64 / (self.highest as f64) < ESTIMATE_GAS_ERROR_RATIO
+    }
+
+    fn midpoint(&self) -> u64 {
+        ((self.highest as u128 + self.lowest as u128) / 2) as u64
+    }
+
+    fn biased_midpoint(&self, gas_used: u64) -> u64 {
+        (gas_used * 3).min(self.midpoint())
+    }
+
+    fn apply_floor(&mut self, floor: u64) {
+        self.lowest = self.lowest.max(floor);
+        self.highest = self.highest.max(floor);
+    }
+
+    fn update(&mut self, result: ExecutionResult, at: u64) {
+        match result {
+            ExecutionResult::Success(_) => self.highest = at,
+            ExecutionResult::Revert(_) => self.lowest = at,
+        }
+    }
+}
+
 fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
     match tx.inner.inner_mut() {
         ZkEnvelope::System(_) => {
@@ -698,32 +691,6 @@ fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
             tx.to_mint = tx.value + U256::from(tx.max_fee_per_gas) * U256::from(gas_limit);
         }
         ZkEnvelope::Upgrade(envelope) => envelope.inner.gas_limit = gas_limit,
-    }
-}
-
-#[inline]
-pub fn update_estimated_gas_range(
-    result: ExecutionResult,
-    tx_gas_limit: u64,
-    highest_gas_limit: &mut u64,
-    lowest_gas_limit: &mut u64,
-) {
-    match result {
-        ExecutionResult::Success { .. } => {
-            // Cap the highest gas limit with the succeeding gas limit.
-            *highest_gas_limit = tx_gas_limit;
-        }
-        ExecutionResult::Revert { .. } => {
-            // We know that transaction succeeded with a higher gas limit before, so any failure
-            // means that we need to increase it.
-            //
-            // We are ignoring all halts here, and not just OOG errors because there are cases when
-            // non-OOG halt might flag insufficient gas limit as well.
-            //
-            // Common usage of invalid opcode in OpenZeppelin:
-            // <https://github.com/OpenZeppelin/openzeppelin-contracts/blob/94697be8a3f0dfcd95dfb13ffbd39b5973f5c65d/contracts/metatx/ERC2771Forwarder.sol#L360-L367>
-            *lowest_gas_limit = tx_gas_limit;
-        }
     }
 }
 
