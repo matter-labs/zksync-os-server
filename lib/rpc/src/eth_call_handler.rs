@@ -33,7 +33,6 @@ use zksync_os_types::{
     ZkTransaction, ZkTxType,
 };
 
-const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
 #[derive(Clone, Debug)]
 pub struct EthCallHandler<RpcStorage> {
     pub(crate) config: RpcConfig,
@@ -636,6 +635,9 @@ fn tx_type_runs_policy(tx_type: ZkTxType) -> bool {
     }
 }
 
+const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
+
+// Invariant: tx fails at `lowest` (false), tx succeeds at `highest` (true).
 struct GasRange {
     lowest: u64,
     highest: u64,
