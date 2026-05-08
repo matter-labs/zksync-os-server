@@ -16,7 +16,7 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_revm::{DefaultZk, ZkBuilder, ZkContext};
 use zksync_os_sequencer::model::blocks::AppliedBlock;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, ViewState};
-use zksync_os_types::ExecutionVersion;
+use zksync_os_types::{ExecutionVersion, SYSTEM_CONTEXT_ADDRESS};
 
 use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
 use crate::metrics::PUSH_METRICS;
@@ -24,7 +24,7 @@ use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
 
 const BLOB_BASE_FEE_UPDATE_FRACTION: u128 = alloy::eips::eip4844::BLOB_GASPRICE_UPDATE_FRACTION;
-const MIN_BASE_FEE_PER_BLOB_GAS: u64 = 1;
+const MIN_BASE_FEE_PER_BLOB_GAS: u128 = alloy::eips::eip4844::BLOB_TX_MIN_BLOB_GASPRICE;
 
 pub struct RevmConsistencyChecker<State>
 where
@@ -252,9 +252,10 @@ where
     }
 }
 
-/// Read the settlement layer chain id from `SYSTEM_CONTEXT_ADDRESS` (0x800b), slot 0.
+/// Read the settlement layer chain id from `SYSTEM_CONTEXT_ADDRESS`, slot 0.
 fn read_settlement_layer_chain_id<S: ViewState>(state: &mut S) -> U256 {
-    let flat_key = derive_flat_storage_key(&B160::from_limbs([0x800b, 0, 0]), &Bytes32::ZERO);
+    let address = B160::from_be_bytes(SYSTEM_CONTEXT_ADDRESS.into_array());
+    let flat_key = derive_flat_storage_key(&address, &Bytes32::ZERO);
     let value = state
         .read(B256::from(flat_key.as_u8_array()))
         .unwrap_or_default();
@@ -267,7 +268,7 @@ fn calculate_excess_blob_gas_from_blob_base_fee(
     blob_base_fee: u64,
     blob_base_fee_update_fraction: u128,
 ) -> u64 {
-    if blob_base_fee <= MIN_BASE_FEE_PER_BLOB_GAS {
+    if (blob_base_fee as u128) <= MIN_BASE_FEE_PER_BLOB_GAS {
         return 0;
     }
     assert!(
