@@ -160,16 +160,11 @@ where
             if let Some(zk_spec) = zk_spec {
                 let settlement_layer_chain_id = read_settlement_layer_chain_id(&mut state_view);
 
-                let blob_fee: u64 = replay_record
-                    .block_context
-                    .blob_fee
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Blob fee should fit into u64"))?;
-                let block_basefee: u64 = replay_record
-                    .block_context
-                    .eip1559_basefee
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Block base fee should fit into u64"))?;
+                // Saturating: extreme fees are unrealistic; clamping keeps the
+                // checker running rather than tearing down the pipeline.
+                let blob_fee: u64 = replay_record.block_context.blob_fee.saturating_to();
+                let block_basefee: u64 =
+                    replay_record.block_context.eip1559_basefee.saturating_to();
 
                 let blob_excess_gas_and_price = BlobExcessGasAndPrice::new(
                     calculate_excess_blob_gas_from_blob_base_fee(
@@ -228,7 +223,7 @@ where
                         }
 
                         let compare_report = CompareReport::build(
-                            evm.0.ctx.db_mut(),
+                            evm.0.db_mut(),
                             &block_output.storage_writes,
                             &block_output.account_diffs,
                         )?;
@@ -237,6 +232,7 @@ where
                     Err(err) => {
                         // Tx conversion failed (e.g. malformed envelope) — skip
                         // the whole block rather than blocking the pipeline.
+                        PUSH_METRICS.revm_blocks_skipped.inc();
                         tracing::warn!(
                             block_number = replay_record.block_context.block_number,
                             "Skipping REVM consistency check for block: {err:#}"
@@ -315,4 +311,54 @@ fn calculate_blob_base_fee_for_excess_blob_gas(
         excess_blob_gas as u128,
         blob_base_fee_update_fraction,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_blob_base_fee_maps_to_zero_excess_blob_gas() {
+        assert_eq!(
+            calculate_excess_blob_gas_from_blob_base_fee(0, BLOB_BASE_FEE_UPDATE_FRACTION),
+            0
+        );
+    }
+
+    #[test]
+    fn excess_blob_gas_inverse_returns_minimum_matching_value() {
+        let test_cases = [0u64, 1, 2, 100_000, 2_314_058, 10_000_000];
+        for excess_blob_gas in test_cases {
+            let blob_base_fee = calculate_blob_base_fee_for_excess_blob_gas(
+                excess_blob_gas,
+                BLOB_BASE_FEE_UPDATE_FRACTION,
+            );
+            let blob_base_fee_u64: u64 = blob_base_fee
+                .try_into()
+                .expect("test vector should fit into u64");
+
+            let recovered_excess_blob_gas = calculate_excess_blob_gas_from_blob_base_fee(
+                blob_base_fee_u64,
+                BLOB_BASE_FEE_UPDATE_FRACTION,
+            );
+
+            // Inverse must round up (not down): the recovered value re-evaluates
+            // to a fee >= the original target...
+            let recovered_blob_base_fee = calculate_blob_base_fee_for_excess_blob_gas(
+                recovered_excess_blob_gas,
+                BLOB_BASE_FEE_UPDATE_FRACTION,
+            );
+            assert!(recovered_blob_base_fee >= blob_base_fee);
+
+            // ...and the value just below recovers to a strictly smaller fee,
+            // confirming it's the minimum match.
+            if recovered_excess_blob_gas > 0 {
+                let previous_blob_base_fee = calculate_blob_base_fee_for_excess_blob_gas(
+                    recovered_excess_blob_gas - 1,
+                    BLOB_BASE_FEE_UPDATE_FRACTION,
+                );
+                assert!(previous_blob_base_fee < blob_base_fee);
+            }
+        }
+    }
 }
