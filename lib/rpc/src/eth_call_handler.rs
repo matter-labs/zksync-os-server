@@ -13,14 +13,15 @@ use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
+use derive_more::{Deref, Display};
 use serde_json::Value as JsonValue;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zk_os_api::helpers::get_nonce;
-use zksync_os_interface::types::{BlockHashes, ExecutionOutput, TxOutput};
+use zksync_os_interface::types::{BlockHashes, ExecutionOutput};
 use zksync_os_interface::{
     error::InvalidTransaction,
-    types::{BlockContext, ExecutionResult},
+    types::{BlockContext, ExecutionResult, TxOutput},
 };
 use zksync_os_storage_api::{
     RepositoryError, StateError, ViewState, state_override_view::OverriddenStateView,
@@ -468,6 +469,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 }
 
 impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
+    // The flow was heavily borrowed from reth, which in turn closely follows the original geth logic. Source:
+    // https://github.com/paradigmxyz/reth/blob/5bc8589162b6e23b07919d82a57eee14353f2862/crates/rpc/rpc-eth-api/src/helpers/estimate.rs
     fn estimate_gas_with_view<V: ViewState + Clone>(
         &self,
         mut request: TransactionRequest,
@@ -475,9 +478,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         mut storage_view: V,
     ) -> Result<U256, EthCallError> {
         tracing::trace!("Estimating gas with block context {block_context:?}");
-        // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
-        // original geth logic. Source:
-        // https://github.com/paradigmxyz/reth/blob/5bc8589162b6e23b07919d82a57eee14353f2862/crates/rpc/rpc-eth-api/src/helpers/estimate.rs
 
         let block_gas_limit = block_context.gas_limit;
         let mut highest_gas_limit = request.gas.unwrap_or(block_gas_limit).min(block_gas_limit);
@@ -504,67 +504,43 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         // Execute the transaction with the highest possible gas limit.
         let res = try_at(tx.gas_limit())?.map_err(EthCallError::InvalidTransaction)?;
         tracing::trace!(
-            "Executed tx in estimate_gas with highest gas limit {}, result {res:?}",
-            tx.gas_limit()
+            "Executed tx in eth_estimateGas with gas limit: {}, result {res:?}",
+            Probe::Highest(tx.gas_limit())
         );
         if let ExecutionResult::Revert(output) = res.execution_result {
             return Err(EthCallError::Revert(RevertError::new(Bytes::from(output))));
         }
 
-        // NOTE: this is the gas the transaction used, which is less than the
-        // transaction requires to succeed.
-        let mut gas_used = res.gas_used;
+        // NOTE: this is the gas the transaction used, which is less than the transaction requires to succeed.
+        let gas_used = res.gas_used;
         let mut range = GasRange::new(gas_used.saturating_sub(1), tx.gas_limit());
+
+        if tx.tx_type() == ZkTxType::L1 {
+            range.apply_floor(L1_TX_MINIMAL_GAS_LIMIT);
+        }
 
         // Optimistic check: tx likely passes at gas_used + refund + stipend, scaled by 64/63 (EIP-150).
         // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L135>
         const GAS_STIPEND: u64 = 2_300;
         let optimistic_gas_limit = (gas_used + res.gas_refunded + GAS_STIPEND) * 64 / 63;
         if optimistic_gas_limit < range.highest {
-            let res = try_at(optimistic_gas_limit)?.map_err(EthCallError::InvalidTransaction)?;
-            tracing::trace!(
-                "Executed tx in estimate_gas with optimistic gas limit {optimistic_gas_limit}, result {res:?}"
-            );
-            gas_used = res.gas_used;
-            range.update(res.execution_result, optimistic_gas_limit);
-        }
-
-        if tx.tx_type() == ZkTxType::L1 {
-            // L1 contracts enforce a higher minimal limit for extra security
-            gas_used = gas_used.max(L1_TX_MINIMAL_GAS_LIMIT);
-            range.apply_floor(L1_TX_MINIMAL_GAS_LIMIT);
+            range.apply_probe(
+                try_at(optimistic_gas_limit)?,
+                Probe::Optimistic(optimistic_gas_limit),
+            )?;
         }
 
         // Binary search narrows the range to find the minimum gas limit needed for the transaction
         // to succeed.
         // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L152>
-        let mut mid = range.biased_midpoint(gas_used);
+        let mut mid = range.biased_midpoint();
         while !range.is_empty() {
             // Stop once error is within 1.5% of the highest gas limit.
             if range.is_narrow_enough() {
                 break;
             }
-            tracing::trace!("trying to simulate transaction with gas_limit {mid}");
-
-            match try_at(mid)? {
-                Err(InvalidTransaction::CallerGasLimitMoreThanBlock) => {
-                    range.highest = mid;
-                }
-                Err(
-                    InvalidTransaction::CallGasCostMoreThanGasLimit
-                    | InvalidTransaction::OutOfGasDuringValidation
-                    | InvalidTransaction::OutOfNativeResourcesDuringValidation,
-                ) => {
-                    range.lowest = mid;
-                }
-                ethres => {
-                    let res = ethres.map_err(EthCallError::InvalidTransaction)?;
-                    tracing::trace!(
-                        "Executed tx in estimate_gas with gas limit {mid}, result {res:?}"
-                    );
-                    range.update(res.execution_result, mid);
-                }
-            }
+            tracing::trace!("Trying to simulate transaction with gas_limit {mid}");
+            range.apply_probe(try_at(mid)?, Probe::Midpoint(mid))?;
             mid = range.midpoint();
         }
         tracing::trace!("Estimated gas limit: {}", range.highest);
@@ -634,7 +610,26 @@ fn tx_type_runs_policy(tx_type: ZkTxType) -> bool {
     }
 }
 
+#[derive(Debug, Deref, Display)]
+enum Probe {
+    #[display("Midpoint({_0})")]
+    Midpoint(u64),
+    #[display("Highest({_0})")]
+    Highest(u64),
+    #[display("Optimistic({_0})")]
+    Optimistic(u64),
+}
+
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
+
+fn is_out_of_gas(err: &InvalidTransaction) -> bool {
+    matches!(
+        err,
+        InvalidTransaction::CallGasCostMoreThanGasLimit
+            | InvalidTransaction::OutOfGasDuringValidation
+            | InvalidTransaction::OutOfNativeResourcesDuringValidation
+    )
+}
 
 // Invariant: tx fails at `lowest` (false), tx succeeds at `highest` (true).
 struct GasRange {
@@ -659,8 +654,8 @@ impl GasRange {
         ((self.highest as u128 + self.lowest as u128) / 2) as u64
     }
 
-    fn biased_midpoint(&self, gas_used: u64) -> u64 {
-        (gas_used * 3).min(self.midpoint())
+    fn biased_midpoint(&self) -> u64 {
+        (self.lowest * 3).min(self.midpoint())
     }
 
     fn apply_floor(&mut self, floor: u64) {
@@ -668,11 +663,22 @@ impl GasRange {
         self.highest = self.highest.max(floor);
     }
 
-    fn update(&mut self, result: ExecutionResult, at: u64) {
-        match result {
-            ExecutionResult::Success(_) => self.highest = at,
-            ExecutionResult::Revert(_) => self.lowest = at,
+    fn apply_probe(
+        &mut self,
+        result: Result<TxOutput, InvalidTransaction>,
+        probe: Probe,
+    ) -> Result<(), EthCallError> {
+        if result.as_ref().is_err_and(is_out_of_gas) {
+            self.lowest = *probe;
+            return Ok(());
         }
+        let res = result.map_err(EthCallError::InvalidTransaction)?;
+        tracing::trace!("Executed tx in eth_estimateGas with gas limit: {probe}, result {res:?}");
+        match res.execution_result {
+            ExecutionResult::Success(_) => self.highest = *probe,
+            ExecutionResult::Revert(_) => self.lowest = *probe,
+        }
+        Ok(())
     }
 }
 

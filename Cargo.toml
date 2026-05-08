@@ -176,6 +176,7 @@ tikv-jemallocator = { version = "0.6.1", features = [
 ] }
 tikv-jemalloc-ctl = "0.6.1"
 clap = "4.2.2"
+derive_more = "2.1.1"
 insta = "1.29.0"
 jsonrpsee = { version = "0.26.0", default-features = false }
 leb128 = "0.2.5"
