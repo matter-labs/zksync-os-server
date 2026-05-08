@@ -1,11 +1,9 @@
 use crate::helpers::get_unpadded_code;
 use alloy::primitives::{Address, B256, KECCAK256_EMPTY};
-use reth_revm::{
-    DatabaseRef,
-    db::DBErrorMarker,
-    primitives::{StorageKey, StorageValue},
-    state::{AccountInfo, Bytecode},
-};
+use revm::DatabaseRef;
+use revm::database_interface::DBErrorMarker;
+use revm::primitives::{StorageKey, StorageValue};
+use revm::state::{AccountInfo, Bytecode};
 use ruint::aliases::B160;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zksync_os_interface::types::BlockHashes;

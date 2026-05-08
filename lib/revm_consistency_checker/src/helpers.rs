@@ -1,9 +1,9 @@
 use alloy::consensus::Transaction;
 use alloy::eips::Typed2718;
-use alloy::primitives::Bytes;
-use reth_revm::context::TxEnv;
-use reth_revm::primitives::TxKind;
-use reth_revm::state::Bytecode;
+use alloy::primitives::{Bytes, U256};
+use revm::context::TxEnv;
+use revm::primitives::TxKind;
+use revm::state::Bytecode;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 use zksync_os_revm::transaction::abstraction::ZKsyncTxBuilder;
 use zksync_os_revm::{ZKsyncTx, ZkSpecId};
@@ -16,16 +16,20 @@ pub fn get_unpadded_code(full_bytecode: &[u8], account: &AccountProperties) -> B
     ))
 }
 
-/// Convert a ZkTransaction into a revm TxEnv for REVM re-execution
+/// Convert a ZkTransaction into a revm TxEnv for REVM re-execution.
 pub fn zk_tx_into_revm_tx(
     tx: &ZkTransaction,
     gas_used: u64,
     execution_status: bool,
-) -> ZKsyncTx<TxEnv> {
+    settlement_layer_chain_id: Option<U256>,
+) -> anyhow::Result<ZKsyncTx<TxEnv>> {
     let caller = tx.signer();
 
-    // Extract transaction details based on envelope type
     let envelope = tx.envelope();
+
+    let mut blob_hashes = vec![];
+    let mut max_fee_per_blob_gas = 0;
+    let mut authorization_list = vec![];
 
     let (
         gas_price,
@@ -38,16 +42,24 @@ pub fn zk_tx_into_revm_tx(
         refund_recipient,
     ) = match envelope {
         zksync_os_types::ZkEnvelope::System(_) => {
-            unimplemented!("handle system txs");
+            anyhow::bail!("System transactions are not supported by REVM consistency checker");
         }
         zksync_os_types::ZkEnvelope::L2(l2_tx) => {
-            // L2 transactions are standard Ethereum transactions
             let gas_price = l2_tx.max_fee_per_gas();
             let priority_fee = l2_tx.max_priority_fee_per_gas();
             let value = l2_tx.value();
             let data = l2_tx.input().clone();
             let chain_id = l2_tx.chain_id();
             let access_list = l2_tx.access_list().cloned().unwrap_or_default();
+            blob_hashes = l2_tx
+                .blob_versioned_hashes()
+                .map(|hashes| hashes.to_vec())
+                .unwrap_or_default();
+            max_fee_per_blob_gas = l2_tx.max_fee_per_blob_gas().unwrap_or_default();
+            authorization_list = l2_tx
+                .authorization_list()
+                .map(|list| list.to_vec())
+                .unwrap_or_default();
 
             (
                 gas_price,
@@ -61,7 +73,6 @@ pub fn zk_tx_into_revm_tx(
             )
         }
         zksync_os_types::ZkEnvelope::L1(l1_tx) => {
-            // L1 priority transactions - extract from canonical transaction format
             let inner = &l1_tx.inner;
             (
                 l1_tx.max_fee_per_gas(),
@@ -69,13 +80,12 @@ pub fn zk_tx_into_revm_tx(
                 inner.value(),
                 inner.input().clone(),
                 None,
-                Default::default(), // L1 transactions don't have access lists
+                Default::default(),
                 inner.to_mint,
                 Some(inner.refund_recipient),
             )
         }
         zksync_os_types::ZkEnvelope::Upgrade(upgrade_tx) => {
-            // Upgrade transactions - system-level transactions
             let inner = &upgrade_tx.inner;
             (
                 0,
@@ -90,13 +100,11 @@ pub fn zk_tx_into_revm_tx(
         }
     };
 
-    // Determine transaction kind (Call or Create)
     let transact_to = match tx.to() {
         Some(to) => TxKind::Call(to),
         None => TxKind::Create,
     };
 
-    // Build TxEnv using the builder pattern
     let mut tx_env_builder = TxEnv::builder()
         .caller(caller)
         .gas_limit(tx.gas_limit())
@@ -108,7 +116,9 @@ pub fn zk_tx_into_revm_tx(
         .access_list(access_list)
         .tx_type(Some(tx.tx_type().ty()))
         .chain_id(chain_id)
-        .blob_hashes(vec![]); // ZkSync transactions don't use blobs yet
+        .blob_hashes(blob_hashes)
+        .max_fee_per_blob_gas(max_fee_per_blob_gas)
+        .authorization_list_signed(authorization_list);
 
     if let Some(priority_fee) = gas_priority_fee {
         tx_env_builder = tx_env_builder.gas_priority_fee(Some(priority_fee));
@@ -118,11 +128,11 @@ pub fn zk_tx_into_revm_tx(
         .base(tx_env_builder)
         .mint(to_mint)
         .refund_recipient(refund_recipient)
+        .settlement_layer_chain_id(settlement_layer_chain_id)
         .gas_used_override(Some(gas_used))
         .force_fail(!execution_status)
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build TxEnv: {e:?}"))
-        .unwrap()
 }
 
 pub fn zk_spec_version(execution_version: ExecutionVersion) -> Option<ZkSpecId> {

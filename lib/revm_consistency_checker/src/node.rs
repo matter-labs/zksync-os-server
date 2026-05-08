@@ -1,23 +1,30 @@
-use alloy::primitives::U256;
+use alloy::primitives::{B256, U256};
 use async_trait::async_trait;
-use reth_revm::ExecuteCommitEvm;
-use reth_revm::context::{Context, ContextTr};
-use reth_revm::db::CacheDB;
+use revm::ExecuteCommitEvm;
+use revm::context::ContextTr;
+use revm::context_interface::block::BlobExcessGasAndPrice;
+use revm::database::{CacheDB, EmptyDB};
+use ruint::aliases::B160;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
+use zk_ee::common_structs::derive_flat_storage_key;
+use zk_ee::utils::Bytes32;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
-use zksync_os_revm::{DefaultZk, ZkBuilder};
+use zksync_os_revm::{DefaultZk, ZkBuilder, ZkContext};
 use zksync_os_sequencer::model::blocks::AppliedBlock;
-use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
+use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, ViewState};
 use zksync_os_types::ExecutionVersion;
 
 use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
 use crate::metrics::PUSH_METRICS;
 use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
+
+const BLOB_BASE_FEE_UPDATE_FRACTION: u128 = alloy::eips::eip4844::BLOB_GASPRICE_UPDATE_FRACTION;
+const MIN_BASE_FEE_PER_BLOB_GAS: u64 = 1;
 
 pub struct RevmConsistencyChecker<State>
 where
@@ -145,18 +152,41 @@ where
             state_reporter.enter_state(GenericComponentState::Active);
             let state_block_number = replay_record.block_context.block_number - 1;
             let block_hashes = replay_record.block_context.block_hashes;
-            let state_view = self
+            let mut state_view = self
                 .state
                 .state_view_at(state_block_number)
                 .map_err(anyhow::Error::from)?;
 
             if let Some(zk_spec) = zk_spec {
+                let settlement_layer_chain_id = read_settlement_layer_chain_id(&mut state_view);
+
+                let blob_fee: u64 = replay_record
+                    .block_context
+                    .blob_fee
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Blob fee should fit into u64"))?;
+                let block_basefee: u64 = replay_record
+                    .block_context
+                    .eip1559_basefee
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Block base fee should fit into u64"))?;
+
+                let blob_excess_gas_and_price = BlobExcessGasAndPrice::new(
+                    calculate_excess_blob_gas_from_blob_base_fee(
+                        blob_fee,
+                        BLOB_BASE_FEE_UPDATE_FRACTION,
+                    ),
+                    BLOB_BASE_FEE_UPDATE_FRACTION
+                        .try_into()
+                        .expect("Blob base fee update fraction should fit into u64"),
+                );
+
                 // For each block, we create an in-memory cache database to accumulate transaction state changes separately
                 let state_provider =
                     RevmStateProvider::new(state_view, block_hashes, state_block_number);
-                let mut cache_db = CacheDB::new(state_provider);
-                let mut evm = Context::default()
-                    .with_db(&mut cache_db)
+                let cache_db = CacheDB::new(state_provider);
+                let mut evm = ZkContext::<EmptyDB>::default()
+                    .with_db(cache_db)
                     .modify_cfg_chained(|cfg| {
                         cfg.chain_id = replay_record.block_context.chain_id;
                         cfg.spec = zk_spec;
@@ -165,15 +195,14 @@ where
                         block.number = U256::from(replay_record.block_context.block_number);
                         block.timestamp = U256::from(replay_record.block_context.timestamp);
                         block.beneficiary = replay_record.block_context.coinbase;
-                        block.basefee = replay_record.block_context.eip1559_basefee.saturating_to();
+                        block.basefee = block_basefee;
                         block.gas_limit = replay_record.block_context.gas_limit;
-                        // `replay_record.block_context` holds an incorrect `prevrandao` value.
-                        // We use the actual value that ZKsync OS uses instead.
-                        block.prevrandao = Some(U256::ONE.into());
+                        block.prevrandao = Some(replay_record.block_context.mix_hash.into());
+                        block.blob_excess_gas_and_price = Some(blob_excess_gas_and_price);
                     })
                     .build_zk();
 
-                let revm_txs = replay_record
+                let revm_txs: anyhow::Result<Vec<_>> = replay_record
                     .transactions
                     .iter()
                     .zip(&block_output.tx_results)
@@ -181,21 +210,38 @@ where
                         let tx_output = tx_output_raw.as_ref().expect(
                             "block_output of a sealed block must not contain invalid transactions",
                         );
+                        zk_tx_into_revm_tx(
+                            transaction,
+                            tx_output.gas_used,
+                            tx_output.is_success(),
+                            Some(settlement_layer_chain_id),
+                        )
+                    })
+                    .collect();
 
-                        zk_tx_into_revm_tx(transaction, tx_output.gas_used, tx_output.is_success())
-                    });
+                match revm_txs {
+                    Ok(txs) => {
+                        // Commit after each tx
+                        for tx in txs {
+                            evm.transact_commit(tx)?;
+                        }
 
-                // Commit after each tx
-                for tx in revm_txs {
-                    evm.transact_commit(tx)?;
+                        let compare_report = CompareReport::build(
+                            evm.0.ctx.db_mut(),
+                            &block_output.storage_writes,
+                            &block_output.account_diffs,
+                        )?;
+                        self.handle_report(&block_output, &replay_record, &compare_report)?;
+                    }
+                    Err(err) => {
+                        // A tx variant we don't yet handle (e.g. system tx) — skip the
+                        // whole block rather than blocking the pipeline.
+                        tracing::warn!(
+                            block_number = replay_record.block_context.block_number,
+                            "Skipping REVM consistency check for block: {err:#}"
+                        );
+                    }
                 }
-
-                let compare_report = CompareReport::build(
-                    evm.0.db_mut(),
-                    &block_output.storage_writes,
-                    &block_output.account_diffs,
-                )?;
-                self.handle_report(&block_output, &replay_record, &compare_report)?;
             }
 
             output.send_and_record(
@@ -207,4 +253,65 @@ where
             )?;
         }
     }
+}
+
+/// Read the settlement layer chain id from `SYSTEM_CONTEXT_ADDRESS` (0x800b), slot 0.
+fn read_settlement_layer_chain_id<S: ViewState>(state: &mut S) -> U256 {
+    let flat_key = derive_flat_storage_key(&B160::from_limbs([0x800b, 0, 0]), &Bytes32::ZERO);
+    let value = state
+        .read(B256::from(flat_key.as_u8_array()))
+        .unwrap_or_default();
+    U256::from_be_slice(value.as_slice())
+}
+
+/// Inverse of `fake_exponential` over the blob base fee, used to derive
+/// `excess_blob_gas` from a target blob base fee.
+fn calculate_excess_blob_gas_from_blob_base_fee(
+    blob_base_fee: u64,
+    blob_base_fee_update_fraction: u128,
+) -> u64 {
+    if blob_base_fee <= MIN_BASE_FEE_PER_BLOB_GAS {
+        return 0;
+    }
+    assert!(
+        blob_base_fee_update_fraction != 0,
+        "blob base fee update fraction cannot be zero"
+    );
+
+    let target_blob_base_fee = blob_base_fee as u128;
+    let mut low = 0u64;
+    let mut high = 1u64;
+
+    while calculate_blob_base_fee_for_excess_blob_gas(high, blob_base_fee_update_fraction)
+        < target_blob_base_fee
+    {
+        if high == u64::MAX {
+            return u64::MAX;
+        }
+        high = high.saturating_mul(2);
+    }
+
+    while low < high {
+        let mid = low + (high - low) / 2;
+        let blob_base_fee_at_mid =
+            calculate_blob_base_fee_for_excess_blob_gas(mid, blob_base_fee_update_fraction);
+        if blob_base_fee_at_mid < target_blob_base_fee {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+
+    low
+}
+
+fn calculate_blob_base_fee_for_excess_blob_gas(
+    excess_blob_gas: u64,
+    blob_base_fee_update_fraction: u128,
+) -> u128 {
+    alloy::eips::eip4844::fake_exponential(
+        alloy::eips::eip4844::BLOB_TX_MIN_BLOB_GASPRICE,
+        excess_blob_gas as u128,
+        blob_base_fee_update_fraction,
+    )
 }
