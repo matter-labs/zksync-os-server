@@ -1,9 +1,21 @@
+use serde::Serialize;
 use vise::{EncodeLabelSet, EncodeLabelValue};
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EncodeLabelValue, EncodeLabelSet,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    EncodeLabelValue,
+    EncodeLabelSet,
+    Serialize,
 )]
 #[metrics(rename_all = "snake_case", label = "component")]
+#[serde(rename_all = "snake_case")]
 pub enum ComponentId {
     ConsensusNodeCommandSource,
     ExternalNodeCommandSource,
