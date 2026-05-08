@@ -13,7 +13,6 @@ use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     Config, ConfigArgs, ConfigValidate, PrometheusConfig, ProofStorageConfig, RebuildBlocksConfig,
     StateBackendConfig, build_external_config, load_config_file_sources,
-    report_flat_config_metrics,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -168,8 +167,6 @@ pub async fn main() {
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
     config.validate().await.expect("invalid config");
-
-    report_flat_config_metrics(&config.prover_api_config, "prover_api");
 
     if opt.no_run {
         tracing::info!("Node config was loaded successfully, exiting due to --no-run flag");

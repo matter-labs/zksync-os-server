@@ -1,42 +1,12 @@
-use super::metrics::CONFIG_METRICS;
 use alloy::primitives::B256;
 use alloy::signers::k256::ecdsa::SigningKey;
 use serde::Deserialize;
 use serde_json::Value;
+use smart_config::ErrorWithOrigin;
 use smart_config::de::{DeserializeContext, DeserializeParam};
 use smart_config::metadata::{BasicTypes, ParamMetadata};
-use smart_config::{DescribeConfig, ErrorWithOrigin, SerializerOptions};
 use zksync_os_network::SecretKey;
 use zksync_os_operator_signer::SignerConfig;
-
-pub fn report_flat_config_metrics<C: DescribeConfig>(config: &C, prefix: &str) {
-    for (name, value) in flat_config_metric_entries(config, prefix) {
-        CONFIG_METRICS.values[&(name, value)].set(1);
-    }
-}
-
-fn flat_config_metric_entries<C: DescribeConfig>(
-    config: &C,
-    prefix: &str,
-) -> Vec<(String, String)> {
-    SerializerOptions::default()
-        .flat(true)
-        .serialize(config)
-        .into_iter()
-        .map(|(key, value)| {
-            let name = format!("{prefix}_{key}");
-            let value = stringify_config_value(value);
-            (name, value)
-        })
-        .collect()
-}
-
-fn stringify_config_value(value: Value) -> String {
-    match value {
-        Value::String(value) => value,
-        value => value.to_string(),
-    }
-}
 
 /// Custom deserializer for [`SignerConfig`].
 ///
@@ -130,27 +100,5 @@ impl DeserializeParam<SecretKey> for SecretKeyDeserializer {
     fn serialize_param(&self, param: &SecretKey) -> Value {
         let bytes = B256::from_slice(&param.secret_bytes());
         serde_json::to_value(bytes).expect("failed serializing to JSON")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use crate::config::GeneralConfig;
-
-    use super::flat_config_metric_entries;
-
-    #[test]
-    fn flat_config_metric_entries_prefix_keys_and_stringify_values() {
-        let entries: HashMap<_, _> =
-            flat_config_metric_entries(&GeneralConfig::default(), "general")
-                .into_iter()
-                .collect();
-
-        assert_eq!(entries["general##node_role"], "main");
-        assert_eq!(entries["general##gateway_chain_id"], "506");
-        assert_eq!(entries["general##run_priority_tree"], "true");
-        assert_eq!(entries["general##force_starting_block_number"], "null");
     }
 }

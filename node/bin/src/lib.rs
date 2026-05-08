@@ -24,6 +24,7 @@ use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_ba
 use crate::command_source::{ConsensusNodeCommandSource, ExternalNodeCommandSource};
 use crate::config::{
     Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
+    report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -191,6 +192,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .leak();
     GENERAL_METRICS.fee_collector_address[&fee_collector_address].set(1);
     GENERAL_METRICS.chain_id.set(chain_id);
+    report_static_config_metrics(&config);
 
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.

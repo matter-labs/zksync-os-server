@@ -1,5 +1,5 @@
 pub use self::cli::ConfigArgs;
-pub use self::util::report_flat_config_metrics;
+pub(crate) use self::metrics::report_static_config_metrics;
 use self::util::{SecretKeyDeserializer, SignerConfigDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
