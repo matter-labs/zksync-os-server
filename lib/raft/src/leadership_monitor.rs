@@ -137,7 +137,15 @@ pub fn spawn_leadership_monitor(
             };
             if role != prev_role {
                 tracing::info!("OpenRaft leadership status changed: {role:?}");
+                let was_leader = prev_role == ConsensusRole::Leader;
                 prev_role = role;
+                // Losing leadership mid-flight leaves the produce pipeline in an unrecoverable
+                // state (e.g. a `Produce` parked in `BlockExecutor` waiting on an empty
+                // mempool). Tear the runtime down so the orchestrator restarts the node and
+                // it rejoins as a follower with fresh raft state.
+                if was_leader && role != ConsensusRole::Leader {
+                    panic!("raft leadership lost; tearing down node");
+                }
             }
 
             let status = RaftConsensusStatus {
