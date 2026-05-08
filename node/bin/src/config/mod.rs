@@ -1,4 +1,5 @@
 pub use self::cli::ConfigArgs;
+pub use self::util::report_flat_config_metrics;
 use self::util::{SecretKeyDeserializer, SignerConfigDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
@@ -30,6 +31,7 @@ use zksync_os_types::{NodeRole, PubdataMode};
 
 mod build_external_config;
 mod cli;
+mod metrics;
 mod util;
 
 pub use build_external_config::{build_external_config, load_config_file_sources};
