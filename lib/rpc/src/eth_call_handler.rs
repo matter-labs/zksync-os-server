@@ -516,11 +516,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let mut gas_used = res.gas_used;
         let mut range = GasRange::new(gas_used.saturating_sub(1), tx.gas_limit());
 
-        // As stated in Geth, there is a good chance that the transaction will pass if we set the
-        // gas limit to the execution gas used plus the gas refund, so we check this first.
+        // Optimistic check: tx likely passes at gas_used + refund + stipend, scaled by 64/63 (EIP-150).
         // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L135>
-        // The 64/63 multiplier accounts for gas forwarding rules (EIP-150).
-        let optimistic_gas_limit = (gas_used + res.gas_refunded + 2_300) * 64 / 63;
+        const GAS_STIPEND: u64 = 2_300;
+        let optimistic_gas_limit = (gas_used + res.gas_refunded + GAS_STIPEND) * 64 / 63;
         if optimistic_gas_limit < range.highest {
             let res = try_at(optimistic_gas_limit)?.map_err(EthCallError::InvalidTransaction)?;
             tracing::trace!(
