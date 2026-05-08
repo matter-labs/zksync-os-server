@@ -82,7 +82,7 @@ fn remaining_storm_send_timeout(deadline: Instant) -> Option<Duration> {
 }
 
 async fn generate_consensus_transaction_storm(
-    cluster: &MultiNodeTester,
+    cluster: &mut MultiNodeTester,
     node_indices: &[usize],
     duration: Duration,
 ) -> anyhow::Result<ConsensusLoadStats> {
@@ -513,7 +513,7 @@ async fn consensus_restarted_node_catches_up_after_long_transaction_storm() -> a
             .await?;
 
         let load_stats = generate_consensus_transaction_storm(
-            &cluster,
+            &mut cluster,
             &active_node_indices,
             CONSENSUS_LONG_GAP_LOAD_DURATION,
         )

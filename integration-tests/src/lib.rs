@@ -375,6 +375,18 @@ impl Tester {
         Ok(provider)
     }
 
+    /// Returns true if the node's runtime has reported a critical-task panic.
+    ///
+    /// Mirrors what a production orchestrator observes when a `reth_tasks` critical task
+    /// panics: the runtime is dying and the node should be respawned. Non-destructive — the
+    /// task-manager handle is left in place so the caller can still consume it via
+    /// [`Self::wait_for_fatal_error_with_timeout`] if desired.
+    pub fn has_crashed(&self) -> bool {
+        self.task_manager_handle
+            .as_ref()
+            .is_some_and(|h| h.is_finished())
+    }
+
     /// Waits until the node reports a fatal critical-task error through the runtime task manager.
     ///
     /// This consumes the runtime's task manager handle for this tester instance, so it should be

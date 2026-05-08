@@ -121,7 +121,7 @@ async fn active_max_last_applied_index(cluster: &MultiNodeTester) -> anyhow::Res
 }
 
 async fn send_transfer_and_wait_for_active_replication(
-    cluster: &MultiNodeTester,
+    cluster: &mut MultiNodeTester,
     leader_index: usize,
 ) -> anyhow::Result<u64> {
     let initial_applied = active_max_last_applied_index(cluster).await?;
@@ -165,7 +165,7 @@ async fn wait_for_l1_finalization_if_batcher_active(
 
 #[test_log::test(tokio::test)]
 async fn consensus_cluster_includes_simple_transaction_with_wait() -> anyhow::Result<()> {
-    let cluster = MultiNodeTester::builder()
+    let mut cluster = MultiNodeTester::builder()
         .with_consensus_secret_keys(consensus_test_keys(1))
         .build()
         .await?;
@@ -251,7 +251,7 @@ async fn consensus_can_be_reenabled_after_clearing_raft_history() -> anyhow::Res
 
 #[test_log::test(tokio::test)]
 async fn consensus_cluster_forms_with_three_nodes_and_replicates_blocks() -> anyhow::Result<()> {
-    let cluster = MultiNodeTester::builder()
+    let mut cluster = MultiNodeTester::builder()
         .with_consensus_secret_keys(consensus_test_keys(3))
         .build()
         .await?;
@@ -266,7 +266,7 @@ async fn consensus_cluster_forms_with_three_nodes_and_replicates_blocks() -> any
         }
 
         let replicated_applied =
-            send_transfer_and_wait_for_active_replication(&cluster, leader_index).await?;
+            send_transfer_and_wait_for_active_replication(&mut cluster, leader_index).await?;
         assert!(replicated_applied > initial_applied);
 
         Ok(())
@@ -293,7 +293,7 @@ async fn consensus_cluster_rotates_leader_after_failure() -> anyhow::Result<()> 
 
         // Warm up follower replication before taking the leader down so the surviving
         // nodes have already exchanged append entries with the elected leader.
-        send_transfer_and_wait_for_active_replication(&cluster, initial_leader_idx).await?;
+        send_transfer_and_wait_for_active_replication(&mut cluster, initial_leader_idx).await?;
 
         cluster.suspend_node(initial_leader_idx).await?;
 
@@ -307,7 +307,7 @@ async fn consensus_cluster_rotates_leader_after_failure() -> anyhow::Result<()> 
 
         assert_ne!(initial_leader_node_id, new_leader_id);
 
-        send_transfer_and_wait_for_active_replication(&cluster, new_leader_idx).await?;
+        send_transfer_and_wait_for_active_replication(&mut cluster, new_leader_idx).await?;
 
         Ok(())
     }
@@ -327,7 +327,7 @@ async fn consensus_cluster_stops_making_progress_without_quorum() -> anyhow::Res
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
         let committed_applied =
-            send_transfer_and_wait_for_active_replication(&cluster, leader_idx).await?;
+            send_transfer_and_wait_for_active_replication(&mut cluster,leader_idx).await?;
         let follower_indices: Vec<_> = (0..cluster.len())
             .filter(|idx| *idx != leader_idx)
             .collect();
@@ -370,7 +370,7 @@ async fn consensus_original_leader_rejoins_and_cluster_remains_stable() -> anyho
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
 
-        send_transfer_and_wait_for_active_replication(&cluster, initial_leader_idx).await?;
+        send_transfer_and_wait_for_active_replication(&mut cluster, initial_leader_idx).await?;
 
         cluster.suspend_node(initial_leader_idx).await?;
 
@@ -379,7 +379,7 @@ async fn consensus_original_leader_rejoins_and_cluster_remains_stable() -> anyho
             .await?;
 
         // Advance the cluster while the original leader is absent so it has entries to catch up.
-        send_transfer_and_wait_for_active_replication(&cluster, new_leader_idx).await?;
+        send_transfer_and_wait_for_active_replication(&mut cluster, new_leader_idx).await?;
         let target_applied = active_max_last_applied_index(&cluster).await?;
 
         // Restart the original leader. It must rejoin without disrupting the running cluster:
@@ -393,7 +393,7 @@ async fn consensus_original_leader_rejoins_and_cluster_remains_stable() -> anyho
             .await?;
 
         // Verify the cluster continues to make progress after the rejoin.
-        send_transfer_and_wait_for_active_replication(&cluster, final_leader_idx).await?;
+        send_transfer_and_wait_for_active_replication(&mut cluster, final_leader_idx).await?;
 
         Ok(())
     }
@@ -413,7 +413,7 @@ async fn consensus_cluster_recovers_after_quorum_loss() -> anyhow::Result<()> {
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
         let committed_applied =
-            send_transfer_and_wait_for_active_replication(&cluster, leader_idx).await?;
+            send_transfer_and_wait_for_active_replication(&mut cluster,leader_idx).await?;
 
         let follower_indices: Vec<_> = (0..cluster.len())
             .filter(|&idx| idx != leader_idx)
@@ -443,7 +443,7 @@ async fn consensus_cluster_recovers_after_quorum_loss() -> anyhow::Result<()> {
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
         let recovery_applied =
-            send_transfer_and_wait_for_active_replication(&cluster, new_leader_idx).await?;
+            send_transfer_and_wait_for_active_replication(&mut cluster,new_leader_idx).await?;
         assert!(
             recovery_applied > committed_applied,
             "cluster must make progress after quorum is restored: committed={committed_applied} recovery={recovery_applied}",
@@ -467,7 +467,7 @@ async fn consensus_cluster_fully_restarts_and_recovers() -> anyhow::Result<()> {
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
         let last_applied =
-            send_transfer_and_wait_for_active_replication(&cluster, leader_idx).await?;
+            send_transfer_and_wait_for_active_replication(&mut cluster, leader_idx).await?;
 
         // Suspend all nodes: state is durably on disk before any restarts.
         for idx in 0..cluster.len() {
@@ -486,7 +486,7 @@ async fn consensus_cluster_fully_restarts_and_recovers() -> anyhow::Result<()> {
             .await?;
 
         // Verify the cluster continues to make progress after the full restart.
-        send_transfer_and_wait_for_active_replication(&cluster, new_leader_idx).await?;
+        send_transfer_and_wait_for_active_replication(&mut cluster, new_leader_idx).await?;
 
         Ok(())
     }
@@ -512,8 +512,8 @@ async fn consensus_late_node_joins_and_catches_up() -> anyhow::Result<()> {
             .wait_for_active_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
 
-        send_transfer_and_wait_for_active_replication(&cluster, leader_idx).await?;
-        send_transfer_and_wait_for_active_replication(&cluster, leader_idx).await?;
+        send_transfer_and_wait_for_active_replication(&mut cluster, leader_idx).await?;
+        send_transfer_and_wait_for_active_replication(&mut cluster, leader_idx).await?;
         let target_applied = active_max_last_applied_index(&cluster).await?;
 
         // Start the late node. It must receive all missed entries via Raft log replication.
@@ -557,9 +557,9 @@ async fn consensus_follower_restarts_and_catches_up() -> anyhow::Result<()> {
             .wait_for_active_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
 
-        send_transfer_and_wait_for_active_replication(&cluster, active_leader_idx).await?;
+        send_transfer_and_wait_for_active_replication(&mut cluster, active_leader_idx).await?;
         let target_applied =
-            send_transfer_and_wait_for_active_replication(&cluster, active_leader_idx).await?;
+            send_transfer_and_wait_for_active_replication(&mut cluster, active_leader_idx).await?;
 
         cluster.start_node(follower_idx).await?;
         wait_for_node_last_applied_index_at_or_above(

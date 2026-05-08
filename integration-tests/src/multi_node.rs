@@ -4,6 +4,10 @@ use std::time::Duration;
 use tokio::time::Instant;
 use zksync_os_status_server::StatusResponse;
 
+/// Each respawn during a wait-helper poll buys this much extra time, since the freshly
+/// respawned node needs to finish booting and the cluster needs another election cycle.
+const RESPAWN_GRACE: Duration = Duration::from_secs(10);
+
 use crate::{
     AnvilL1, ChainLayout, Config, LockedPort, NodeRole, PROTOCOL_VERSION, StoppedTester, Tester,
 };
@@ -381,6 +385,37 @@ impl MultiNodeTester {
         Ok(())
     }
 
+    /// Respawn any running node whose runtime reported a critical-task panic, reusing its
+    /// on-disk state and ports. Mirrors what a production orchestrator does on a `reth_tasks`
+    /// critical-task panic (notably the deliberate panic in
+    /// `lib/raft/src/leadership_monitor.rs` when a leader is demoted) so cluster-wait helpers
+    /// can recover from a transient leader flicker without leaving a dead status endpoint.
+    /// Returns the number of nodes respawned in this sweep.
+    async fn respawn_crashed_running_nodes(&mut self) -> anyhow::Result<usize> {
+        let crashed: Vec<usize> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, slot)| match slot {
+                NodeSlot::Running(t) if t.has_crashed() => Some(idx),
+                _ => None,
+            })
+            .collect();
+        let count = crashed.len();
+        for idx in crashed {
+            tracing::warn!("node {idx} crashed (critical task panicked); respawning...");
+            let running = self.nodes.remove(idx);
+            let stopped = match running {
+                NodeSlot::Running(tester) => tester.stop().await?,
+                NodeSlot::Suspended(_) => unreachable!("filtered to running above"),
+            };
+            let restarted = stopped.start().await?;
+            self.nodes
+                .insert(idx, NodeSlot::Running(Box::new(restarted)));
+        }
+        Ok(count)
+    }
+
     pub async fn start_node_with_overrides(
         &mut self,
         index: usize,
@@ -400,7 +435,7 @@ impl MultiNodeTester {
     /// Waits for the Raft cluster to form with a single elected leader
     /// Returns the index of the leader node
     pub async fn wait_for_raft_cluster_formation(
-        &self,
+        &mut self,
         timeout: Duration,
     ) -> anyhow::Result<usize> {
         let node_indices = self.all_node_indices();
@@ -410,7 +445,7 @@ impl MultiNodeTester {
 
     /// Same as `wait_for_raft_cluster_formation`, but ignores suspended nodes.
     pub async fn wait_for_active_raft_cluster_formation(
-        &self,
+        &mut self,
         timeout: Duration,
     ) -> anyhow::Result<usize> {
         let node_indices = self.active_node_indices();
@@ -420,7 +455,7 @@ impl MultiNodeTester {
 
     /// Same as `wait_for_raft_cluster_formation`, but only considers selected nodes.
     pub async fn wait_for_raft_cluster_formation_among(
-        &self,
+        &mut self,
         node_indices: &[usize],
         timeout: Duration,
     ) -> anyhow::Result<usize> {
@@ -429,14 +464,18 @@ impl MultiNodeTester {
     }
 
     pub async fn wait_for_active_last_applied_index_convergence(
-        &self,
+        &mut self,
         min_index: u64,
         timeout: Duration,
     ) -> anyhow::Result<u64> {
-        let deadline = Instant::now() + timeout;
+        let mut deadline = Instant::now() + timeout;
         let mut last_summary = String::new();
 
         while Instant::now() < deadline {
+            let respawned = self.respawn_crashed_running_nodes().await?;
+            if respawned > 0 {
+                deadline = deadline.max(Instant::now() + RESPAWN_GRACE);
+            }
             let cluster_state = ClusterState::collect_active(&self.nodes).await;
             let summary = cluster_state.summary();
 
@@ -472,7 +511,7 @@ impl MultiNodeTester {
     }
 
     async fn wait_for_raft_cluster_formation_inner(
-        &self,
+        &mut self,
         node_indices: &[usize],
         timeout: Duration,
     ) -> anyhow::Result<usize> {
@@ -488,10 +527,14 @@ impl MultiNodeTester {
             );
         }
 
-        let deadline = Instant::now() + timeout;
+        let mut deadline = Instant::now() + timeout;
         let mut last_summary = String::new();
 
         while Instant::now() < deadline {
+            let respawned = self.respawn_crashed_running_nodes().await?;
+            if respawned > 0 {
+                deadline = deadline.max(Instant::now() + RESPAWN_GRACE);
+            }
             let cluster_state =
                 ClusterState::collect_indices(&self.nodes, node_indices.iter().copied()).await;
             let summary = cluster_state.summary();
