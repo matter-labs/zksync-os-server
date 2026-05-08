@@ -131,7 +131,7 @@ where
             // original sequencing, so it always falls back to the deployment
             // filter (with `Unrestricted` config to avoid re-filtering).
             let policy_client = is_produce
-                .then(|| self.config.tx_validator.policy_client.clone())
+                .then_some(self.config.tx_validator.policy_client.as_ref())
                 .flatten();
             let exec_result = if let Some(policy_client) = policy_client {
                 let policy_session = policy_client.session(AccessType::Write);

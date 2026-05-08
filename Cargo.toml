@@ -195,7 +195,6 @@ sha2 = "0.10.9"
 tower = "0.5.2"
 tower-http = "0.6.6"
 hyper = "1.6.0"
-hyper-util = "0.1.19"
 semver = { version = "1", features = ["serde"] }
 num_cpus = "1.17.0"
 rocksdb = "0.24.0"
@@ -234,10 +233,6 @@ rustls = { version = "0.23.31", default-features = false, features = [
     "ring",
     "std",
 ] }
-bytes = "1"
-rustls-pemfile = "2.2"
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
-rcgen = "0.13"
 test-casing = "0.2.0-beta.1"
 quote = "1"
 syn = "2"

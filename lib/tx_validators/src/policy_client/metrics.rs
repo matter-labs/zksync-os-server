@@ -1,7 +1,7 @@
 use std::time::Duration;
-use vise::{Buckets, Counter, EncodeLabelValue, Histogram, LabeledFamily, Metrics, Unit};
+use vise::{Buckets, Counter, EncodeLabelSet, EncodeLabelValue, Family, Histogram, Metrics, Unit};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelSet, EncodeLabelValue)]
 #[metrics(label = "outcome", rename_all = "snake_case")]
 pub enum Outcome {
     Allow,
@@ -10,9 +10,9 @@ pub enum Outcome {
 
 /// Cheap reason breakdown for errors. The goal is operator-legible buckets,
 /// not a perfect 1:1 with `TransportError` variants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
-#[metrics(label = "reason", rename_all = "snake_case")]
-pub enum ErrorReason {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelSet, EncodeLabelValue)]
+#[metrics(label = "kind", rename_all = "snake_case")]
+pub enum ErrorKind {
     Timeout,
     Connect,
     Http,
@@ -25,12 +25,10 @@ pub enum ErrorReason {
 #[metrics(prefix = "policy_client")]
 pub struct PolicyClientMetrics {
     /// Count of admit decisions, broken down by allow / deny.
-    #[metrics(labels = ["outcome"])]
-    pub admit_decisions: LabeledFamily<Outcome, Counter>,
+    pub admit_decisions: Family<Outcome, Counter>,
 
     /// Count of admit errors (treated as fail-closed by the client).
-    #[metrics(labels = ["reason"])]
-    pub admit_errors: LabeledFamily<ErrorReason, Counter>,
+    pub admit_errors: Family<ErrorKind, Counter>,
 
     /// Count of admit calls bypassed via the `bypass_from` allowlist.
     pub admit_bypassed: Counter,
@@ -42,12 +40,10 @@ pub struct PolicyClientMetrics {
     pub admit_latency: Histogram<Duration>,
 
     /// Count of judge decisions, broken down by allow / deny.
-    #[metrics(labels = ["outcome"])]
-    pub judge_decisions: LabeledFamily<Outcome, Counter>,
+    pub judge_decisions: Family<Outcome, Counter>,
 
     /// Count of judge errors (treated as fail-closed by the client).
-    #[metrics(labels = ["reason"])]
-    pub judge_errors: LabeledFamily<ErrorReason, Counter>,
+    pub judge_errors: Family<ErrorKind, Counter>,
 
     /// Count of judge calls bypassed via the `bypass_from` allowlist.
     pub judge_bypassed: Counter,

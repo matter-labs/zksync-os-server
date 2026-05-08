@@ -7,7 +7,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use bytes::Bytes;
+use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
+use secrecy::{ExposeSecret, SecretString};
+use serde::{Serialize, de::DeserializeOwned};
 
 /// Errors raised by the transport layer at request time. All of these are
 /// treated as fail-closed by `PolicyClient`; the caller never branches on the
@@ -33,7 +35,7 @@ pub(crate) enum TransportConfig {
     /// HTTP over TCP. Bearer token is required and always injected.
     Http {
         url: url::Url,
-        auth_token: String,
+        auth_token: SecretString,
     },
     /// Unix domain socket. Socket-path filesystem permissions are the access
     /// control; bearer token is not applicable and not sent.
@@ -48,7 +50,6 @@ pub(crate) enum TransportConfig {
 pub(crate) struct Transport {
     client: reqwest::Client,
     base_url: String,
-    auth_token: Option<String>,
 }
 
 impl Transport {
@@ -56,53 +57,76 @@ impl Transport {
         match config {
             TransportConfig::Http { url, auth_token } => {
                 let base_url = url.to_string().trim_end_matches('/').to_owned();
+                let mut auth_value =
+                    HeaderValue::from_str(&format!("Bearer {}", auth_token.expose_secret()))
+                        .expect("auth token must be a valid HTTP header value");
+                auth_value.set_sensitive(true);
+                let mut headers = Self::base_headers();
+                headers.insert(AUTHORIZATION, auth_value);
                 let client = reqwest::Client::builder()
+                    .default_headers(headers)
                     .build()
                     .map_err(TransportError::Request)?;
-                Ok(Self {
-                    client,
-                    base_url,
-                    auth_token: Some(auth_token),
-                })
+                Ok(Self { client, base_url })
             }
             TransportConfig::Unix { socket_path } => {
                 let client = reqwest::Client::builder()
+                    .default_headers(Self::base_headers())
                     .unix_socket(socket_path)
                     .build()
                     .map_err(TransportError::Request)?;
                 Ok(Self {
                     client,
                     base_url: "http://localhost".to_owned(),
-                    auth_token: None,
                 })
             }
         }
     }
 
-    pub async fn post_admit(&self, body: Vec<u8>) -> Result<Bytes, TransportError> {
-        self.post("/admit", body).await
+    fn base_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        headers
     }
 
-    pub async fn post_judge(&self, body: Vec<u8>) -> Result<Bytes, TransportError> {
-        self.post("/judge", body).await
+    pub async fn post_admit<R: Serialize, D: DeserializeOwned>(
+        &self,
+        request: &R,
+    ) -> Result<D, TransportError> {
+        self.post("/admit", request).await
     }
 
-    async fn post(&self, path: &str, body: Vec<u8>) -> Result<Bytes, TransportError> {
+    pub async fn post_judge<R: Serialize, D: DeserializeOwned>(
+        &self,
+        request: &R,
+    ) -> Result<D, TransportError> {
+        self.post("/judge", request).await
+    }
+
+    async fn post<R: Serialize, D: DeserializeOwned>(
+        &self,
+        path: &str,
+        request: &R,
+    ) -> Result<D, TransportError> {
         let url = format!("{}{path}", self.base_url);
-        let mut req = self
+        let response = self
             .client
             .post(url)
-            .header("content-type", "application/json")
-            .header("accept", "application/json")
-            .body(body);
-        if let Some(token) = &self.auth_token {
-            req = req.header("authorization", format!("Bearer {token}"));
-        }
-        let response = req.send().await.map_err(TransportError::Request)?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(TransportError::NonSuccessStatus(status));
-        }
-        response.bytes().await.map_err(TransportError::Request)
+            .json(request)
+            .send()
+            .await
+            .map_err(TransportError::Request)?
+            .error_for_status()
+            .map_err(|e: reqwest::Error| match e.status() {
+                Some(status) => TransportError::NonSuccessStatus(status),
+                None => TransportError::Request(e),
+            })?;
+        response.json::<D>().await.map_err(|e: reqwest::Error| {
+            if e.is_decode() {
+                TransportError::MalformedResponse
+            } else {
+                TransportError::Request(e)
+            }
+        })
     }
 }

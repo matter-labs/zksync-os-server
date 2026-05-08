@@ -1,28 +1,16 @@
 //! Unit + integration tests for `PolicyClient` / `PolicySession`.
 //!
-//! Transport exercised: **UDS** (`unix:///`) covers the full request/response
-//! surface (allow, deny, fail-closed, bypass, serialization, timeout,
-//! protocol-version, bearer-token injection). Construction-level URL checks
-//! are covered separately and don't need a server.
-//!
-//! Real HTTP round trips over UDS (no mocked transport), so serde, timeout,
-//! and bearer-token code paths run end-to-end.
+//! Transport exercised: **HTTP** (`http://`) via httpmock covers the full
+//! request/response surface (allow, deny, fail-closed, bypass, serialization,
+//! timeout, protocol-version, bearer-token injection). Construction-level URL
+//! checks are covered separately and don't need a server.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use alloy::primitives::{Address, U256, address};
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
-use hyper::service::service_fn;
-use hyper::{Request, Response};
-use hyper_util::rt::TokioIo;
+use httpmock::{Method, MockServer};
 use serde_json::json;
-use tempfile::TempDir;
-use tokio::net::UnixListener;
 use tokio::task::spawn_blocking;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{
@@ -45,14 +33,14 @@ fn test_context() -> BeginTxContext<'static> {
     }
 }
 
-fn base_config(url: String) -> Config {
+fn base_config(server: &MockServer) -> Config {
     Config {
-        url,
+        url: server.base_url(),
         request_timeout: Duration::from_millis(500),
         protocol_version: "1".into(),
         expected_protocol_version: None,
         bypass_from: Default::default(),
-        auth_token: None,
+        auth_token: Some("test-token".into()),
     }
 }
 
@@ -66,246 +54,70 @@ async fn run_begin_tx(
     spawn_blocking(move || session.begin_tx(&ctx)).await.unwrap()
 }
 
-// ---------- Mock-server helper (UDS) ----------
-//
-// httpmock doesn't support UDS, so we roll a tiny path-dispatched mock that
-// covers the patterns the tests need: status + JSON body per path, optional
-// pre-response delay, request-body capture, per-path call counts.
-
-#[derive(Clone)]
-struct MockResponse {
-    status: u16,
-    body: Vec<u8>,
-    delay: Option<Duration>,
-}
-
-impl MockResponse {
-    fn ok_json(value: serde_json::Value) -> Self {
-        Self {
-            status: 200,
-            body: serde_json::to_vec(&value).unwrap(),
-            delay: None,
-        }
-    }
-    fn raw(status: u16, body: impl Into<Vec<u8>>) -> Self {
-        Self {
-            status,
-            body: body.into(),
-            delay: None,
-        }
-    }
-    fn with_delay(mut self, delay: Duration) -> Self {
-        self.delay = Some(delay);
-        self
-    }
-}
-
-#[derive(Default, Clone)]
-struct MockRoutes {
-    by_path: HashMap<String, MockResponse>,
-}
-
-impl MockRoutes {
-    fn with(mut self, path: &str, resp: MockResponse) -> Self {
-        self.by_path.insert(path.into(), resp);
-        self
-    }
-}
-
-struct MockHandle {
-    base_url: String,
-    captured: Arc<Mutex<HashMap<String, Vec<Vec<u8>>>>>,
-    counts: Arc<Mutex<HashMap<String, AtomicUsize>>>,
-    headers: Arc<Mutex<HashMap<String, Vec<HashMap<String, String>>>>>,
-    _tmp: Option<TempDir>,
-}
-
-impl MockHandle {
-    fn url(&self) -> &str {
-        &self.base_url
-    }
-    fn calls(&self, path: &str) -> usize {
-        self.counts
-            .lock()
-            .unwrap()
-            .get(path)
-            .map(|c| c.load(Ordering::SeqCst))
-            .unwrap_or(0)
-    }
-    fn last_body(&self, path: &str) -> Option<Vec<u8>> {
-        self.captured
-            .lock()
-            .unwrap()
-            .get(path)
-            .and_then(|v| v.last().cloned())
-    }
-    fn last_header(&self, path: &str, header: &str) -> Option<String> {
-        self.headers
-            .lock()
-            .unwrap()
-            .get(path)
-            .and_then(|v| v.last())
-            .and_then(|h| h.get(header).cloned())
-    }
-}
-
-async fn start_uds_mock(routes: MockRoutes) -> MockHandle {
-    let tmp = tempfile::tempdir().unwrap();
-    let socket_path = tmp.path().join("policy.sock");
-    let listener = UnixListener::bind(&socket_path).unwrap();
-    let captured: Arc<Mutex<HashMap<String, Vec<Vec<u8>>>>> = Arc::new(Mutex::new(HashMap::new()));
-    let counts: Arc<Mutex<HashMap<String, AtomicUsize>>> = Arc::new(Mutex::new(HashMap::new()));
-    let headers: Arc<Mutex<HashMap<String, Vec<HashMap<String, String>>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-    let routes = Arc::new(routes);
-
-    let captured_clone = captured.clone();
-    let counts_clone = counts.clone();
-    let headers_clone = headers.clone();
-    tokio::spawn(async move {
-        loop {
-            let stream = match listener.accept().await {
-                Ok((s, _)) => s,
-                Err(_) => break,
-            };
-            let routes = routes.clone();
-            let captured = captured_clone.clone();
-            let counts = counts_clone.clone();
-            let headers = headers_clone.clone();
-            tokio::spawn(async move {
-                let io = TokioIo::new(stream);
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(
-                        io,
-                        service_fn(move |req: Request<Incoming>| {
-                            let routes = routes.clone();
-                            let captured = captured.clone();
-                            let counts = counts.clone();
-                            let headers = headers.clone();
-                            async move {
-                                let path = req.uri().path().to_string();
-                                let hdrs: HashMap<String, String> = req
-                                    .headers()
-                                    .iter()
-                                    .filter_map(|(k, v)| {
-                                        v.to_str()
-                                            .ok()
-                                            .map(|s| (k.as_str().to_owned(), s.to_owned()))
-                                    })
-                                    .collect();
-                                let body = req.into_body().collect().await.unwrap().to_bytes();
-                                captured
-                                    .lock()
-                                    .unwrap()
-                                    .entry(path.clone())
-                                    .or_default()
-                                    .push(body.to_vec());
-                                counts
-                                    .lock()
-                                    .unwrap()
-                                    .entry(path.clone())
-                                    .or_default()
-                                    .fetch_add(1, Ordering::SeqCst);
-                                headers
-                                    .lock()
-                                    .unwrap()
-                                    .entry(path.clone())
-                                    .or_default()
-                                    .push(hdrs);
-                                respond(routes.by_path.get(&path).cloned()).await
-                            }
-                        }),
-                    )
-                    .await;
-            });
-        }
-    });
-
-    let base_url = format!("unix://{}", socket_path.display());
-    MockHandle {
-        base_url,
-        captured,
-        counts,
-        headers,
-        _tmp: Some(tmp),
-    }
-}
-
-async fn respond(
-    response: Option<MockResponse>,
-) -> Result<Response<Full<Bytes>>, hyper::http::Error> {
-    let resp = match response {
-        Some(r) => r,
-        None => MockResponse::raw(404, "not mocked"),
-    };
-    if let Some(delay) = resp.delay {
-        tokio::time::sleep(delay).await;
-    }
-    Response::builder()
-        .status(resp.status)
-        .header("content-type", "application/json")
-        .body(Full::new(Bytes::from(resp.body)))
-}
-
-fn allow_admit() -> MockResponse {
-    MockResponse::ok_json(json!({"allow": true}))
-}
-
-// ---------- UDS path: admit ----------
+// ---------- Admit path ----------
 
 #[tokio::test]
 async fn happy_path_allow() {
-    let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(res.is_ok());
 }
 
 #[tokio::test]
 async fn deny_maps_to_filtered_by_validator() {
-    let mock = start_uds_mock(MockRoutes::default().with(
-        "/admit",
-        MockResponse::ok_json(json!({
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({
             "allow": false,
             "ruleId": "allowed_method_callers",
             "reason": "signer not in whitelist"
-        })),
-    ))
-    .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+        }));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
 }
 
 #[tokio::test]
 async fn non_success_status_fails_closed() {
-    let mock =
-        start_uds_mock(MockRoutes::default().with("/admit", MockResponse::raw(503, "unavailable")))
-            .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(503).body("unavailable");
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
 }
 
 #[tokio::test]
 async fn malformed_body_fails_closed() {
-    let mock = start_uds_mock(
-        MockRoutes::default().with("/admit", MockResponse::raw(200, "not json at all")),
-    )
-    .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).body("not json at all");
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
 }
 
 #[tokio::test]
 async fn timeout_fails_closed() {
-    let mock = start_uds_mock(MockRoutes::default().with(
-        "/admit",
-        allow_admit().with_delay(Duration::from_millis(300)),
-    ))
-    .await;
-    let mut cfg = base_config(mock.url().into());
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200)
+            .json_body(json!({"allow": true}))
+            .delay(Duration::from_millis(300));
+    });
+    let mut cfg = base_config(&server);
     cfg.request_timeout = Duration::from_millis(50);
     let client = PolicyClient::new(cfg).unwrap();
     let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
@@ -314,11 +126,19 @@ async fn timeout_fails_closed() {
 
 #[tokio::test]
 async fn connection_refused_fails_closed() {
-    // Pointing at a socket that doesn't exist — connect() fails immediately,
-    // which the client must treat as fail-closed.
-    let client = PolicyClient::new(base_config(
-        "unix:///tmp/zksync_os_policy_nonexistent.sock".into(),
-    ))
+    // Bind and immediately release a port to get a guaranteed-free port number.
+    let port = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let client = PolicyClient::new(Config {
+        url: format!("http://127.0.0.1:{port}"),
+        auth_token: Some("test-token".into()),
+        request_timeout: Duration::from_millis(500),
+        protocol_version: "1".into(),
+        expected_protocol_version: None,
+        bypass_from: Default::default(),
+    })
     .unwrap();
     let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
     assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
@@ -326,12 +146,13 @@ async fn connection_refused_fails_closed() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_fails_closed() {
-    let mock = start_uds_mock(MockRoutes::default().with(
-        "/admit",
-        MockResponse::ok_json(json!({"allow": true, "protocolVersion": "2"})),
-    ))
-    .await;
-    let mut cfg = base_config(mock.url().into());
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200)
+            .json_body(json!({"allow": true, "protocolVersion": "2"}));
+    });
+    let mut cfg = base_config(&server);
     cfg.expected_protocol_version = Some("1".into());
     let client = PolicyClient::new(cfg).unwrap();
     let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
@@ -340,12 +161,13 @@ async fn protocol_version_mismatch_fails_closed() {
 
 #[tokio::test]
 async fn protocol_version_match_allows() {
-    let mock = start_uds_mock(MockRoutes::default().with(
-        "/admit",
-        MockResponse::ok_json(json!({"allow": true, "protocolVersion": "1"})),
-    ))
-    .await;
-    let mut cfg = base_config(mock.url().into());
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200)
+            .json_body(json!({"allow": true, "protocolVersion": "1"}));
+    });
+    let mut cfg = base_config(&server);
     cfg.expected_protocol_version = Some("1".into());
     let client = PolicyClient::new(cfg).unwrap();
     let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
@@ -354,11 +176,20 @@ async fn protocol_version_match_allows() {
 
 #[tokio::test]
 async fn serialized_request_matches_context() {
-    let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    let body: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let body_c = body.clone();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit").is_true(move |req| {
+            *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
+            true
+        });
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let _ = run_begin_tx(client.session(AccessType::Write), test_context()).await;
 
-    let recorded = mock.last_body("/admit").expect("body captured");
+    let recorded = body.lock().unwrap().take().expect("body captured");
     let parsed: serde_json::Value = serde_json::from_slice(&recorded).unwrap();
     assert_eq!(parsed["protocolVersion"], "1");
     assert_eq!(
@@ -377,76 +208,112 @@ async fn serialized_request_matches_context() {
 
 #[tokio::test]
 async fn admit_serializes_access_type_read() {
-    let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    let body: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let body_c = body.clone();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit").is_true(move |req| {
+            *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
+            true
+        });
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let _ = run_begin_tx(client.session(AccessType::Read), test_context()).await;
 
-    let recorded = mock.last_body("/admit").expect("body captured");
+    let recorded = body.lock().unwrap().take().expect("body captured");
     let parsed: serde_json::Value = serde_json::from_slice(&recorded).unwrap();
     assert_eq!(parsed["accessType"].as_str().unwrap(), "read");
 }
 
 #[tokio::test]
 async fn bearer_token_sent_when_configured() {
-    let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
-    let mut cfg = base_config(mock.url().into());
+    let server = MockServer::start();
+    // Mock only matches if the correct Authorization header is present.
+    // A wrong or missing header → 404 → fail-closed → test would panic.
+    server.mock(|when, then| {
+        when.method(Method::POST)
+            .path("/admit")
+            .header("authorization", "Bearer secret-token");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let mut cfg = base_config(&server);
     cfg.auth_token = Some("secret-token".into());
     let client = PolicyClient::new(cfg).unwrap();
-    let _ = run_begin_tx(client.session(AccessType::Write), test_context()).await;
-    assert_eq!(
-        mock.last_header("/admit", "authorization").as_deref(),
-        Some("Bearer secret-token")
-    );
-}
-
-#[tokio::test]
-async fn no_authorization_header_when_token_unset() {
-    let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
-    let _ = run_begin_tx(client.session(AccessType::Write), test_context()).await;
-    let auth = mock.last_header("/admit", "authorization");
-    assert!(auth.is_none(), "expected no Authorization header, got {auth:?}");
+    let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
+    assert!(res.is_ok(), "request with correct auth token should succeed");
 }
 
 #[test]
 fn unsupported_scheme_rejected_at_construction() {
-    assert!(PolicyClient::new(base_config("ftp://example.com".into())).is_err());
+    assert!(PolicyClient::new(Config {
+        url: "ftp://example.com".into(),
+        auth_token: None,
+        request_timeout: Duration::from_millis(500),
+        protocol_version: "1".into(),
+        expected_protocol_version: None,
+        bypass_from: Default::default(),
+    })
+    .is_err());
 }
 
 #[test]
 fn invalid_url_rejected_at_construction() {
-    assert!(PolicyClient::new(base_config("not a url".into())).is_err());
+    assert!(PolicyClient::new(Config {
+        url: "not a url".into(),
+        auth_token: None,
+        request_timeout: Duration::from_millis(500),
+        protocol_version: "1".into(),
+        expected_protocol_version: None,
+        bypass_from: Default::default(),
+    })
+    .is_err());
 }
 
 #[test]
 fn http_url_accepted_at_construction() {
-    let mut cfg = base_config("http://policy.local:9000".into());
+    let mut cfg = Config {
+        url: "http://policy.local:9000".into(),
+        auth_token: Some("token".into()),
+        request_timeout: Duration::from_millis(500),
+        protocol_version: "1".into(),
+        expected_protocol_version: None,
+        bypass_from: Default::default(),
+    };
     cfg.auth_token = Some("token".into());
     assert!(PolicyClient::new(cfg).is_ok());
 }
 
-
 #[test]
 fn https_url_rejected_at_construction() {
-    assert!(PolicyClient::new(base_config("https://policy.local:9000".into())).is_err());
+    assert!(PolicyClient::new(Config {
+        url: "https://policy.local:9000".into(),
+        auth_token: None,
+        request_timeout: Duration::from_millis(500),
+        protocol_version: "1".into(),
+        expected_protocol_version: None,
+        bypass_from: Default::default(),
+    })
+    .is_err());
 }
 
 #[tokio::test]
 async fn bypass_from_skips_admit_call() {
     // Mock configured to deny everything. If the bypass is not honoured the
     // tx fails closed. The Ok assertion at the end proves it never reached the mock.
-    let mock = start_uds_mock(
-        MockRoutes::default().with("/admit", MockResponse::ok_json(json!({"allow": false}))),
-    )
-    .await;
-    let mut cfg = base_config(mock.url().into());
+    let server = MockServer::start();
+    let admit_mock = server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": false}));
+    });
+    let mut cfg = base_config(&server);
     cfg.bypass_from = [FROM].into_iter().collect();
     let client = PolicyClient::new(cfg).unwrap();
     let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
 
     assert!(res.is_ok(), "bypassed tx should be allowed without a call");
     assert_eq!(
-        mock.calls("/admit"),
+        admit_mock.calls(),
         0,
         "bypass must not reach the policy service"
     );
@@ -554,33 +421,40 @@ fn one_frame() -> Vec<TraceScript> {
 
 #[tokio::test]
 async fn judge_happy_path_allow() {
-    let mock = start_uds_mock(
-        MockRoutes::default()
-            .with("/admit", allow_admit())
-            .with("/judge", MockResponse::ok_json(json!({"allow": true}))),
-    )
-    .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let judge_mock = server.mock(|when, then| {
+        when.method(Method::POST).path("/judge");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let session = client.session(AccessType::Write);
     let tracer = session.paired_tracer();
     let res = run_full_tx(session, tracer, test_context(), one_frame()).await;
 
     assert!(res.is_ok(), "expected judge to allow, got {res:?}");
-    assert_eq!(mock.calls("/judge"), 1);
+    assert_eq!(judge_mock.calls(), 1);
 }
 
 #[tokio::test]
 async fn judge_deny_maps_to_filtered_by_validator() {
-    let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit()).with(
-        "/judge",
-        MockResponse::ok_json(json!({
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/judge");
+        then.status(200).json_body(json!({
             "allow": false,
             "ruleId": "post_exec_disallowed",
             "reason": "wrote to a forbidden slot"
-        })),
-    ))
-    .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+        }));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let session = client.session(AccessType::Write);
     let tracer = session.paired_tracer();
     let res = run_full_tx(session, tracer, test_context(), one_frame()).await;
@@ -592,8 +466,12 @@ async fn judge_deny_maps_to_filtered_by_validator() {
 async fn judge_transport_error_fails_closed() {
     // No /judge mock registered: the mock server replies 404 to that path,
     // which the client must treat as fail-closed.
-    let mock = start_uds_mock(MockRoutes::default().with("/admit", allow_admit())).await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let session = client.session(AccessType::Write);
     let tracer = session.paired_tracer();
     let res = run_full_tx(session, tracer, test_context(), one_frame()).await;
@@ -604,13 +482,16 @@ async fn judge_transport_error_fails_closed() {
 #[tokio::test]
 async fn judge_bypass_from_skips_call() {
     // Mock /judge to deny — the bypass must prevent the call from ever firing.
-    let mock = start_uds_mock(
-        MockRoutes::default()
-            .with("/admit", allow_admit())
-            .with("/judge", MockResponse::ok_json(json!({"allow": false}))),
-    )
-    .await;
-    let mut cfg = base_config(mock.url().into());
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let judge_mock = server.mock(|when, then| {
+        when.method(Method::POST).path("/judge");
+        then.status(200).json_body(json!({"allow": false}));
+    });
+    let mut cfg = base_config(&server);
     cfg.bypass_from = [FROM].into_iter().collect();
     let client = PolicyClient::new(cfg).unwrap();
     let session = client.session(AccessType::Write);
@@ -618,22 +499,26 @@ async fn judge_bypass_from_skips_call() {
     let res = run_full_tx(session, tracer, test_context(), one_frame()).await;
 
     assert!(res.is_ok(), "bypassed tx should not be judged");
-    assert_eq!(
-        mock.calls("/judge"),
-        0,
-        "bypass must not reach the policy service"
-    );
+    assert_eq!(judge_mock.calls(), 0, "bypass must not reach the policy service");
 }
 
 #[tokio::test]
 async fn judge_serialized_request_carries_captured_frames() {
-    let mock = start_uds_mock(
-        MockRoutes::default()
-            .with("/admit", allow_admit())
-            .with("/judge", MockResponse::ok_json(json!({"allow": true}))),
-    )
-    .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let body: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let body_c = body.clone();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/judge").is_true(move |req| {
+            *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
+            true
+        });
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let session = client.session(AccessType::Write);
     let tracer = session.paired_tracer();
 
@@ -660,8 +545,8 @@ async fn judge_serialized_request_carries_captured_frames() {
     let res = run_full_tx(session, tracer, test_context(), scripts).await;
     assert!(res.is_ok());
 
-    let body = mock.last_body("/judge").expect("body captured");
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let captured = body.lock().unwrap().take().expect("body captured");
+    let parsed: serde_json::Value = serde_json::from_slice(&captured).unwrap();
     assert_eq!(parsed["protocolVersion"], "1");
     let root = &parsed["trace"]["frame"];
     assert!(!root.is_null(), "trace.frame should be non-null");
@@ -696,13 +581,21 @@ async fn judge_serialized_request_carries_captured_frames() {
 /// surface to the service so it knows to skip the per-method lookup.
 #[tokio::test]
 async fn judge_serialized_frames_carry_call_kind_for_delegatecall_and_static() {
-    let mock = start_uds_mock(
-        MockRoutes::default()
-            .with("/admit", allow_admit())
-            .with("/judge", MockResponse::ok_json(json!({"allow": true}))),
-    )
-    .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let body: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let body_c = body.clone();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/judge").is_true(move |req| {
+            *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
+            true
+        });
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let session = client.session(AccessType::Write);
     let tracer = session.paired_tracer();
 
@@ -737,8 +630,8 @@ async fn judge_serialized_frames_carry_call_kind_for_delegatecall_and_static() {
     let res = run_full_tx(session, tracer, test_context(), scripts).await;
     assert!(res.is_ok());
 
-    let body = mock.last_body("/judge").expect("body captured");
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let captured = body.lock().unwrap().take().expect("body captured");
+    let parsed: serde_json::Value = serde_json::from_slice(&captured).unwrap();
     let root = &parsed["trace"]["frame"];
     assert_eq!(root["callKind"].as_str().unwrap(), "call");
     let children = root["children"].as_array().unwrap();
@@ -751,19 +644,27 @@ async fn judge_serialized_frames_carry_call_kind_for_delegatecall_and_static() {
 
 #[tokio::test]
 async fn judge_serializes_access_type_read() {
-    let mock = start_uds_mock(
-        MockRoutes::default()
-            .with("/admit", allow_admit())
-            .with("/judge", MockResponse::ok_json(json!({"allow": true}))),
-    )
-    .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let body: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let body_c = body.clone();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/judge").is_true(move |req| {
+            *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
+            true
+        });
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let session = client.session(AccessType::Read);
     let tracer = session.paired_tracer();
     let _ = run_full_tx(session, tracer, test_context(), one_frame()).await;
 
-    let body = mock.last_body("/judge").expect("body captured");
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let captured = body.lock().unwrap().take().expect("body captured");
+    let parsed: serde_json::Value = serde_json::from_slice(&captured).unwrap();
     assert_eq!(parsed["accessType"].as_str().unwrap(), "read");
 }
 
@@ -772,15 +673,39 @@ async fn judge_serializes_access_type_read() {
 /// Two sessions created from the same `PolicyClient` must each own their
 /// own trace slot and `pending_tx_from`. After driving a frame into one
 /// session, the other's `/judge` body shows zero frames.
+///
+/// Uses content-based mock conditions (pure predicates) rather than
+/// side-effect body capture to avoid double-counting httpmock's two-phase
+/// condition evaluation.
 #[tokio::test]
 async fn session_isolates_slot_from_sibling() {
-    let mock = start_uds_mock(
-        MockRoutes::default()
-            .with("/admit", allow_admit())
-            .with("/judge", MockResponse::ok_json(json!({"allow": true}))),
-    )
-    .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    // session_a: read intent + a non-null frame with calldata=0xcc.
+    let session_a_judge = server.mock(|when, then| {
+        when.method(Method::POST).path("/judge").is_true(|req| {
+            let v: serde_json::Value =
+                serde_json::from_slice(req.body().as_ref()).unwrap_or(json!(null));
+            v["accessType"].as_str() == Some("read")
+                && !v["trace"]["frame"].is_null()
+                && v["trace"]["frame"]["calldata"].as_str() == Some("0xcc")
+        });
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    // session_b: write intent + null frame (no tracer frames driven).
+    let session_b_judge = server.mock(|when, then| {
+        when.method(Method::POST).path("/judge").is_true(|req| {
+            let v: serde_json::Value =
+                serde_json::from_slice(req.body().as_ref()).unwrap_or(json!(null));
+            v["accessType"].as_str() == Some("write") && v["trace"]["frame"].is_null()
+        });
+        then.status(200).json_body(json!({"allow": true}));
+    });
+
+    let client = PolicyClient::new(base_config(&server)).unwrap();
     let mut session_a = client.session(AccessType::Read);
     let mut session_b = client.session(AccessType::Write);
 
@@ -795,28 +720,25 @@ async fn session_isolates_slot_from_sibling() {
     });
     tracer_a.after_execution_frame_completed(None);
 
-    // session_a judge ships exactly session_a's frame, with `read` intent.
     spawn_blocking(move || session_a.finish_tx())
         .await
         .unwrap()
         .unwrap();
-    let body_a = mock.last_body("/judge").expect("judge called for session_a");
-    let parsed_a: serde_json::Value = serde_json::from_slice(&body_a).unwrap();
-    assert_eq!(parsed_a["accessType"].as_str().unwrap(), "read");
-    let frame_a = &parsed_a["trace"]["frame"];
-    assert!(!frame_a.is_null(), "session_a should have a root frame");
-    assert_eq!(frame_a["calldata"].as_str().unwrap(), "0xcc");
-
-    // session_b's judge body has no root frame (session_a's frame did not
-    // bleed into session_b's slot). session_b defaults to Write intent.
     spawn_blocking(move || session_b.finish_tx())
         .await
         .unwrap()
         .unwrap();
-    let body_b = mock.last_body("/judge").expect("judge called for session_b");
-    let parsed_b: serde_json::Value = serde_json::from_slice(&body_b).unwrap();
-    assert_eq!(parsed_b["accessType"].as_str().unwrap(), "write");
-    assert!(parsed_b["trace"]["frame"].is_null(), "session_b should have no root frame");
+
+    assert_eq!(
+        session_a_judge.calls(),
+        1,
+        "session_a: read intent with non-null frame carrying calldata=0xcc"
+    );
+    assert_eq!(
+        session_b_judge.calls(),
+        1,
+        "session_b: write intent with null frame — no bleed from session_a"
+    );
 }
 
 /// Two concurrent sessions must not see each other's frames at `/judge`.
@@ -824,13 +746,17 @@ async fn session_isolates_slot_from_sibling() {
 /// simulations.
 #[tokio::test]
 async fn concurrent_sessions_dont_share_slot() {
-    let mock = start_uds_mock(
-        MockRoutes::default()
-            .with("/admit", allow_admit())
-            .with("/judge", MockResponse::ok_json(json!({"allow": true}))),
-    )
-    .await;
-    let client = PolicyClient::new(base_config(mock.url().into())).unwrap();
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let judge_mock = server.mock(|when, then| {
+        when.method(Method::POST).path("/judge");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+
+    let client = PolicyClient::new(base_config(&server)).unwrap();
 
     let client_a = client.clone();
     let client_b = client.clone();
@@ -864,6 +790,5 @@ async fn concurrent_sessions_dont_share_slot() {
     task_b.await.unwrap().unwrap();
 
     // Both judge calls fired and each body has exactly one frame.
-    assert_eq!(mock.calls("/judge"), 2);
+    assert_eq!(judge_mock.calls(), 2);
 }
-

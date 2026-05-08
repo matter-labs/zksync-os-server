@@ -20,7 +20,7 @@ use zksync_os_interface::tracing::{
     AnyTxValidator, BeginTxContext, TxValidationResult, TxValidator,
 };
 
-use self::metrics::{ErrorReason, Outcome, POLICY_CLIENT_METRICS};
+use self::metrics::{ErrorKind, Outcome, POLICY_CLIENT_METRICS};
 use self::tracer::TraceSlot;
 pub use self::tracer::{CallKind, CapturedFrame, Tracer};
 use self::transport::{Transport, TransportConfig, TransportError};
@@ -78,7 +78,8 @@ impl PolicyClient {
             "http" => TransportConfig::Http {
                 url: parsed,
                 auth_token: config.auth_token.clone()
-                    .expect("auth_token is required for http://; enforced by config validation"),
+                    .expect("auth_token is required for http://; enforced by config validation")
+                    .into(),
             },
             "unix" => {
                 if config.auth_token.is_some() {
@@ -196,18 +197,25 @@ impl PolicySession {
         endpoint: Endpoint,
         request: &R,
     ) -> Result<bool, TransportError> {
-        let body = serde_json::to_vec(request).expect("policy request serialization is infallible");
         let timeout = self.client.request_timeout;
         let response = match endpoint {
             Endpoint::Admit => {
-                tokio::time::timeout(timeout, self.client.transport.post_admit(body)).await
+                tokio::time::timeout(
+                    timeout,
+                    self.client.transport.post_admit::<_, PolicyResponse>(request),
+                )
+                .await
             }
             Endpoint::Judge => {
-                tokio::time::timeout(timeout, self.client.transport.post_judge(body)).await
+                tokio::time::timeout(
+                    timeout,
+                    self.client.transport.post_judge::<_, PolicyResponse>(request),
+                )
+                .await
             }
         };
-        let raw = match response {
-            Ok(Ok(bytes)) => bytes,
+        let parsed = match response {
+            Ok(Ok(parsed)) => parsed,
             Ok(Err(err)) => {
                 tracing::warn!(?err, ?endpoint, "policy request failed");
                 return Err(err);
@@ -217,10 +225,6 @@ impl PolicySession {
                 return Err(TransportError::Timeout(timeout));
             }
         };
-        let parsed: PolicyResponse = serde_json::from_slice(&raw).map_err(|err| {
-            tracing::warn!(?err, ?endpoint, "policy response body malformed");
-            TransportError::MalformedResponse
-        })?;
         if let Some(expected) = &self.client.expected_protocol_version
             && parsed.protocol_version.as_deref() != Some(expected.as_str())
         {
@@ -277,18 +281,18 @@ impl TxValidator for PolicySession {
     }
 }
 
-fn classify_error(err: &TransportError) -> ErrorReason {
+fn classify_error(err: &TransportError) -> ErrorKind {
     match err {
-        TransportError::Timeout(_) => ErrorReason::Timeout,
-        TransportError::NonSuccessStatus(_) => ErrorReason::Status,
+        TransportError::Timeout(_) => ErrorKind::Timeout,
+        TransportError::NonSuccessStatus(_) => ErrorKind::Status,
         TransportError::Request(e) => {
             if e.is_connect() {
-                ErrorReason::Connect
+                ErrorKind::Connect
             } else {
-                ErrorReason::Http
+                ErrorKind::Http
             }
         }
-        TransportError::MalformedResponse => ErrorReason::MalformedResponse,
-        TransportError::ProtocolVersionMismatch => ErrorReason::ProtocolVersionMismatch,
+        TransportError::MalformedResponse => ErrorKind::MalformedResponse,
+        TransportError::ProtocolVersionMismatch => ErrorKind::ProtocolVersionMismatch,
     }
 }

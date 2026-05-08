@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use zksync_os_interface::tracing::BeginTxContext;
 
 use super::AccessType;
-use super::tracer::{CallKind, CapturedFrame};
+use super::tracer::CapturedFrame;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,32 +67,7 @@ pub(super) struct JudgeRequest<'a> {
 
 #[derive(Debug, Serialize)]
 pub(super) struct JudgeTrace<'a> {
-    pub frame: Option<JudgeFrame<'a>>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct JudgeFrame<'a> {
-    pub caller: Address,
-    pub callee: Address,
-    pub value: U256,
-    #[serde(with = "alloy::hex")]
-    pub calldata: &'a [u8],
-    pub deploys: &'a [Address],
-    pub call_kind: CallKind,
-    pub children: Vec<JudgeFrame<'a>>,
-}
-
-fn to_wire_frame(f: &CapturedFrame) -> JudgeFrame<'_> {
-    JudgeFrame {
-        caller: f.caller,
-        callee: f.callee,
-        value: f.value,
-        calldata: &f.calldata,
-        deploys: &f.deploys,
-        call_kind: f.call_kind,
-        children: f.children.iter().map(to_wire_frame).collect(),
-    }
+    pub frame: Option<&'a CapturedFrame>,
 }
 
 impl<'a> JudgeRequest<'a> {
@@ -105,9 +80,7 @@ impl<'a> JudgeRequest<'a> {
         Self {
             protocol_version,
             from,
-            trace: JudgeTrace {
-                frame: root.map(to_wire_frame),
-            },
+            trace: JudgeTrace { frame: root },
             access_type,
         }
     }

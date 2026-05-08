@@ -40,11 +40,13 @@ impl From<CallModifier> for CallKind {
 }
 
 /// Per-frame summary captured by [`Tracer`] and shipped to `/judge`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CapturedFrame {
     pub caller: Address,
     pub callee: Address,
     pub value: U256,
+    #[serde(with = "alloy::hex")]
     pub calldata: Vec<u8>,
     pub deploys: Vec<Address>,
     pub call_kind: CallKind,

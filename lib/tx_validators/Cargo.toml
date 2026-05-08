@@ -17,8 +17,8 @@ tracing.workspace = true
 alloy = { workspace = true, default-features = false, features = [
     "consensus",
 ] }
-bytes.workspace = true
-reqwest = { workspace = true, features = ["rustls-tls"] }
+reqwest = { workspace = true, features = ["rustls-tls", "json"] }
+secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
@@ -27,9 +27,5 @@ url.workspace = true
 vise.workspace = true
 
 [dev-dependencies]
-http-body-util.workspace = true
-hyper = { workspace = true, features = ["server"] }
-hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "tokio"] }
-tempfile.workspace = true
-time.workspace = true
+httpmock.workspace = true
 tokio = { workspace = true, features = ["full"] }

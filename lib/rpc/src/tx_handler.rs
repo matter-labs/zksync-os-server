@@ -85,8 +85,12 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         }
 
         if let Some(policy_client) = &self.policy_client {
-            // Skip the simulation until the sequencer has built at least
-            // one block. Block-build runs the policy authoritatively then.
+            // `last_constructed_block_context` is None until the sequencer has
+            // prepared its first block. The context carries fee parameters and
+            // a timestamp the EVM simulation needs; there is no alternative
+            // source for them before the first block is built. Transactions
+            // admitted during this brief startup window are still checked
+            // authoritatively by block-build before inclusion.
             // Copy the watch ref before await so the future stays `Send`.
             let block_context = *self.last_constructed_block_context.borrow();
             if let Some(block_context) = block_context {
@@ -115,9 +119,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
                 .await
                 .map_err(|err| EthSendRawTransactionError::JudgeSimFailed(err.into()))?
                 .map_err(EthSendRawTransactionError::JudgeSimFailed)?;
-                if let Err(err) = sim
-                    && matches!(err, InvalidTransaction::FilteredByValidator)
-                {
+                if matches!(sim, Err(InvalidTransaction::FilteredByValidator)) {
                     return Err(EthSendRawTransactionError::PolicyDenied);
                 }
                 // Other sim errors (nonce, gas, etc.) are handled by the
