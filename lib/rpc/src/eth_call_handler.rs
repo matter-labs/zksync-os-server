@@ -469,16 +469,12 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 }
 
 impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
-    // The flow was heavily borrowed from reth, which in turn closely follows the original geth logic. Source:
-    // https://github.com/paradigmxyz/reth/blob/5bc8589162b6e23b07919d82a57eee14353f2862/crates/rpc/rpc-eth-api/src/helpers/estimate.rs
-    fn estimate_gas_with_view<V: ViewState + Clone>(
+    fn build_estimate_tx<V: ViewState>(
         &self,
         mut request: TransactionRequest,
-        block_context: BlockContext,
-        mut storage_view: V,
-    ) -> Result<U256, EthCallError> {
-        tracing::trace!("Estimating gas with block context {block_context:?}");
-
+        block_context: &BlockContext,
+        storage_view: &mut V,
+    ) -> Result<ZkTransaction, EthCallError> {
         let block_gas_limit = block_context.gas_limit;
         let mut highest_gas_limit = request.gas.unwrap_or(block_gas_limit).min(block_gas_limit);
 
@@ -488,11 +484,24 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .unwrap_or_default();
         if effective_gas_price > 0 {
             let gas_limit_from_balance =
-                max_gas_from_balance(&request, block_context.eip1559_basefee, &mut storage_view)?;
+                max_gas_from_balance(&request, block_context.eip1559_basefee, storage_view)?;
             highest_gas_limit = highest_gas_limit.min(gas_limit_from_balance);
         }
         request.set_gas_limit(highest_gas_limit);
-        let tx = self.create_tx_from_request(request, &block_context, true)?;
+        self.create_tx_from_request(request, block_context, true)
+    }
+
+    // The flow was heavily borrowed from reth, which in turn closely follows the original geth logic. Source:
+    // https://github.com/paradigmxyz/reth/blob/5bc8589162b6e23b07919d82a57eee14353f2862/crates/rpc/rpc-eth-api/src/helpers/estimate.rs
+    fn estimate_gas_with_view<V: ViewState + Clone>(
+        &self,
+        request: TransactionRequest,
+        block_context: BlockContext,
+        mut storage_view: V,
+    ) -> Result<U256, EthCallError> {
+        tracing::trace!("Estimating gas with block context {block_context:?}");
+
+        let tx = self.build_estimate_tx(request, &block_context, &mut storage_view)?;
 
         let try_at = |gas_limit: u64| {
             let mut attempt = tx.clone();
