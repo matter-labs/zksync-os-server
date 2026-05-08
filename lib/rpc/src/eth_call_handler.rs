@@ -52,6 +52,48 @@ struct ExecutionEnv {
     transaction: ZkTransaction,
 }
 
+/// Builds new block context for theoretical pending block using current system state.
+pub(crate) fn build_pending_block_context(
+    storage: &impl ReadRpcStorage,
+    chain_id: u64,
+) -> BlockContext {
+    let latest_block_number = storage.replay_storage().latest_record();
+    let latest_block = storage
+        .replay_storage()
+        .get_replay_record(latest_block_number)
+        .expect("latest block record must exist");
+    let latest_block_context = latest_block.block_context;
+
+    // Shift block hashes one to the left and append latest block's hash
+    let mut block_hashes = latest_block_context.block_hashes.0;
+    block_hashes.rotate_left(1);
+    block_hashes[255] = U256::from_be_bytes(latest_block.block_output_hash.0);
+
+    // Use current timestamp for pending block
+    let millis_since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("incorrect system time")
+        .as_millis();
+    let timestamp = (millis_since_epoch / 1000) as u64;
+
+    BlockContext {
+        chain_id,
+        block_number: latest_block_number + 1,
+        block_hashes: BlockHashes(block_hashes),
+        timestamp,
+        // Presume all other fields are the same as latest block, subject to change in the future
+        eip1559_basefee: latest_block_context.eip1559_basefee,
+        pubdata_price: latest_block_context.pubdata_price,
+        native_price: latest_block_context.native_price,
+        coinbase: latest_block_context.coinbase,
+        gas_limit: latest_block_context.gas_limit,
+        pubdata_limit: latest_block_context.pubdata_limit,
+        mix_hash: latest_block_context.mix_hash,
+        execution_version: latest_block_context.execution_version,
+        blob_fee: latest_block_context.blob_fee,
+    }
+}
+
 impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     pub fn new(
         config: RpcConfig,
@@ -213,46 +255,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         Ok(Recovered::new_unchecked(tx, from).into())
     }
 
-    /// Builds new block context for theoretical pending block using current system state.
-    pub(crate) fn build_pending_block_context(&self) -> BlockContext {
-        let latest_block_number = self.storage.replay_storage().latest_record();
-        let latest_block = self
-            .storage
-            .replay_storage()
-            .get_replay_record(latest_block_number)
-            .expect("latest block record must exist");
-        let latest_block_context = latest_block.block_context;
-
-        // Shift block hashes one to the left and append latest block's hash
-        let mut block_hashes = latest_block_context.block_hashes.0;
-        block_hashes.rotate_left(1);
-        block_hashes[255] = U256::from_be_bytes(latest_block.block_output_hash.0);
-
-        // Use current timestamp for pending block
-        let millis_since_epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("incorrect system time")
-            .as_millis();
-        let timestamp = (millis_since_epoch / 1000) as u64;
-
-        BlockContext {
-            chain_id: self.chain_id,
-            block_number: latest_block_number + 1,
-            block_hashes: BlockHashes(block_hashes),
-            timestamp,
-            // Presume all other fields are the same as latest block, subject to change in the future
-            eip1559_basefee: latest_block_context.eip1559_basefee,
-            pubdata_price: latest_block_context.pubdata_price,
-            native_price: latest_block_context.native_price,
-            coinbase: latest_block_context.coinbase,
-            gas_limit: latest_block_context.gas_limit,
-            pubdata_limit: latest_block_context.pubdata_limit,
-            mix_hash: latest_block_context.mix_hash,
-            execution_version: latest_block_context.execution_version,
-            blob_fee: latest_block_context.blob_fee,
-        }
-    }
-
     fn resolve_block_context(
         &self,
         block_id: Option<BlockId>,
@@ -268,7 +270,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 Ok(pending_block_context)
             } else {
                 // If it has, we build new block context using current system state
-                Ok(self.build_pending_block_context())
+                Ok(build_pending_block_context(&self.storage, self.chain_id))
             }
         } else {
             let Some(block_number) = self.storage.resolve_block_number(block_id)? else {

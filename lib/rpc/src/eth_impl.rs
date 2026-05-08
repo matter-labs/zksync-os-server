@@ -66,6 +66,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         let tx_handler = TxHandler::new(
             config.clone(),
             storage.clone(),
+            chain_id,
             mempool.clone(),
             acceptance_state,
             tx_forwarder,

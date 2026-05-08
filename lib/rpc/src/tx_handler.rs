@@ -1,3 +1,4 @@
+use crate::eth_call_handler::build_pending_block_context;
 use crate::eth_impl::build_api_receipt;
 use crate::metrics::{TX_SUBMISSION, TxRejectionReason};
 use crate::{ReadRpcStorage, RpcConfig};
@@ -27,6 +28,7 @@ const SEND_RAW_TRANSACTION_SYNC_MAX_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct TxHandler<RpcStorage, Mempool> {
     config: RpcConfig,
     storage: RpcStorage,
+    chain_id: u64,
     mempool: Mempool,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     tx_forwarder: Option<DynProvider>,
@@ -35,9 +37,9 @@ pub struct TxHandler<RpcStorage, Mempool> {
     /// clients a `pending → no receipt` poll loop on a stable deny.
     /// Block-build remains authoritative.
     policy_client: Option<PolicyClient>,
-    /// Latest block context constructed by the sequencer; used as the
-    /// simulation environment for the RPC-side judge call. `None` until
-    /// the sequencer has built at least one block.
+    /// Latest block context constructed by the sequencer. `None` until
+    /// the sequencer has built at least one block; in that startup
+    /// window we synthesize a pending block context from current state.
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
 }
 
@@ -46,6 +48,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
     pub fn new(
         config: RpcConfig,
         storage: RpcStorage,
+        chain_id: u64,
         mempool: Mempool,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
         tx_forwarder: Option<DynProvider>,
@@ -55,6 +58,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         Self {
             config,
             storage,
+            chain_id,
             mempool,
             acceptance_state,
             tx_forwarder,
@@ -86,45 +90,44 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
 
         if let Some(policy_client) = &self.policy_client {
             // `last_constructed_block_context` is None until the sequencer has
-            // prepared its first block. The context carries fee parameters and
-            // a timestamp the EVM simulation needs; there is no alternative
-            // source for them before the first block is built. Transactions
-            // admitted during this brief startup window are still checked
-            // authoritatively by block-build before inclusion.
+            // prepared its first block. In that startup window, fall back to a
+            // synthesized pending block context derived from current state so
+            // the policy is still consulted (block-build remains authoritative).
             // Copy the watch ref before await so the future stays `Send`.
-            let block_context = *self.last_constructed_block_context.borrow();
-            if let Some(block_context) = block_context {
-                let storage_view = self
-                    .storage
-                    .state_at_block_number_or_latest(block_context.block_number)
-                    .map_err(|err| EthSendRawTransactionError::JudgeSimFailed(err.into()))?;
-                let zk_tx: ZkTransaction = l2_tx.clone().into();
-                let policy_client = policy_client.clone();
-                // `spawn_blocking`: the sim is CPU-bound and the validator
-                // hooks call `Handle::block_on` internally, which would
-                // panic on a runtime worker thread. Note: dropping the
-                // outer future (RPC client disconnect) does not cancel
-                // this task; admit and judge fire to completion.
-                let sim = tokio::task::spawn_blocking(move || {
-                    let mut policy_session = policy_client.session(AccessType::Write);
-                    let mut tracer = policy_session.paired_tracer();
-                    crate::sandbox::execute_with(
-                        zk_tx,
-                        block_context,
-                        storage_view,
-                        &mut tracer,
-                        &mut policy_session,
-                    )
-                })
-                .await
-                .map_err(|err| EthSendRawTransactionError::JudgeSimFailed(err.into()))?
-                .map_err(EthSendRawTransactionError::JudgeSimFailed)?;
-                if matches!(sim, Err(InvalidTransaction::FilteredByValidator)) {
-                    return Err(EthSendRawTransactionError::PolicyDenied);
-                }
-                // Other sim errors (nonce, gas, etc.) are handled by the
-                // mempool / block-build rejection paths.
+            let block_context = self
+                .last_constructed_block_context
+                .borrow()
+                .unwrap_or_else(|| build_pending_block_context(&self.storage, self.chain_id));
+            let storage_view = self
+                .storage
+                .state_at_block_number_or_latest(block_context.block_number)
+                .map_err(|err| EthSendRawTransactionError::JudgeSimFailed(err.into()))?;
+            let zk_tx: ZkTransaction = l2_tx.clone().into();
+            let policy_client = policy_client.clone();
+            // `spawn_blocking`: the sim is CPU-bound and the validator
+            // hooks call `Handle::block_on` internally, which would
+            // panic on a runtime worker thread. Note: dropping the
+            // outer future (RPC client disconnect) does not cancel
+            // this task; admit and judge fire to completion.
+            let sim = tokio::task::spawn_blocking(move || {
+                let mut policy_session = policy_client.session(AccessType::Write);
+                let mut tracer = policy_session.paired_tracer();
+                crate::sandbox::execute_with(
+                    zk_tx,
+                    block_context,
+                    storage_view,
+                    &mut tracer,
+                    &mut policy_session,
+                )
+            })
+            .await
+            .map_err(|err| EthSendRawTransactionError::JudgeSimFailed(err.into()))?
+            .map_err(EthSendRawTransactionError::JudgeSimFailed)?;
+            if matches!(sim, Err(InvalidTransaction::FilteredByValidator)) {
+                return Err(EthSendRawTransactionError::PolicyDenied);
             }
+            // Other sim errors (nonce, gas, etc.) are handled by the
+            // mempool / block-build rejection paths.
         }
         {
             let _guard = MempoolLatencyGuard::new();
