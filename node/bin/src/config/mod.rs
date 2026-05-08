@@ -679,6 +679,10 @@ pub struct RpcConfig {
     #[config(default_t = 10000000)]
     pub eth_call_gas: usize,
 
+    /// Maximum block gas limit accepted for an `eth_simulateV1` block override.
+    #[config(default_t = 100_000_000)]
+    pub eth_simulate_block_gas_limit: u64,
+
     /// Number of concurrent API connections (passed to jsonrpsee, default value there is 128)
     #[config(default_t = 1000)]
     pub max_connections: u32,
@@ -1284,6 +1288,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
         Self {
             address: c.address,
             eth_call_gas: c.eth_call_gas,
+            eth_simulate_block_gas_limit: c.eth_simulate_block_gas_limit,
             max_connections: c.max_connections,
             max_request_size: c.max_request_size,
             max_response_size: c.max_response_size,

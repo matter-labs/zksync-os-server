@@ -162,7 +162,24 @@ pub(crate) fn apply_simulate_block_overrides(
     previous_timestamp: u64,
     max_block_gas_limit: u64,
 ) -> Result<(), EthCallError> {
-    if let Some(number) = overrides.number {
+    // Destructure to force a compile error when alloy adds new override fields, so we
+    // explicitly decide whether to support or ignore each one.
+    let BlockOverrides {
+        number,
+        time,
+        gas_limit,
+        coinbase,
+        random,
+        base_fee,
+        blob_base_fee,
+        block_hash,
+        // ZKsync OS uses mix_hash for prevrandao and has no separate difficulty field; ignored.
+        difficulty: _,
+        // No corresponding field in BlockContext; ignored.
+        beacon_root: _,
+    } = overrides;
+
+    if let Some(number) = number {
         let number = u64::try_from(number)
             .map_err(|_| EthCallError::SimulateInvalidBlockOverride("number"))?;
         if number <= previous_block_number {
@@ -184,7 +201,7 @@ pub(crate) fn apply_simulate_block_overrides(
         }
         block_context.block_number = number;
     }
-    if let Some(time) = overrides.time {
+    if let Some(time) = time {
         if time <= previous_timestamp {
             return Err(EthCallError::SimulateBlockTimestampInvalid {
                 got: time,
@@ -193,29 +210,25 @@ pub(crate) fn apply_simulate_block_overrides(
         }
         block_context.timestamp = time;
     }
-    if let Some(gas_limit) = overrides.gas_limit {
+    if let Some(gas_limit) = gas_limit {
         if max_block_gas_limit != 0 && gas_limit > max_block_gas_limit {
             return Err(EthCallError::SimulateBlockGasLimitExceeded);
         }
         block_context.gas_limit = gas_limit;
     }
-    if let Some(coinbase) = overrides.coinbase {
+    if let Some(coinbase) = coinbase {
         block_context.coinbase = coinbase;
     }
-    if let Some(random) = overrides.random {
+    if let Some(random) = random {
         block_context.mix_hash = U256::from_be_bytes(random.0);
-    } else {
-        block_context.mix_hash = U256::ZERO;
     }
-    if let Some(base_fee) = overrides.base_fee {
+    if let Some(base_fee) = base_fee {
         block_context.eip1559_basefee = base_fee;
     }
-    if let Some(blob_base_fee) = overrides.blob_base_fee {
+    if let Some(blob_base_fee) = blob_base_fee {
         block_context.blob_fee = blob_base_fee;
     }
-    // Note: difficulty override is silently ignored — ZKsync OS uses mix_hash for prevrandao
-    // and has no separate difficulty field in BlockContext.
-    if let Some(block_hash_overrides) = overrides.block_hash {
+    if let Some(block_hash_overrides) = block_hash {
         let range_start = block_context.block_number.saturating_sub(256);
         for (block_number, block_hash) in
             block_hash_overrides.range(range_start..block_context.block_number)
@@ -232,6 +245,7 @@ pub(crate) fn apply_simulate_block_overrides(
 pub(crate) fn simulation_default_gas_limit(
     calls: &[TransactionRequest],
     block_gas_limit: u64,
+    per_call_gas_cap: u64,
 ) -> Result<u64, EthCallError> {
     let total_specified_gas =
         calls
@@ -250,7 +264,9 @@ pub(crate) fn simulation_default_gas_limit(
         return Ok(0);
     }
 
-    Ok((block_gas_limit - total_specified_gas) / calls_without_gas)
+    // Cap the per-call default at `per_call_gas_cap` to avoid handing a single call the entire
+    // block's gas when the block limit is large and few calls specify gas explicitly.
+    Ok(((block_gas_limit - total_specified_gas) / calls_without_gas).min(per_call_gas_cap))
 }
 
 struct SimulatedTx {

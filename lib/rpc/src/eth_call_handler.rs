@@ -779,6 +779,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let mut previous_timestamp = parent_timestamp;
 
         for sim_block in block_state_calls {
+            // Per the eth_simulateV1 spec, prevrandao defaults to zero for simulated blocks
+            // unless explicitly overridden via `blockOverrides.random`.
             block_context.mix_hash = U256::ZERO;
             if let Some(block_overrides) = sim_block.block_overrides {
                 simulation_utils::apply_simulate_block_overrides(
@@ -786,7 +788,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                     block_overrides,
                     previous_block_number,
                     previous_timestamp,
-                    self.config.eth_call_gas as u64,
+                    self.config.eth_simulate_block_gas_limit,
                 )?;
             }
 
@@ -909,8 +911,11 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         block_context: BlockContext,
         mut state_view: V,
     ) -> Result<Vec<ZkTransaction>, EthCallError> {
-        let default_gas_limit =
-            simulation_utils::simulation_default_gas_limit(&calls, block_context.gas_limit)?;
+        let default_gas_limit = simulation_utils::simulation_default_gas_limit(
+            &calls,
+            block_context.gas_limit,
+            self.config.eth_call_gas as u64,
+        )?;
         let mut next_nonces = HashMap::new();
 
         calls
