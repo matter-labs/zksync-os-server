@@ -97,7 +97,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     let set_sl_chain_id_migration_number = blocks.iter().find_map(|(_, replay_record, _, _)| {
         replay_record.transactions.iter().find_map(|tx| {
             if let ZkEnvelope::System(system_tx) = tx.envelope()
-                && let SystemTxType::SetSLChainId(n) = system_tx.system_subtype()
+                && let SystemTxType::SetSLChainId(_, n) = system_tx.system_subtype()
                 && *n != u64::MAX
             {
                 Some(*n)

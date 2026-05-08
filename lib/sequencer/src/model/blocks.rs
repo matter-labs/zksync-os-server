@@ -1,8 +1,9 @@
 use alloy::primitives::B256;
 use std::fmt::Display;
 use std::time::Duration;
-use zksync_os_interface::types::BlockContext;
+use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_mempool::MarkingTxStream;
+use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
@@ -28,6 +29,39 @@ pub enum BlockCommandType {
     Replay,
     Produce,
     Rebuild,
+}
+
+/// Message flowing from `BlockExecutor` → `BlockCanonizer` → `BlockApplier`.
+#[derive(Clone, Debug)]
+pub struct BlockPayload {
+    pub output: BlockOutput,
+    pub record: ReplayRecord,
+    pub command_type: BlockCommandType,
+}
+
+impl HasBlockRangeEnd for BlockPayload {
+    fn block_number(&self) -> u64 {
+        self.record.block_context.block_number
+    }
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.record.block_context.timestamp)
+    }
+}
+
+/// Message flowing from `BlockApplier` → `TreeManager`.
+#[derive(Clone, Debug)]
+pub struct AppliedBlock {
+    pub output: BlockOutput,
+    pub record: ReplayRecord,
+}
+
+impl HasBlockRangeEnd for AppliedBlock {
+    fn block_number(&self) -> u64 {
+        self.record.block_context.block_number
+    }
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.record.block_context.timestamp)
+    }
 }
 
 /// Command to produce a new block.

@@ -14,7 +14,7 @@ use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_metadata::NODE_SEMVER_VERSION;
-use zksync_os_observability::ComponentStateHandle;
+use zksync_os_observability::ComponentStateReporter;
 use zksync_os_storage_api::{MeteredViewState, OverriddenStateView, ReplayRecord, ViewState};
 use zksync_os_types::{SystemTxType, ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
@@ -26,7 +26,7 @@ use zksync_os_types::{SystemTxType, ZkTransaction, ZkTxType, ZksyncOsEncode};
 pub async fn execute_block_in_vm<V: ViewState>(
     mut command: PreparedBlockCommand<'_>,
     state_view: V,
-    latency_tracker: &ComponentStateHandle<SequencerState>,
+    latency_tracker: &ComponentStateReporter,
     tracer: impl AnyTracer + Send + 'static,
     validator: impl AnyTxValidator + Send + 'static,
 ) -> Result<
@@ -47,10 +47,10 @@ pub async fn execute_block_in_vm<V: ViewState>(
     // after the block is executed.
     let state_view_with_force_preimages =
         OverriddenStateView::with_preimages(state_view, &command.force_preimages);
-    let metered_state_view = MeteredViewState {
-        component_state_tracker: latency_tracker.clone(),
-        state_view: state_view_with_force_preimages,
-    };
+    let metered_state_view = MeteredViewState::<SequencerState, _>::new(
+        latency_tracker.clone(),
+        state_view_with_force_preimages,
+    );
     let mut runner = VmWrapper::new(ctx, metered_state_view, tracer, validator);
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
@@ -89,7 +89,6 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
             /* -------- stream branch ------------------------------- */
             maybe_tx = command.tx_source.stream.next() => {
-                latency_tracker.enter_state(SequencerState::Execution);
                 let Some(tx) = maybe_tx else {
                     tracing::info!(
                         block_number = ctx.block_number,
@@ -197,7 +196,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         }
 
                         // If the transaction provided is an SL chain id update transaction, we need to seal the block.
-                        if let Some(SystemTxType::SetSLChainId(_)) = executed_txs.last().unwrap().as_system_tx_type() {
+                        if let Some(SystemTxType::SetSLChainId(_, _)) = executed_txs.last().unwrap().as_system_tx_type() {
                             match &command.seal_policy {
                                 SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
                                     tracing::info!(block_number = ctx.block_number, "sealing block as chain id update tx was executed");
@@ -345,8 +344,6 @@ pub async fn execute_block_in_vm<V: ViewState>(
             }
         }
     }
-
-    latency_tracker.enter_state(SequencerState::Sealing);
 
     /* ---------- seal & return ------------------------------------- */
     let mut output = runner.seal_block().await.map_err(|e| BlockDump {

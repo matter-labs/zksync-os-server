@@ -43,6 +43,11 @@ pub struct BlockContextProvider<Subpool> {
     /// Can change in runtime in case of upgrades.
     protocol_version: ProtocolSemanticVersion,
     sl_chain_id_at_startup: u64,
+    /// L2 chain id of the chain's currently-active settlement layer. Can change in runtime if there
+    /// is a migration in the process.
+    current_sl_chain_id: u64,
+    /// L1 chain id, fixed at startup.
+    l1_chain_id: u64,
     /// Whether the one-time `SetSLChainId` system transaction has already been included.
     /// Initialized to `true` on restart when already at v31+, since it must have been
     /// included in a prior run. Also set to `true` during replay when a v31 block is
@@ -71,6 +76,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         service_block_delay: Duration,
         protocol_version: ProtocolSemanticVersion,
         sl_chain_id_at_startup: u64,
+        l1_chain_id: u64,
         fee_collector_address: Address,
         last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
         fee_provider: FeeProvider,
@@ -96,11 +102,19 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             next_interop_tx_allowed_after: Instant::now(),
             protocol_version,
             sl_chain_id_at_startup,
+            current_sl_chain_id: sl_chain_id_at_startup,
+            l1_chain_id,
             sl_chain_id_set,
             fee_collector_address,
             last_constructed_block_ctx_sender,
             fee_provider,
         }
+    }
+
+    /// `true` when the chain currently settles on a Gateway (i.e. its tracked SL chain id
+    /// differs from L1's).
+    fn settles_on_gateway(&self) -> bool {
+        self.current_sl_chain_id != self.l1_chain_id
     }
 
     pub fn next_block_number(&self) -> u64 {
@@ -122,7 +136,10 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 // - L1 transactions first, then L2 transactions.
                 let best_txs = self
                     .pool
-                    .best_transactions_stream(self.next_interop_tx_allowed_after)
+                    .best_transactions_stream(
+                        self.next_interop_tx_allowed_after,
+                        self.settles_on_gateway(),
+                    )
                     .await
                     .context("mempool is closed")?;
 
@@ -251,7 +268,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                         matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
                             && matches!(
                                 window[1].as_system_tx_type(),
-                                Some(SystemTxType::SetSLChainId(_))
+                                Some(SystemTxType::SetSLChainId(_, _))
                             )
                     })
                     .is_some();
@@ -351,7 +368,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                         matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
                             && matches!(
                                 window[1].as_system_tx_type(),
-                                Some(SystemTxType::SetSLChainId(_))
+                                Some(SystemTxType::SetSLChainId(_, _))
                             )
                     })
                     .is_some();
@@ -413,6 +430,20 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
 
         if let Some(last_migration_number) = outcome.last_migration_number {
             self.next_cursors.migration_number = last_migration_number + 1;
+        }
+        if let Some(target_sl_chain_id) = outcome.last_sl_chain_id_target {
+            // Subsequent produced blocks will gate interop traffic on the new value (in particular:
+            // stop including interop-root / interop-fee txs once we've migrated back to L1).
+            // Otherwise, we will end up with blocks/batches that must be committed to L1 but
+            // include interop txs which leads to `CommitBasedInteropNotSupported` revert.
+            if self.current_sl_chain_id != target_sl_chain_id {
+                tracing::info!(
+                    previous_sl_chain_id = self.current_sl_chain_id,
+                    new_sl_chain_id = target_sl_chain_id,
+                    "applied SetSLChainId tx; updating runtime settlement layer pointer"
+                );
+                self.current_sl_chain_id = target_sl_chain_id;
+            }
         }
         if let Some(last_interop_fee_number) = outcome.last_interop_fee_number {
             self.next_cursors.interop_fee_number = last_interop_fee_number + 1;

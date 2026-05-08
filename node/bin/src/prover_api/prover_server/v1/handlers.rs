@@ -159,6 +159,10 @@ pub(super) async fn submit_fri_proof(
         Err(SubmitError::DeserializationFailed(err)) => {
             Err((StatusCode::BAD_REQUEST, err.to_string()))
         }
+        Err(SubmitError::ShuttingDown) => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server is shutting down".to_string(),
+        )),
         Err(SubmitError::Other(e)) => {
             tracing::error!("internal error: {e}");
             Err((StatusCode::INTERNAL_SERVER_ERROR, e))

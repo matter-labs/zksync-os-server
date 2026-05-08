@@ -1,3 +1,4 @@
+use crate::prover_block::ProverBlock;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -5,19 +6,15 @@ use futures::stream::FuturesOrdered;
 use reth_tasks::Runtime;
 use std::collections::VecDeque;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
-use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_batch_types::batcher_model::ProverInput;
 use zksync_os_contract_interface::models::DACommitmentScheme;
 use zksync_os_interface::traits::TxListSource;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::PeekableReceiver;
-use zksync_os_pipeline::PipelineComponent;
-use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
+use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, TreeBlock};
 use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
 
 /// This component generates prover input from batch replay data.
@@ -39,11 +36,11 @@ pub struct ProverInputGenerator<ReadState> {
 impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     for ProverInputGenerator<ReadState>
 {
-    type Input = (BlockOutput, ReplayRecord, BlockMerkleTreeData);
-    type Output = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
+    type Input = TreeBlock;
+    type Output = ProverBlock;
 
-    const NAME: &'static str = "prover_input_generator";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::ProverInputGenerator;
 
     /// Works on multiple blocks in parallel, up to [Self::maximum_in_flight_blocks].
     /// Each computation runs on the blocking pool and is tracked as a graceful task so
@@ -53,54 +50,52 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         self,
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> Result<()> {
         if self.disabled {
             tracing::info!(
                 "ProverInputGenerator is disabled — passing through blocks with ProverInput::Fake"
             );
-            while let Some((block_output, replay_record, tree)) = input.recv().await {
-                if output
-                    .send((block_output, replay_record, ProverInput::Fake, tree))
-                    .await
-                    .is_err()
-                {
-                    tracing::info!(
-                        "Prover input generator output channel closed, stopping component"
-                    );
+            loop {
+                state_reporter.enter_state(GenericComponentState::Idle);
+                let Some(TreeBlock {
+                    output: block_output,
+                    record: replay_record,
+                    tree,
+                }) = input.recv_and_record_picked(&state_reporter).await
+                else {
                     return Ok(());
-                }
+                };
+                state_reporter.enter_state(GenericComponentState::Active);
+                output.send_and_record(
+                    ProverBlock {
+                        output: block_output,
+                        record: replay_record,
+                        prover_input: ProverInput::Fake,
+                        tree,
+                    },
+                    &state_reporter,
+                )?;
             }
-            return Ok(());
         }
-
-        let latency_tracker = ComponentStateReporter::global().handle_for(
-            "prover_input_generator",
-            GenericComponentState::ProcessingOrWaitingRecv,
-        );
-
         // Process the first item alone — it involves heavy trusted-setup precomputation
         // and we want it isolated before concurrent processing starts.
-        let first_item = match input.recv().await {
+        state_reporter.enter_state(GenericComponentState::Idle);
+        let first_item = match input.recv_and_record_picked(&state_reporter).await {
             Some(item) => item,
             None => return Ok(()),
         };
+        state_reporter.enter_state(GenericComponentState::Active);
         let result = self.spawn_computation(first_item).await?;
-        latency_tracker.enter_state(GenericComponentState::WaitingSend);
         tracing::debug!(
-            block_number = result.0.header.number,
+            block_number = result.output.header.number,
             "sending block with prover input to batcher",
         );
-        if output.send(result).await.is_err() {
-            tracing::info!("Prover input generator output channel closed, stopping component");
-            return Ok(());
-        }
-        latency_tracker.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
+        output.send_and_record(result, &state_reporter)?;
 
         // Process remaining items with up to `maximum_in_flight_blocks` in parallel.
         // Results are delivered in arrival order via FuturesOrdered.
-        let mut pending: FuturesOrdered<
-            oneshot::Receiver<(BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData)>,
-        > = FuturesOrdered::new();
+        let mut pending: FuturesOrdered<oneshot::Receiver<ProverBlock>> = FuturesOrdered::new();
         let mut input_done = false;
 
         loop {
@@ -108,27 +103,28 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 break;
             }
 
+            state_reporter.enter_state(GenericComponentState::Idle);
             tokio::select! {
                 maybe_item = input.recv(),
                     if !input_done && pending.len() < self.maximum_in_flight_blocks =>
                 {
+                    state_reporter.enter_state(GenericComponentState::Active);
                     match maybe_item {
-                        Some(item) => pending.push_back(self.spawn_computation(item)),
+                        Some(item) => {
+                            state_reporter.record_picked(item.output.header.number, Some(item.record.block_context.timestamp), None);
+                            pending.push_back(self.spawn_computation(item));
+                        }
                         None => input_done = true,
                     }
                 }
                 Some(result) = pending.next(), if !pending.is_empty() => {
+                    state_reporter.enter_state(GenericComponentState::Active);
                     let item = result.map_err(|_| anyhow::anyhow!("prover input computation task dropped sender"))?;
-                    latency_tracker.enter_state(GenericComponentState::WaitingSend);
                     tracing::debug!(
-                        block_number = item.0.header.number,
+                        block_number = item.output.header.number,
                         "sending block with prover input to batcher",
                     );
-                    if output.send(item).await.is_err() {
-                        tracing::info!("Prover input generator output channel closed, stopping component");
-                        return Ok(());
-                    }
-                    latency_tracker.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
+                    output.send_and_record(item, &state_reporter)?;
                 }
             }
         }
@@ -142,10 +138,12 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
     /// a receiver for the result. The computation is tracked as a graceful task so its
     /// [BlockMerkleTreeData] (holding the tree RocksDB lock) is guaranteed to be dropped
     /// before [graceful_shutdown_with_timeout] returns.
-    fn spawn_computation(
-        &self,
-        (block_output, replay_record, tree): (BlockOutput, ReplayRecord, BlockMerkleTreeData),
-    ) -> oneshot::Receiver<(BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData)> {
+    fn spawn_computation(&self, input: TreeBlock) -> oneshot::Receiver<ProverBlock> {
+        let TreeBlock {
+            output: block_output,
+            record: replay_record,
+            tree,
+        } = input;
         let (result_tx, result_rx) = oneshot::channel();
         let read_state = self.read_state.clone();
         let enable_logging = self.enable_logging;
@@ -168,7 +166,12 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
                 da_commitment_scheme,
                 enable_logging,
             ));
-            (block_output, replay_record, prover_input, tree)
+            ProverBlock {
+                output: block_output,
+                record: replay_record,
+                prover_input,
+                tree,
+            }
         });
         self.runtime.spawn_critical_with_graceful_shutdown_signal(
             "prover input computation",

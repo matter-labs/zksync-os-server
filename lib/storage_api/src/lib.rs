@@ -1,5 +1,8 @@
+mod metered_state;
+pub use metered_state::{MeteredViewState, StateAccessLabel};
+
 mod model;
-pub use model::{FinalityStatus, ReplayRecord, StoredTxData, TxMeta};
+pub use model::{FinalityStatus, ReplayRecord, StoredTxData, TreeBlock, TxMeta};
 
 mod replay;
 pub use replay::{ReadReplay, ReadReplayExt, WriteReplay};
@@ -16,9 +19,6 @@ mod repository;
 pub use repository::{
     LogIndex, ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult, WriteRepository,
 };
-
-mod metered_state;
-pub use metered_state::{MeteredViewState, StateAccessLabel};
 
 mod state;
 pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};

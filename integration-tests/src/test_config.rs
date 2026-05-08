@@ -3,7 +3,9 @@ use crate::{AnvilL1, BATCH_VERIFICATION_ADDRESSES, BATCH_VERIFICATION_KEYS};
 use alloy::primitives::Address;
 use std::net::Ipv4Addr;
 use std::time::Duration;
-use zksync_os_server::config::Config;
+use zksync_os_server::config::{Config, ProviderConfig};
+
+pub(crate) const TEST_PROVIDER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn disable_prover_input_generation(config: &mut Config) {
     if config.prover_api_config.fake_fri_provers.enabled
@@ -18,9 +20,11 @@ pub(crate) async fn build_node_config(
     chain_layout: ChainLayout<'static>,
 ) -> anyhow::Result<Config> {
     let mut config = load_chain_config(chain_layout).await;
-    config.general_config.l1_rpc_url = l1.address.clone();
-    config.general_config.l1_rpc_poll_interval = Duration::from_millis(100);
-    config.general_config.gateway_rpc_poll_interval = Duration::from_millis(100);
+    config.l1_provider_config =
+        ProviderConfig::new(l1.address.clone(), TEST_PROVIDER_POLL_INTERVAL);
+    if let Some(gateway_provider_config) = &mut config.gateway_provider_config {
+        gateway_provider_config.rpc_poll_interval = TEST_PROVIDER_POLL_INTERVAL;
+    }
     config.sequencer_config.fee_collector_address = Address::random();
     config.rpc_config.send_raw_transaction_sync_timeout = Duration::from_secs(10);
     config.prover_api_config.fake_fri_provers.enabled = true;

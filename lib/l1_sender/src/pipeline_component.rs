@@ -6,9 +6,9 @@ use alloy::primitives::Address;
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, WalletProvider};
 use async_trait::async_trait;
-use tokio::sync::mpsc;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
+use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
 /// Generic L1 Sender pipeline component
@@ -34,13 +34,13 @@ where
     type Input = L1SenderCommand<C>;
     type Output = SignedBatchEnvelope<FriProof>;
 
-    const NAME: &'static str = C::NAME;
-    const OUTPUT_BUFFER_SIZE: usize = 1;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId = C::COMPONENT_ID;
 
     async fn run(
         self,
         input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         run_l1_sender(
             input,
@@ -49,6 +49,7 @@ where
             self.provider,
             self.config,
             self.gateway,
+            state_reporter,
             self.commit_submitted_tx,
             self.sl_block_number,
         )
