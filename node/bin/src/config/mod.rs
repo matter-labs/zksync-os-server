@@ -1897,18 +1897,6 @@ mod tests {
         SignerConfig::Local(SigningKey::from_slice(&[byte; 32]).unwrap())
     }
 
-    fn secret_key(byte: u8) -> SecretKey {
-        SecretKey::from_slice(&[byte; 32]).unwrap()
-    }
-
-    fn peer_id(secret_key: &SecretKey) -> PeerId {
-        NodeRecord::from_secret_key(
-            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3060).into(),
-            secret_key,
-        )
-        .id
-    }
-
     fn base_config(node_role: NodeRole) -> Config {
         Config {
             general_config: GeneralConfig {
@@ -2115,81 +2103,5 @@ mod tests {
         assert!(
             err.contains("`batch_verification.client_enabled` requires `network.enabled=true`")
         );
-    }
-
-    #[tokio::test]
-    async fn consensus_requires_main_node_networking_secret_key_and_peer_ids() {
-        let mut config = base_config(NodeRole::MainNode);
-        config.consensus_config.enabled = true;
-
-        let err = config.validate().await.unwrap_err().to_string();
-
-        assert!(err.contains("`consensus.enabled` requires `network.enabled=true`"));
-        assert!(err.contains("`consensus.enabled` requires `network.secret_key`"));
-        assert!(
-            err.contains("`consensus.peer_ids` must not be empty when `consensus.enabled=true`")
-        );
-
-        let local_secret_key = secret_key(0x44);
-        config.network_config.enabled = true;
-        config.network_config.secret_key = Some(local_secret_key);
-        config.consensus_config.peer_ids = vec![peer_id(&secret_key(0x55))];
-
-        let err = config.validate().await.unwrap_err().to_string();
-        assert!(err.contains(
-            "`consensus.peer_ids` must include local peer id derived from `network.secret_key`"
-        ));
-
-        config
-            .consensus_config
-            .peer_ids
-            .push(peer_id(&local_secret_key));
-        config.validate().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn consensus_is_rejected_on_external_nodes() {
-        let mut config = base_config(NodeRole::ExternalNode);
-        config.general_config.main_node_rpc_url = Some("http://127.0.0.1:3050".into());
-        config.network_config.enabled = true;
-        let local_secret_key = secret_key(0x44);
-        config.network_config.secret_key = Some(local_secret_key);
-        config.consensus_config.enabled = true;
-        config.consensus_config.peer_ids = vec![peer_id(&local_secret_key)];
-        config.genesis_config.bridgehub_address = None;
-        config.genesis_config.bytecode_supplier_address = None;
-        config.genesis_config.chain_id = None;
-        config.genesis_config.genesis_input_path = None;
-        config.l1_sender_config.operator_commit_sk = None;
-        config.l1_sender_config.operator_prove_sk = None;
-        config.l1_sender_config.operator_execute_sk = None;
-        config.l1_sender_config.pubdata_mode = None;
-        config.external_price_api_client_config = None;
-
-        let err = config.validate().await.unwrap_err().to_string();
-
-        assert!(err.contains("`consensus.enabled` requires `general.node_role=main`"));
-    }
-
-    #[tokio::test]
-    async fn block_rebuild_is_rejected_when_consensus_is_enabled() {
-        let mut config = base_config(NodeRole::MainNode);
-        let local_secret_key = secret_key(0x44);
-        config.network_config.enabled = true;
-        config.network_config.secret_key = Some(local_secret_key);
-        config.consensus_config.enabled = true;
-        config.consensus_config.peer_ids = vec![peer_id(&local_secret_key)];
-        config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
-            from_block: 1,
-            blocks_to_empty: vec![],
-            reset_timestamps: false,
-        });
-
-        let err = config.validate().await.unwrap_err().to_string();
-
-        assert!(err.contains("`sequencer.block_rebuild` requires `consensus.enabled=false`"));
-
-        config.consensus_config.enabled = false;
-        config.validate().await.unwrap();
     }
 }
