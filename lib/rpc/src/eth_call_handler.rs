@@ -503,7 +503,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
         let tx = self.build_estimate_tx(request, &block_context, &mut storage_view)?;
 
-        let try_at = |gas_limit: u64| {
+        let run_at = |gas_limit: u64| {
             let mut attempt = tx.clone();
             set_gas_limit(&mut attempt, gas_limit);
             execute(attempt, block_context, storage_view.clone())
@@ -511,7 +511,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         };
 
         // Execute the transaction with the highest possible gas limit.
-        let res = try_at(tx.gas_limit())?.map_err(EthCallError::InvalidTransaction)?;
+        let res = run_at(tx.gas_limit())?.map_err(EthCallError::InvalidTransaction)?;
         tracing::trace!(
             "Executed tx in eth_estimateGas with gas limit: {}, result {res:?}",
             Probe::Highest(tx.gas_limit())
@@ -534,7 +534,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let optimistic_gas_limit = (gas_used + res.gas_refunded + GAS_STIPEND) * 64 / 63;
         if optimistic_gas_limit < range.highest {
             range.apply_probe(
-                try_at(optimistic_gas_limit)?,
+                run_at(optimistic_gas_limit)?,
                 Probe::Optimistic(optimistic_gas_limit),
             )?;
         }
@@ -549,7 +549,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 break;
             }
             tracing::trace!("Trying to simulate transaction with gas_limit {mid}");
-            range.apply_probe(try_at(mid)?, Probe::Midpoint(mid))?;
+            range.apply_probe(run_at(mid)?, Probe::Midpoint(mid))?;
             mid = range.midpoint();
         }
         tracing::trace!("Estimated gas limit: {}", range.highest);
