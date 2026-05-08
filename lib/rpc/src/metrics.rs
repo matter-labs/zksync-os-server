@@ -11,6 +11,20 @@ use vise::{
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.000001..=32.0, 2.0);
 const BLOCK_COUNTS: Buckets = Buckets::exponential(1.0..=100000.0, 10.0);
 const BYTES_BUCKETS: Buckets = Buckets::exponential(1.0..=10485760.0, 2.0); // 1B .. 10MB
+const GAS_BUCKETS: Buckets = Buckets::values(&[
+    20_000.0,
+    50_000.0,
+    100_000.0,
+    200_000.0,
+    500_000.0,
+    1_000_000.0,
+    2_000_000.0,
+    5_000_000.0,
+    10_000_000.0,
+    20_000_000.0,
+    50_000_000.0,
+    100_000_000.0,
+]);
 const RATIO_BUCKETS: Buckets = Buckets::values(&[
     0.0, 0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0,
 ]);
@@ -92,6 +106,10 @@ pub struct Api {
     pub cancelled: LabeledFamily<String, Counter>,
     #[metrics(labels = ["method"])]
     pub panicked: LabeledFamily<String, Counter>,
+    /// Gas consumed by methods whose execution cost scales with gas (eth_call, eth_estimateGas,
+    /// debug_traceTransaction, debug_traceCall). Always recorded, including on revert.
+    #[metrics(labels = ["method"], buckets = GAS_BUCKETS)]
+    pub call_gas_used: LabeledFamily<String, Histogram<u64>>,
 }
 
 #[vise::register]

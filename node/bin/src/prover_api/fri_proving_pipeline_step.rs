@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{FriProof, ProverInput, SignedBatchEnvelope};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::ComponentStateReporter;
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 
 /// Pipeline step that waits for batches to be FRI proved.
 ///
@@ -58,19 +59,20 @@ impl PipelineComponent for FriProvingPipelineStep {
     type Input = SignedBatchEnvelope<ProverInput>;
     type Output = SignedBatchEnvelope<FriProof>;
 
-    const NAME: &'static str = "fri_proving";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::FriJobManager;
 
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         // Forward batches: pipeline input → FriJobManager (add_job) → pipeline output (via proofs channel)
         // Two concurrent tasks handle the bidirectional flow
         tokio::select! {
             result = async {
-                while let Some(batch) = input.recv().await {
+                while let Some(batch) = input.recv_and_record_picked(&state_reporter).await {
                     if batch.batch_number() > self.last_proved_batch_number {
                         tracing::info!(
                             "Received batch for FRI proving: {:?}",
@@ -81,7 +83,8 @@ impl PipelineComponent for FriProvingPipelineStep {
                     } else {
                         // Already proven - send with fake proof to pass through the pipeline
                         let batch_with_fake_proof = batch.with_data(FriProof::AlreadySubmittedToL1);
-                        let _ = output.send(batch_with_fake_proof).await;
+                        output
+                            .send_and_record(batch_with_fake_proof, &state_reporter)?;
                     }
                 }
                 Ok::<(), anyhow::Error>(())
@@ -90,15 +93,17 @@ impl PipelineComponent for FriProvingPipelineStep {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             },
-            _ = async {
+            result = async {
                 while let Some(proof) = self.batches_with_proof_receiver.recv().await {
                     tracing::info!(
                         "Received batch after FRI proving: {:?}",
                         proof.batch_number()
                     );
-                    let _ = output.send(proof).await;
+                    output.send_and_record(proof, &state_reporter)?;
                 }
+                Ok::<(), anyhow::Error>(())
             } => {
+                result?;
                 tracing::info!("outbound channel closed");
                 return Ok(());
             },

@@ -10,8 +10,8 @@ use time::UtcDateTime;
 use zksync_os_batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_observability::LatencyDistributionTracker;
-use zksync_os_types::ProvingVersion;
-use zksync_os_types::PubdataMode;
+use zksync_os_pipeline::HasBlockRangeEnd;
+use zksync_os_types::{ProvingVersion, PubdataMode};
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
 
@@ -310,6 +310,18 @@ impl RealSnarkProof {
             RealSnarkProof::V1(proof) => proof.as_slice(),
             RealSnarkProof::V2 { proof, .. } => proof.as_slice(),
         }
+    }
+}
+
+impl<E: Send + 'static, S: Send + 'static> HasBlockRangeEnd for BatchEnvelope<E, S> {
+    fn block_number(&self) -> u64 {
+        self.batch.last_block_number
+    }
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.batch.batch_info.last_block_timestamp)
+    }
+    fn batch_number(&self) -> Option<u64> {
+        Some(self.batch.batch_info.batch_number)
     }
 }
 

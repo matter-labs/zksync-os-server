@@ -6,7 +6,7 @@ use crate::subpools::l2::{L2Subpool, L2TransactionsStreamMarker};
 use crate::subpools::sl_chain_id::SlChainIdSubpool;
 use crate::subpools::upgrade::{UpgradeSubpool, UpgradeTransactionsStream};
 use alloy::consensus::{Header, Sealed};
-use alloy::primitives::TxHash;
+use alloy::primitives::{ChainId, TxHash};
 use futures::stream::{BoxStream, PollNext};
 use futures::{Stream, StreamExt};
 use reth_execution_types::ChangedAccount;
@@ -55,10 +55,15 @@ impl<T: L2Subpool> Pool<T> {
     /// Also provides upgrade information is there is one (which is not necessarily accompanied by
     /// an upgrade transaction).
     ///
+    /// `include_interop_traffic` should be `false` whenever the chain currently settles on L1 --
+    /// in that case interop-root and interop-fee system txs are not valid downstream (they only
+    /// flow through Gateway settlement) and must not be included in produced blocks.
+    ///
     /// Returns `None` if all transaction sources are closed.
     pub async fn best_transactions_stream<'a>(
         &'a mut self,
         next_interop_tx_allowed_after: Instant,
+        include_interop_traffic: bool,
     ) -> Option<StreamOutcome<'a>> {
         let mut upgrade_info_stream = self.upgrade_subpool.upgrade_info_stream().await;
 
@@ -137,7 +142,7 @@ impl<T: L2Subpool> Pool<T> {
                         stream: MarkingTxStream::unmarkable(sl_chain_id_stream),
                     });
                 }
-                Some(_) = interop_related_stream.peek() => {
+                Some(_) = interop_related_stream.peek(), if include_interop_traffic => {
                     return Some(StreamOutcome {
                         upgrade_metadata,
                         stream: MarkingTxStream::unmarkable(interop_related_stream),
@@ -208,7 +213,7 @@ impl<T: L2Subpool> Pool<T> {
                     SystemTxType::SetInteropFee(_) => {
                         interop_fee_txs.push(system_tx);
                     }
-                    SystemTxType::SetSLChainId(_) => {
+                    SystemTxType::SetSLChainId(_, _) => {
                         sl_chain_id_txs.push(system_tx);
                     }
                 },
@@ -234,7 +239,7 @@ impl<T: L2Subpool> Pool<T> {
             .interop_fee_subpool
             .on_canonical_state_change(interop_fee_txs, strict_subpool_cleanup)
             .await;
-        let last_migration_number = self
+        let sl_chain_id_outcome = self
             .sl_chain_id_subpool
             .on_canonical_state_change(sl_chain_id_txs)
             .await;
@@ -269,7 +274,8 @@ impl<T: L2Subpool> Pool<T> {
         StateChangeOutcome {
             last_interop_log_id,
             last_l1_priority_id,
-            last_migration_number,
+            last_migration_number: sl_chain_id_outcome.map(|o| o.last_migration_number),
+            last_sl_chain_id_target: sl_chain_id_outcome.map(|o| o.last_sl_chain_id_target),
             last_interop_fee_number,
         }
     }
@@ -292,6 +298,9 @@ pub struct StateChangeOutcome {
     pub last_l1_priority_id: Option<L1TxSerialId>,
     /// Last migration number that was executed after canonical state change.
     pub last_migration_number: Option<u64>,
+    /// Target settlement-layer chain id of the last `SetSLChainId` system tx applied in the
+    /// block (excluding the `u64::MAX` upgrade placeholder).
+    pub last_sl_chain_id_target: Option<ChainId>,
     /// Last interop fee update number that was executed after canonical state change.
     pub last_interop_fee_number: Option<u64>,
 }

@@ -4,31 +4,30 @@ use reth_revm::ExecuteCommitEvm;
 use reth_revm::context::{Context, ContextTr};
 use reth_revm::db::CacheDB;
 use std::collections::HashSet;
-use std::marker::PhantomData;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_revm::{DefaultZk, ZkBuilder};
+use zksync_os_sequencer::model::blocks::AppliedBlock;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ExecutionVersion;
 
 use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
+use crate::metrics::PUSH_METRICS;
 use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
 
-pub struct RevmConsistencyChecker<State, Block> {
+pub struct RevmConsistencyChecker<State> {
     state: State,
     internal_config_manager: InternalConfigManager,
     revert_enabled: bool,
-    _block: PhantomData<Block>,
 }
 
-impl<State, Block> RevmConsistencyChecker<State, Block>
+impl<State> RevmConsistencyChecker<State>
 where
     State: ReadStateHistory + Clone + Send + 'static,
-    Block: AsRef<BlockOutput>,
 {
     pub fn new(
         state: State,
@@ -39,7 +38,6 @@ where
             state,
             internal_config_manager,
             revert_enabled,
-            _block: PhantomData,
         }
     }
 
@@ -50,7 +48,21 @@ where
         report: &CompareReport,
     ) -> anyhow::Result<()> {
         report.log_tracing(20);
-        if self.revert_enabled && !report.is_empty() {
+        if report.is_empty() {
+            return Ok(());
+        }
+
+        let message = format!(
+            "REVM consistency check failed for block number {}, block hash {}",
+            replay_record.block_context.block_number,
+            block_output.header.hash(),
+        );
+        tracing::warn!(message);
+
+        // Update metric for the divergence alert
+        PUSH_METRICS.revm_divergences_detected.inc();
+
+        if self.revert_enabled {
             let mut config = self.internal_config_manager.read_config()?;
             config.failing_block = Some(replay_record.block_context.block_number);
 
@@ -60,15 +72,10 @@ where
             }
             let new_blacklist_size = config.l2_signer_blacklist.len();
             tracing::info!(
-                "Adding {} new addresses to L2 signer blacklist due to REVM inconsistency",
+                "Adding {} new addresses to L2 signer blacklist due to REVM divergence",
                 new_blacklist_size - initial_blacklist_size
             );
 
-            let message = format!(
-                "REVM consistency check failed for block number {}, block hash {}",
-                replay_record.block_context.block_number,
-                block_output.header.hash(),
-            );
             self.internal_config_manager
                 .write_config_and_panic(&config, &message)?;
         }
@@ -78,32 +85,32 @@ where
 }
 
 #[async_trait]
-impl<State, Block> PipelineComponent for RevmConsistencyChecker<State, Block>
+impl<State> PipelineComponent for RevmConsistencyChecker<State>
 where
     State: ReadStateHistory + Clone + Send + 'static,
-    Block: AsRef<BlockOutput> + Send + 'static,
 {
-    type Input = (Block, ReplayRecord);
-    type Output = (Block, ReplayRecord);
+    type Input = AppliedBlock;
+    type Output = AppliedBlock;
 
-    const NAME: &'static str = "revm_consistency_checker";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::RevmConsistencyChecker;
 
     async fn run(
-        mut self,
-        mut input: PeekableReceiver<Self::Input>, // PeekableReceiver<(BlockOutput, ReplayRecord)>
-        output: Sender<Self::Output>,             // Sender<(BlockOutput, ReplayRecord)>
+        self,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        let latency_tracker = ComponentStateReporter::global().handle_for(
-            "revm_consistency_checker",
-            GenericComponentState::WaitingRecv,
-        );
         // Remember unsupported execution versions to log only one warning for it.
         let mut warned_unsupported_versions: HashSet<u32> = HashSet::new();
 
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
-            let Some((block, replay_record)) = input.recv().await else {
+            state_reporter.enter_state(GenericComponentState::Idle);
+            let Some(AppliedBlock {
+                output: block,
+                record: replay_record,
+            }) = input.recv_and_record_picked(&state_reporter).await
+            else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
@@ -134,7 +141,7 @@ where
                 }
             };
 
-            latency_tracker.enter_state(GenericComponentState::Processing);
+            state_reporter.enter_state(GenericComponentState::Active);
             let state_block_number = replay_record.block_context.block_number - 1;
             let block_hashes = replay_record.block_context.block_hashes;
             let state_view = self
@@ -190,10 +197,13 @@ where
                 self.handle_report(block_output, &replay_record, &compare_report)?;
             }
 
-            latency_tracker.enter_state(GenericComponentState::WaitingSend);
-            if output.send((block, replay_record.clone())).await.is_err() {
-                anyhow::bail!("Outbound channel closed");
-            }
+            output.send_and_record(
+                AppliedBlock {
+                    output: block,
+                    record: replay_record,
+                },
+                &state_reporter,
+            )?;
         }
     }
 }

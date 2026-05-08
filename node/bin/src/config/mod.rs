@@ -50,6 +50,8 @@ pub use build_external_config::{build_external_config, load_config_file_sources}
 #[config_validate(root)]
 pub struct Config {
     pub general_config: GeneralConfig,
+    pub l1_provider_config: ProviderConfig,
+    pub gateway_provider_config: Option<ProviderConfig>,
     pub network_config: NetworkConfig,
     pub genesis_config: GenesisConfig,
     pub rpc_config: RpcConfig,
@@ -73,6 +75,7 @@ pub struct Config {
     #[config_validate(required_if = NodeRole::MainNode, skip_nested)]
     pub external_price_api_client_config: Option<ExternalPriceApiClientConfig>,
     pub fee_config: FeeConfig,
+    pub backpressure_config: BackpressureConfig,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -179,6 +182,12 @@ impl Config {
             .insert(&GeneralConfig::DESCRIPTION, "general")
             .expect("Failed to insert general config");
         schema
+            .insert(&ProviderConfig::DESCRIPTION, "l1_provider")
+            .expect("Failed to insert L1 provider config");
+        schema
+            .insert(&ProviderConfig::DESCRIPTION, "gateway_provider")
+            .expect("Failed to insert Gateway provider config");
+        schema
             .insert(&NetworkConfig::DESCRIPTION, "network")
             .expect("Failed to insert network config");
         schema
@@ -244,6 +253,9 @@ impl Config {
         schema
             .insert(&FeeConfig::DESCRIPTION, "fee")
             .expect("Failed to insert fee config");
+        schema
+            .insert(&BackpressureConfig::DESCRIPTION, "backpressure")
+            .expect("Failed to insert backpressure config");
         schema
     }
 
@@ -364,24 +376,6 @@ pub struct GeneralConfig {
     #[config(default_t = NodeRole::MainNode, with = Serde![str])]
     pub node_role: NodeRole,
 
-    /// L1's JSON RPC API.
-    #[config(default_t = "http://localhost:8545".into())]
-    pub l1_rpc_url: String,
-
-    /// Poll interval used by the L1 alloy provider when waiting for transaction receipts.
-    /// Alloy's default is 7 seconds for HTTP transports, using the same criteria here.
-    #[config(default_t = 7 * TimeUnit::Seconds)]
-    pub l1_rpc_poll_interval: Duration,
-
-    /// Gateway's JSON RPC API.
-    /// Must be present if the chain is currently settling to Gateway.
-    pub gateway_rpc_url: Option<String>,
-
-    /// Poll interval used by the Gateway alloy provider when waiting for transaction receipts.
-    /// Alloy's default is 7 seconds for HTTP transports, using the same criteria here.
-    #[config(default_t = 7 * TimeUnit::Seconds)]
-    pub gateway_rpc_poll_interval: Duration,
-
     /// Gateway chain ID. Used by the migration watcher to construct `SetSLChainId` system
     /// transactions when a `MigrateToGateway` event fires. Defaults to 506 (ZKsync Gateway).
     #[config(default_t = 506)]
@@ -449,6 +443,38 @@ pub struct GeneralConfig {
         "requires `general.ephemeral=true`"
     ))]
     pub ephemeral_state: Option<PathBuf>,
+}
+
+/// Config for L1 or Gateway provider
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+pub struct ProviderConfig {
+    /// JSON RPC API URL.
+    #[config(default_t = "http://localhost:8545".into())]
+    pub rpc_url: String,
+
+    /// Poll interval used by the alloy provider when waiting for transaction receipts.
+    /// Alloy's default is 7 seconds for HTTP transports, using the same criteria here.
+    #[config(default_t = 7 * TimeUnit::Seconds)]
+    pub rpc_poll_interval: Duration,
+
+    /// Maximum number of retry attempts, excluding the initial attempt.
+    #[config(default_t = 5)]
+    pub max_retries: u32,
+
+    /// Backoff used between retry attempts.
+    #[config(default_t = Duration::from_millis(1000))]
+    pub retry_backoff: Duration,
+}
+
+impl ProviderConfig {
+    pub fn new(rpc_url: impl Into<String>, rpc_poll_interval: Duration) -> Self {
+        Self {
+            rpc_url: rpc_url.into(),
+            rpc_poll_interval,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
@@ -771,6 +797,10 @@ pub struct L1SenderConfig {
     #[config(default_t = 2 * EtherUnit::Gwei)]
     pub max_fee_per_blob_gas: EtherAmount,
 
+    /// Force transaction resubmission options.
+    #[config(nest, default)]
+    pub force_transaction_resubmission: ForceTransactionResubmissionConfig,
+
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
     pub command_limit: usize,
@@ -805,6 +835,34 @@ pub struct L1SenderConfig {
     #[config_validate(required_if = NodeRole::MainNode)]
     #[config(with = Serde![str])]
     pub pubdata_mode: Option<PubdataMode>,
+
+    /// Stop accepting transactions when L1 senders fall this many batches behind their upstream.
+    /// Applied to commit, prove, execute senders and the upgrade gatekeeper.
+    pub max_batch_diff_to_upstream: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+pub struct ForceTransactionResubmissionConfig {
+    /// Skips startup in-flight recovery and resubmits queued L1 transactions with replacement fee caps.
+    #[config(default_t = false)]
+    pub enabled: bool,
+
+    /// Multiplier applied to `max_fee_per_gas` when force transaction resubmission is enabled.
+    #[config(default_t = 1.1, validate(is_positive_f64, "must be positive"))]
+    pub max_fee_per_gas_replacement_multiplier: f64,
+
+    /// Multiplier applied to `max_priority_fee_per_gas` when force transaction resubmission is enabled.
+    #[config(default_t = 1.1, validate(is_positive_f64, "must be positive"))]
+    pub max_priority_fee_per_gas_replacement_multiplier: f64,
+
+    /// Multiplier applied to `max_fee_per_blob_gas` when force transaction resubmission is enabled.
+    #[config(default_t = 2.0, validate(is_positive_f64, "must be positive"))]
+    pub max_fee_per_blob_gas_replacement_multiplier: f64,
+}
+
+fn is_positive_f64(&val: &f64) -> bool {
+    val > 0.0
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -963,6 +1021,10 @@ pub struct ProverApiConfig {
     /// Default: store files in ./db/fri_proofs/ with 1GiB disk usage cap
     #[config(nest, default)]
     pub proof_storage: ProofStorageConfig,
+
+    /// Stop accepting transactions when the prover pipeline falls this many batches behind
+    /// its upstream. Applied to both FRI and SNARK job managers.
+    pub max_batch_diff_to_upstream: Option<u64>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1049,6 +1111,10 @@ pub struct PrometheusConfig {
     /// Port to expose Prometheus metrics on.
     #[config(default_t = 3312)]
     pub port: u16,
+
+    /// Base URL for the Prometheus Pushgateway used for push-only metrics.
+    #[config(default_t = None)]
+    pub push_gateway_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
@@ -1149,6 +1215,9 @@ pub struct BatchVerificationConfig {
     // default address 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
     #[config(default_t = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110".into())]
     pub signing_key: SecretString,
+    /// Stop accepting transactions when batch verification falls this many batches behind
+    /// its upstream.
+    pub max_batch_diff_to_upstream: Option<u64>,
 }
 
 /// Config for the base token price updater.
@@ -1270,6 +1339,54 @@ pub struct FeeConfig {
     pub native_price_override: Option<U128>,
 }
 
+/// Backpressure configuration.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct BackpressureConfig {
+    /// Stop accepting transactions when a block-pipeline component falls this many blocks behind
+    /// its upstream neighbour.
+    #[config(default_t = zksync_os_backpressure::DEFAULT_BLOCK_DIFF_LIMIT)]
+    pub default_block_diff_limit: u64,
+
+    /// Stop accepting transactions when a batch-pipeline component falls this many batches
+    /// behind its upstream neighbour.
+    #[config(default_t = zksync_os_backpressure::DEFAULT_BATCH_DIFF_LIMIT)]
+    pub default_batch_diff_limit: u64,
+}
+
+impl Config {
+    pub fn build_backpressure_config(&self) -> zksync_os_backpressure::BackpressureConfig {
+        use zksync_os_backpressure::{ComponentId, PipelineCondition};
+        let condition = |v| PipelineCondition {
+            max_batch_diff_to_upstream: v,
+            ..Default::default()
+        };
+        let mut cfg = zksync_os_backpressure::BackpressureConfig::default();
+        cfg.default_block_diff_limit = self.backpressure_config.default_block_diff_limit;
+        cfg.default_batch_diff_limit = self.backpressure_config.default_batch_diff_limit;
+        if let Some(v) = self.prover_api_config.max_batch_diff_to_upstream {
+            cfg.set(ComponentId::FriJobManager, condition(Some(v)));
+            cfg.set(ComponentId::GaplessCommitter, condition(Some(v)));
+            cfg.set(ComponentId::SnarkJobManager, condition(Some(v)));
+            cfg.set(ComponentId::GaplessL1ProofSender, condition(Some(v)));
+        }
+        if let Some(v) = self.batch_verification_config.max_batch_diff_to_upstream {
+            cfg.set(ComponentId::BatchVerification, condition(Some(v)));
+        }
+        if let Some(v) = self.l1_sender_config.max_batch_diff_to_upstream {
+            for id in [
+                ComponentId::L1SenderCommit,
+                ComponentId::L1SenderProve,
+                ComponentId::L1SenderExecute,
+                ComponentId::UpgradeGatekeeper,
+            ] {
+                cfg.set(id, condition(Some(v)));
+            }
+        }
+        cfg
+    }
+}
+
 impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {
     fn from(value: NetworkConfig) -> Self {
         Self {
@@ -1332,11 +1449,21 @@ impl L1SenderConfig {
         self,
         operator_signer: SignerConfig,
     ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
+        let force_transaction_resubmission = self.force_transaction_resubmission;
         zksync_os_l1_sender::config::L1SenderConfig {
             operator_signer,
-            max_fee_per_gas_wei: self.max_fee_per_gas.0,
-            max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
-            max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
+            fee_config: zksync_os_l1_sender::config::L1SenderFeeConfig {
+                max_fee_per_gas_wei: self.max_fee_per_gas.0,
+                max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
+                max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
+                max_fee_per_gas_replacement_multiplier: force_transaction_resubmission
+                    .max_fee_per_gas_replacement_multiplier,
+                max_priority_fee_per_gas_replacement_multiplier: force_transaction_resubmission
+                    .max_priority_fee_per_gas_replacement_multiplier,
+                max_fee_per_blob_gas_replacement_multiplier: force_transaction_resubmission
+                    .max_fee_per_blob_gas_replacement_multiplier,
+            },
+            force_transaction_resubmission: force_transaction_resubmission.enabled,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
@@ -1554,6 +1681,12 @@ mod tests {
         repo.single::<NetworkConfig>().unwrap().parse().unwrap()
     }
 
+    fn parse_l1_sender_config<const N: usize>(env_vars: [(&str, &str); N]) -> L1SenderConfig {
+        let schema = ConfigSchema::new(&L1SenderConfig::DESCRIPTION, "l1_sender");
+        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
+        repo.single::<L1SenderConfig>().unwrap().parse().unwrap()
+    }
+
     #[test]
     fn network_interface_is_a_separate_field_and_overrides_address() {
         let config = parse_network_config([
@@ -1584,6 +1717,66 @@ mod tests {
     }
 
     #[test]
+    fn l1_sender_force_resubmission_config_is_nested() {
+        let default_config = parse_l1_sender_config([]);
+        assert!(!default_config.force_transaction_resubmission.enabled);
+        assert_eq!(
+            default_config
+                .force_transaction_resubmission
+                .max_fee_per_gas_replacement_multiplier,
+            1.1
+        );
+        assert_eq!(
+            default_config
+                .force_transaction_resubmission
+                .max_priority_fee_per_gas_replacement_multiplier,
+            1.1
+        );
+        assert_eq!(
+            default_config
+                .force_transaction_resubmission
+                .max_fee_per_blob_gas_replacement_multiplier,
+            2.0
+        );
+
+        let config = parse_l1_sender_config([
+            ("L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_ENABLED", "true"),
+            (
+                "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_FEE_PER_GAS_REPLACEMENT_MULTIPLIER",
+                "1.25",
+            ),
+            (
+                "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_PRIORITY_FEE_PER_GAS_REPLACEMENT_MULTIPLIER",
+                "1.5",
+            ),
+            (
+                "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_FEE_PER_BLOB_GAS_REPLACEMENT_MULTIPLIER",
+                "1.75",
+            ),
+        ]);
+
+        assert!(config.force_transaction_resubmission.enabled);
+        assert_eq!(
+            config
+                .force_transaction_resubmission
+                .max_fee_per_gas_replacement_multiplier,
+            1.25
+        );
+        assert_eq!(
+            config
+                .force_transaction_resubmission
+                .max_priority_fee_per_gas_replacement_multiplier,
+            1.5
+        );
+        assert_eq!(
+            config
+                .force_transaction_resubmission
+                .max_fee_per_blob_gas_replacement_multiplier,
+            1.75
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "failed to resolve network interface 'definitely-missing-if'")]
     fn invalid_network_interface_panics() {
         let _ = zksync_os_network::config::NetworkConfig::from(parse_network_config([
@@ -1604,6 +1797,8 @@ mod tests {
                 run_priority_tree: true,
                 ..Default::default()
             },
+            l1_provider_config: ProviderConfig::default(),
+            gateway_provider_config: None,
             network_config: NetworkConfig::default(),
             genesis_config: GenesisConfig {
                 bridgehub_address: Some(Address::ZERO),
@@ -1622,12 +1817,14 @@ mod tests {
                 max_fee_per_gas: 200 * EtherUnit::Gwei,
                 max_priority_fee_per_gas: 1 * EtherUnit::Gwei,
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
+                force_transaction_resubmission: ForceTransactionResubmissionConfig::default(),
                 command_limit: 16,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
                 fusaka_upgrade_timestamp: u64::MAX,
                 enabled: true,
                 pubdata_mode: Some(PubdataMode::Blobs),
+                max_batch_diff_to_upstream: None,
             },
             l1_watcher_config: L1WatcherConfig::default(),
             batcher_config: BatcherConfig::default(),
@@ -1643,7 +1840,51 @@ mod tests {
                 forced: ForcedPriceClientConfig::default(),
             }),
             fee_config: FeeConfig::default(),
+            backpressure_config: BackpressureConfig::default(),
         }
+    }
+
+    #[test]
+    fn l1_sender_replacement_multipliers_must_be_positive() {
+        let schema = ConfigSchema::new(&L1SenderConfig::DESCRIPTION, "l1_sender");
+        let repo = ConfigRepository::new(&schema).with(Environment::from_iter(
+            "",
+            [
+                (
+                    "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_FEE_PER_GAS_REPLACEMENT_MULTIPLIER",
+                    "-1.0",
+                ),
+                (
+                    "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_PRIORITY_FEE_PER_GAS_REPLACEMENT_MULTIPLIER",
+                    "-1.25",
+                ),
+                (
+                    "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_FEE_PER_BLOB_GAS_REPLACEMENT_MULTIPLIER",
+                    "-1.5",
+                ),
+            ],
+        ));
+
+        let err = repo
+            .single::<L1SenderConfig>()
+            .unwrap()
+            .parse()
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("max_fee_per_gas_replacement_multiplier"),
+            "{err}"
+        );
+        assert!(
+            err.contains("max_priority_fee_per_gas_replacement_multiplier"),
+            "{err}"
+        );
+        assert!(
+            err.contains("max_fee_per_blob_gas_replacement_multiplier"),
+            "{err}"
+        );
+        assert!(err.contains("must be positive"), "{err}");
     }
 
     #[tokio::test]

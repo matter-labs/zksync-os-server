@@ -6,7 +6,8 @@ use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::ComponentStateReporter;
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 
 /// Pipeline step that waits for batches to be SNARK proved.
 ///
@@ -56,34 +57,43 @@ impl PipelineComponent for SnarkProvingPipelineStep {
     type Input = SignedBatchEnvelope<FriProof>;
     type Output = L1SenderCommand<ProofCommand>;
 
-    const NAME: &'static str = "snark_proving";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::SnarkJobManager;
 
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         // Forward batches: pipeline input → SnarkJobManager → pipeline output
         // Two concurrent tasks handle the bidirectional flow
         tokio::select! {
-            _ = async {
-                while let Some(batch) = input.recv().await {
+            result = async {
+                while let Some(batch) = input.recv_and_record_picked(&state_reporter).await {
                     if batch.batch_number() > self.last_proved_batch_number {
-                        let _ = self.snark_job_manager.add_job(batch).await;
+                        self.snark_job_manager.add_job(batch).await;
                     } else {
-                        let _ = output.send(L1SenderCommand::Passthrough(Box::new(batch))).await;
+                        let passthrough = L1SenderCommand::Passthrough(Box::new(batch));
+                        output.send_and_record(passthrough, &state_reporter)?;
                     }
                 }
+                Ok::<(), anyhow::Error>(())
             } => {
+                result?;
                 tracing::info!("inbound channel closed");
                 return Ok(());
             },
-            _ = async {
+            result = async {
                 while let Some(proof_command) = self.proof_commands_receiver.recv().await {
-                    let _ = output.send(L1SenderCommand::SendToL1(proof_command)).await;
+                    output.send_and_record(
+                        L1SenderCommand::SendToL1(proof_command),
+                        &state_reporter,
+                    )?;
                 }
+                Ok::<(), anyhow::Error>(())
             } => {
+                result?;
                 tracing::info!("outbound channel closed");
                 return Ok(());
             },

@@ -1,7 +1,9 @@
+use crate::component_id::ComponentId;
 use crate::peekable_receiver::PeekableReceiver;
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
+use zksync_os_observability::ComponentStateReporter;
 
 /// A component that transforms messages in the pipeline.
 /// Examples: ProverInputGenerator, Batcher, L1 senders
@@ -15,21 +17,17 @@ pub trait PipelineComponent: Send + 'static {
     /// The type of messages this component produces
     type Output: Send + 'static;
 
-    /// Human-readable name for logging and metrics
-    const NAME: &'static str;
+    /// Id of this component.
+    const COMPONENT_ID: ComponentId;
 
-    /// Buffer size for the output channel.
-    /// If set to `0`, this component won't start the next item
-    /// until the previous item is picked up by the next component.
-    /// Higher values allow this component to process items ahead of the downstream components.
-    /// Todo: it'd be cleaner to define the **Inbound** buffer size instead
-    /// Todo: this will be replaced by a more general backpressure mechanism
-    const OUTPUT_BUFFER_SIZE: usize;
+    /// Capacity of the output channel for this component.
+    const OUTPUT_CHANNEL_CAPACITY: usize = 4096;
 
     /// Run the component, receiving from input and sending to output.
     async fn run(
         self,
         input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> Result<()>;
 }

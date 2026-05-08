@@ -1,7 +1,7 @@
 # zksync_os_observability
 
 Utilities for wiring the zkSync OS observability stack together: structured logging, traces, metrics, Sentry alerts,
-and helpers for measuring component health. The crate exposes a single entry
+and helpers for measuring component state. The crate exposes a single entry
 point (`ObservabilityBuilder`) plus opt-in modules you can mix and match inside binaries across the workspace.
 
 ## Highlights
@@ -102,8 +102,7 @@ for as long as you need instrumentation.
 Track how long asynchronous components spend in each state:
 
 ```rust
-use zksync_os_observability::component_state_reporter::{ComponentStateReporter, StateLabel};
-use zksync_os_observability::GenericComponentState;
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState, StateLabel};
 
 #[derive(Clone)]
 enum MyState {
@@ -114,8 +113,8 @@ enum MyState {
 impl StateLabel for MyState {
     fn generic(&self) -> GenericComponentState {
         match self {
-            MyState::Idle => GenericComponentState::WaitingRecv,
-            MyState::Working => GenericComponentState::Processing,
+            MyState::Idle => GenericComponentState::Idle,
+            MyState::Working => GenericComponentState::Active,
         }
     }
     fn specific(&self) -> &'static str {
@@ -126,17 +125,21 @@ impl StateLabel for MyState {
     }
 }
 
-let handle = ComponentStateReporter::global().handle_for("my_worker", MyState::Idle);
-handle.enter_state(MyState::Working);
+let (reporter, rx) = ComponentStateReporter::new("my_worker");
+reporter.enter_state(MyState::Working);
+// Hand `rx` to a monitor (e.g. BackpressureMonitor) to observe state transitions.
 ```
 
-The background task updates `GENERAL_METRICS.component_time_spent_in_state[component, generic_state, specific_state]` every two seconds.
+A background task flushes elapsed time into
+`GENERAL_METRICS.component_time_spent_in_state` on every 2-second tick and
+immediately on each `enter_state` call. A component that stays in one state
+indefinitely will still contribute to the counter rate.
 
 ## Built-in Metrics
 
 metrics::GENERAL_METRICS exposes:
 
-- component_time_spent_in_state (counter in seconds by component / generic state / specific state),
+- component_time_spent_in_state (counter in seconds by component / generic state / specific state; flushed every 2 s and on state transition),
 - process_started_at (timestamp gauge with version + role),
 - startup_time (startup stage durations),
 - fee_collector_address and chain_id.
