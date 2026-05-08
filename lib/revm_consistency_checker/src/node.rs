@@ -214,6 +214,7 @@ where
                             transaction,
                             tx_output.gas_used,
                             tx_output.is_success(),
+                            replay_record.block_context.gas_limit,
                             Some(settlement_layer_chain_id),
                         )
                     })
@@ -234,8 +235,8 @@ where
                         self.handle_report(&block_output, &replay_record, &compare_report)?;
                     }
                     Err(err) => {
-                        // A tx variant we don't yet handle (e.g. system tx) — skip the
-                        // whole block rather than blocking the pipeline.
+                        // Tx conversion failed (e.g. malformed envelope) — skip
+                        // the whole block rather than blocking the pipeline.
                         tracing::warn!(
                             block_number = replay_record.block_context.block_number,
                             "Skipping REVM consistency check for block: {err:#}"

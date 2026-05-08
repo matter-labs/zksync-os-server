@@ -17,10 +17,14 @@ pub fn get_unpadded_code(full_bytecode: &[u8], account: &AccountProperties) -> B
 }
 
 /// Convert a ZkTransaction into a revm TxEnv for REVM re-execution.
+///
+/// `block_gas_limit` is used for system txs, whose own `gas_limit` is 0;
+/// the new revm rejects the tx if `gas_used_override` exceeds `gas_limit`.
 pub fn zk_tx_into_revm_tx(
     tx: &ZkTransaction,
     gas_used: u64,
     execution_status: bool,
+    block_gas_limit: u64,
     settlement_layer_chain_id: Option<U256>,
 ) -> anyhow::Result<ZKsyncTx<TxEnv>> {
     let caller = tx.signer();
@@ -40,10 +44,19 @@ pub fn zk_tx_into_revm_tx(
         access_list,
         to_mint,
         refund_recipient,
+        gas_limit,
     ) = match envelope {
-        zksync_os_types::ZkEnvelope::System(_) => {
-            anyhow::bail!("System transactions are not supported by REVM consistency checker");
-        }
+        zksync_os_types::ZkEnvelope::System(system_tx) => (
+            0,
+            Some(0),
+            U256::ZERO,
+            system_tx.input().clone(),
+            None,
+            Default::default(),
+            Default::default(),
+            None,
+            block_gas_limit,
+        ),
         zksync_os_types::ZkEnvelope::L2(l2_tx) => {
             let gas_price = l2_tx.max_fee_per_gas();
             let priority_fee = l2_tx.max_priority_fee_per_gas();
@@ -70,6 +83,7 @@ pub fn zk_tx_into_revm_tx(
                 access_list,
                 Default::default(),
                 None,
+                tx.gas_limit(),
             )
         }
         zksync_os_types::ZkEnvelope::L1(l1_tx) => {
@@ -83,6 +97,7 @@ pub fn zk_tx_into_revm_tx(
                 Default::default(),
                 inner.to_mint,
                 Some(inner.refund_recipient),
+                tx.gas_limit(),
             )
         }
         zksync_os_types::ZkEnvelope::Upgrade(upgrade_tx) => {
@@ -96,6 +111,7 @@ pub fn zk_tx_into_revm_tx(
                 Default::default(),
                 upgrade_tx.inner.to_mint,
                 Some(inner.refund_recipient),
+                tx.gas_limit(),
             )
         }
     };
@@ -105,9 +121,12 @@ pub fn zk_tx_into_revm_tx(
         None => TxKind::Create,
     };
 
+    // The `tx_type == 0x7d` value already triggers the service-tx code path in
+    // zksync-os-revm (validation skipped, no nonce/balance checks); no extra
+    // builder flag is required.
     let mut tx_env_builder = TxEnv::builder()
         .caller(caller)
-        .gas_limit(tx.gas_limit())
+        .gas_limit(gas_limit)
         .gas_price(gas_price)
         .kind(transact_to)
         .value(value)
