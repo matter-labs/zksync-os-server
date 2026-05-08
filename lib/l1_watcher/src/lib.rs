@@ -36,6 +36,11 @@ pub use persist_batch_watcher::L1PersistBatchWatcher;
 mod gateway_migration_watcher;
 pub use gateway_migration_watcher::GatewayMigrationWatcher;
 
+mod state_commitment;
+pub use state_commitment::{
+    LocalStateCommitmentReader, StateCommitmentError, StateCommitmentReader,
+};
+
 mod migration_finalized_watcher;
 pub use migration_finalized_watcher::MigrationFinalizedWatcher;
 

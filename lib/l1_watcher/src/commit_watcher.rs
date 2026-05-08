@@ -1,9 +1,13 @@
 use crate::committed_batch_provider::CommittedBatchProvider;
+use crate::state_commitment::StateCommitmentReader;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::Log;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::watch;
+use tokio::time::sleep;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
@@ -29,9 +33,12 @@ pub struct L1CommitWatcher<Finality> {
     committed_batch_provider: CommittedBatchProvider,
     finality: Finality,
     commit_submitted_rx: Option<watch::Receiver<u64>>,
+    // Recomputes `state_commitment` from local replay/state to cross-check against L1's value.
+    state_commitment_reader: Arc<dyn StateCommitmentReader>,
 }
 
 impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
         config: L1WatcherConfig,
         zk_chain: ZkChain<DynProvider>,
@@ -40,6 +47,7 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
         sl_block_initial_finality_init_at: u64,
         l1_chain_id: u64,
         commit_submitted_rx: Option<watch::Receiver<u64>>,
+        state_commitment_reader: Arc<dyn StateCommitmentReader>,
     ) -> anyhow::Result<L1Watcher> {
         let last_committed_batch = finality.get_finality_status().last_committed_batch;
         tracing::info!(
@@ -65,6 +73,7 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
             committed_batch_provider,
             finality,
             commit_submitted_rx,
+            state_commitment_reader,
         };
         L1Watcher::new(
             config,
@@ -122,11 +131,22 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
             tracing::debug!(batch_number, "discovered committed batch");
             let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
             let zk_chain = ZkChain::new(log.address(), provider.clone());
-            let batch_info = util::fetch_committed_batch_data(&zk_chain, tx_hash)
-                .await?
-                .into_stored();
+            let extended_batch_info =
+                util::fetch_committed_batch_data(&zk_chain, tx_hash).await?;
+
+            // Cross-check: recompute `state_commitment` from local replay/state and compare to
+            // the value L1 received in the commit calldata. Replay can lag the L1 commit by a
+            // small amount, so we retry on transient missing-data errors before giving up.
+            verify_state_commitment(
+                &*self.state_commitment_reader,
+                batch_number,
+                report.lastBlockNumber,
+                extended_batch_info.commit_info.new_state_commitment,
+            )
+            .await;
+
             let committed_batch = DiscoveredCommittedBatch {
-                batch_info,
+                batch_info: extended_batch_info.into_stored(),
                 block_range: report.firstBlockNumber..=report.lastBlockNumber,
             };
 
@@ -146,6 +166,70 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
             self.committed_batch_provider.insert(committed_batch);
         }
         Ok(())
+    }
+}
+
+/// Recomputes `state_commitment` from local replay/state for the batch's last block and asserts
+/// it matches what L1 saw in the commit calldata.
+///
+/// This runs at commit time, when the EN may not yet have replayed up to `last_block_number`
+/// (commit can land on L1 a few seconds before the EN's pipeline finishes the same blocks). We
+/// retry briefly on missing-data errors; any actual hash mismatch panics immediately because the
+/// EN's local state has diverged from the canonical chain and there is no safe recovery besides
+/// resyncing from a known-good source.
+async fn verify_state_commitment(
+    reader: &dyn StateCommitmentReader,
+    batch_number: u64,
+    last_block_number: u64,
+    expected: alloy::primitives::B256,
+) {
+    use crate::state_commitment::StateCommitmentError;
+
+    // Bounded retry to absorb the small replay-vs-commit race. Hours of waiting would mean
+    // something is broken, not racing — so we cap the wait.
+    const MAX_ATTEMPTS: usize = 60;
+    const RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
+    for attempt in 0..MAX_ATTEMPTS {
+        match reader.compute(last_block_number) {
+            Ok(actual) => {
+                if actual != expected {
+                    panic!(
+                        "state_commitment mismatch at batch {batch_number} (last block \
+                         {last_block_number}): local {actual:?}, L1 {expected:?}. The EN's \
+                         local replay diverged from the canonical chain; halting."
+                    );
+                }
+                return;
+            }
+            Err(
+                err @ (StateCommitmentError::MissingTreeInfo(_)
+                | StateCommitmentError::MissingBlockHeader(_)
+                | StateCommitmentError::MissingReplayRecord(_)),
+            ) => {
+                if attempt + 1 == MAX_ATTEMPTS {
+                    panic!(
+                        "state_commitment verification timed out for batch {batch_number} \
+                         (last block {last_block_number}): {err}. Local replay never reached \
+                         the L1-committed block."
+                    );
+                }
+                tracing::debug!(
+                    batch_number,
+                    last_block_number,
+                    attempt,
+                    %err,
+                    "local data not yet available for state_commitment check; retrying"
+                );
+                sleep(RETRY_INTERVAL).await;
+            }
+            Err(err) => {
+                panic!(
+                    "state_commitment verification failed for batch {batch_number} (last \
+                     block {last_block_number}): {err}"
+                );
+            }
+        }
     }
 }
 

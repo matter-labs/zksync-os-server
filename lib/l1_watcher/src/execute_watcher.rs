@@ -1,7 +1,9 @@
+use crate::state_commitment::{StateCommitmentError, StateCommitmentReader};
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{CommittedBatchProvider, L1WatcherConfig, ProcessL1Event, util};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
+use std::sync::Arc;
 use zksync_os_contract_interface::IExecutor::BlockExecution;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::WriteFinality;
@@ -31,6 +33,8 @@ struct ExecuteWatcherState<Finality> {
     next_batch_number: u64,
     committed_batch_provider: CommittedBatchProvider,
     finality: Finality,
+    // Recomputes `state_commitment` from local replay/state to cross-check against L1's value.
+    state_commitment_reader: Arc<dyn StateCommitmentReader>,
 }
 
 impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
@@ -40,6 +44,7 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         l1_chain_id: u64,
+        state_commitment_reader: Arc<dyn StateCommitmentReader>,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_executed_batch = finality.get_finality_status().last_executed_batch;
@@ -61,6 +66,7 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
                 next_batch_number: last_executed_batch + 1,
                 committed_batch_provider,
                 finality,
+                state_commitment_reader,
             },
         };
         L1Watcher::new(
@@ -84,6 +90,7 @@ impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
         zk_chain: ZkChain<DynProvider>,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
+        state_commitment_reader: Arc<dyn StateCommitmentReader>,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_finalized_executed_batch =
@@ -108,6 +115,7 @@ impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
                 next_batch_number: last_finalized_executed_batch + 1,
                 committed_batch_provider,
                 finality,
+                state_commitment_reader,
             },
         };
         Ok(L1Watcher::new_finalized(
@@ -145,6 +153,20 @@ impl<Finality: WriteFinality> ExecuteWatcherState<Finality> {
                 .wait_for_batch(batch_number)
                 .await;
             let last_executed_block = discovered_batch.last_block_number();
+
+            // Cross-check that the batch L1 just executed matches what the EN replayed locally.
+            // We use the `state_commitment` field — fully derivable from RocksDB (no pubdata) —
+            // and compare against L1's authoritative value carried in the commit calldata.
+            // By execute time, replay is guaranteed to have advanced past `last_executed_block`,
+            // so any missing-data error is a real error (no retry).
+            verify_state_commitment_at_execute(
+                &*self.state_commitment_reader,
+                batch_number,
+                last_executed_block,
+                discovered_batch.batch_info.state_commitment,
+                frontier,
+            );
+
             update_finality(&self.finality, batch_number, last_executed_block);
             tracing::info!(
                 "discovered executed batch {batch_number}, hash {batch_hash:?}, commitment {batch_commitment:?},\
@@ -152,6 +174,46 @@ impl<Finality: WriteFinality> ExecuteWatcherState<Finality> {
             );
         }
         Ok(())
+    }
+}
+
+/// Recomputes `state_commitment` from local data and panics if it disagrees with L1's value
+/// for this batch. See `commit_watcher::verify_state_commitment` for the rationale; this variant
+/// runs without retry because by the time L1 has executed a batch the EN has long since replayed
+/// past the corresponding blocks.
+fn verify_state_commitment_at_execute(
+    reader: &dyn StateCommitmentReader,
+    batch_number: u64,
+    last_block_number: u64,
+    expected: alloy::primitives::B256,
+    frontier: &'static str,
+) {
+    match reader.compute(last_block_number) {
+        Ok(actual) => {
+            if actual != expected {
+                panic!(
+                    "state_commitment mismatch at batch {batch_number} (last block \
+                     {last_block_number}, frontier {frontier}): local {actual:?}, L1 \
+                     {expected:?}. The EN's local replay diverged from the canonical chain; \
+                     halting."
+                );
+            }
+        }
+        Err(err) => match err {
+            StateCommitmentError::MissingTreeInfo(_)
+            | StateCommitmentError::MissingBlockHeader(_)
+            | StateCommitmentError::MissingReplayRecord(_) => {
+                panic!(
+                    "state_commitment verification failed at batch {batch_number} (last block \
+                     {last_block_number}, frontier {frontier}): {err}. Replay is expected to be \
+                     ahead of L1 execution; this indicates a corrupted local store."
+                );
+            }
+            _ => panic!(
+                "state_commitment verification failed at batch {batch_number} (last block \
+                 {last_block_number}, frontier {frontier}): {err}"
+            ),
+        },
     }
 }
 
