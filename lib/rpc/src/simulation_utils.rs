@@ -213,8 +213,8 @@ pub(crate) fn apply_simulate_block_overrides(
     if let Some(blob_base_fee) = overrides.blob_base_fee {
         block_context.blob_fee = blob_base_fee;
     }
-    // TODO: difficulty override is not propagated to BlockContext (ZKsync OS uses mix_hash
-    // for prevrandao), so it is silently ignored.
+    // Note: difficulty override is silently ignored — ZKsync OS uses mix_hash for prevrandao
+    // and has no separate difficulty field in BlockContext.
     if let Some(block_hash_overrides) = overrides.block_hash {
         let range_start = block_context.block_number.saturating_sub(256);
         for (block_number, block_hash) in

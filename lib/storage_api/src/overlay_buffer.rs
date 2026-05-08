@@ -8,7 +8,7 @@ use zksync_os_interface::types::StorageWrite;
 use crate::state_override_view::{OverrideProvider, OwnedOverrides};
 use crate::{OverriddenStateView, ReadStateHistory, ViewState};
 
-pub type BlockOverlay = OwnedOverrides;
+pub(crate) type BlockOverlay = OwnedOverrides;
 
 #[derive(Debug, Default, Clone)]
 pub struct OverlayBuffer {
