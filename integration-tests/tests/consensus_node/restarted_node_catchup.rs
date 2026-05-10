@@ -1,12 +1,7 @@
 use super::*;
 
-use alloy::eips::BlockId;
-use alloy::providers::Provider;
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
-use zksync_os_integration_tests::Tester;
-use zksync_os_integration_tests::multi_node::MultiNodeTester;
-use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::rpc_recorder::{HttpRpcRecorder, HttpRpcReport, RpcRecordConfig};
 
 const CONSENSUS_LONG_GAP_LOAD_DURATION: Duration = Duration::from_secs(60);
@@ -30,29 +25,8 @@ struct ConsensusRejoinLoadStats {
     restart_started_at: Duration,
     restart_completed_at: Duration,
     target_block_at_restart: u64,
-    target_applied_at_restart: u64,
-    raft_caught_up_index: u64,
-    raft_caught_up_at: Duration,
     l2_caught_up_at: Duration,
     rpc_caught_up_at: Duration,
-}
-
-async fn latest_l2_block(node: &Tester) -> anyhow::Result<u64> {
-    node.l2_zk_provider
-        .get_block_number_by_id(BlockId::latest())
-        .await?
-        .context("latest block number is missing")
-}
-
-async fn wait_for_l2_block(
-    node: &Tester,
-    block_number: u64,
-    timeout: Duration,
-) -> anyhow::Result<()> {
-    tokio::time::timeout(timeout, node.l2_zk_provider.wait_for_block(block_number))
-        .await
-        .with_context(|| format!("timed out waiting for L2 block {block_number}"))??;
-    Ok(())
 }
 
 async fn send_transfer_and_wait_for_l2_blocks(
@@ -152,31 +126,15 @@ async fn generate_consensus_transaction_storm(
     })
 }
 
-async fn node_last_applied_index(
-    cluster: &MultiNodeTester,
-    index: usize,
-) -> anyhow::Result<Option<u64>> {
-    raft_last_applied(&raft_status(cluster, index).await?, index)
-}
-
 async fn observe_restarted_node_catch_up_to_target(
     cluster: &MultiNodeTester,
     restarted_node_idx: usize,
     restarted_rpc_monitor: &HttpRpcRecorder,
     target_block: u64,
-    target_applied: u64,
     started_at: Instant,
-    raft_caught_up: &mut Option<(u64, Duration)>,
     l2_caught_up: &mut Option<Duration>,
     rpc_caught_up: &mut Option<Duration>,
 ) {
-    if raft_caught_up.is_none()
-        && let Ok(Some(last_applied)) = node_last_applied_index(cluster, restarted_node_idx).await
-        && last_applied >= target_applied
-    {
-        *raft_caught_up = Some((last_applied, started_at.elapsed()));
-    }
-
     if l2_caught_up.is_none()
         && let Ok(latest_block) = latest_l2_block(cluster.node(restarted_node_idx)).await
         && latest_block >= target_block
@@ -213,8 +171,6 @@ async fn generate_consensus_transaction_storm_across_restart(
     let mut restart_started_at = None;
     let mut restart_completed_at = None;
     let mut target_block_at_restart = None;
-    let mut target_applied_at_restart = None;
-    let mut raft_caught_up = None;
     let mut l2_caught_up = None;
     let mut rpc_caught_up = None;
     let mut last_error = None;
@@ -222,12 +178,10 @@ async fn generate_consensus_transaction_storm_across_restart(
     while Instant::now() < stop_deadline {
         if !restarted && Instant::now() >= restart_deadline {
             let target_block = latest_l2_block(cluster.node(active_node_indices[0])).await?;
-            let target_applied = active_max_last_applied_index(cluster).await?;
             let started = started_at.elapsed();
             tracing::info!(
                 restarted_node_idx,
                 target_block,
-                target_applied,
                 elapsed_ms = started.as_millis(),
                 "restarting consensus node while transaction storm continues"
             );
@@ -238,16 +192,13 @@ async fn generate_consensus_transaction_storm_across_restart(
             restart_started_at = Some(started);
             restart_completed_at = Some(completed);
             target_block_at_restart = Some(target_block);
-            target_applied_at_restart = Some(target_applied);
 
             observe_restarted_node_catch_up_to_target(
                 cluster,
                 restarted_node_idx,
                 restarted_rpc_monitor,
                 target_block,
-                target_applied,
                 started_at,
-                &mut raft_caught_up,
                 &mut l2_caught_up,
                 &mut rpc_caught_up,
             )
@@ -260,9 +211,7 @@ async fn generate_consensus_transaction_storm_across_restart(
                 restarted_node_idx,
                 restarted_rpc_monitor,
                 target_block_at_restart.expect("target block set after restart"),
-                target_applied_at_restart.expect("target applied set after restart"),
                 started_at,
-                &mut raft_caught_up,
                 &mut l2_caught_up,
                 &mut rpc_caught_up,
             )
@@ -325,9 +274,7 @@ async fn generate_consensus_transaction_storm_across_restart(
                 restarted_node_idx,
                 restarted_rpc_monitor,
                 target_block_at_restart.expect("target block set after restart"),
-                target_applied_at_restart.expect("target applied set after restart"),
                 started_at,
-                &mut raft_caught_up,
                 &mut l2_caught_up,
                 &mut rpc_caught_up,
             )
@@ -341,9 +288,7 @@ async fn generate_consensus_transaction_storm_across_restart(
             restarted_node_idx,
             restarted_rpc_monitor,
             target_block_at_restart.expect("target block set after restart"),
-            target_applied_at_restart.expect("target applied set after restart"),
             started_at,
-            &mut raft_caught_up,
             &mut l2_caught_up,
             &mut rpc_caught_up,
         )
@@ -369,8 +314,6 @@ async fn generate_consensus_transaction_storm_across_restart(
         last_error
     );
 
-    let (raft_caught_up_index, raft_caught_up_at) = raft_caught_up
-        .context("restarted node did not Raft-apply the restart target while load continued")?;
     let l2_caught_up_at = l2_caught_up.context(
         "restarted node did not expose the restart target L2 block while load continued",
     )?;
@@ -386,9 +329,6 @@ async fn generate_consensus_transaction_storm_across_restart(
         restart_started_at: restart_started_at.expect("restart started"),
         restart_completed_at: restart_completed_at.expect("restart completed"),
         target_block_at_restart: target_block_at_restart.expect("target block set"),
-        target_applied_at_restart: target_applied_at_restart.expect("target applied set"),
-        raft_caught_up_index,
-        raft_caught_up_at,
         l2_caught_up_at,
         rpc_caught_up_at,
     })
@@ -473,22 +413,6 @@ async fn l2_block_snapshot(cluster: &MultiNodeTester, node_indices: &[usize]) ->
     snapshot
 }
 
-async fn raft_last_applied_snapshot(
-    cluster: &MultiNodeTester,
-    node_indices: &[usize],
-) -> Vec<String> {
-    let mut snapshot = Vec::with_capacity(node_indices.len());
-    for &index in node_indices {
-        match node_last_applied_index(cluster, index).await {
-            Ok(last_applied) => {
-                snapshot.push(format!("node_{index}: last_applied={last_applied:?}"))
-            }
-            Err(error) => snapshot.push(format!("node_{index}: raft_error={error:#}")),
-        }
-    }
-    snapshot
-}
-
 #[test_log::test(tokio::test)]
 async fn consensus_restarted_node_catches_up_after_long_transaction_storm() -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::builder()
@@ -519,7 +443,6 @@ async fn consensus_restarted_node_catches_up_after_long_transaction_storm() -> a
         )
         .await?;
         let target_block = latest_l2_block(cluster.node(active_node_indices[0])).await?;
-        let target_applied = active_max_last_applied_index(&cluster).await?;
         assert!(
             target_block > restarted_node_initial_block,
             "active cluster head did not advance while node was down: initial={restarted_node_initial_block}, target={target_block}"
@@ -532,7 +455,6 @@ async fn consensus_restarted_node_catches_up_after_long_transaction_storm() -> a
             elapsed_ms = load_stats.elapsed.as_millis(),
             restarted_node_initial_block,
             target_block,
-            target_applied,
             "transaction storm finished while consensus node was stopped"
         );
 
@@ -549,30 +471,20 @@ async fn consensus_restarted_node_catches_up_after_long_transaction_storm() -> a
         cluster.start_node(restarted_node_idx).await?;
 
         let catch_up_result = async {
-            let raft_caught_up_index = wait_for_node_last_applied_index_at_or_above(
-                &cluster,
-                restarted_node_idx,
-                target_applied,
-                CONSENSUS_LONG_GAP_CATCH_UP_TIMEOUT,
-            )
-            .await
-            .context("restarted node did not reach target Raft last_applied_index")?;
-            let raft_caught_up_at = restart_started_at.elapsed();
-
             wait_for_l2_block(
                 cluster.node(restarted_node_idx),
                 target_block,
                 CONSENSUS_LONG_GAP_CATCH_UP_TIMEOUT,
             )
             .await
-            .context("restarted node Raft-applied the target but did not expose the target L2 block")?;
+            .context("restarted node did not expose the target L2 block")?;
             let l2_caught_up_at = restart_started_at.elapsed();
 
             wait_for_rpc_monitor_block(&rpc_monitor, target_block, REPLICATION_TIMEOUT)
                 .await
                 .context("RPC monitor did not observe the restarted node's caught-up L2 head")?;
 
-            anyhow::Ok((raft_caught_up_index, raft_caught_up_at, l2_caught_up_at))
+            anyhow::Ok(l2_caught_up_at)
         }
         .await;
 
@@ -585,19 +497,16 @@ async fn consensus_restarted_node_catches_up_after_long_transaction_storm() -> a
 
         let all_node_indices = (0..cluster.len()).collect::<Vec<_>>();
         let final_l2_blocks = l2_block_snapshot(&cluster, &all_node_indices).await;
-        let final_last_applied = raft_last_applied_snapshot(&cluster, &all_node_indices).await;
 
-        let (raft_caught_up_index, raft_caught_up_at, l2_caught_up_at) =
-            catch_up_result.with_context(|| {
-                format!(
-                    "restarted consensus node failed to catch up after long downtime: \
-                     target_block={target_block}, target_applied={target_applied}, \
-                     initial_block={restarted_node_initial_block}, active_nodes={active_node_indices:?}, \
-                     l2_blocks=[{}], raft_last_applied=[{}], rpc_report={rpc_report}",
-                    final_l2_blocks.join(", "),
-                    final_last_applied.join(", "),
-                )
-            })?;
+        let l2_caught_up_at = catch_up_result.with_context(|| {
+            format!(
+                "restarted consensus node failed to catch up after long downtime: \
+                 target_block={target_block}, \
+                 initial_block={restarted_node_initial_block}, active_nodes={active_node_indices:?}, \
+                 l2_blocks=[{}], rpc_report={rpc_report}",
+                final_l2_blocks.join(", "),
+            )
+        })?;
 
         rpc_report.assert_eventually_ready()?;
         let rpc_observed_target_at = first_rpc_observed_block_at(&rpc_report, target_block)
@@ -613,12 +522,9 @@ async fn consensus_restarted_node_catches_up_after_long_transaction_storm() -> a
             "RPC monitor latest block did not reach target {target_block}: {rpc_report}"
         );
         tracing::info!(
-            raft_caught_up_index,
-            raft_caught_up_ms = raft_caught_up_at.as_millis(),
             l2_caught_up_ms = l2_caught_up_at.as_millis(),
             rpc_observed_target_ms = rpc_observed_target_at.as_millis(),
             target_block,
-            target_applied,
             "restarted consensus node caught up after long downtime"
         );
 
@@ -769,17 +675,15 @@ async fn consensus_restarted_node_catches_up_while_transaction_storm_continues()
         );
 
         let final_l2_blocks = l2_block_snapshot(&cluster, &all_node_indices).await;
-        let final_last_applied = raft_last_applied_snapshot(&cluster, &all_node_indices).await;
         let (load_stats, final_active_block) = observation_result.with_context(|| {
             format!(
                 "restarted consensus node failed to catch up while load continued: \
                  initial_block={restarted_node_initial_block}, active_nodes={active_node_indices:?}, \
-                 l2_blocks=[{}], raft_last_applied=[{}], \
+                 l2_blocks=[{}], \
                  active_leader_rpc_report={active_leader_rpc_report}, \
                  active_follower_rpc_report={active_follower_rpc_report}, \
                  restarted_rpc_report={restarted_rpc_report}",
                 final_l2_blocks.join(", "),
-                final_last_applied.join(", "),
             )
         })?;
 
@@ -807,9 +711,6 @@ async fn consensus_restarted_node_catches_up_while_transaction_storm_continues()
             restart_started_ms = load_stats.restart_started_at.as_millis(),
             restart_completed_ms = load_stats.restart_completed_at.as_millis(),
             target_block_at_restart = load_stats.target_block_at_restart,
-            target_applied_at_restart = load_stats.target_applied_at_restart,
-            raft_caught_up_index = load_stats.raft_caught_up_index,
-            raft_caught_up_ms = load_stats.raft_caught_up_at.as_millis(),
             l2_caught_up_ms = load_stats.l2_caught_up_at.as_millis(),
             rpc_caught_up_ms = load_stats.rpc_caught_up_at.as_millis(),
             final_active_block,

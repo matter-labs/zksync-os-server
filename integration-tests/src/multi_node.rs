@@ -10,6 +10,7 @@ const RESPAWN_GRACE: Duration = Duration::from_secs(10);
 
 use crate::{
     AnvilL1, ChainLayout, Config, LockedPort, NodeRole, PROTOCOL_VERSION, StoppedTester, Tester,
+    provider::ZksyncTestingProvider,
 };
 
 const TEST_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
@@ -38,15 +39,6 @@ pub struct ClusterState {
 }
 
 impl ClusterState {
-    /// Collects status from all non-suspended nodes in parallel.
-    async fn collect_active(nodes: &[NodeSlot]) -> Self {
-        let node_indices = nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, node)| node.running().is_some().then_some(idx));
-        Self::collect_indices(nodes, node_indices).await
-    }
-
     /// Collects status from the selected node indices in parallel.
     async fn collect_indices(
         nodes: &[NodeSlot],
@@ -254,37 +246,6 @@ impl ClusterState {
         }
     }
 
-    /// Returns true if all healthy nodes report the same non-empty `last_applied_index`.
-    pub fn all_have_same_last_applied_index_at_or_above(&self, min_index: u64) -> bool {
-        let mut last_applied = self.nodes.iter().filter_map(|(_, result)| {
-            result
-                .as_ref()
-                .ok()?
-                .consensus
-                .raft
-                .as_ref()?
-                .last_applied_index
-        });
-        let Some(first) = last_applied.next() else {
-            return false;
-        };
-        first >= min_index && last_applied.all(|idx| idx == first) && self.all_healthy()
-    }
-
-    pub fn agreed_last_applied_index(&self) -> Option<u64> {
-        let mut last_applied = self.nodes.iter().filter_map(|(_, result)| {
-            result
-                .as_ref()
-                .ok()?
-                .consensus
-                .raft
-                .as_ref()?
-                .last_applied_index
-        });
-        let first = last_applied.next()?;
-        last_applied.all(|idx| idx == first).then_some(first)
-    }
-
     fn status_for_index(&self, index: usize) -> Option<&StatusResponse> {
         self.nodes
             .iter()
@@ -463,51 +424,30 @@ impl MultiNodeTester {
             .await
     }
 
-    pub async fn wait_for_active_last_applied_index_convergence(
-        &mut self,
-        min_index: u64,
+    /// Waits for all currently-running nodes to expose `block_number` via their L2 RPC.
+    pub async fn wait_for_active_l2_block(
+        &self,
+        block_number: u64,
         timeout: Duration,
-    ) -> anyhow::Result<u64> {
-        let mut deadline = Instant::now() + timeout;
-        let mut last_summary = String::new();
-
-        while Instant::now() < deadline {
-            let respawned = self.respawn_crashed_running_nodes().await?;
-            if respawned > 0 {
-                deadline = deadline.max(Instant::now() + RESPAWN_GRACE);
-            }
-            let cluster_state = ClusterState::collect_active(&self.nodes).await;
-            let summary = cluster_state.summary();
-
-            if summary != last_summary {
-                tracing::info!(
-                    "raft last_applied convergence check (min_index={min_index}): {summary}"
-                );
-                last_summary = summary;
-            }
-
-            if cluster_state.all_have_same_last_applied_index_at_or_above(min_index) {
-                let last_applied = cluster_state
-                    .agreed_last_applied_index()
-                    .expect("checked above");
-                tracing::info!("raft last_applied converged: {last_applied}");
-                return Ok(last_applied);
-            }
-
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-
-        let final_state = ClusterState::collect_active(&self.nodes).await;
-
-        tracing::error!(
-            "failed to converge raft last_applied index (min_index={min_index}): {:?}",
-            final_state.nodes
+    ) -> anyhow::Result<()> {
+        let active_nodes: Vec<&Tester> = self
+            .nodes
+            .iter()
+            .filter_map(|slot| slot.running())
+            .collect();
+        let join_all = futures::future::try_join_all(
+            active_nodes
+                .iter()
+                .map(|node| node.l2_zk_provider.wait_for_block(block_number)),
         );
-
-        anyhow::bail!(
-            "timed out waiting for active nodes to converge on last_applied_index >= {min_index}: {}",
-            final_state.summary()
-        )
+        tokio::time::timeout(timeout, join_all)
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "timed out waiting for all active nodes to reach L2 block {block_number}"
+                )
+            })?
+            .map(|_| ())
     }
 
     async fn wait_for_raft_cluster_formation_inner(

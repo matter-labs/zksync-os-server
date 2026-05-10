@@ -204,8 +204,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
 
     tracing::info!("Reading L1 state");
-    let l1_state = if node_role.is_main() {
-        // On the main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
+    let l1_state = if node_role.is_main() && config.batcher_config.enabled {
+        // The batcher node must wait for any pending L1 commit/prove/execute transactions
+        // (from a prior run) to be mined before starting, so it doesn't conflict with itself.
+        // Non-batcher consensus nodes never submit L1 transactions, so they don't need this
+        // wait: calling fetch_finalized on them would spuriously fail when a concurrently
+        // running batcher node keeps submitting new batch transactions.
         L1State::fetch_finalized(
             l1_provider.clone().erased(),
             gateway_provider.as_ref().map(|p| p.clone().erased()),
