@@ -414,33 +414,18 @@ impl MultiNodeTester {
             .await
     }
 
-    /// Same as `wait_for_raft_cluster_formation`, but only considers selected nodes.
-    pub async fn wait_for_raft_cluster_formation_among(
-        &mut self,
-        node_indices: &[usize],
-        timeout: Duration,
-    ) -> anyhow::Result<usize> {
-        self.wait_for_raft_cluster_formation_inner(node_indices, timeout)
-            .await
-    }
-
     /// Waits for all currently-running nodes to expose `block_number` via their L2 RPC.
     pub async fn wait_for_active_l2_block(
         &self,
         block_number: u64,
         timeout: Duration,
     ) -> anyhow::Result<()> {
-        let active_nodes: Vec<&Tester> = self
+        let waits = self
             .nodes
             .iter()
-            .filter_map(|slot| slot.running())
-            .collect();
-        let join_all = futures::future::try_join_all(
-            active_nodes
-                .iter()
-                .map(|node| node.l2_zk_provider.wait_for_block(block_number)),
-        );
-        tokio::time::timeout(timeout, join_all)
+            .filter_map(NodeSlot::running)
+            .map(|node| node.l2_zk_provider.wait_for_block(block_number));
+        tokio::time::timeout(timeout, futures::future::try_join_all(waits))
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
@@ -450,7 +435,8 @@ impl MultiNodeTester {
             .map(|_| ())
     }
 
-    async fn wait_for_raft_cluster_formation_inner(
+    /// Same as `wait_for_raft_cluster_formation`, but only considers selected nodes.
+    pub async fn wait_for_raft_cluster_formation_among(
         &mut self,
         node_indices: &[usize],
         timeout: Duration,

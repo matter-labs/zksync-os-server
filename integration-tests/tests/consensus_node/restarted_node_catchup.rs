@@ -192,25 +192,14 @@ async fn generate_consensus_transaction_storm_across_restart(
             restart_started_at = Some(started);
             restart_completed_at = Some(completed);
             target_block_at_restart = Some(target_block);
-
-            observe_restarted_node_catch_up_to_target(
-                cluster,
-                restarted_node_idx,
-                restarted_rpc_monitor,
-                target_block,
-                started_at,
-                &mut l2_caught_up,
-                &mut rpc_caught_up,
-            )
-            .await;
         }
 
-        if restarted {
+        if let Some(target) = target_block_at_restart {
             observe_restarted_node_catch_up_to_target(
                 cluster,
                 restarted_node_idx,
                 restarted_rpc_monitor,
-                target_block_at_restart.expect("target block set after restart"),
+                target,
                 started_at,
                 &mut l2_caught_up,
                 &mut rpc_caught_up,
@@ -267,27 +256,14 @@ async fn generate_consensus_transaction_storm_across_restart(
                 sleep(Duration::from_millis(200)).await;
             }
         }
-
-        if restarted {
-            observe_restarted_node_catch_up_to_target(
-                cluster,
-                restarted_node_idx,
-                restarted_rpc_monitor,
-                target_block_at_restart.expect("target block set after restart"),
-                started_at,
-                &mut l2_caught_up,
-                &mut rpc_caught_up,
-            )
-            .await;
-        }
     }
 
-    if restarted {
+    if let Some(target) = target_block_at_restart {
         observe_restarted_node_catch_up_to_target(
             cluster,
             restarted_node_idx,
             restarted_rpc_monitor,
-            target_block_at_restart.expect("target block set after restart"),
+            target,
             started_at,
             &mut l2_caught_up,
             &mut rpc_caught_up,
@@ -332,18 +308,6 @@ async fn generate_consensus_transaction_storm_across_restart(
         l2_caught_up_at,
         rpc_caught_up_at,
     })
-}
-
-fn first_rpc_observed_block_at(report: &HttpRpcReport, target_block: u64) -> Option<Duration> {
-    report
-        .samples
-        .iter()
-        .find(|sample| {
-            sample
-                .block_number
-                .is_some_and(|block| block >= target_block)
-        })
-        .map(|sample| sample.elapsed)
 }
 
 fn assert_rpc_monitor_stayed_ready(report: &HttpRpcReport) -> anyhow::Result<()> {
@@ -509,7 +473,8 @@ async fn consensus_restarted_node_catches_up_after_long_transaction_storm() -> a
         })?;
 
         rpc_report.assert_eventually_ready()?;
-        let rpc_observed_target_at = first_rpc_observed_block_at(&rpc_report, target_block)
+        let rpc_observed_target_at = rpc_report
+            .first_observed_block_at(target_block)
             .with_context(|| {
                 format!(
                     "RPC monitor never observed restarted node reaching target block {target_block}: {rpc_report}"
@@ -690,15 +655,15 @@ async fn consensus_restarted_node_catches_up_while_transaction_storm_continues()
         assert_rpc_monitor_stayed_ready(&active_leader_rpc_report)?;
         assert_rpc_monitor_stayed_ready(&active_follower_rpc_report)?;
         assert_rpc_monitor_recovered_after_outage(&restarted_rpc_report)?;
-        let active_leader_final_at =
-            first_rpc_observed_block_at(&active_leader_rpc_report, final_active_block)
-                .context("active leader RPC monitor never observed final active block")?;
-        let active_follower_final_at =
-            first_rpc_observed_block_at(&active_follower_rpc_report, final_active_block)
-                .context("active follower RPC monitor never observed final active block")?;
-        let restarted_final_at =
-            first_rpc_observed_block_at(&restarted_rpc_report, final_active_block)
-                .context("restarted RPC monitor never observed final active block")?;
+        let active_leader_final_at = active_leader_rpc_report
+            .first_observed_block_at(final_active_block)
+            .context("active leader RPC monitor never observed final active block")?;
+        let active_follower_final_at = active_follower_rpc_report
+            .first_observed_block_at(final_active_block)
+            .context("active follower RPC monitor never observed final active block")?;
+        let restarted_final_at = restarted_rpc_report
+            .first_observed_block_at(final_active_block)
+            .context("restarted RPC monitor never observed final active block")?;
 
         tracing::info!(
             attempts = load_stats.attempts,

@@ -226,6 +226,17 @@ impl HttpRpcReport {
             .map(|sample| sample.elapsed)
     }
 
+    pub fn first_observed_block_at(&self, target_block: u64) -> Option<Duration> {
+        self.samples
+            .iter()
+            .find(|sample| {
+                sample
+                    .block_number
+                    .is_some_and(|block| block >= target_block)
+            })
+            .map(|sample| sample.elapsed)
+    }
+
     pub fn first_error_at(&self) -> Option<Duration> {
         self.samples
             .iter()

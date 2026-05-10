@@ -24,22 +24,14 @@ fn consensus_test_keys(n: usize) -> Vec<zksync_os_network::SecretKey> {
         .collect()
 }
 
-async fn raft_status(
-    cluster: &MultiNodeTester,
-    index: usize,
-) -> anyhow::Result<zksync_os_status_server::StatusResponse> {
-    cluster.node(index).status().await
-}
-
-fn raft_node_id(
-    status: &zksync_os_status_server::StatusResponse,
-    index: usize,
-) -> anyhow::Result<String> {
-    status
+async fn raft_node_id(cluster: &MultiNodeTester, index: usize) -> anyhow::Result<String> {
+    cluster
+        .node(index)
+        .status()
+        .await?
         .consensus
         .raft
-        .as_ref()
-        .map(|raft| raft.node_id.clone())
+        .map(|raft| raft.node_id)
         .ok_or_else(|| anyhow::anyhow!("node {index} did not expose raft status"))
 }
 
@@ -66,12 +58,6 @@ async fn send_transfer(
     index: usize,
 ) -> anyhow::Result<alloy::rpc::types::TransactionReceipt> {
     let node = cluster.node(index);
-    send_transfer_to_node(node).await
-}
-
-async fn send_transfer_to_node(
-    node: &Tester,
-) -> anyhow::Result<alloy::rpc::types::TransactionReceipt> {
     let gas_price = node.l2_provider.get_gas_price().await?;
     let tx = TransactionRequest::default()
         .with_to(Address::random())
@@ -243,10 +229,7 @@ async fn consensus_cluster_rotates_leader_after_failure() -> anyhow::Result<()> 
         let initial_leader_idx = cluster
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
-        let initial_leader_node_id = raft_node_id(
-            &raft_status(&cluster, initial_leader_idx).await?,
-            initial_leader_idx,
-        )?;
+        let initial_leader_node_id = raft_node_id(&cluster, initial_leader_idx).await?;
 
         // Warm up follower replication before taking the leader down so the surviving
         // nodes have already exchanged append entries with the elected leader.
@@ -257,10 +240,7 @@ async fn consensus_cluster_rotates_leader_after_failure() -> anyhow::Result<()> 
         let new_leader_idx = cluster
             .wait_for_active_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
-        let new_leader_id = raft_node_id(
-            &raft_status(&cluster, new_leader_idx).await?,
-            new_leader_idx,
-        )?;
+        let new_leader_id = raft_node_id(&cluster, new_leader_idx).await?;
 
         assert_ne!(initial_leader_node_id, new_leader_id);
 
