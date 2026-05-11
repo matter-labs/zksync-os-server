@@ -8761,7 +8761,7 @@ checksum = "1e061d1b48cb8d38042de4ae0a7a6401009d6143dc80d2e2d6f31f0bdd6470c7"
 [[package]]
 name = "reth-chain-state"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -8792,7 +8792,7 @@ dependencies = [
 [[package]]
 name = "reth-chainspec"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-chains",
  "alloy-consensus",
@@ -8812,7 +8812,7 @@ dependencies = [
 [[package]]
 name = "reth-codecs"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -8832,7 +8832,7 @@ dependencies = [
 [[package]]
 name = "reth-codecs-derive"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8842,7 +8842,7 @@ dependencies = [
 [[package]]
 name = "reth-consensus"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
@@ -8855,7 +8855,7 @@ dependencies = [
 [[package]]
 name = "reth-db"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "derive_more 2.0.1",
@@ -8882,7 +8882,7 @@ dependencies = [
 [[package]]
 name = "reth-db-api"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-genesis",
@@ -8911,7 +8911,7 @@ dependencies = [
 [[package]]
 name = "reth-db-models"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -8926,7 +8926,7 @@ dependencies = [
 [[package]]
 name = "reth-discv4"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -8951,7 +8951,7 @@ dependencies = [
 [[package]]
 name = "reth-discv5"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -8975,7 +8975,7 @@ dependencies = [
 [[package]]
 name = "reth-dns-discovery"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "dashmap",
@@ -8997,7 +8997,7 @@ dependencies = [
 [[package]]
 name = "reth-ecies"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "aes",
  "alloy-primitives",
@@ -9025,7 +9025,7 @@ dependencies = [
 [[package]]
 name = "reth-engine-primitives"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9050,7 +9050,7 @@ dependencies = [
 [[package]]
 name = "reth-errors"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "reth-consensus",
  "reth-execution-errors",
@@ -9061,7 +9061,7 @@ dependencies = [
 [[package]]
 name = "reth-eth-wire"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -9088,7 +9088,7 @@ dependencies = [
 [[package]]
 name = "reth-eth-wire-types"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-chains",
  "alloy-consensus",
@@ -9109,7 +9109,7 @@ dependencies = [
 [[package]]
 name = "reth-ethereum-engine-primitives"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -9127,7 +9127,7 @@ dependencies = [
 [[package]]
 name = "reth-ethereum-forks"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-eip2124",
  "alloy-hardforks 0.4.7",
@@ -9140,7 +9140,7 @@ dependencies = [
 [[package]]
 name = "reth-ethereum-primitives"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9160,7 +9160,7 @@ dependencies = [
 [[package]]
 name = "reth-evm"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9182,7 +9182,7 @@ dependencies = [
 [[package]]
 name = "reth-evm-ethereum"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9204,7 +9204,7 @@ dependencies = [
 [[package]]
 name = "reth-execution-errors"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-evm",
  "alloy-primitives",
@@ -9217,7 +9217,7 @@ dependencies = [
 [[package]]
 name = "reth-execution-types"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9235,7 +9235,7 @@ dependencies = [
 [[package]]
 name = "reth-fs-util"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "serde",
  "serde_json",
@@ -9245,7 +9245,7 @@ dependencies = [
 [[package]]
 name = "reth-libmdbx"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "bitflags 2.11.0",
  "byteorder",
@@ -9261,7 +9261,7 @@ dependencies = [
 [[package]]
 name = "reth-mdbx-sys"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "bindgen",
  "cc",
@@ -9270,7 +9270,7 @@ dependencies = [
 [[package]]
 name = "reth-metrics"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "futures",
  "metrics",
@@ -9282,7 +9282,7 @@ dependencies = [
 [[package]]
 name = "reth-net-banlist"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "ipnet",
@@ -9291,7 +9291,7 @@ dependencies = [
 [[package]]
 name = "reth-net-nat"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "futures-util",
  "if-addrs",
@@ -9305,7 +9305,7 @@ dependencies = [
 [[package]]
 name = "reth-network"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9361,7 +9361,7 @@ dependencies = [
 [[package]]
 name = "reth-network-api"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
@@ -9385,7 +9385,7 @@ dependencies = [
 [[package]]
 name = "reth-network-p2p"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9408,7 +9408,7 @@ dependencies = [
 [[package]]
 name = "reth-network-peers"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -9423,7 +9423,7 @@ dependencies = [
 [[package]]
 name = "reth-network-types"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-eip2124",
  "reth-net-banlist",
@@ -9435,7 +9435,7 @@ dependencies = [
 [[package]]
 name = "reth-nippy-jar"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "anyhow",
  "bincode 1.3.3",
@@ -9452,7 +9452,7 @@ dependencies = [
 [[package]]
 name = "reth-node-types"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "reth-chainspec",
  "reth-db-api",
@@ -9464,7 +9464,7 @@ dependencies = [
 [[package]]
 name = "reth-payload-builder-primitives"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "pin-project 1.1.10",
  "reth-payload-primitives",
@@ -9476,7 +9476,7 @@ dependencies = [
 [[package]]
 name = "reth-payload-primitives"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9499,7 +9499,7 @@ dependencies = [
 [[package]]
 name = "reth-primitives"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9517,7 +9517,7 @@ dependencies = [
 [[package]]
 name = "reth-primitives-traits"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9551,7 +9551,7 @@ dependencies = [
 [[package]]
 name = "reth-provider"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9595,7 +9595,7 @@ dependencies = [
 [[package]]
 name = "reth-prune-types"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "arbitrary",
@@ -9611,7 +9611,7 @@ dependencies = [
 [[package]]
 name = "reth-revm"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "reth-primitives-traits",
@@ -9623,7 +9623,7 @@ dependencies = [
 [[package]]
 name = "reth-rpc-convert"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-evm",
@@ -9644,7 +9644,7 @@ dependencies = [
 [[package]]
 name = "reth-rpc-eth-types"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9692,7 +9692,7 @@ dependencies = [
 [[package]]
 name = "reth-rpc-server-types"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -9708,7 +9708,7 @@ dependencies = [
 [[package]]
 name = "reth-stages-types"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "arbitrary",
@@ -9722,7 +9722,7 @@ dependencies = [
 [[package]]
 name = "reth-static-file-types"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "derive_more 2.0.1",
@@ -9736,7 +9736,7 @@ dependencies = [
 [[package]]
 name = "reth-storage-api"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9760,7 +9760,7 @@ dependencies = [
 [[package]]
 name = "reth-storage-errors"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -9777,7 +9777,7 @@ dependencies = [
 [[package]]
 name = "reth-tasks"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "auto_impl",
  "dyn-clone",
@@ -9795,7 +9795,7 @@ dependencies = [
 [[package]]
 name = "reth-tokio-util"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "tokio",
  "tokio-stream",
@@ -9805,7 +9805,7 @@ dependencies = [
 [[package]]
 name = "reth-tracing"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "clap",
  "eyre",
@@ -9821,7 +9821,7 @@ dependencies = [
 [[package]]
 name = "reth-transaction-pool"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9865,7 +9865,7 @@ dependencies = [
 [[package]]
 name = "reth-trie"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -9891,7 +9891,7 @@ dependencies = [
 [[package]]
 name = "reth-trie-common"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
@@ -9918,7 +9918,7 @@ dependencies = [
 [[package]]
 name = "reth-trie-db"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "metrics",
@@ -9938,7 +9938,7 @@ dependencies = [
 [[package]]
 name = "reth-trie-sparse"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -9955,7 +9955,7 @@ dependencies = [
 [[package]]
 name = "reth-zstd-compressors"
 version = "1.11.1"
-source = "git+https://github.com/matter-labs/reth.git?branch=fix%2Fdiscv5-shutdown-v1.11.1#35a09721e0f1c2b8c95a18c03731abe4da4bafcb"
+source = "git+https://github.com/EmilLuta/reth.git?rev=2bb8f26ac1086a06ba6cf2fb413e9469756de766#2bb8f26ac1086a06ba6cf2fb413e9469756de766"
 dependencies = [
  "zstd",
 ]
@@ -14216,7 +14216,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_backpressure"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "futures",
  "reth-tasks",
@@ -14231,7 +14231,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_base_token_adjuster"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14248,7 +14248,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batch_types"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14269,7 +14269,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batch_verification"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14293,14 +14293,14 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batcher_metrics"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "vise",
 ]
 
 [[package]]
 name = "zksync_os_config_validation_macros"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -14309,7 +14309,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_consensus_types"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "openraft",
  "reth-network-peers",
@@ -14318,7 +14318,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_contract_interface"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14333,7 +14333,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_crypto"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "blake2",
@@ -14348,7 +14348,7 @@ checksum = "a7e143e8ed5c5b99fece20b77ebef0f0314a349b74c9a788b823e170a68df1de"
 
 [[package]]
 name = "zksync_os_external_price_api"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14370,7 +14370,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_gas_adjuster"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14385,7 +14385,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_generate_deposit"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14397,7 +14397,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_genesis"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14417,7 +14417,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_integration_tests"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14457,7 +14457,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_integration_tests_macros"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -14478,7 +14478,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_internal_config"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14489,7 +14489,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_interop_fee_updater"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14504,7 +14504,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_sender"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14526,7 +14526,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_watcher"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14551,7 +14551,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_mempool"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "auto_impl",
@@ -14576,7 +14576,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_merkle_tree"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14606,7 +14606,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_merkle_tree_api"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14619,14 +14619,14 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_metadata"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "semver 1.0.26",
 ]
 
 [[package]]
 name = "zksync_os_mini_merkle_tree"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "criterion",
@@ -14637,7 +14637,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_multivm"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14658,7 +14658,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_network"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -14697,7 +14697,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_observability"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -14725,7 +14725,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_operator_signer"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14735,7 +14735,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_pipeline"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -14749,7 +14749,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_priority_tree"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14771,7 +14771,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_raft"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -14797,7 +14797,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_reth_compat"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "reth-chainspec",
@@ -14813,7 +14813,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_revm_consistency_checker"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14852,7 +14852,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rocksdb"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "num_cpus",
  "once_cell",
@@ -14865,7 +14865,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -14914,7 +14914,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc_api"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -14985,7 +14985,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_sequencer"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -15018,7 +15018,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_server"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -15106,7 +15106,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -15125,7 +15125,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state_full_diffs"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -15143,7 +15143,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_status_server"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -15156,7 +15156,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
@@ -15179,7 +15179,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage_api"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -15207,7 +15207,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_tx_validators"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "tracing",
@@ -15217,7 +15217,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_types"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -15236,7 +15236,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_verify_storage_proof"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "alloy",
  "anyhow",
