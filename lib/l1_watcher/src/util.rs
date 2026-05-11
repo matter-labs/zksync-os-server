@@ -20,7 +20,7 @@ use zksync_os_types::ProtocolSemanticVersion;
 pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
 
 /// Finds the first block where `IChainAssetHandler::migrationNumber(chain_id) >= migration_number`
-/// using binary search.
+/// using binary search. Returns latest block if migration number is not reached yet.
 ///
 /// Used by both [`GatewayMigrationWatcher`][crate::GatewayMigrationWatcher] (on L1) and
 /// [`MigrationCompleteWatcher`][crate::MigrationCompleteWatcher] (on the current settlement layer)
@@ -36,6 +36,16 @@ pub async fn find_block_by_migration_number(
         zk_chain.provider().clone(),
     ));
     let target = U256::from(migration_number);
+    let latest = instance.provider().get_block_number().await?;
+    let latest_migration_number = instance
+        .migrationNumber(U256::from(chain_id))
+        .block(latest.into())
+        .call()
+        .await?;
+    // If this migration has not been reached yet, return the latest block.
+    if latest_migration_number < migration_number {
+        return Ok(latest);
+    }
 
     find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| {
         let instance = instance.clone();
