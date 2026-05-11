@@ -1,8 +1,8 @@
 use crate::config::{
     BackpressureConfig, BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig,
     Config, ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig,
-    GwSenderConfig, GenesisConfig, InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
-    MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig, ProverApiConfig,
+    GenesisConfig, GwSenderConfig, InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig,
+    MempoolConfig, MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig, ProverApiConfig,
     ProverInputGeneratorConfig, ProviderConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
