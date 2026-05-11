@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use openraft::Config;
 use openraft::error::{Fatal, RPCError, RaftError, ReplicationClosed, StreamingError, Unreachable};
-use openraft::network::{RPCOption, RaftNetwork, RaftNetworkFactory as RaftNetworkFactoryTrait};
+use openraft::network::{RPCOption, RaftNetwork, RaftNetworkFactory as OpenraftNetworkFactory};
 use openraft::raft::{
     AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, InstallSnapshotResponse,
     SnapshotResponse, VoteRequest, VoteResponse,
@@ -57,12 +57,12 @@ impl RaftRequestHandler for RaftRpcHandler {
 }
 
 #[derive(Clone)]
-pub struct RaftNetworkFactoryImpl {
+pub struct RaftNetworkFactory {
     router: RaftRouter,
     timeout: Duration,
 }
 
-impl RaftNetworkFactoryImpl {
+impl RaftNetworkFactory {
     pub fn new(
         router: RaftRouter,
         nodes: &BTreeMap<PeerId, RaftNode>,
@@ -87,24 +87,21 @@ impl RaftNetworkFactoryImpl {
     }
 }
 
-impl RaftNetworkFactoryTrait<RaftTypeConfig> for RaftNetworkFactoryImpl {
+impl OpenraftNetworkFactory<RaftTypeConfig> for RaftNetworkFactory {
     type Network = RaftNetworkClient;
 
     async fn new_client(&mut self, target: PeerId, _node: &RaftNode) -> Self::Network {
-        let factory = self.clone();
         tracing::debug!(
             "creating raft network client: target={target}, timeout_ms={}",
-            factory.timeout.as_millis()
+            self.timeout.as_millis()
         );
         RaftNetworkClient {
-            router: factory.router,
+            router: self.router.clone(),
             peer_id: target,
-            timeout: factory.timeout,
+            timeout: self.timeout,
         }
     }
 }
-
-pub type RaftNetworkFactory = RaftNetworkFactoryImpl;
 
 #[derive(Clone)]
 pub struct RaftNetworkClient {
@@ -138,10 +135,9 @@ impl RaftNetwork<RaftTypeConfig> for RaftNetworkClient {
         option: RPCOption,
     ) -> Result<AppendEntriesResponse<PeerId>, RPCError<PeerId, RaftNode, RaftError<PeerId>>> {
         let timeout_dur = std::cmp::min(self.timeout, option.hard_ttl());
-        let client = self.clone();
         tracing::debug!(
             "sending raft append_entries rpc to {:?} ({} entries: {}), prev_log_id: {}, timeout_ms={}",
-            client.peer_id,
+            self.peer_id,
             rpc.entries.len(),
             rpc.entries
                 .iter()
@@ -151,7 +147,7 @@ impl RaftNetwork<RaftTypeConfig> for RaftNetworkClient {
             rpc.prev_log_id.map(|id| id.index).unwrap_or_default(),
             timeout_dur.as_millis(),
         );
-        match client
+        match self
             .send_rpc(RaftRequest::AppendEntries(rpc), timeout_dur)
             .await?
         {
@@ -166,14 +162,13 @@ impl RaftNetwork<RaftTypeConfig> for RaftNetworkClient {
         option: RPCOption,
     ) -> Result<VoteResponse<PeerId>, RPCError<PeerId, RaftNode, RaftError<PeerId>>> {
         let timeout_dur = std::cmp::min(self.timeout, option.hard_ttl());
-        let client = self.clone();
         tracing::debug!(
             "sending raft vote rpc to {:?} for leader {:?} (timeout_ms={})",
-            client.peer_id,
+            self.peer_id,
             rpc.vote.leader_id,
             timeout_dur.as_millis(),
         );
-        match client.send_rpc(RaftRequest::Vote(rpc), timeout_dur).await? {
+        match self.send_rpc(RaftRequest::Vote(rpc), timeout_dur).await? {
             RaftResponse::Vote(r) => Ok(r),
             other => unreachable!("vote rpc returned wrong response variant: {other:?}"),
         }
@@ -188,13 +183,12 @@ impl RaftNetwork<RaftTypeConfig> for RaftNetworkClient {
         RPCError<PeerId, RaftNode, RaftError<PeerId, openraft::error::InstallSnapshotError>>,
     > {
         let timeout_dur = std::cmp::min(self.timeout, option.hard_ttl());
-        let client = self.clone();
         tracing::debug!(
             "sending raft install_snapshot rpc to {} (timeout_ms={})",
-            client.peer_id,
+            self.peer_id,
             timeout_dur.as_millis(),
         );
-        match client
+        match self
             .send_rpc(RaftRequest::InstallSnapshot(rpc), timeout_dur)
             .await?
         {

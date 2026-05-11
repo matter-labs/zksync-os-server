@@ -15,7 +15,6 @@ const CLUSTER_FORMATION_TIMEOUT: Duration = Duration::from_secs(20);
 const REPLICATION_TIMEOUT: Duration = Duration::from_secs(20);
 const L1_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[path = "consensus_node/restarted_node_catchup.rs"]
 mod restarted_node_catchup;
 
 fn consensus_test_keys(n: usize) -> Vec<zksync_os_network::SecretKey> {

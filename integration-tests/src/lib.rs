@@ -280,7 +280,6 @@ pub struct Tester {
     // Needed to be able to connect external nodes
     node_record: NodeRecord,
     l2_rpc_address: String,
-    #[allow(dead_code)]
     status_server_url: String,
     gateway_rpc_url: Option<String>,
     sl_provider: EthDynProvider,

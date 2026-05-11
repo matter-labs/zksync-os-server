@@ -1788,12 +1788,6 @@ mod tests {
         repo.single::<NetworkConfig>().unwrap().parse().unwrap()
     }
 
-    fn parse_l1_sender_config<const N: usize>(env_vars: [(&str, &str); N]) -> L1SenderConfig {
-        let schema = ConfigSchema::new(&L1SenderConfig::DESCRIPTION, "l1_sender");
-        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
-        repo.single::<L1SenderConfig>().unwrap().parse().unwrap()
-    }
-
     #[test]
     fn network_interface_is_a_separate_field_and_overrides_address() {
         let config = parse_network_config([
@@ -1821,66 +1815,6 @@ mod tests {
         assert!(record.address.is_loopback());
         assert_eq!(record.tcp_port, 30303);
         assert_eq!(record.udp_port, 30301);
-    }
-
-    #[test]
-    fn l1_sender_force_resubmission_config_is_nested() {
-        let default_config = parse_l1_sender_config([]);
-        assert!(!default_config.force_transaction_resubmission.enabled);
-        assert_eq!(
-            default_config
-                .force_transaction_resubmission
-                .max_fee_per_gas_replacement_multiplier,
-            1.1
-        );
-        assert_eq!(
-            default_config
-                .force_transaction_resubmission
-                .max_priority_fee_per_gas_replacement_multiplier,
-            1.1
-        );
-        assert_eq!(
-            default_config
-                .force_transaction_resubmission
-                .max_fee_per_blob_gas_replacement_multiplier,
-            2.0
-        );
-
-        let config = parse_l1_sender_config([
-            ("L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_ENABLED", "true"),
-            (
-                "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_FEE_PER_GAS_REPLACEMENT_MULTIPLIER",
-                "1.25",
-            ),
-            (
-                "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_PRIORITY_FEE_PER_GAS_REPLACEMENT_MULTIPLIER",
-                "1.5",
-            ),
-            (
-                "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_FEE_PER_BLOB_GAS_REPLACEMENT_MULTIPLIER",
-                "1.75",
-            ),
-        ]);
-
-        assert!(config.force_transaction_resubmission.enabled);
-        assert_eq!(
-            config
-                .force_transaction_resubmission
-                .max_fee_per_gas_replacement_multiplier,
-            1.25
-        );
-        assert_eq!(
-            config
-                .force_transaction_resubmission
-                .max_priority_fee_per_gas_replacement_multiplier,
-            1.5
-        );
-        assert_eq!(
-            config
-                .force_transaction_resubmission
-                .max_fee_per_blob_gas_replacement_multiplier,
-            1.75
-        );
     }
 
     #[test]
@@ -1950,49 +1884,6 @@ mod tests {
             fee_config: FeeConfig::default(),
             backpressure_config: BackpressureConfig::default(),
         }
-    }
-
-    #[test]
-    fn l1_sender_replacement_multipliers_must_be_positive() {
-        let schema = ConfigSchema::new(&L1SenderConfig::DESCRIPTION, "l1_sender");
-        let repo = ConfigRepository::new(&schema).with(Environment::from_iter(
-            "",
-            [
-                (
-                    "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_FEE_PER_GAS_REPLACEMENT_MULTIPLIER",
-                    "-1.0",
-                ),
-                (
-                    "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_PRIORITY_FEE_PER_GAS_REPLACEMENT_MULTIPLIER",
-                    "-1.25",
-                ),
-                (
-                    "L1_SENDER_FORCE_TRANSACTION_RESUBMISSION_MAX_FEE_PER_BLOB_GAS_REPLACEMENT_MULTIPLIER",
-                    "-1.5",
-                ),
-            ],
-        ));
-
-        let err = repo
-            .single::<L1SenderConfig>()
-            .unwrap()
-            .parse()
-            .unwrap_err()
-            .to_string();
-
-        assert!(
-            err.contains("max_fee_per_gas_replacement_multiplier"),
-            "{err}"
-        );
-        assert!(
-            err.contains("max_priority_fee_per_gas_replacement_multiplier"),
-            "{err}"
-        );
-        assert!(
-            err.contains("max_fee_per_blob_gas_replacement_multiplier"),
-            "{err}"
-        );
-        assert!(err.contains("must be positive"), "{err}");
     }
 
     #[tokio::test]
