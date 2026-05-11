@@ -4,7 +4,7 @@ use crate::metrics::{TX_SUBMISSION, TxRejectionReason};
 use crate::{ReadRpcStorage, RpcConfig};
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
-use alloy::primitives::{B256, Bytes, U256};
+use alloy::primitives::{B256, Bytes, TxHash, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::transports::{RpcError, TransportErrorKind};
 use std::time::{Duration, Instant};
@@ -202,6 +202,13 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
                         &stored_tx.meta,
                     ));
                 }
+
+                if let Some(reason) = block.failed_transactions.get(&tx_hash) {
+                    return Err(EthSendRawTransactionSyncError::RejectedDuringExecution {
+                        tx_hash,
+                        reason: reason.clone(),
+                    });
+                }
             }
         })
         .await
@@ -308,6 +315,13 @@ pub enum EthSendRawTransactionSyncError {
     /// Timeout while waiting for transaction receipt.
     #[error("The transaction was added to the mempool but wasn't processed within {0:?}.")]
     Timeout(Duration),
+    /// The sequencer picked up the transaction but the VM rejected it during block
+    /// building, so it will not be included in any block.
+    #[error("transaction {tx_hash} was rejected during execution: {reason}")]
+    RejectedDuringExecution {
+        tx_hash: TxHash,
+        reason: InvalidTransaction,
+    },
 }
 
 /// Records mempool insertion latency on drop, capturing errors and async cancellations.

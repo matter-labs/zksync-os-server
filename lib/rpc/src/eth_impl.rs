@@ -789,10 +789,14 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         self.tx_handler
             .send_raw_transaction_sync_impl(bytes, max_wait_ms)
             .await
-            .inspect_err(|err| {
-                if let EthSendRawTransactionSyncError::Regular(inner) = err {
+            .inspect_err(|err| match err {
+                EthSendRawTransactionSyncError::Regular(inner) => {
                     TX_SUBMISSION.rejections[&TxRejectionReason::from(inner)].inc();
                 }
+                EthSendRawTransactionSyncError::RejectedDuringExecution { .. } => {
+                    TX_SUBMISSION.rejections[&TxRejectionReason::RejectedDuringExecution].inc();
+                }
+                EthSendRawTransactionSyncError::Timeout(_) => {}
             })
             .to_rpc_result()
     }

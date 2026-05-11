@@ -4,6 +4,7 @@ use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Sealed, TxHash, T
 use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::ops::Range;
+use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_rocksdb::rocksdb;
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
@@ -87,6 +88,7 @@ pub trait WriteRepository: ReadRepository {
         &self,
         block_output: BlockOutput,
         transactions: Vec<ZkTransaction>,
+        failed_transactions: Vec<(TxHash, InvalidTransaction)>,
     ) -> impl Future<Output = RepositoryResult<()>> + Send;
 }
 

@@ -1,5 +1,6 @@
+use alloy::eips::Encodable2718;
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{Address, U256, utils::parse_ether};
+use alloy::primitives::{Address, TxKind, U256, utils::parse_ether};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
@@ -59,6 +60,46 @@ async fn unauthorized_address_deploy_is_rejected() -> Result<()> {
     timeout(Duration::from_secs(1), pending.get_receipt())
         .await
         .expect_err("deploy from unauthorized address should not produce a receipt");
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn send_raw_transaction_sync_surfaces_filter_rejection() -> Result<()> {
+    // `eth_sendRawTransactionSync` should surface VM rejections from the deployment
+    // filter (FilteredByValidator → Purge) as a concrete error, not as a timeout.
+    let (mc, unauthorized) = setup().await?;
+    let chain = mc.chain(0);
+    let wallet = chain.l2_provider.wallet().clone();
+
+    let fees = chain.l2_provider.estimate_eip1559_fees().await?;
+    let tx = TransactionRequest::default()
+        .from(unauthorized)
+        .with_chain_id(chain.l2_provider.get_chain_id().await?)
+        .with_kind(TxKind::Create)
+        .with_input(EventEmitter::BYTECODE.clone())
+        .with_nonce(
+            chain
+                .l2_provider
+                .get_transaction_count(unauthorized)
+                .await?,
+        )
+        .with_max_fee_per_gas(fees.max_fee_per_gas)
+        .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
+        .with_gas_limit(2_000_000);
+    let tx_envelope = tx.build(&wallet).await?;
+    let encoded = tx_envelope.encoded_2718();
+
+    let error = chain
+        .l2_provider
+        .send_raw_transaction_sync(&encoded)
+        .await
+        .expect_err("deploy from unauthorized address should be rejected");
+    let msg = error.to_string();
+    assert!(
+        msg.contains("rejected during execution") && msg.contains("FilteredByValidator"),
+        "expected execution rejection error, got: {msg}"
+    );
 
     Ok(())
 }

@@ -1,6 +1,7 @@
-use alloy::primitives::B256;
+use alloy::primitives::{B256, TxHash};
 use std::fmt::Display;
 use std::time::Duration;
+use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_mempool::MarkingTxStream;
 use zksync_os_pipeline::HasBlockRangeEnd;
@@ -37,6 +38,10 @@ pub struct BlockPayload {
     pub output: BlockOutput,
     pub record: ReplayRecord,
     pub command_type: BlockCommandType,
+    /// L2 transactions the VM rejected during block building (purged from the mempool).
+    /// Surfaced downstream so RPC subscribers (e.g. `eth_sendRawTransactionSync`) can
+    /// report a concrete reason instead of timing out.
+    pub failed_transactions: Vec<(TxHash, InvalidTransaction)>,
 }
 
 impl HasBlockRangeEnd for BlockPayload {

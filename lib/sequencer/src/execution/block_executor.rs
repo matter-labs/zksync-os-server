@@ -182,7 +182,7 @@ where
             self.block_context_provider
                 .on_canonical_state_change(&block_output, &replay_record, strict_subpool_cleanup)
                 .await;
-            let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
+            let purged_txs_hashes = purged_txs.iter().map(|(hash, _)| *hash).collect();
             self.block_context_provider
                 .purge_transactions(purged_txs_hashes);
 
@@ -207,6 +207,7 @@ where
                     output: block_output.clone(),
                     record: replay_record.clone(),
                     command_type: cmd_type,
+                    failed_transactions: purged_txs,
                 },
                 &state_reporter,
             )?;

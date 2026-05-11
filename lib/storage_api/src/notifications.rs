@@ -7,11 +7,17 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
+use zksync_os_interface::error::InvalidTransaction;
 
 #[derive(Debug, Clone)]
 pub struct BlockNotification {
     pub block: Arc<RepositoryBlock>,
     pub transactions: HashMap<TxHash, Arc<StoredTxData>>,
+    /// Transactions that the sequencer attempted to include in this block but the
+    /// VM rejected as invalid. They are not part of the canonical block, but RPC
+    /// subscribers (e.g. `eth_sendRawTransactionSync`) use this to surface a
+    /// rejection reason instead of waiting until timeout.
+    pub failed_transactions: HashMap<TxHash, InvalidTransaction>,
 }
 
 /// A type that allows to register block subscriptions.
