@@ -93,23 +93,26 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             // prepared its first block. In that startup window, fall back to a
             // synthesized pending block context derived from current state so
             // the policy is still consulted (block-build remains authoritative).
-            // Copy the watch ref before await so the future stays `Send`.
-            let block_context = self
-                .last_constructed_block_context
-                .borrow()
-                .unwrap_or_else(|| build_pending_block_context(&self.storage, self.chain_id));
-            let storage_view = self
-                .storage
-                .state_at_block_number_or_latest(block_context.block_number)
-                .map_err(|err| EthSendRawTransactionError::JudgeSimFailed(err.into()))?;
+            // Copy the watch ref before the move so the future stays `Send`.
+            let last_block_ctx = *self.last_constructed_block_context.borrow();
+            let storage = self.storage.clone();
+            let chain_id = self.chain_id;
             let zk_tx: ZkTransaction = l2_tx.clone().into();
             let policy_client = policy_client.clone();
-            // `spawn_blocking`: the sim is CPU-bound and the validator
-            // hooks call `Handle::block_on` internally, which would
-            // panic on a runtime worker thread. Note: dropping the
-            // outer future (RPC client disconnect) does not cancel
-            // this task; admit and judge fire to completion.
+            // `spawn_blocking`: the body has blocking I/O and VM execution.
+            //
+            // TODO: dropping the outer future (RPC client disconnect) does not cancel
+            // this task; admit and judge fire to completion. Era stops VM execution on
+            // disconnect via a stop token embedded in the tracer and checked during
+            // storage operations:
+            // https://github.com/matter-labs/zksync-era/blob/main/core/lib/vm_executor/src/oneshot/mod.rs
+            // To be worth implementing it would also need to cover `eth_call` and
+            // `eth_estimateGas`, which currently run under `#[method(blocking)]`.
             let sim = tokio::task::spawn_blocking(move || {
+                let block_context = last_block_ctx
+                    .unwrap_or_else(|| build_pending_block_context(&storage, chain_id));
+                let storage_view =
+                    storage.state_at_block_number_or_latest(block_context.block_number)?;
                 let mut policy_session = policy_client.session(AccessType::Write);
                 let mut tracer = policy_session.paired_tracer();
                 crate::sandbox::execute_with(

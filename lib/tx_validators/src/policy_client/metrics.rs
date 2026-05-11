@@ -1,5 +1,8 @@
 use std::time::Duration;
-use vise::{Buckets, Counter, EncodeLabelSet, EncodeLabelValue, Family, Histogram, Metrics, Unit};
+use vise::{
+    Buckets, Counter, EncodeLabelSet, EncodeLabelValue, Family, Histogram, Metrics, MetricsFamily,
+    Unit,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelSet, EncodeLabelValue)]
 #[metrics(label = "outcome", rename_all = "snake_case")]
@@ -19,6 +22,16 @@ pub enum ErrorKind {
     Status,
     MalformedResponse,
     ProtocolVersionMismatch,
+}
+
+/// Which call site this `PolicyClient` instance is serving. Stamped on the
+/// client at construction time so admit / judge metrics partition cleanly
+/// between the RPC boundary and the sequencer's block-build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelSet, EncodeLabelValue)]
+#[metrics(label = "component", rename_all = "snake_case")]
+pub enum Component {
+    Rpc,
+    Sequencer,
 }
 
 #[derive(Debug, Metrics)]
@@ -55,4 +68,5 @@ pub struct PolicyClientMetrics {
 }
 
 #[vise::register]
-pub(crate) static POLICY_CLIENT_METRICS: vise::Global<PolicyClientMetrics> = vise::Global::new();
+pub(crate) static POLICY_CLIENT_METRICS: MetricsFamily<Component, PolicyClientMetrics> =
+    MetricsFamily::new();

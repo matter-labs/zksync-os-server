@@ -9,21 +9,19 @@ use std::time::Duration;
 
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
-use serde::{Serialize, de::DeserializeOwned};
+
+use super::wire::{AdmitRequest, JudgeRequest, PolicyResponse};
 
 /// Errors raised by the transport layer at request time. All of these are
 /// treated as fail-closed by `PolicyClient`; the caller never branches on the
-/// variant.
+/// variant. Granularity for metric labels comes from the underlying
+/// `reqwest::Error` (see `is_decode` / `is_connect` / `status` / `is_timeout`).
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("request error: {0}")]
-    Request(reqwest::Error),
-    #[error("non-success status: {0}")]
-    NonSuccessStatus(reqwest::StatusCode),
+    Request(#[from] reqwest::Error),
     #[error("timed out after {0:?}")]
     Timeout(Duration),
-    #[error("response body is not valid JSON or missing required fields")]
-    MalformedResponse,
     #[error("response protocolVersion does not match expected")]
     ProtocolVersionMismatch,
 }
@@ -65,16 +63,14 @@ impl Transport {
                 headers.insert(AUTHORIZATION, auth_value);
                 let client = reqwest::Client::builder()
                     .default_headers(headers)
-                    .build()
-                    .map_err(TransportError::Request)?;
+                    .build()?;
                 Ok(Self { client, base_url })
             }
             TransportConfig::Unix { socket_path } => {
                 let client = reqwest::Client::builder()
                     .default_headers(Self::base_headers())
                     .unix_socket(socket_path)
-                    .build()
-                    .map_err(TransportError::Request)?;
+                    .build()?;
                 Ok(Self {
                     client,
                     base_url: "http://localhost".to_owned(),
@@ -89,44 +85,34 @@ impl Transport {
         headers
     }
 
-    pub async fn post_admit<R: Serialize, D: DeserializeOwned>(
+    pub async fn post_admit(
         &self,
-        request: &R,
-    ) -> Result<D, TransportError> {
+        request: &AdmitRequest<'_>,
+    ) -> Result<PolicyResponse, TransportError> {
         self.post("/admit", request).await
     }
 
-    pub async fn post_judge<R: Serialize, D: DeserializeOwned>(
+    pub async fn post_judge(
         &self,
-        request: &R,
-    ) -> Result<D, TransportError> {
+        request: &JudgeRequest<'_>,
+    ) -> Result<PolicyResponse, TransportError> {
         self.post("/judge", request).await
     }
 
-    async fn post<R: Serialize, D: DeserializeOwned>(
+    async fn post<R: serde::Serialize>(
         &self,
         path: &str,
         request: &R,
-    ) -> Result<D, TransportError> {
+    ) -> Result<PolicyResponse, TransportError> {
         let url = format!("{}{path}", self.base_url);
-        let response = self
+        Ok(self
             .client
             .post(url)
             .json(request)
             .send()
-            .await
-            .map_err(TransportError::Request)?
-            .error_for_status()
-            .map_err(|e: reqwest::Error| match e.status() {
-                Some(status) => TransportError::NonSuccessStatus(status),
-                None => TransportError::Request(e),
-            })?;
-        response.json::<D>().await.map_err(|e: reqwest::Error| {
-            if e.is_decode() {
-                TransportError::MalformedResponse
-            } else {
-                TransportError::Request(e)
-            }
-        })
+            .await?
+            .error_for_status()?
+            .json::<PolicyResponse>()
+            .await?)
     }
 }

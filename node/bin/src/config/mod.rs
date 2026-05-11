@@ -12,7 +12,6 @@ use smart_config::value::SecretString;
 use smart_config::{
     ByteSize, ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig,
     EtherAmount, ErrorWithOrigin, ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
-    value::ExposeSecret,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
@@ -884,10 +883,10 @@ pub struct DeploymentFilterConfig {
 /// service).
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
-#[config(validate(Self::check_url, "URL must use scheme `http` or `unix`; `http://` requires auth_token"))]
+#[config(validate(Self::check_auth_required, "auth_token is required when using `http://` transport"))]
 pub struct PolicyServiceConfig {
     /// `http://host:port` or `unix:///path/to/socket`.
-    #[config(with = Serde![str])]
+    #[config(with = Serde![str], validate(check_url_scheme, "URL must use scheme `http` or `unix`"))]
     pub url: Option<url::Url>,
 
     /// Per-request timeout. Fail-closed on exceed.
@@ -1713,42 +1712,42 @@ impl TxValidatorConfig {
     }
 }
 
+fn check_url_scheme(url: &url::Url) -> Result<(), ErrorWithOrigin> {
+    match url.scheme() {
+        "http" | "unix" => Ok(()),
+        other => Err(ErrorWithOrigin::custom(format!(
+            "unsupported URL scheme `{other}`; expected `http` or `unix`"
+        ))),
+    }
+}
+
 impl PolicyServiceConfig {
-    fn check_url(&self) -> Result<(), ErrorWithOrigin> {
+    fn check_auth_required(&self) -> Result<(), ErrorWithOrigin> {
         let Some(url) = &self.url else { return Ok(()) };
-        match url.scheme() {
-            "http" => {
-                if self.auth_token.is_none() {
-                    return Err(ErrorWithOrigin::custom(
-                        "auth_token is required when using `http://` transport",
-                    ));
-                }
-            }
-            "unix" => {}
-            other => {
-                return Err(ErrorWithOrigin::custom(format!(
-                    "unsupported URL scheme `{other}`; expected `http` or `unix`"
-                )));
-            }
+        if url.scheme() == "http" && self.auth_token.is_none() {
+            return Err(ErrorWithOrigin::custom(
+                "auth_token is required when using `http://` transport",
+            ));
         }
         Ok(())
     }
 
     /// Build a `PolicyClient`, or `None` when no service is configured.
     /// Panics on invalid URL: config validation already ran at load time.
-    pub fn build_client(&self) -> Option<zksync_os_tx_validators::policy_client::PolicyClient> {
+    pub fn build_client(
+        &self,
+        component: zksync_os_tx_validators::policy_client::Component,
+    ) -> Option<zksync_os_tx_validators::policy_client::PolicyClient> {
         self.url.as_ref().map(|url| {
             zksync_os_tx_validators::policy_client::PolicyClient::new(
                 zksync_os_tx_validators::policy_client::Config {
                     url: url.to_string(),
+                    component,
                     request_timeout: self.request_timeout,
                     protocol_version: self.protocol_version.clone(),
                     expected_protocol_version: self.expected_protocol_version.clone(),
                     bypass_from: self.bypass_from.iter().copied().collect(),
-                    auth_token: self
-                        .auth_token
-                        .as_ref()
-                        .map(|s| s.expose_secret().to_owned()),
+                    auth_token: self.auth_token.clone(),
                 },
             )
             .expect("failed to build PolicyClient from `policy_service`")
@@ -1779,7 +1778,7 @@ impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
                         .sequencer_config
                         .tx_validator
                         .policy_service
-                        .build_client(),
+                        .build_client(zksync_os_tx_validators::policy_client::Component::Sequencer),
                 }
             },
         }

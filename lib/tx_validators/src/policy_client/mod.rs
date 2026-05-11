@@ -14,23 +14,24 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alloy::primitives::Address;
-use serde::Serialize;
+use secrecy::SecretString;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{
     AnyTxValidator, BeginTxContext, TxValidationResult, TxValidator,
 };
 
+pub use self::metrics::Component;
 use self::metrics::{ErrorKind, Outcome, POLICY_CLIENT_METRICS};
 use self::tracer::TraceSlot;
 pub use self::tracer::{CallKind, CapturedFrame, Tracer};
 use self::transport::{Transport, TransportConfig, TransportError};
-use self::wire::{AdmitRequest, JudgeRequest, PolicyResponse};
+use self::wire::{AdmitRequest, JudgeRequest};
 
 /// Caller intent forwarded with each request. `Read` is for read-only
 /// simulations (`eth_call`); `Write` is for everything else, including
 /// `eth_estimateGas` (gas is state-dependent and would otherwise leak
 /// via the estimator).
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AccessType {
     Read,
@@ -41,6 +42,9 @@ pub enum AccessType {
 pub struct Config {
     /// `http://host:port` or `unix:///path/to.sock`.
     pub url: String,
+    /// Identifies which call site this client serves; partitions metrics so
+    /// RPC traffic and sequencer block-build traffic are reportable separately.
+    pub component: Component,
     pub request_timeout: Duration,
     pub protocol_version: String,
     /// If set, responses whose `protocolVersion` is not exactly equal are
@@ -53,13 +57,14 @@ pub struct Config {
     /// Bearer token sent as `Authorization: Bearer <token>` on every request.
     /// Required for `http://`; ignored (with a warning) for `unix://` where
     /// socket-path permissions are the access control.
-    pub auth_token: Option<String>,
+    pub auth_token: Option<SecretString>,
 }
 
 
 #[derive(Debug)]
 struct PolicyClientInner {
     transport: Transport,
+    component: Component,
     request_timeout: Duration,
     protocol_version: String,
     expected_protocol_version: Option<String>,
@@ -78,8 +83,7 @@ impl PolicyClient {
             "http" => TransportConfig::Http {
                 url: parsed,
                 auth_token: config.auth_token.clone()
-                    .expect("auth_token is required for http://; enforced by config validation")
-                    .into(),
+                    .expect("auth_token is required for http://; enforced by config validation"),
             },
             "unix" => {
                 if config.auth_token.is_some() {
@@ -100,6 +104,7 @@ impl PolicyClient {
             .map_err(|e| anyhow::anyhow!("failed to build transport: {e}"))?;
         Ok(Self(Arc::new(PolicyClientInner {
             transport,
+            component: config.component,
             request_timeout: config.request_timeout,
             protocol_version: config.protocol_version,
             expected_protocol_version: config.expected_protocol_version,
@@ -138,90 +143,85 @@ impl PolicySession {
         Tracer::new(self.slot.clone())
     }
 
+    fn metrics(&self) -> &'static metrics::PolicyClientMetrics {
+        &POLICY_CLIENT_METRICS[&self.client.component]
+    }
+
     async fn admit(&self, ctx: &BeginTxContext<'_>) -> TxValidationResult {
+        let metrics = self.metrics();
         if self.client.bypass_from.contains(&ctx.from) {
-            POLICY_CLIENT_METRICS.admit_bypassed.inc();
+            metrics.admit_bypassed.inc();
             return Ok(());
         }
         let request =
             AdmitRequest::from_context(ctx, &self.client.protocol_version, self.access_type);
         let started = Instant::now();
-        let result = self.post_and_parse(Endpoint::Admit, &request).await;
-        POLICY_CLIENT_METRICS.admit_latency.observe(started.elapsed());
+        let result = self.post_and_parse(Endpoint::Admit(request)).await;
+        metrics.admit_latency.observe(started.elapsed());
         match result {
             Ok(true) => {
-                POLICY_CLIENT_METRICS.admit_decisions[&Outcome::Allow].inc();
+                metrics.admit_decisions[&Outcome::Allow].inc();
                 Ok(())
             }
             Ok(false) => {
-                POLICY_CLIENT_METRICS.admit_decisions[&Outcome::Deny].inc();
+                metrics.admit_decisions[&Outcome::Deny].inc();
                 Err(InvalidTransaction::FilteredByValidator)
             }
             Err(err) => {
-                POLICY_CLIENT_METRICS.admit_errors[&classify_error(&err)].inc();
+                metrics.admit_errors[&classify_error(&err)].inc();
                 Err(InvalidTransaction::FilteredByValidator)
             }
         }
     }
 
     async fn judge(&self, from: Option<Address>, root: Option<CapturedFrame>) -> TxValidationResult {
+        let metrics = self.metrics();
         if let Some(from) = from
             && self.client.bypass_from.contains(&from)
         {
-            POLICY_CLIENT_METRICS.judge_bypassed.inc();
+            metrics.judge_bypassed.inc();
             return Ok(());
         }
         let request =
             JudgeRequest::new(&self.client.protocol_version, from, root.as_ref(), self.access_type);
         let started = Instant::now();
-        let result = self.post_and_parse(Endpoint::Judge, &request).await;
-        POLICY_CLIENT_METRICS.judge_latency.observe(started.elapsed());
+        let result = self.post_and_parse(Endpoint::Judge(request)).await;
+        metrics.judge_latency.observe(started.elapsed());
         match result {
             Ok(true) => {
-                POLICY_CLIENT_METRICS.judge_decisions[&Outcome::Allow].inc();
+                metrics.judge_decisions[&Outcome::Allow].inc();
                 Ok(())
             }
             Ok(false) => {
-                POLICY_CLIENT_METRICS.judge_decisions[&Outcome::Deny].inc();
+                metrics.judge_decisions[&Outcome::Deny].inc();
                 Err(InvalidTransaction::FilteredByValidator)
             }
             Err(err) => {
-                POLICY_CLIENT_METRICS.judge_errors[&classify_error(&err)].inc();
+                metrics.judge_errors[&classify_error(&err)].inc();
                 Err(InvalidTransaction::FilteredByValidator)
             }
         }
     }
 
-    async fn post_and_parse<R: Serialize>(
-        &self,
-        endpoint: Endpoint,
-        request: &R,
-    ) -> Result<bool, TransportError> {
+    async fn post_and_parse(&self, endpoint: Endpoint<'_>) -> Result<bool, TransportError> {
         let timeout = self.client.request_timeout;
-        let response = match endpoint {
-            Endpoint::Admit => {
-                tokio::time::timeout(
-                    timeout,
-                    self.client.transport.post_admit::<_, PolicyResponse>(request),
-                )
-                .await
+        let endpoint_name = endpoint.name();
+        let response = match &endpoint {
+            Endpoint::Admit(req) => {
+                tokio::time::timeout(timeout, self.client.transport.post_admit(req)).await
             }
-            Endpoint::Judge => {
-                tokio::time::timeout(
-                    timeout,
-                    self.client.transport.post_judge::<_, PolicyResponse>(request),
-                )
-                .await
+            Endpoint::Judge(req) => {
+                tokio::time::timeout(timeout, self.client.transport.post_judge(req)).await
             }
         };
         let parsed = match response {
             Ok(Ok(parsed)) => parsed,
             Ok(Err(err)) => {
-                tracing::warn!(?err, ?endpoint, "policy request failed");
+                tracing::warn!(?err, endpoint = endpoint_name, "policy request failed");
                 return Err(err);
             }
             Err(_) => {
-                tracing::warn!(?timeout, ?endpoint, "policy request timed out");
+                tracing::warn!(?timeout, endpoint = endpoint_name, "policy request timed out");
                 return Err(TransportError::Timeout(timeout));
             }
         };
@@ -231,7 +231,7 @@ impl PolicySession {
             tracing::warn!(
                 expected = %expected,
                 got = ?parsed.protocol_version,
-                ?endpoint,
+                endpoint = endpoint_name,
                 "policy response protocolVersion mismatch"
             );
             return Err(TransportError::ProtocolVersionMismatch);
@@ -242,7 +242,7 @@ impl PolicySession {
             tracing::info!(
                 rule_id = ?parsed.rule_id,
                 reason = ?parsed.reason,
-                ?endpoint,
+                endpoint = endpoint_name,
                 "policy denied"
             );
             Ok(false)
@@ -250,10 +250,18 @@ impl PolicySession {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-enum Endpoint {
-    Admit,
-    Judge,
+enum Endpoint<'a> {
+    Admit(AdmitRequest<'a>),
+    Judge(JudgeRequest<'a>),
+}
+
+impl Endpoint<'_> {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Admit(_) => "admit",
+            Self::Judge(_) => "judge",
+        }
+    }
 }
 
 impl AnyTxValidator for PolicySession {
@@ -284,15 +292,19 @@ impl TxValidator for PolicySession {
 fn classify_error(err: &TransportError) -> ErrorKind {
     match err {
         TransportError::Timeout(_) => ErrorKind::Timeout,
-        TransportError::NonSuccessStatus(_) => ErrorKind::Status,
+        TransportError::ProtocolVersionMismatch => ErrorKind::ProtocolVersionMismatch,
         TransportError::Request(e) => {
-            if e.is_connect() {
+            if e.is_timeout() {
+                ErrorKind::Timeout
+            } else if e.is_connect() {
                 ErrorKind::Connect
+            } else if e.is_decode() {
+                ErrorKind::MalformedResponse
+            } else if e.status().is_some() {
+                ErrorKind::Status
             } else {
                 ErrorKind::Http
             }
         }
-        TransportError::MalformedResponse => ErrorKind::MalformedResponse,
-        TransportError::ProtocolVersionMismatch => ErrorKind::ProtocolVersionMismatch,
     }
 }

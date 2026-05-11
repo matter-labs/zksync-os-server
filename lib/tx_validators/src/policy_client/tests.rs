@@ -17,7 +17,7 @@ use zksync_os_interface::tracing::{
     BeginTxContext, CallModifier, EvmRequest, EvmResources, EvmTracer, TxValidator,
 };
 
-use super::{AccessType, Config, PolicyClient, PolicySession, Tracer};
+use super::{AccessType, Component, Config, PolicyClient, PolicySession, Tracer};
 
 const FROM: Address = address!("0x1111111111111111111111111111111111111111");
 const TO: Address = address!("0x2222222222222222222222222222222222222222");
@@ -36,6 +36,7 @@ fn test_context() -> BeginTxContext<'static> {
 fn base_config(server: &MockServer) -> Config {
     Config {
         url: server.base_url(),
+        component: Component::Rpc,
         request_timeout: Duration::from_millis(500),
         protocol_version: "1".into(),
         expected_protocol_version: None,
@@ -133,6 +134,7 @@ async fn connection_refused_fails_closed() {
     };
     let client = PolicyClient::new(Config {
         url: format!("http://127.0.0.1:{port}"),
+        component: Component::Rpc,
         auth_token: Some("test-token".into()),
         request_timeout: Duration::from_millis(500),
         protocol_version: "1".into(),
@@ -248,6 +250,7 @@ async fn bearer_token_sent_when_configured() {
 fn unsupported_scheme_rejected_at_construction() {
     assert!(PolicyClient::new(Config {
         url: "ftp://example.com".into(),
+        component: Component::Rpc,
         auth_token: None,
         request_timeout: Duration::from_millis(500),
         protocol_version: "1".into(),
@@ -261,6 +264,7 @@ fn unsupported_scheme_rejected_at_construction() {
 fn invalid_url_rejected_at_construction() {
     assert!(PolicyClient::new(Config {
         url: "not a url".into(),
+        component: Component::Rpc,
         auth_token: None,
         request_timeout: Duration::from_millis(500),
         protocol_version: "1".into(),
@@ -274,6 +278,7 @@ fn invalid_url_rejected_at_construction() {
 fn http_url_accepted_at_construction() {
     let mut cfg = Config {
         url: "http://policy.local:9000".into(),
+        component: Component::Rpc,
         auth_token: Some("token".into()),
         request_timeout: Duration::from_millis(500),
         protocol_version: "1".into(),
@@ -288,6 +293,7 @@ fn http_url_accepted_at_construction() {
 fn https_url_rejected_at_construction() {
     assert!(PolicyClient::new(Config {
         url: "https://policy.local:9000".into(),
+        component: Component::Rpc,
         auth_token: None,
         request_timeout: Duration::from_millis(500),
         protocol_version: "1".into(),

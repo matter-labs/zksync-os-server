@@ -1098,7 +1098,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .sequencer_config
         .tx_validator
         .policy_service
-        .build_client();
+        .build_client(zksync_os_tx_validators::policy_client::Component::Rpc);
     zksync_os_rpc::spawn(
         config.rpc_config.into(),
         chain_id,
