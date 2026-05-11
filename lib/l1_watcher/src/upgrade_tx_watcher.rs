@@ -24,8 +24,6 @@ use zksync_os_types::{
 use zksync_os_contract_interface::IChainTypeManager::IChainTypeManagerInstance;
 use zksync_os_contract_interface::ISettlementLayerV31Upgrade::ISettlementLayerV31UpgradeInstance;
 
-/// Limit the number of L1 blocks to scan when looking for the set timestamp transaction.
-const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
 /// The constant value is higher than for other watchers, since we're looking for rare/specific events
 /// and we don't expect a lot of results.
 const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
@@ -88,21 +86,11 @@ impl L1UpgradeTxWatcher {
         let ctm_sl = zk_chain_sl.get_chain_type_manager().await?;
         tracing::info!(ctm_sl = ?ctm_sl, "resolved SL chain type manager");
 
-        let current_l1_block = zk_chain_l1.provider().get_block_number().await?;
-        let last_l1_block = find_l1_block_by_protocol_version(zk_chain_l1.clone(), current_protocol_version.clone())
-            .await
-            .or_else(|err| {
-                // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
-                // We default to `0` in this case - `eth_getLogs` are still supported.
-                // Assert that we don't fallback on longer chains (e.g. Sepolia)
-                if current_l1_block > INITIAL_LOOKBEHIND_BLOCKS {
-                    anyhow::bail!(
-                        "Binary search failed with {err}. Cannot default starting block to zero for a long chain. Current L1 block number: {current_l1_block}. Limit: {INITIAL_LOOKBEHIND_BLOCKS}."
-                    );
-                } else {
-                    Ok(0)
-                }
-            })?;
+        let last_l1_block = find_l1_block_by_protocol_version(
+            zk_chain_l1.clone(),
+            current_protocol_version.clone(),
+        )
+        .await?;
         // The configured bytecode supplier address is used as fallback for pre-v31 CTMs.
         // On v31+ CTMs, `resolve_active_bytecode_supplier` discovers the address dynamically.
         // Sanity check: make sure the fallback address has code deployed.

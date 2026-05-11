@@ -1,15 +1,12 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, U256};
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use tokio::sync::watch;
 use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_contract_interface::{Bridgehub, IChainAssetHandler::MigrationFinalized, ZkChain};
-
-/// Limit the number of SL blocks to scan when performing the initial binary search.
-const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
 
 /// Watches for `MigrationFinalized(uint256 indexed chainId, uint256 migrationNumber, ...)` events
 /// emitted by the `IChainAssetHandler` contract on the current settlement layer.
@@ -64,7 +61,6 @@ impl MigrationFinalizedWatcher {
         }
 
         let chain_asset_handler = bridgehub_sl.chain_asset_handler_address().await?;
-        let current_sl_block = zk_chain.provider().get_block_number().await?;
         // todo: not necessary to run binary search here, just use latest
         let starting_block = util::find_block_by_migration_number(
             zk_chain.clone(),
@@ -72,18 +68,7 @@ impl MigrationFinalizedWatcher {
             l2_chain_id,
             active_migration_number,
         )
-        .await
-        .or_else(|err| {
-            if current_sl_block > INITIAL_LOOKBEHIND_BLOCKS {
-                anyhow::bail!(
-                    "Binary search failed with {err}. Cannot default starting block to zero \
-                     for a long chain. Current SL block number: {current_sl_block}. \
-                     Limit: {INITIAL_LOOKBEHIND_BLOCKS}."
-                );
-            } else {
-                Ok(0)
-            }
-        })?;
+        .await?;
 
         tracing::info!(
             contract = %chain_asset_handler,
