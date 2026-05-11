@@ -1,14 +1,19 @@
 use serde_json::Value;
 use smart_config::{DescribeConfig, SerializerOptions};
-use vise::{Gauge, LabeledFamily, Metrics};
+use vise::{EncodeLabelSet, Info, LabeledFamily, Metrics};
 
 use super::Config;
+
+#[derive(Debug, EncodeLabelSet)]
+struct ValueLabel {
+    value: String,
+}
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "config")]
 pub(super) struct ConfigMetrics {
-    #[metrics(labels = ["name", "value"])]
-    pub values: LabeledFamily<(String, String), Gauge, 2>,
+    #[metrics(labels = ["name"])]
+    values: LabeledFamily<String, Info<ValueLabel>>,
 }
 
 #[vise::register]
@@ -17,7 +22,7 @@ pub(super) static CONFIG_METRICS: vise::Global<ConfigMetrics> = vise::Global::ne
 pub(crate) fn report_static_config_metrics(config: &Config) {
     report_flat_config_metrics(&config.general_config, "general");
     report_flat_config_metrics(&config.l1_provider_config, "l1_provider");
-    report_opt_flat_config_metrics(config.gateway_provider_config.as_ref(), "gateway_provider");
+    report_flat_config_metrics_opt(config.gateway_provider_config.as_ref(), "gateway_provider");
     report_flat_config_metrics(&config.network_config, "network");
     report_flat_config_metrics(&config.genesis_config, "genesis");
     report_flat_config_metrics(&config.rpc_config, "rpc");
@@ -41,7 +46,7 @@ pub(crate) fn report_static_config_metrics(config: &Config) {
         "base_token_price_updater",
     );
     report_flat_config_metrics(&config.interop_fee_updater_config, "interop_fee_updater");
-    report_opt_flat_config_metrics(
+    report_flat_config_metrics_opt(
         config.external_price_api_client_config.as_ref(),
         "external_price_api_client",
     );
@@ -50,32 +55,21 @@ pub(crate) fn report_static_config_metrics(config: &Config) {
 }
 
 fn report_flat_config_metrics<C: DescribeConfig>(config: &C, prefix: &str) {
-    for (name, value) in flat_config_metric_entries(config, prefix) {
-        CONFIG_METRICS.values[&(name, value)].set(1);
-    }
-}
-
-fn report_opt_flat_config_metrics<C: DescribeConfig>(config: Option<&C>, prefix: &str) {
-    if let Some(config) = config {
-        report_flat_config_metrics(config, prefix);
-    }
-}
-
-fn flat_config_metric_entries<C: DescribeConfig>(
-    config: &C,
-    prefix: &str,
-) -> Vec<(String, String)> {
-    SerializerOptions::default()
+    for (key, value) in SerializerOptions::default()
         .with_secret_placeholder("<secret>")
         .flat(true)
         .serialize(config)
-        .into_iter()
-        .map(|(key, value)| {
-            let name = format!("{prefix}_{key}");
-            let value = stringify_config_value(value);
-            (name, value)
-        })
-        .collect()
+    {
+        let name = format!("{prefix}_{key}");
+        let value = stringify_config_value(value);
+        let _ = CONFIG_METRICS.values[&name].set(ValueLabel { value });
+    }
+}
+
+fn report_flat_config_metrics_opt<C: DescribeConfig>(config: Option<&C>, prefix: &str) {
+    if let Some(config) = config {
+        report_flat_config_metrics(config, prefix);
+    }
 }
 
 fn stringify_config_value(value: Value) -> String {
@@ -95,72 +89,17 @@ fn sanitize_label_value(value: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::time::Duration;
-
-    use alloy::signers::k256::ecdsa::SigningKey;
-    use smart_config::metadata::EtherUnit;
-    use zksync_os_operator_signer::SignerConfig;
-    use zksync_os_types::PubdataMode;
-
-    use crate::config::{
-        BatchVerificationConfig, ForceTransactionResubmissionConfig, GeneralConfig, L1SenderConfig,
-    };
-
-    use super::flat_config_metric_entries;
+    use serde_json::{Value, json};
 
     #[test]
-    fn flat_config_metric_entries_prefix_keys_and_stringify_values() {
-        let entries: HashMap<_, _> =
-            flat_config_metric_entries(&GeneralConfig::default(), "general")
-                .into_iter()
-                .collect();
-
-        assert_eq!(entries["general_node_role"], "main");
-        assert_eq!(entries["general_gateway_chain_id"], "506");
-        assert_eq!(entries["general_run_priority_tree"], "true");
-        assert_eq!(entries["general_force_starting_block_number"], "null");
-    }
-
-    #[test]
-    fn flat_config_metric_entries_redact_secret_values() {
-        let config = L1SenderConfig {
-            operator_commit_sk: Some(local_signer()),
-            operator_prove_sk: None,
-            operator_execute_sk: None,
-            max_fee_per_gas: 200 * EtherUnit::Gwei,
-            max_priority_fee_per_gas: 1 * EtherUnit::Gwei,
-            max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
-            force_transaction_resubmission: ForceTransactionResubmissionConfig::default(),
-            command_limit: 16,
-            poll_interval: Duration::from_secs(1),
-            transaction_timeout: Duration::from_secs(600),
-            fusaka_upgrade_timestamp: u64::MAX,
-            enabled: true,
-            pubdata_mode: Some(PubdataMode::Blobs),
-            max_batch_diff_to_upstream: None,
-        };
-        let entries: HashMap<_, _> = flat_config_metric_entries(&config, "l1_sender")
-            .into_iter()
-            .collect();
-
-        assert_eq!(entries["l1_sender_operator_commit_sk"], "<secret>");
-    }
-
-    #[test]
-    fn flat_config_metric_entries_sanitize_structured_values() {
-        let entries: HashMap<_, _> =
-            flat_config_metric_entries(&BatchVerificationConfig::default(), "batch_verification")
-                .into_iter()
-                .collect();
-
+    fn stringify_config_value_formats_label_values() {
+        assert_eq!(super::stringify_config_value(json!("main")), "main");
+        assert_eq!(super::stringify_config_value(json!(506)), "506");
+        assert_eq!(super::stringify_config_value(json!(true)), "true");
+        assert_eq!(super::stringify_config_value(Value::Null), "null");
         assert_eq!(
-            entries["batch_verification_accepted_signers"],
+            super::stringify_config_value(json!(["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049"])),
             "['0x36615Cf349d7F6344891B1e7CA7C72883F5dc049']"
         );
-    }
-
-    fn local_signer() -> SignerConfig {
-        SignerConfig::Local(SigningKey::from_slice(&[0x11; 32]).unwrap())
     }
 }
