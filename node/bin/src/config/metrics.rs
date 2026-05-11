@@ -19,6 +19,10 @@ pub(super) struct ConfigMetrics {
 #[vise::register]
 pub(super) static CONFIG_METRICS: vise::Global<ConfigMetrics> = vise::Global::new();
 
+/// Report every top-level config for metrics
+/// Called once during initialization
+///
+/// If you rename or add a top-level config, you need to change the prefix or register here
 pub(crate) fn report_static_config_metrics(config: &Config) {
     report_flat_config_metrics(&config.general_config, "general");
     report_flat_config_metrics(&config.l1_provider_config, "l1_provider");
@@ -72,6 +76,8 @@ fn report_flat_config_metrics_opt<C: DescribeConfig>(config: Option<&C>, prefix:
     }
 }
 
+/// Make the serialized value suitable for prometheus export
+/// Some characters can break metrics
 fn stringify_config_value(value: Value) -> String {
     let value = match value {
         Value::String(value) => value,

@@ -134,6 +134,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     runtime: &Runtime,
     config: Config,
 ) {
+    report_static_config_metrics(&config);
+
     let node_role = config.general_config.node_role;
     let role: &'static str = node_role.as_str();
 
@@ -192,7 +194,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .leak();
     GENERAL_METRICS.fee_collector_address[&fee_collector_address].set(1);
     GENERAL_METRICS.chain_id.set(chain_id);
-    report_static_config_metrics(&config);
 
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
