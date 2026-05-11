@@ -307,6 +307,16 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let tree_db = tree_at_genesis.tree;
     let tree_for_rpc = Arc::new(tree_db.clone());
 
+    // Shared reader used by the L1 watchers to recompute `state_commitment` from local data and
+    // cross-check it against L1's value, catching any divergence between the EN's replay and the
+    // canonical chain.
+    let state_commitment_reader: Arc<dyn zksync_os_l1_watcher::StateCommitmentReader> =
+        Arc::new(zksync_os_l1_watcher::LocalStateCommitmentReader::new(
+            tree_for_rpc.clone(),
+            repositories.clone(),
+            block_replay_storage.clone(),
+        ));
+
     let committed_batch_provider = CommittedBatchProvider::new(
         runtime,
         &l1_state,
@@ -508,6 +518,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             l1_state.sl_block_number,
             node_startup_state.l1_state.l1_chain_id,
             node_role.is_main().then_some(commit_submitted_rx),
+            state_commitment_reader.clone(),
         )
         .await
         .expect("failed to start L1 commit watcher")
@@ -522,6 +533,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_batch_provider.clone(),
             finality_storage.clone(),
             node_startup_state.l1_state.l1_chain_id,
+            state_commitment_reader.clone(),
         )
         .await
         .expect("failed to start L1 execute watcher")
@@ -535,6 +547,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
+            state_commitment_reader.clone(),
         )
         .await
         .expect("failed to start finalized L1 execute watcher")

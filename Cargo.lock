@@ -14544,6 +14544,7 @@ dependencies = [
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_mempool",
+ "zksync_os_merkle_tree",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
