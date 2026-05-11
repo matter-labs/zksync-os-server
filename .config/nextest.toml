@@ -34,7 +34,7 @@ threads-required = 2
 [[profile.default.overrides]]
 # Consensus tests spin up 3 L2 nodes + an L1 anvil and have tight 20s raft
 # timeouts; without throttling, parallel scheduling causes flaky failures.
-filter = 'binary(consensus_node)'
+filter = 'test(~consensus)'
 threads-required = 6
 
 # Fast profile for local development — excludes the slowest integration tests.
