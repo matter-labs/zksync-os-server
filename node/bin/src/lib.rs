@@ -1748,12 +1748,21 @@ fn prepare_raft_storage(config: &Config) -> anyhow::Result<()> {
             path = %raft_storage_path.display(),
             "force-clearing persisted raft history before startup"
         );
-        std::fs::remove_dir_all(&raft_storage_path).with_context(|| {
+        // Use DB::destroy rather than remove_dir_all so that only files RocksDB
+        // tracks are removed; an arbitrary path misconfiguration cannot wipe more.
+        zksync_os_rocksdb::rocksdb::DB::destroy(
+            &zksync_os_rocksdb::rocksdb::Options::default(),
+            &raft_storage_path,
+        )
+        .with_context(|| {
             format!(
-                "failed to remove raft storage at {}",
+                "failed to destroy raft storage at {}",
                 raft_storage_path.display()
             )
         })?;
+        // DB::destroy leaves behind an empty directory; remove it so the next
+        // open starts completely clean (RocksDB recreates the dir on open).
+        let _ = std::fs::remove_dir(&raft_storage_path);
     }
 
     if !config.consensus_config.enabled && raft_storage_path_exists(&raft_storage_path)? {
