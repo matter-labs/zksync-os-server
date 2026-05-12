@@ -23,8 +23,8 @@ use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ConsensusNodeCommandSource, ExternalNodeCommandSource};
 use crate::config::{
-    Config, ProverApiConfig, ReplayArchiveConfig, ReplayArchiveEncryptionConfig,
-    base_token_price_updater_config, gas_adjuster_config, report_static_config_metrics,
+    Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
+    report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -102,9 +102,7 @@ use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, loopback_consensus,
 };
 use zksync_os_replay_archive::{
-    AgeEncryptedReplayArchiver, FileSystemReplayArchiveStorage, FileSystemReplayArchiver,
-    ReplayArchiveComponent, ReplayArchiveGateComponent, ReplayArchiveSender, ReplayArchiveSession,
-    ReplayArchiveStorage, ReplayArchiver,
+    ReplayArchiveGateComponent, ReplayArchiveSender, ReplayArchiver, init_replay_archive,
 };
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
@@ -949,7 +947,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     let replay_archive = if node_role.is_main() {
-        init_replay_archive(&config, runtime).await
+        init_replay_archive(config.replay_archive_config.clone().into(), runtime).await
     } else {
         None
     };
@@ -1066,64 +1064,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let startup_time = process_started_at.elapsed();
     GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
     tracing::info!("All components scheduled for initialization in {startup_time:?}");
-}
-
-async fn init_replay_archive(
-    config: &Config,
-    runtime: &Runtime,
-) -> Option<(
-    ReplayArchiveSender,
-    Arc<dyn ReplayArchiver + Send + Sync + 'static>,
-)> {
-    match &config.replay_archive_config {
-        ReplayArchiveConfig::Noop {} => None,
-        ReplayArchiveConfig::FileSystem {
-            root_path,
-            encryption,
-        } => {
-            let node_id = std::env::var("POD_NAME").unwrap_or_else(|_| "node".to_owned());
-
-            let session = ReplayArchiveSession::new(current_timestamp_millis(), node_id)
-                .expect("failed to create replay archive session");
-
-            let storage = FileSystemReplayArchiveStorage::init(root_path.clone(), session.clone())
-                .await
-                .with_context(|| format!("failed to create replay archive session {session}"))
-                .expect("failed to initialize replay archive");
-            let archive: Arc<dyn ReplayArchiver + Send + Sync> = match encryption {
-                ReplayArchiveEncryptionConfig::Noop {} => {
-                    Arc::new(FileSystemReplayArchiver::new(storage))
-                }
-                ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => Arc::new(
-                    AgeEncryptedReplayArchiver::from_recipient_str(storage, recipient)
-                        .expect("failed to initialize age X25519 replay archive encryption"),
-                ),
-            };
-            let (sender, component) = ReplayArchiveComponent::new(archive.clone());
-            runtime.spawn_critical_task("replay archive", async move {
-                component
-                    .run()
-                    .await
-                    .expect("replay archive component failed");
-            });
-            tracing::info!(
-                archive_root = %root_path.display(),
-                %session,
-                encryption = ?encryption,
-                "Replay archive enabled"
-            );
-            Some((sender, archive))
-        }
-    }
-}
-
-fn current_timestamp_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis()
-        .try_into()
-        .expect("system time in millis does not fit into u64")
 }
 
 #[allow(clippy::too_many_arguments)]

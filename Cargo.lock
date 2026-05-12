@@ -15178,6 +15178,7 @@ dependencies = [
  "async-trait",
  "clap",
  "futures",
+ "reth-tasks",
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",

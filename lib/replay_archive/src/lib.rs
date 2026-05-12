@@ -9,6 +9,7 @@ mod age_encrypted;
 mod component;
 mod filesystem;
 mod gate_component;
+mod init;
 mod metrics;
 mod reader;
 mod recovery;
@@ -20,6 +21,10 @@ pub use filesystem::{
     FileSystemReplayArchiveReader, FileSystemReplayArchiveStorage, FileSystemReplayArchiver,
 };
 pub use gate_component::ReplayArchiveGateComponent;
+pub use init::{
+    InitializedReplayArchive, ReplayArchiveConfig, ReplayArchiveEncryptionConfig,
+    init_replay_archive,
+};
 pub use reader::{ReplayArchiveObjectStream, ReplayArchiveStorageReader};
 pub use recovery::{
     decrypt_downloaded_replay_archive_objects, download_all_replay_archive_objects,

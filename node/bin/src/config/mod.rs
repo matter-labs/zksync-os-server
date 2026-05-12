@@ -1115,6 +1115,36 @@ pub enum ReplayArchiveEncryptionConfig {
     },
 }
 
+impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig {
+    fn from(config: ReplayArchiveConfig) -> Self {
+        match config {
+            ReplayArchiveConfig::Noop {} => zksync_os_replay_archive::ReplayArchiveConfig::Noop {},
+            ReplayArchiveConfig::FileSystem {
+                root_path,
+                encryption,
+            } => zksync_os_replay_archive::ReplayArchiveConfig::FileSystem {
+                root_path,
+                encryption: encryption.into(),
+            },
+        }
+    }
+}
+
+impl From<ReplayArchiveEncryptionConfig>
+    for zksync_os_replay_archive::ReplayArchiveEncryptionConfig
+{
+    fn from(config: ReplayArchiveEncryptionConfig) -> Self {
+        match config {
+            ReplayArchiveEncryptionConfig::Noop {} => {
+                zksync_os_replay_archive::ReplayArchiveEncryptionConfig::Noop {}
+            }
+            ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
+                zksync_os_replay_archive::ReplayArchiveEncryptionConfig::AgeX25519 { recipient }
+            }
+        }
+    }
+}
+
 /// Set of options related to the observability stack,
 /// e.g. logging, metrics, tracing, error tracking, etc.
 #[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig, ConfigValidate)]
