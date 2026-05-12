@@ -81,6 +81,11 @@ async fn encrypted_replay_archive_recovers_node_storage_end_to_end(
     .await?;
 
     let restarted = stopped.start().await?;
+    // Wait for finalization before sending tx to make sure the node populated block in repositories up to the anchor.
+    restarted
+        .l2_zk_provider
+        .wait_finalized_with_timeout(latest_block_number, DEFAULT_TIMEOUT)
+        .await?;
     let post_recovery_receipt = restarted
         .l2_provider
         .send_transaction(
