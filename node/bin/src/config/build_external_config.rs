@@ -3,7 +3,8 @@ use crate::config::{
     ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
     InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
     MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig, ProverApiConfig,
-    ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
+    ProverInputGeneratorConfig, ReplayArchiveConfig, RpcConfig, SequencerConfig,
+    StatusServerConfig,
 };
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use std::fs;
@@ -113,6 +114,12 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse batch verification config");
 
+    let replay_archive_config = repo
+        .single::<ReplayArchiveConfig>()
+        .expect("Failed to load replay archive config")
+        .parse()
+        .expect("Failed to parse replay archive config");
+
     let base_token_price_updater_config = repo
         .single::<BaseTokenPriceUpdaterConfig>()
         .expect("Failed to load base token price updater config")
@@ -154,6 +161,7 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         observability_config,
         gas_adjuster_config,
         batch_verification_config,
+        replay_archive_config,
         base_token_price_updater_config,
         interop_fee_updater_config,
         external_price_api_client_config,

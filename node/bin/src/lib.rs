@@ -21,7 +21,8 @@ use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ConsensusNodeCommandSource, ExternalNodeCommandSource};
 use crate::config::{
-    Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
+    Config, ProverApiConfig, ReplayArchiveConfig, ReplayArchiveEncryptionConfig,
+    base_token_price_updater_config, gas_adjuster_config,
 };
 use crate::en_remote_config::load_remote_config;
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -96,6 +97,11 @@ use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, loopback_consensus,
+};
+use zksync_os_replay_archive::{
+    AgeEncryptedReplayArchiver, FileSystemReplayArchiveStorage, FileSystemReplayArchiver,
+    ReplayArchiveComponent, ReplayArchiveGateComponent, ReplayArchiveSender, ReplayArchiveSession,
+    ReplayArchiveStorage, ReplayArchiver,
 };
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
@@ -276,7 +282,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!("Initializing BlockReplayStorage");
 
-    let block_replay_storage = BlockReplayStorage::new(
+    let (block_replay_storage, inserted_genesis_replay_record) = BlockReplayStorage::new(
         &config
             .general_config
             .rocks_db_path
@@ -937,6 +943,22 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
+    let replay_archive = if node_role.is_main() {
+        init_replay_archive(&config, runtime).await
+    } else {
+        None
+    };
+    if let (Some((replay_archive_sender, _)), Some(inserted_genesis_replay_record)) =
+        (&replay_archive, inserted_genesis_replay_record)
+    {
+        let (genesis_replay_record, genesis_hash) = inserted_genesis_replay_record.split();
+        replay_archive_sender
+            .send((genesis_hash, genesis_replay_record))
+            .await
+            .expect("replay archive component stopped before accepting genesis replay record");
+    }
+    let (replay_archive_sender, replay_archiver) = replay_archive.unzip();
+
     if node_role.is_main() {
         run_main_node_pipeline(
             &config,
@@ -961,6 +983,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             verify_result_rx,
             last_finalized_migration_receiver,
             migration_triggered_sender,
+            replay_archive_sender,
+            replay_archiver,
         )
         .await;
     } else {
@@ -1027,6 +1051,64 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("All components scheduled for initialization in {startup_time:?}");
 }
 
+async fn init_replay_archive(
+    config: &Config,
+    runtime: &Runtime,
+) -> Option<(
+    ReplayArchiveSender,
+    Arc<dyn ReplayArchiver + Send + Sync + 'static>,
+)> {
+    match &config.replay_archive_config {
+        ReplayArchiveConfig::Noop {} => None,
+        ReplayArchiveConfig::FileSystem {
+            root_path,
+            encryption,
+        } => {
+            let node_id = std::env::var("POD_NAME").unwrap_or_else(|_| "node".to_owned());
+
+            let session = ReplayArchiveSession::new(current_timestamp_millis(), node_id)
+                .expect("failed to create replay archive session");
+
+            let storage = FileSystemReplayArchiveStorage::init(root_path.clone(), session.clone())
+                .await
+                .with_context(|| format!("failed to create replay archive session {session}"))
+                .expect("failed to initialize replay archive");
+            let archive: Arc<dyn ReplayArchiver + Send + Sync> = match encryption {
+                ReplayArchiveEncryptionConfig::Noop {} => {
+                    Arc::new(FileSystemReplayArchiver::new(storage))
+                }
+                ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => Arc::new(
+                    AgeEncryptedReplayArchiver::from_recipient_str(storage, recipient)
+                        .expect("failed to initialize age X25519 replay archive encryption"),
+                ),
+            };
+            let (sender, component) = ReplayArchiveComponent::new(archive.clone());
+            runtime.spawn_critical_task("replay archive", async move {
+                component
+                    .run()
+                    .await
+                    .expect("replay archive component failed");
+            });
+            tracing::info!(
+                archive_root = %root_path.display(),
+                %session,
+                encryption = ?encryption,
+                "Replay archive enabled"
+            );
+            Some((sender, archive))
+        }
+    }
+}
+
+fn current_timestamp_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .try_into()
+        .expect("system time in millis does not fit into u64")
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: &Config,
@@ -1054,6 +1136,8 @@ async fn run_main_node_pipeline(
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
     last_finalized_migration: watch::Receiver<u64>,
     migration_triggered: watch::Sender<Option<u64>>,
+    replay_archive_sender: Option<ReplayArchiveSender>,
+    replay_archiver: Option<impl ReplayArchiver + Send + Sync + 'static>,
 ) {
     let pubdata_mode = config
         .l1_sender_config
@@ -1103,6 +1187,7 @@ async fn run_main_node_pipeline(
             repositories: repositories.clone(),
             config: config.into(),
             applied_block_number_sender,
+            replay_archive_sender,
         })
         .pipe_opt(
             config
@@ -1225,6 +1310,9 @@ async fn run_main_node_pipeline(
             last_finalized_migration,
             migration_triggered,
         })
+        .pipe_opt(replay_archiver.map(|replay_archiver| {
+            ReplayArchiveGateComponent::new(replay_archiver, block_replay_storage.clone())
+        }))
         .pipe(L1Sender::<_, _, CommitCommand> {
             provider: sl_provider.clone(),
             config: config.l1_sender_config.clone().into(),
@@ -1316,6 +1404,7 @@ async fn run_en_pipeline(
             repositories: repositories.clone(),
             config: config.into(),
             applied_block_number_sender,
+            replay_archive_sender: None,
         })
         .pipe_opt(
             config

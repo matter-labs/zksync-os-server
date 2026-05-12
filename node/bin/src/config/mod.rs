@@ -66,6 +66,7 @@ pub struct Config {
     pub observability_config: ObservabilityConfig,
     pub gas_adjuster_config: GasAdjusterConfig,
     pub batch_verification_config: BatchVerificationConfig,
+    pub replay_archive_config: ReplayArchiveConfig,
     pub base_token_price_updater_config: BaseTokenPriceUpdaterConfig,
     pub interop_fee_updater_config: InteropFeeUpdaterConfig,
     /// Only required on the Main Node, where the base token price updater runs.
@@ -226,6 +227,9 @@ impl Config {
         schema
             .insert(&BatchVerificationConfig::DESCRIPTION, "batch_verification")
             .expect("Failed to insert batch verification config");
+        schema
+            .insert(&ReplayArchiveConfig::DESCRIPTION, "replay_archive")
+            .expect("Failed to insert replay archive config");
         schema
             .insert(
                 &BaseTokenPriceUpdaterConfig::DESCRIPTION,
@@ -1021,6 +1025,32 @@ pub struct ProofStorageConfig {
     pub failed_capacity: ByteSize,
 }
 
+/// Replay archive backend used for cold-storage copies of replay records.
+#[derive(Debug, Clone, DescribeConfig, DeserializeConfig)]
+#[config(tag = "type", derive(Default))]
+pub enum ReplayArchiveConfig {
+    #[config(default)]
+    Noop {},
+    FileSystem {
+        /// Root directory for replay archive sessions.
+        root_path: PathBuf,
+        #[config(nest, default)]
+        encryption: ReplayArchiveEncryptionConfig,
+    },
+}
+
+/// Replay archive encryption applied before data is written to cold storage.
+#[derive(Debug, Clone, DescribeConfig, DeserializeConfig)]
+#[config(tag = "type", derive(Default))]
+pub enum ReplayArchiveEncryptionConfig {
+    #[config(default)]
+    Noop {},
+    AgeX25519 {
+        /// age X25519 recipient public key. The node only needs this public key.
+        recipient: String,
+    },
+}
+
 /// Set of options related to the observability stack,
 /// e.g. logging, metrics, tracing, error tracking, etc.
 #[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig, ConfigValidate)]
@@ -1554,6 +1584,65 @@ mod tests {
         repo.single::<NetworkConfig>().unwrap().parse().unwrap()
     }
 
+    fn parse_replay_archive_config<const N: usize>(
+        env_vars: [(&str, &str); N],
+    ) -> ReplayArchiveConfig {
+        let schema = ConfigSchema::new(&ReplayArchiveConfig::DESCRIPTION, "replay_archive");
+        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
+        repo.single::<ReplayArchiveConfig>()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    #[test]
+    fn replay_archive_config_defaults_to_noop() {
+        let config = parse_replay_archive_config([]);
+
+        assert!(matches!(config, ReplayArchiveConfig::Noop {}));
+    }
+
+    #[test]
+    fn replay_archive_config_parses_filesystem_backend() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "FileSystem"),
+            ("REPLAY_ARCHIVE_ROOT_PATH", "/tmp/replay-archive"),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::FileSystem {
+                root_path,
+                encryption,
+            } => {
+                assert_eq!(root_path, PathBuf::from("/tmp/replay-archive"));
+                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop {}));
+            }
+            ReplayArchiveConfig::Noop {} => panic!("expected file system replay archive config"),
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_age_x25519_encryption() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "FileSystem"),
+            ("REPLAY_ARCHIVE_ROOT_PATH", "/tmp/replay-archive"),
+            ("REPLAY_ARCHIVE_ENCRYPTION_TYPE", "AgeX25519"),
+            ("REPLAY_ARCHIVE_ENCRYPTION_RECIPIENT", "age1recipient"),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::FileSystem { encryption, .. } => match encryption {
+                ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
+                    assert_eq!(recipient, "age1recipient");
+                }
+                ReplayArchiveEncryptionConfig::Noop {} => {
+                    panic!("expected age X25519 replay archive encryption")
+                }
+            },
+            ReplayArchiveConfig::Noop {} => panic!("expected file system replay archive config"),
+        }
+    }
+
     #[test]
     fn network_interface_is_a_separate_field_and_overrides_address() {
         let config = parse_network_config([
@@ -1637,6 +1726,7 @@ mod tests {
             observability_config: ObservabilityConfig::default(),
             gas_adjuster_config: GasAdjusterConfig::default(),
             batch_verification_config: BatchVerificationConfig::default(),
+            replay_archive_config: ReplayArchiveConfig::default(),
             base_token_price_updater_config: BaseTokenPriceUpdaterConfig::default(),
             interop_fee_updater_config: InteropFeeUpdaterConfig::default(),
             external_price_api_client_config: Some(ExternalPriceApiClientConfig::Forced {

@@ -130,3 +130,15 @@ pub struct ExecutionMetrics {
 
 #[vise::register]
 pub(crate) static EXECUTION_METRICS: vise::Global<ExecutionMetrics> = vise::Global::new();
+
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "replay_archive")]
+pub struct ReplayArchiveMetrics {
+    pub queue_depth: Gauge<usize>,
+
+    #[metrics(unit = Unit::Seconds, buckets = Buckets::exponential(0.00001..=10.0, 10.0))]
+    pub enqueue_latency: Histogram<Duration>,
+}
+
+#[vise::register]
+pub(crate) static REPLAY_ARCHIVE_METRICS: vise::Global<ReplayArchiveMetrics> = vise::Global::new();

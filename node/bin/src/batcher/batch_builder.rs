@@ -28,6 +28,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
 ) -> anyhow::Result<BatchForSigning<ProverInput>> {
     let block_number_from = blocks.first().unwrap().1.block_context.block_number;
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
+    let last_block_hash = blocks.last().unwrap().0.header.hash();
     let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
 
     let state_view = read_state.state_view_at(block_number_to)?;
@@ -115,6 +116,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             blob_sidecar,
             first_block_number: block_number_from,
             last_block_number: block_number_to,
+            last_block_hash,
             pubdata_mode,
             tx_count: blocks
                 .iter()
