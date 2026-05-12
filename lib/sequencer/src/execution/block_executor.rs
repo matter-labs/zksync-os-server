@@ -139,7 +139,7 @@ where
                 execute_block_in_vm(
                     prepared_command,
                     exec_view,
-                    &latency_tracker,
+                    &state_reporter,
                     policy_tracer,
                     policy_session,
                 )
