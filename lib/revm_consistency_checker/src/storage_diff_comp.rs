@@ -230,14 +230,23 @@ where
     DB: DatabaseRef,
     DB::Error: std::error::Error + Send + Sync + 'static,
 {
-    let mut map = HashMap::new();
+    // Collapse to the final value per slot first. ZKsync OS can emit several writes for the
+    // same slot in a block; filtering each one against the pre-block value would leave a
+    // stale intermediate write when a slot is later restored to its original value
+    // (e.g. A → B → A would keep B in the map while REVM has no final diff).
+    let mut final_values: HashMap<(Address, B256), B256> = HashMap::new();
     for w in zksync_storage_writes {
         if w.account == ACCOUNT_PROPERTIES_STORAGE_ADDRESS {
             continue;
         }
-        let prev_value = B256::from(cache_db.db.storage_ref(w.account, w.account_key.into())?);
-        if prev_value != w.value {
-            map.insert((w.account, w.account_key), w.value); // latest non-noop write wins
+        final_values.insert((w.account, w.account_key), w.value);
+    }
+
+    let mut map = HashMap::new();
+    for ((account, slot), value) in final_values {
+        let prev_value = B256::from(cache_db.db.storage_ref(account, slot.into())?);
+        if prev_value != value {
+            map.insert((account, slot), value);
         }
     }
     Ok(map)
