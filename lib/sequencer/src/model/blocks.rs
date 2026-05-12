@@ -38,9 +38,8 @@ pub struct BlockPayload {
     pub output: BlockOutput,
     pub record: ReplayRecord,
     pub command_type: BlockCommandType,
-    /// L2 transactions the VM rejected during block building (purged from the mempool).
-    /// Surfaced downstream so RPC subscribers (e.g. `eth_sendRawTransactionSync`) can
-    /// report a concrete reason instead of timing out.
+    /// L2 txs the VM rejected during block building (purged from mempool).
+    /// Surfaced so RPC subscribers can report a reason instead of timing out.
     pub failed_transactions: Vec<(TxHash, InvalidTransaction)>,
 }
 

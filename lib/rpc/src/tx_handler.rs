@@ -24,6 +24,9 @@ use zksync_os_types::{
 /// inexpensive.
 const SEND_RAW_TRANSACTION_SYNC_MAX_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// JSON-RPC error code used by EIP-7966 to signal a sync-send timeout.
+const EIP_7966_TIMEOUT_CODE: i64 = 4;
+
 /// Handles transactions received in API
 pub struct TxHandler<RpcStorage, Mempool> {
     config: RpcConfig,
@@ -67,9 +70,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         }
     }
 
-    pub async fn send_raw_transaction_impl(
+    /// Shared prelude of both sync and async send: decode, validate, insert into mempool.
+    async fn admit_to_local_mempool(
         &self,
-        tx_bytes: Bytes,
+        tx_bytes: &Bytes,
     ) -> Result<B256, EthSendRawTransactionError> {
         if let TransactionAcceptanceState::NotAccepting(reasons) = &*self.acceptance_state.borrow()
         {
@@ -136,6 +140,14 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             let _guard = MempoolLatencyGuard::new();
             self.mempool.add_l2_transaction(l2_tx).await?;
         }
+        Ok(hash)
+    }
+
+    pub async fn send_raw_transaction_impl(
+        &self,
+        tx_bytes: Bytes,
+    ) -> Result<B256, EthSendRawTransactionError> {
+        let hash = self.admit_to_local_mempool(&tx_bytes).await?;
 
         if let Some(tx_forwarder) = self.tx_forwarder.as_ref() {
             let forwarding_result = {
@@ -179,15 +191,44 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             self.config.send_raw_transaction_sync_timeout
         };
 
-        // Create block subscription
+        // Subscribe before submission to avoid missing the block carrying our tx.
         let mut block_rx = self.storage.block_subscriptions().subscribe_to_blocks();
 
-        let tx_hash = self.send_raw_transaction_impl(bytes).await?;
+        // Admit outside the deadline so a tight user budget can't leave half-admitted state.
+        let tx_hash = self.admit_to_local_mempool(&bytes).await?;
 
-        // Wait for the transaction to appear in a block or timeout
+        // Forward to main *outside* the cancellable deadline. A tight max_wait_ms
+        // could otherwise cancel the request before it reaches main, leaving the
+        // tx only in the local mirror. Main bounds its own wait via its config
+        // default (alloy's helper does not forward max_wait_ms).
+        if let Some(forwarder) = self.tx_forwarder.as_ref() {
+            // Main's receipt is discarded. We still wait for local replay below
+            // and build the receipt from local storage so it is rooted in a
+            // block this EN has applied.
+            let forwarding_result = {
+                let _guard = ForwardingLatencyGuard::new();
+                forwarder.send_raw_transaction_sync(&bytes).await
+            };
+            if let Err(err) = forwarding_result {
+                tracing::debug!(%err, "sync forwarding error from main node back to user");
+                // Main returned EIP-7966 timeout (code 4). Tx is still pending
+                // on main, so keep our local mirror and propagate as timeout.
+                if let RpcError::ErrorResp(payload) = &err
+                    && payload.code == EIP_7966_TIMEOUT_CODE
+                {
+                    return Err(EthSendRawTransactionSyncError::Timeout(timeout_duration));
+                }
+                // Real rejection or transport failure. Drop the local mirror.
+                self.mempool.remove_transactions(vec![tx_hash]);
+                return Err(EthSendRawTransactionError::ForwardError(err).into());
+            }
+        }
+
+        // Wait for the tx to land in a locally-applied block. If the deadline
+        // fires we keep the local mempool entry: main has the tx (forward
+        // already succeeded above) so it will arrive via replay.
         tokio::time::timeout(timeout_duration, async {
             loop {
-                // Wait for the next block notification
                 let Ok(block) = block_rx.recv().await else {
                     // Channel closed or is lagging, this shouldn't happen in normal operation
                     tracing::warn!("block subscription closed while waiting for tx receipt");
@@ -315,8 +356,7 @@ pub enum EthSendRawTransactionSyncError {
     /// Timeout while waiting for transaction receipt.
     #[error("The transaction was added to the mempool but wasn't processed within {0:?}.")]
     Timeout(Duration),
-    /// The sequencer picked up the transaction but the VM rejected it during block
-    /// building, so it will not be included in any block.
+    /// VM rejected the tx during block building. It will not be mined.
     #[error("transaction {tx_hash} was rejected during execution: {reason}")]
     RejectedDuringExecution {
         tx_hash: TxHash,

@@ -13,10 +13,8 @@ use zksync_os_interface::error::InvalidTransaction;
 pub struct BlockNotification {
     pub block: Arc<RepositoryBlock>,
     pub transactions: HashMap<TxHash, Arc<StoredTxData>>,
-    /// Transactions that the sequencer attempted to include in this block but the
-    /// VM rejected as invalid. They are not part of the canonical block, but RPC
-    /// subscribers (e.g. `eth_sendRawTransactionSync`) use this to surface a
-    /// rejection reason instead of waiting until timeout.
+    /// Txs the VM rejected during block building. Not part of the canonical block.
+    /// Surfaced so RPC subscribers can report a reason instead of timing out.
     pub failed_transactions: HashMap<TxHash, InvalidTransaction>,
 }
 
