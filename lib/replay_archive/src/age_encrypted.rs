@@ -7,6 +7,8 @@ use async_trait::async_trait;
 use std::time::Instant;
 use zksync_os_storage_api::ReplayRecord;
 
+const BYTES_PER_MEGABYTE: f64 = 1024.0 * 1024.0;
+
 /// Replay archiver that stores age/X25519-encrypted JSON replay records.
 #[derive(Debug, Clone)]
 pub struct AgeEncryptedReplayArchiver<Storage> {
@@ -46,8 +48,8 @@ impl<Storage> AgeEncryptedReplayArchiver<Storage> {
         REPLAY_ARCHIVE_METRICS.encryption_time.observe(elapsed);
         if encoded_len > 0 {
             REPLAY_ARCHIVE_METRICS
-                .encryption_time_per_byte
-                .observe(elapsed.as_secs_f64() / encoded_len as f64);
+                .encryption_time_per_megabyte
+                .observe(elapsed.as_secs_f64() * BYTES_PER_MEGABYTE / encoded_len as f64);
         }
         REPLAY_ARCHIVE_METRICS.object_bytes[&"stored"].observe(encrypted.len());
         Ok(encrypted)
