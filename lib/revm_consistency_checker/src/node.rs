@@ -168,6 +168,11 @@ where
                 // AtlasV1/V2 didn't honor `block_context.mix_hash` for prevrandao (ZKsync OS
                 // hardcoded `1`) and didn't surface blob fees. Both fields only became
                 // meaningful with AtlasV3 — gating them keeps the historical check accurate.
+                //
+                // The pre-AtlasV3 `blob_excess_gas_and_price` must still be `Some`: all Atlas
+                // specs map to Cancun and revm's header validation rejects a missing value.
+                // Use the same value `BlockEnv::default()` would have produced, since that's
+                // what the pre-PR checker effectively passed.
                 let (prevrandao, blob_excess_gas_and_price) =
                     if ZkSpecId::AtlasV3.is_enabled_in(zk_spec) {
                         let blob_fee: u64 = replay_record.block_context.blob_fee.saturating_to();
@@ -186,7 +191,11 @@ where
                             Some(blob_excess),
                         )
                     } else {
-                        (B256::from(U256::ONE), None)
+                        let pre_v3_blob_default = BlobExcessGasAndPrice::new(
+                            0,
+                            revm::primitives::eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE,
+                        );
+                        (B256::from(U256::ONE), Some(pre_v3_blob_default))
                     };
 
                 // For each block, we create an in-memory cache database to accumulate transaction state changes separately
