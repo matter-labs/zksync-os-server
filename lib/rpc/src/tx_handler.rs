@@ -191,42 +191,41 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             self.config.send_raw_transaction_sync_timeout
         };
 
-        // Subscribe before submission to avoid missing the block carrying our tx.
+        // Subscribe before submission so the main-node wait below never misses the block.
         let mut block_rx = self.storage.block_subscriptions().subscribe_to_blocks();
 
-        // Admit outside the deadline so a tight user budget can't leave half-admitted state.
+        // Admit outside any deadline so a tight user budget can't leave half-admitted state.
         let tx_hash = self.admit_to_local_mempool(&bytes).await?;
 
-        // Forward to main *outside* the cancellable deadline. A tight max_wait_ms
-        // could otherwise cancel the request before it reaches main, leaving the
-        // tx only in the local mirror. Main bounds its own wait via its config
-        // default (alloy's helper does not forward max_wait_ms).
         if let Some(forwarder) = self.tx_forwarder.as_ref() {
-            // Main's receipt is discarded. We still wait for local replay below
-            // and build the receipt from local storage so it is rooted in a
-            // block this EN has applied.
-            let forwarding_result = {
+            // EN path. Main is the source of truth: forward the sync call and
+            // return main's verdict (receipt, rejection, or timeout) directly.
+            //
+            // No client-side timeout wraps this call so the EN cannot disagree
+            // with main on the outcome. The trade-off is that main's config
+            // default bounds the wait, not the caller's max_wait_ms.
+            let forwarding_result: Result<ZkTransactionReceipt, _> = {
                 let _guard = ForwardingLatencyGuard::new();
-                forwarder.send_raw_transaction_sync(&bytes).await
+                forwarder
+                    .raw_request("eth_sendRawTransactionSync".into(), (bytes,))
+                    .await
             };
-            if let Err(err) = forwarding_result {
+            return forwarding_result.map_err(|err| {
                 tracing::debug!(%err, "sync forwarding error from main node back to user");
                 // Main returned EIP-7966 timeout (code 4). Tx is still pending
                 // on main, so keep our local mirror and propagate as timeout.
                 if let RpcError::ErrorResp(payload) = &err
                     && payload.code == EIP_7966_TIMEOUT_CODE
                 {
-                    return Err(EthSendRawTransactionSyncError::Timeout(timeout_duration));
+                    return EthSendRawTransactionSyncError::Timeout(timeout_duration);
                 }
                 // Real rejection or transport failure. Drop the local mirror.
                 self.mempool.remove_transactions(vec![tx_hash]);
-                return Err(EthSendRawTransactionError::ForwardError(err).into());
-            }
+                EthSendRawTransactionError::ForwardError(err).into()
+            });
         }
 
-        // Wait for the tx to land in a locally-applied block. If the deadline
-        // fires we keep the local mempool entry: main has the tx (forward
-        // already succeeded above) so it will arrive via replay.
+        // Main node: wait for the tx to land in a locally-applied block.
         tokio::time::timeout(timeout_duration, async {
             loop {
                 let Ok(block) = block_rx.recv().await else {
