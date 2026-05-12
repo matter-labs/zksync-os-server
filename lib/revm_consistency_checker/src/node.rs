@@ -13,7 +13,7 @@ use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
-use zksync_os_revm::{DefaultZk, ZkBuilder, ZkContext};
+use zksync_os_revm::{DefaultZk, ZkBuilder, ZkContext, ZkSpecId};
 use zksync_os_sequencer::model::blocks::AppliedBlock;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, ViewState};
 use zksync_os_types::{ExecutionVersion, SYSTEM_CONTEXT_ADDRESS};
@@ -162,19 +162,32 @@ where
 
                 // Saturating: extreme fees are unrealistic; clamping keeps the
                 // checker running rather than tearing down the pipeline.
-                let blob_fee: u64 = replay_record.block_context.blob_fee.saturating_to();
                 let block_basefee: u64 =
                     replay_record.block_context.eip1559_basefee.saturating_to();
 
-                let blob_excess_gas_and_price = BlobExcessGasAndPrice::new(
-                    calculate_excess_blob_gas_from_blob_base_fee(
-                        blob_fee,
-                        BLOB_BASE_FEE_UPDATE_FRACTION,
-                    ),
-                    BLOB_BASE_FEE_UPDATE_FRACTION
-                        .try_into()
-                        .expect("Blob base fee update fraction should fit into u64"),
-                );
+                // AtlasV1/V2 didn't honor `block_context.mix_hash` for prevrandao (ZKsync OS
+                // hardcoded `1`) and didn't surface blob fees. Both fields only became
+                // meaningful with AtlasV3 — gating them keeps the historical check accurate.
+                let (prevrandao, blob_excess_gas_and_price) =
+                    if ZkSpecId::AtlasV3.is_enabled_in(zk_spec) {
+                        let blob_fee: u64 = replay_record.block_context.blob_fee.saturating_to();
+                        let blob_excess_gas = calculate_excess_blob_gas_from_blob_base_fee(
+                            blob_fee,
+                            BLOB_BASE_FEE_UPDATE_FRACTION,
+                        );
+                        let blob_excess = BlobExcessGasAndPrice::new(
+                            blob_excess_gas,
+                            BLOB_BASE_FEE_UPDATE_FRACTION
+                                .try_into()
+                                .expect("Blob base fee update fraction should fit into u64"),
+                        );
+                        (
+                            replay_record.block_context.mix_hash.into(),
+                            Some(blob_excess),
+                        )
+                    } else {
+                        (B256::from(U256::ONE), None)
+                    };
 
                 // For each block, we create an in-memory cache database to accumulate transaction state changes separately
                 let state_provider =
@@ -192,8 +205,8 @@ where
                         block.beneficiary = replay_record.block_context.coinbase;
                         block.basefee = block_basefee;
                         block.gas_limit = replay_record.block_context.gas_limit;
-                        block.prevrandao = Some(replay_record.block_context.mix_hash.into());
-                        block.blob_excess_gas_and_price = Some(blob_excess_gas_and_price);
+                        block.prevrandao = Some(prevrandao);
+                        block.blob_excess_gas_and_price = blob_excess_gas_and_price;
                     })
                     .build_zk();
 
