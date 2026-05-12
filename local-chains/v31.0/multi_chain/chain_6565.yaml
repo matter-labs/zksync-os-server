@@ -1,6 +1,7 @@
 general:
   ephemeral: true
-  gateway_rpc_url: http://localhost:3052
+gateway_provider:
+  rpc_url: http://localhost:3052
 genesis:
   bridgehub_address: '0x4c548076c53ba29a7dddac6fe463c57cde78a3d8'
   bytecode_supplier_address: '0x04e7cfe87caff2c17cadb4b708ba08cc86a029bc'

@@ -1,6 +1,7 @@
 use crate::batcher::batch_deadline_policy::deadline_from_block_timestamp;
 use crate::batcher::seal_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
+use crate::prover_block::ProverBlock;
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::Address;
 use async_trait::async_trait;
@@ -8,19 +9,17 @@ use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Sleep};
 use tracing;
+use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_batch_types::batcher_model::{
     BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
 };
-use zksync_os_batch_types::{BlockMerkleTreeData, DiscoveredCommittedBatch};
 use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_merkle_tree::TreeBatchOutput;
-use zksync_os_observability::{
-    ComponentStateHandle, ComponentStateReporter, GenericComponentState,
-};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::PubdataMode;
 
@@ -60,23 +59,17 @@ pub struct Batcher<ReadState> {
 impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     for Batcher<ReadState>
 {
-    type Input = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
+    type Input = ProverBlock;
     type Output = BatchEnvelope<ProverInput, MissingSignature>;
 
-    const NAME: &'static str = "batcher";
-
-    // The next component is `FriProvingPipelineStep` which contains an internal queue for FRI jobs.
-    // We don't want to add additional buffers - as soon as the queue is full, we want to halt batching.
-    const OUTPUT_BUFFER_SIZE: usize = 1;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId = zksync_os_pipeline::ComponentId::Batcher;
 
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        let latency_tracker = ComponentStateReporter::global()
-            .handle_for("batcher", GenericComponentState::WaitingRecv);
-
         // We use last executed batch as the starting point. Next immediate batch we process will be
         // `last_executed_batch + 1`.
         let last_executed_batch = self
@@ -90,7 +83,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         // as there is no need to perform any L1 operations on them.
         loop {
             let Some(next_block_number) = input
-                .peek_recv(|(_, replay_record, _, _)| replay_record.block_context.block_number)
+                .peek_recv(|item| item.record.block_context.block_number)
                 .await
             else {
                 tracing::info!("inbound channel closed");
@@ -103,27 +96,32 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 block_number = next_block_number,
                 "skipping already executed on L1 block {next_block_number} (first unexecuted on L1 block is {first_expected_block})"
             );
-            input
-                .recv()
+            let skipped = input
+                .recv_and_record_picked(&state_reporter)
                 .await
                 .expect("impossible: missing an already peeked batch");
+            state_reporter.record_processed(
+                skipped.record.block_context.block_number,
+                Some(skipped.record.block_context.timestamp),
+                None,
+            );
         }
 
         // Only used for metrics/logs
         let mut last_created_batch_at: Option<Instant> = None;
 
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
+            state_reporter.enter_state(GenericComponentState::Idle);
 
             // Peek at the next block to decide whether to recreate or create anew.
             let Some(next_block_number) = input
-                .peek_recv(|(_, replay_record, _, _)| replay_record.block_context.block_number)
+                .peek_recv(|item| item.record.block_context.block_number)
                 .await
             else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
-            latency_tracker.enter_state(GenericComponentState::Processing);
+            state_reporter.enter_state(GenericComponentState::Active);
 
             let recreated;
             let batch_envelope =
@@ -143,9 +141,9 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     let Some(batch_envelope) = self
                         .recreate_existing_batch(
                             &mut input,
-                            &latency_tracker,
                             &prev_batch_info,
                             committed_batch,
+                            &state_reporter,
                         )
                         .await?
                     else {
@@ -155,7 +153,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     batch_envelope
                 } else {
                     let Some(batch_envelope) = self
-                        .create_batch(&mut input, &latency_tracker, &prev_batch_info)
+                        .create_batch(&mut input, &prev_batch_info, &state_reporter)
                         .await?
                     else {
                         return Ok(());
@@ -196,17 +194,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 "Batch da_input",
             );
 
-            latency_tracker.enter_state(GenericComponentState::WaitingSend);
             if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone() {
                 self.sidecar_sender
                     .send(sidecar)
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
             }
-            if output.send(batch_envelope).await.is_err() {
-                tracing::info!("outbound channel closed");
-                return Ok(());
-            }
+            output.send_and_record(batch_envelope, &state_reporter)?;
         }
     }
 }
@@ -214,14 +208,9 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
     async fn create_batch(
         &mut self,
-        block_receiver: &mut PeekableReceiver<(
-            BlockOutput,
-            ReplayRecord,
-            ProverInput,
-            BlockMerkleTreeData,
-        )>,
-        latency_tracker: &ComponentStateHandle<GenericComponentState>,
+        block_receiver: &mut PeekableReceiver<ProverBlock>,
         prev_batch_info: &StoredBatchInfo,
+        state_reporter: &ComponentStateReporter,
     ) -> anyhow::Result<Option<BatchForSigning<ProverInput>>> {
         // Armed once we reach `last_persisted_block`, using the first block's timestamp.
         let mut deadline: Option<Pin<Box<Sleep>>> = None;
@@ -238,7 +227,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         );
 
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
+            state_reporter.enter_state(GenericComponentState::Idle);
             tokio::select! {
                 /* ---------- check for timeout ---------- */
                 _ = async {
@@ -252,22 +241,28 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 }
 
                 /* ---------- collect blocks ---------- */
-               should_seal = block_receiver.peek_recv(|(block_output, replay_record, _, _)| {
+               should_seal = block_receiver.peek_recv(|item| {
                     // determine if the block fits into the current batch
-                    accumulator.clone().add(block_output, replay_record).should_seal()
+                    accumulator.clone().add(&item.output, &item.record).should_seal()
                 }) => {
-                    latency_tracker.enter_state(GenericComponentState::Processing);
+                    state_reporter.enter_state(GenericComponentState::Active);
                     match should_seal {
                         Some(true) => {
                             // some of the limits was reached, start sealing the batch
                             break;
                         }
                         Some(false) => {
-                            let Some((block_output, replay_record, prover_input, tree)) = block_receiver.pop_buffer() else {
+                            let Some(ProverBlock { output: block_output, record: replay_record, prover_input, tree }) = block_receiver.pop_buffer() else {
                                 anyhow::bail!("No block received in buffer after peeking")
                             };
 
                             let block_number = replay_record.block_context.block_number;
+
+                            state_reporter.record_picked(
+                                block_number,
+                                Some(replay_record.block_context.timestamp),
+                                None,
+                            );
 
                             tracing::debug!(
                                 batch_number,
@@ -348,15 +343,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
 
     async fn recreate_existing_batch(
         &mut self,
-        block_receiver: &mut PeekableReceiver<(
-            BlockOutput,
-            ReplayRecord,
-            ProverInput,
-            BlockMerkleTreeData,
-        )>,
-        latency_tracker: &ComponentStateHandle<GenericComponentState>,
+        block_receiver: &mut PeekableReceiver<ProverBlock>,
         prev_batch_info: &StoredBatchInfo,
         existing_batch: DiscoveredCommittedBatch,
+        state_reporter: &ComponentStateReporter,
     ) -> anyhow::Result<Option<BatchForSigning<ProverInput>>> {
         let batch_number = existing_batch.number();
 
@@ -372,14 +362,18 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         let expected_block_count = existing_batch.block_count();
         // Collect all blocks in this batch
         while blocks.len() < expected_block_count as usize {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
-            let Some((block_output, replay_record, prover_input, tree)) =
-                block_receiver.recv().await
+            state_reporter.enter_state(GenericComponentState::Idle);
+            let Some(ProverBlock {
+                output: block_output,
+                record: replay_record,
+                prover_input,
+                tree,
+            }) = block_receiver.recv().await
             else {
                 tracing::info!("inbound channel closed");
                 return Ok(None);
             };
-            latency_tracker.enter_state(GenericComponentState::Processing);
+            state_reporter.enter_state(GenericComponentState::Active);
 
             let (root_hash, leaf_count) = tree.block_end.root_info()?;
             let tree_output = TreeBatchOutput {
@@ -391,6 +385,14 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 batch_number,
                 block_number = replay_record.block_context.block_number,
                 "Adding block to recreated batch"
+            );
+
+            // Mirrors the record_picked call in create_batch; needed here too because
+            // recreate_existing_batch is a separate code path for already-committed batches.
+            state_reporter.record_picked(
+                replay_record.block_context.block_number,
+                Some(replay_record.block_context.timestamp),
+                None,
             );
 
             blocks.push((block_output, replay_record, tree_output, prover_input));

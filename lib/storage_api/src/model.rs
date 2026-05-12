@@ -1,7 +1,9 @@
 use alloy::primitives::{Address, B256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
-use zksync_os_interface::types::BlockContext;
+use zksync_os_batch_types::BlockMerkleTreeData;
+use zksync_os_interface::types::{BlockContext, BlockOutput};
+use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_types::{
     BlockStartCursors, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction,
 };
@@ -112,4 +114,29 @@ pub struct FinalityStatus {
     pub last_executed_batch: u64,
     pub last_finalized_executed_block: u64,
     pub last_finalized_executed_batch: u64,
+}
+
+/// Message flowing from `TreeManager` → `ProverInputGenerator` / `BatchVerificationResponder`.
+pub struct TreeBlock {
+    pub output: BlockOutput,
+    pub record: ReplayRecord,
+    pub tree: BlockMerkleTreeData,
+}
+
+impl HasBlockRangeEnd for TreeBlock {
+    fn block_number(&self) -> u64 {
+        self.record.block_context.block_number
+    }
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.record.block_context.timestamp)
+    }
+}
+
+impl HasBlockRangeEnd for ReplayRecord {
+    fn block_number(&self) -> u64 {
+        self.block_context.block_number
+    }
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.block_context.timestamp)
+    }
 }

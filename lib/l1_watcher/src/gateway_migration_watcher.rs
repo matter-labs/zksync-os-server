@@ -1,16 +1,13 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, ChainId, U256};
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
 use zksync_os_contract_interface::{Bridgehub, ServerNotifier::MigrateToGateway, ZkChain};
 use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_types::SystemTxEnvelope;
-
-/// Limit the number of L1 blocks to scan when looking for the migration number block.
-const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
 
 /// Watches for both `MigrateToGateway` and `MigrateFromGateway` events on L1 in a single
 /// polling loop, and submits a `SetSLChainId` system transaction for each.
@@ -46,25 +43,13 @@ impl GatewayMigrationWatcher {
         let server_notifier_contract = zk_chain.get_server_notifier_address().await?;
         let chain_asset_handler_address = bridgehub.chain_asset_handler_address().await?;
 
-        let current_l1_block = zk_chain.provider().get_block_number().await?;
         let next_l1_block = util::find_block_by_migration_number(
             zk_chain.clone(),
             chain_asset_handler_address,
             l2_chain_id,
             next_migration_number,
         )
-        .await
-        .or_else(|err| {
-            if current_l1_block > INITIAL_LOOKBEHIND_BLOCKS {
-                anyhow::bail!(
-                    "Binary search failed with {err}. Cannot default starting block to zero \
-                     for a long chain. Current L1 block number: {current_l1_block}. \
-                     Limit: {INITIAL_LOOKBEHIND_BLOCKS}."
-                );
-            } else {
-                Ok(0)
-            }
-        })?;
+        .await?;
 
         tracing::info!(
             contract = %server_notifier_contract,

@@ -5,6 +5,7 @@ use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_watcher::CommittedBatchProvider;
+use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_storage_api::{ReadFinality, ReadReplay};
@@ -15,10 +16,6 @@ use zksync_os_storage_api::{ReadFinality, ReadReplay};
 /// - Receives proven batches from L1 proof sender
 /// - Manages the priority operations tree
 /// - Outputs execute commands for L1 executor
-///
-/// Internally manages:
-/// - `prepare_execute_commands` task: processes proven batches and generates execute commands
-/// - `keep_caching` task: persists priority tree for executed batches
 pub struct PriorityTreePipelineStep<BlockStorage, Finality> {
     priority_tree_manager: PriorityTreeManager<BlockStorage, Finality>,
 }
@@ -56,17 +53,17 @@ where
     type Input = SignedBatchEnvelope<FriProof>;
     type Output = L1SenderCommand<ExecuteCommand>;
 
-    const NAME: &'static str = "priority_tree";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::PriorityTree;
 
     async fn run(
-        mut self,
+        self,
         input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         self.priority_tree_manager
-            .run(Some((input, output)))
-            .await?;
-        Ok(())
+            .run(Some((input, output)), state_reporter)
+            .await
     }
 }

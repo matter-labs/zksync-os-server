@@ -12,6 +12,9 @@ categories.workspace = true
 [dependencies]
 zksync_os_storage.workspace = true
 zksync_os_storage_api.workspace = true
+zksync_os_l1_sender.workspace = true
+zksync_os_pipeline.workspace = true
+zksync_os_observability.workspace = true
 
 age.workspace = true
 alloy = { workspace = true, default-features = false }
@@ -23,8 +26,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "sync"] }
 tokio-stream.workspace = true
-zksync_os_l1_sender.workspace = true
-zksync_os_pipeline.workspace = true
 tracing.workspace = true
 vise.workspace = true
 

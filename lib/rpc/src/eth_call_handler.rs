@@ -1,6 +1,7 @@
 use crate::call_fees::{CallFees, CallFeesError};
 use crate::config::RpcConfig;
 use crate::js_tracer;
+use crate::metrics::API_METRICS;
 use crate::result::RevertError;
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
 use crate::sandbox::{call_trace_simulate, execute};
@@ -302,25 +303,25 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> Result<Bytes, EthCallError> {
         let mut execution_env = self.prepare_execution_env(request, block, block_overrides)?;
+        execution_env.block_context.eip1559_basefee = U256::from(0);
+
         let storage_view = self
             .storage
             .state_at_block_number_or_latest(execution_env.block_context.block_number)?;
+        let state_view = OverriddenStateView::with_state_overrides(
+            storage_view,
+            state_overrides.unwrap_or_default(),
+        );
 
-        execution_env.block_context.eip1559_basefee = U256::from(0);
-        let res = match state_overrides {
-            Some(overrides) => execute(
-                execution_env.transaction,
-                execution_env.block_context,
-                OverriddenStateView::with_state_overrides(storage_view, overrides),
-            ),
-            None => execute(
-                execution_env.transaction,
-                execution_env.block_context,
-                storage_view,
-            ),
-        }
+        let res = execute(
+            execution_env.transaction,
+            execution_env.block_context,
+            state_view,
+        )
         .map_err(EthCallError::ForwardSubsystemError)?
         .map_err(EthCallError::InvalidTransaction)?;
+
+        API_METRICS.call_gas_used[&"eth_call".to_string()].observe(res.gas_used);
 
         match res.execution_result {
             ExecutionResult::Success(

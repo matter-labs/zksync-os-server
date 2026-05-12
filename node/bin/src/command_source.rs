@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
+use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_raft::{ConsensusRole, LeadershipSignal};
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
@@ -43,13 +44,19 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
     type Input = ();
     type Output = BlockCommand;
 
-    const NAME: &'static str = "consensus_node_command_source";
-    const OUTPUT_BUFFER_SIZE: usize = 1;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::ConsensusNodeCommandSource;
+    // Capacity 1 is intentional: the leader arm in run_loop emits Produce tokens inside
+    // tokio::select! on output.send(), firing whenever the channel has space. A larger buffer
+    // would let the leader queue multiple tokens ahead of execution. Capacity of 1 ensures
+    // at most one un-executed Produce command in flight, making the downstream consumer the pacer.
+    const OUTPUT_CHANNEL_CAPACITY: usize = 1;
 
     async fn run(
         mut self,
         _input: PeekableReceiver<()>,
         output: mpsc::Sender<BlockCommand>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         let last_block_in_wal = self.block_replay_storage.latest_record();
 
@@ -93,14 +100,23 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 
         tracing::info!("All WAL blocks replayed. Starting main loop.");
 
-        self.run_loop(output).await
+        // Seed watermark so block_diff_to_head starts at 0; leader mode never fires maybe_record.
+        if let Some(ctx) = self.block_replay_storage.get_context(last_block_in_wal) {
+            state_reporter.record_processed(last_block_in_wal, Some(ctx.timestamp), None);
+        }
+
+        self.run_loop(output, state_reporter).await
     }
 }
 
 impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
     /// This method kicks in after all local canonized Replayed Records (WAL) are replayed.
     /// Produces `Produce` commands only when the node is the leader.
-    async fn run_loop(mut self, output: mpsc::Sender<BlockCommand>) -> anyhow::Result<()> {
+    async fn run_loop(
+        mut self,
+        output: mpsc::Sender<BlockCommand>,
+        state_reporter: ComponentStateReporter,
+    ) -> anyhow::Result<()> {
         let mut leadership = self.leadership.clone();
         let mut role = leadership.current_role();
         tracing::info!(?role, "Consensus role initialized");
@@ -122,8 +138,10 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                         tracing::info!("inbound channel closed");
                         return Ok(());
                     };
+                    let block_number = record.block_context.block_number;
+                    let timestamp = record.block_context.timestamp;
                     tracing::info!(
-                        block_number = record.block_context.block_number,
+                        block_number,
                         role = ?role,
                         "Received canonized block from consensus",
                     );
@@ -135,11 +153,17 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                         tracing::info!("Command output channel closed, stopping source");
                         break;
                     }
+                    state_reporter.record_processed(block_number, Some(timestamp), None);
                 }
                 send_res = output.send(BlockCommand::Produce(ProduceCommand)), if role == ConsensusRole::Leader => {
                     if send_res.is_err() {
                         tracing::info!("Command output channel closed, stopping source");
                         break;
+                    }
+                    // Advance watermark to the last sealed block so diff stays near 0.
+                    let latest = self.block_replay_storage.latest_record();
+                    if let Some(ctx) = self.block_replay_storage.get_context(latest) {
+                        state_reporter.record_processed(latest, Some(ctx.timestamp), None);
                     }
                 }
             }
@@ -189,16 +213,19 @@ impl PipelineComponent for ExternalNodeCommandSource {
     type Input = ();
     type Output = BlockCommand;
 
-    const NAME: &'static str = "external_node_command_source";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::ExternalNodeCommandSource;
+    const OUTPUT_CHANNEL_CAPACITY: usize = 5;
 
     async fn run(
         mut self,
         _input: PeekableReceiver<()>,
         output: mpsc::Sender<BlockCommand>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         while let Some(record) = self.replays_for_sequencer.recv().await {
             let block_number = record.block_context.block_number;
+            let timestamp = record.block_context.timestamp;
             let txs = record.transactions.len();
             let force_preimages = record.force_preimages.len();
             let force_preimage_bytes = record
@@ -231,6 +258,7 @@ impl PipelineComponent for ExternalNodeCommandSource {
                 tracing::info!("Command output channel closed, stopping source");
                 break;
             }
+            state_reporter.record_processed(block_number, Some(timestamp), None);
         }
 
         Ok(())

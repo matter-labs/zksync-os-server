@@ -8,56 +8,56 @@ use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_genesis::Genesis;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeVersion, RocksDBWrapper, TreeEntry,
 };
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
+use zksync_os_sequencer::model::blocks::AppliedBlock;
+use zksync_os_storage_api::TreeBlock;
 
-#[derive(Debug)]
 pub(crate) struct TreeManager {
     pub tree: MerkleTree<RocksDBWrapper>,
 }
 
 #[async_trait]
 impl PipelineComponent for TreeManager {
-    type Input = (BlockOutput, zksync_os_storage_api::ReplayRecord);
-    type Output = (
-        BlockOutput,
-        zksync_os_storage_api::ReplayRecord,
-        BlockMerkleTreeData,
-    );
-    const NAME: &'static str = "merkle_tree";
-    const OUTPUT_BUFFER_SIZE: usize = 10;
+    type Input = AppliedBlock;
+    type Output = TreeBlock;
+
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::TreeManager;
 
     async fn run(
         self,
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        let tree = self.tree;
-
         // only used to skip blocks that were already processed by the tree -
         // will be removed once idempotency is handled on the framework level
-        let mut last_processed_block = tree.latest_version()?.expect("tree wasn't initialized");
-
-        let latency_tracker =
-            ComponentStateReporter::global().handle_for("tree", GenericComponentState::WaitingRecv);
+        let mut last_processed_block = self
+            .tree
+            .latest_version()?
+            .expect("tree wasn't initialized");
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
+            state_reporter.enter_state(GenericComponentState::Idle);
 
-            let Some((block_output, replay_record)) = input.recv().await else {
+            let Some(AppliedBlock {
+                output: block_output,
+                record: replay_record,
+            }) = input.recv_and_record_picked(&state_reporter).await
+            else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
-            latency_tracker.enter_state(GenericComponentState::Processing);
+            state_reporter.enter_state(GenericComponentState::Active);
             let started_at = Instant::now();
             let block_number = block_output.header.number;
 
             if block_number <= last_processed_block {
-                let mut tree_clone = tree.clone();
+                let mut tree_clone = self.tree.clone();
                 tokio::task::spawn_blocking(move || {
                     tree_clone.truncate_recent_versions(block_number)
                 })
@@ -80,10 +80,11 @@ impl PipelineComponent for TreeManager {
                 .collect::<Vec<_>>();
 
             let count = tree_entries.len();
-            let mut tree_clone = tree.clone();
+            let mut tree_clone = self.tree.clone();
             let tree_batch_output =
                 tokio::task::spawn_blocking(move || tree_clone.extend(&tree_entries)).await??;
-            last_processed_block = tree
+            last_processed_block = self
+                .tree
                 .latest_version()?
                 .expect("uninitialized tree after applying a block");
             assert_eq!(last_processed_block, block_number);
@@ -104,20 +105,24 @@ impl PipelineComponent for TreeManager {
 
             TREE_METRICS.processing_range.observe(count.max(1) as u64);
             TREE_METRICS.block_number.set(block_number);
-            let tree_block = BlockMerkleTreeData {
+            let tree_data = BlockMerkleTreeData {
                 block_start: MerkleTreeVersion {
-                    tree: tree.clone(),
+                    tree: self.tree.clone(),
                     block: block_number - 1,
                 },
                 block_end: MerkleTreeVersion {
-                    tree: tree.clone(),
+                    tree: self.tree.clone(),
                     block: block_number,
                 },
             };
-            latency_tracker.enter_state(GenericComponentState::WaitingSend);
-            output
-                .send((block_output, replay_record, tree_block))
-                .await?;
+            output.send_and_record(
+                TreeBlock {
+                    output: block_output,
+                    record: replay_record,
+                    tree: tree_data,
+                },
+                &state_reporter,
+            )?;
         }
     }
 }

@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::ReadReplay;
 
 pub struct ReplayArchiveGateComponent<Archive, ReplayStorage> {
@@ -62,20 +63,24 @@ where
     type Input = L1SenderCommand<CommitCommand>;
     type Output = L1SenderCommand<CommitCommand>;
 
-    const NAME: &'static str = "replay_archive_gate";
-    // 1-sized buffer so back-pressure propagates immediately upstream when the gate is closed.
-    const OUTPUT_BUFFER_SIZE: usize = 1;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::ReplayArchiveGate;
 
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         loop {
-            let Some(item) = input.recv().await else {
+            state_reporter.enter_state(GenericComponentState::Idle);
+
+            let Some(item) = input.recv_and_record_picked(&state_reporter).await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
+
+            state_reporter.enter_state(GenericComponentState::Active);
 
             let envelope = match &item {
                 L1SenderCommand::SendToL1(command) => &command.input,
@@ -84,7 +89,7 @@ where
             let block_range = envelope.batch.first_block_number..=envelope.batch.last_block_number;
             tracing::info!(
                 "Entered {} for batch #{}, block range {block_range:?}",
-                Self::NAME,
+                Self::COMPONENT_ID.as_str(),
                 envelope.batch.batch_info.batch_number
             );
 
@@ -104,10 +109,7 @@ where
                     .into();
             }
 
-            if output.send(item).await.is_err() {
-                tracing::info!("outbound channel closed");
-                return Ok(());
-            }
+            output.send_and_record(item, &state_reporter)?;
         }
     }
 }

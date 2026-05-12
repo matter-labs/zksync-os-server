@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.20.2](https://github.com/matter-labs/zksync-os-server/compare/v0.20.1...v0.20.2) (2026-05-11)
+
+
+### Features
+
+* **mempool:** stream interop txs only during gateway SL ([#1263](https://github.com/matter-labs/zksync-os-server/issues/1263)) ([b2a8a4a](https://github.com/matter-labs/zksync-os-server/commit/b2a8a4abb9dbe158ce979905ac1b4d718e67a103))
+
+
+### Bug Fixes
+
+* **l1-watcher:** do not panic on non-existent migration ([#1274](https://github.com/matter-labs/zksync-os-server/issues/1274)) ([a3ba0fe](https://github.com/matter-labs/zksync-os-server/commit/a3ba0fe7b0d4f66b4f9f46c3cad9fb195d06207e))
+* **network:** pin reth with bounded RLPx buffer ([#1275](https://github.com/matter-labs/zksync-os-server/issues/1275)) ([d6194aa](https://github.com/matter-labs/zksync-os-server/commit/d6194aa9709dc326ad58055b77c12a7f33be6a1e))
+
+## [0.20.1](https://github.com/matter-labs/zksync-os-server/compare/v0.20.0...v0.20.1) (2026-05-07)
+
+
+### Features
+
+* add backpressure monitor and pipeline wiring ([#1206](https://github.com/matter-labs/zksync-os-server/issues/1206)) ([66861de](https://github.com/matter-labs/zksync-os-server/commit/66861dea0a703df9700c8ec5d66fc6890f9efb77))
+
+## [0.20.0](https://github.com/matter-labs/zksync-os-server/compare/v0.19.3...v0.20.0) (2026-05-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **provider:** Add metrics & retry config ([#1257](https://github.com/matter-labs/zksync-os-server/issues/1257))
+
+### Features
+
+* add possibility to forcefully resubmit transactions ([#1239](https://github.com/matter-labs/zksync-os-server/issues/1239)) ([2ddd717](https://github.com/matter-labs/zksync-os-server/commit/2ddd717bf25f434648d123b0cb9d4c3e46e68e00))
+* add zks protocol v4 ([#1247](https://github.com/matter-labs/zksync-os-server/issues/1247)) ([7e20bd2](https://github.com/matter-labs/zksync-os-server/commit/7e20bd2dcff449215478b6526bf97630c1c811ed))
+* **interop:** Allow inclusion of multiple interop roots in system tx ([#1258](https://github.com/matter-labs/zksync-os-server/issues/1258)) ([dd58427](https://github.com/matter-labs/zksync-os-server/commit/dd584272b1d37360681b58edcb18181c03e599cd))
+* **l1-sender:** Use constant base fee for l1 transactions ([#1255](https://github.com/matter-labs/zksync-os-server/issues/1255)) ([d4eb7ce](https://github.com/matter-labs/zksync-os-server/commit/d4eb7cea9c8f9c163b03644455341484f4f57776))
+* **observability:** add push exporter support & a metric to track REVM divergencies that can be used for alerting ([#1221](https://github.com/matter-labs/zksync-os-server/issues/1221)) ([df0275f](https://github.com/matter-labs/zksync-os-server/commit/df0275ff8d1c79d3cc6389fd48f759daa0ecce24))
+* **provider:** Add metrics & retry config ([#1257](https://github.com/matter-labs/zksync-os-server/issues/1257)) ([ef0bde5](https://github.com/matter-labs/zksync-os-server/commit/ef0bde59bf01e0fbd34b66638adcd5f5e9173190))
+* support live chain L1-&gt;GW migration ([#1129](https://github.com/matter-labs/zksync-os-server/issues/1129)) ([a9019f9](https://github.com/matter-labs/zksync-os-server/commit/a9019f92e2b15005c703cc42eb9e3b486a185517))
+
+
+### Bug Fixes
+
+* **prover-api:** potential race conditions in SnarkJobManager ([#1254](https://github.com/matter-labs/zksync-os-server/issues/1254)) ([e93a7c1](https://github.com/matter-labs/zksync-os-server/commit/e93a7c1428aa9e6b85d103179007dfd82b474bd6))
+* register v4 subprotocol ([#1251](https://github.com/matter-labs/zksync-os-server/issues/1251)) ([3ad8db2](https://github.com/matter-labs/zksync-os-server/commit/3ad8db2618d386a04d712c5488353b63286a0c28))
+
 ## [0.19.3](https://github.com/matter-labs/zksync-os-server/compare/v0.19.2...v0.19.3) (2026-05-01)
 
 

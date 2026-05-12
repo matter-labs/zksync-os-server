@@ -20,7 +20,7 @@ use zksync_os_types::ProtocolSemanticVersion;
 pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
 
 /// Finds the first block where `IChainAssetHandler::migrationNumber(chain_id) >= migration_number`
-/// using binary search.
+/// using binary search. Returns latest block if migration number is not reached yet.
 ///
 /// Used by both [`GatewayMigrationWatcher`][crate::GatewayMigrationWatcher] (on L1) and
 /// [`MigrationCompleteWatcher`][crate::MigrationCompleteWatcher] (on the current settlement layer)
@@ -36,6 +36,16 @@ pub async fn find_block_by_migration_number(
         zk_chain.provider().clone(),
     ));
     let target = U256::from(migration_number);
+    let latest = instance.provider().get_block_number().await?;
+    let latest_migration_number = instance
+        .migrationNumber(U256::from(chain_id))
+        .block(latest.into())
+        .call()
+        .await?;
+    // If this migration has not been reached yet, return the latest block.
+    if latest_migration_number < migration_number {
+        return Ok(latest);
+    }
 
     find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| {
         let instance = instance.clone();
@@ -69,13 +79,6 @@ pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool
     start_block_number: BlockNumber,
     predicate: impl Fn(Arc<ZkChain<DynProvider>>, u64) -> Fut,
 ) -> anyhow::Result<BlockNumber> {
-    if zk_chain.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
-        // Binary search may error on Anvil with `--load-state` - as it doesn't support `eth_call`
-        // even for recent blocks. We default to `start_block_number` in this case - `eth_getLogs`
-        // are still supported.
-        return Ok(start_block_number);
-    }
-
     let latest = zk_chain.provider().get_block_number().await?;
 
     let guarded_predicate =
@@ -213,27 +216,6 @@ pub async fn find_l1_commit_block_by_batch_number(
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<BlockNumber> {
-    if zk_chain.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
-        // Binary search may error on Anvil with `--load-state` - as it doesn't support `eth_call`
-        // for historical blocks. We run linear search as a fallback.
-        if batch_number == 0 {
-            // For genesis we must return L1 block where `zk_chain` got deployed. For Anvil it's okay
-            // to return 0 here as the chain should not be long anyway.
-            return Ok(0);
-        }
-        return find_last_matching_event::<ReportCommittedBatchRangeZKsyncOS>(
-            *zk_chain.address(),
-            zk_chain.provider(),
-            0,
-            max_l1_blocks_to_scan,
-            |e| e.batchNumber == batch_number,
-        )
-        .await?
-        .with_context(|| {
-            format!("linear search failed to find where batch {batch_number} was committed")
-        });
-    }
-
     let is_batch_committed = move |zk: Arc<ZkChain<DynProvider>>, block: BlockNumber| async move {
         let res = zk.get_total_batches_committed(block.into()).await?;
         Ok(res >= batch_number)
@@ -322,13 +304,6 @@ pub async fn find_l1_block_by_interop_root_id(
     next_interop_root_id: u64,
 ) -> anyhow::Result<BlockNumber> {
     if next_interop_root_id == 0 {
-        return Ok(0);
-    }
-
-    // Binary search via `eth_call` with historical block IDs is not supported on Anvil with
-    // `--load-state`. Fall back to block 0 so the watcher starts from genesis and catches up
-    // via `eth_getLogs`, which Anvil does support.
-    if bridgehub.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
         return Ok(0);
     }
 
