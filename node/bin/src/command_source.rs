@@ -20,7 +20,7 @@ pub struct ConsensusNodeCommandSource<Replay> {
     /// This is essentially a block rollback.
     pub rebuild_options: Option<RebuildOptions>,
     /// Inbound channel of canonized blocks. Populated by `BlockCanonizer` with blocks that are canonized
-    pub replays_to_execute: mpsc::Receiver<ReplayRecord>,
+    pub replays_to_execute: mpsc::UnboundedReceiver<ReplayRecord>,
     /// Current leadership status from consensus.
     pub leadership: LeadershipSignal,
 }

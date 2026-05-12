@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.20.2](https://github.com/matter-labs/zksync-os-server/compare/v0.20.1...v0.20.2) (2026-05-11)
+
+
+### Features
+
+* **mempool:** stream interop txs only during gateway SL ([#1263](https://github.com/matter-labs/zksync-os-server/issues/1263)) ([b2a8a4a](https://github.com/matter-labs/zksync-os-server/commit/b2a8a4abb9dbe158ce979905ac1b4d718e67a103))
+
+
+### Bug Fixes
+
+* **l1-watcher:** do not panic on non-existent migration ([#1274](https://github.com/matter-labs/zksync-os-server/issues/1274)) ([a3ba0fe](https://github.com/matter-labs/zksync-os-server/commit/a3ba0fe7b0d4f66b4f9f46c3cad9fb195d06207e))
+* **network:** pin reth with bounded RLPx buffer ([#1275](https://github.com/matter-labs/zksync-os-server/issues/1275)) ([d6194aa](https://github.com/matter-labs/zksync-os-server/commit/d6194aa9709dc326ad58055b77c12a7f33be6a1e))
+
 ## [0.20.1](https://github.com/matter-labs/zksync-os-server/compare/v0.20.0...v0.20.1) (2026-05-07)
 
 

@@ -31,6 +31,12 @@ threads-required = 3
 filter = 'test(~to_gateway)'
 threads-required = 2
 
+[[profile.default.overrides]]
+# Consensus tests spin up 3 L2 nodes + an L1 anvil and have tight 20s raft
+# timeouts; without throttling, parallel scheduling causes flaky failures.
+filter = 'test(~consensus)'
+threads-required = 6
+
 # Fast profile for local development — excludes the slowest integration tests.
 # Usage: cargo nextest run -p zksync_os_integration_tests --profile fast
 [profile.fast]

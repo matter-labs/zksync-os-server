@@ -1,5 +1,7 @@
-use alloy::primitives::{Address, B256, U256, address};
-use reth_revm::{DatabaseRef, bytecode::Bytecode, db::CacheDB};
+use alloy::primitives::{Address, B256, KECCAK256_EMPTY, U256, address};
+use revm::DatabaseRef;
+use revm::bytecode::BytecodeKind;
+use revm::database::CacheDB;
 use std::collections::{HashMap, HashSet};
 use zksync_os_interface::types::{AccountDiff, StorageWrite};
 
@@ -61,7 +63,7 @@ impl CompareReport {
     {
         // internal maps keyed by (addr, slot)
         let revm_storage = build_revm_storage_map(cache_db)?;
-        let zk_storage = build_zk_storage_map(zksync_storage_writes);
+        let zk_storage = build_zk_storage_map(cache_db, zksync_storage_writes)?;
 
         let revm_accounts = build_revm_accounts(cache_db)?;
         let zk_accounts = build_zk_accounts(zksync_account_diffs);
@@ -220,15 +222,34 @@ where
     Ok(map)
 }
 
-fn build_zk_storage_map(zksync_storage_writes: &[StorageWrite]) -> HashMap<(Address, B256), B256> {
-    let mut map = HashMap::new();
+fn build_zk_storage_map<DB>(
+    cache_db: &CacheDB<DB>,
+    zksync_storage_writes: &[StorageWrite],
+) -> Result<HashMap<(Address, B256), B256>, anyhow::Error>
+where
+    DB: DatabaseRef,
+    DB::Error: std::error::Error + Send + Sync + 'static,
+{
+    // Collapse to the final value per slot first. ZKsync OS can emit several writes for the
+    // same slot in a block; filtering each one against the pre-block value would leave a
+    // stale intermediate write when a slot is later restored to its original value
+    // (e.g. A → B → A would keep B in the map while REVM has no final diff).
+    let mut final_values: HashMap<(Address, B256), B256> = HashMap::new();
     for w in zksync_storage_writes {
         if w.account == ACCOUNT_PROPERTIES_STORAGE_ADDRESS {
             continue;
         }
-        map.insert((w.account, w.account_key), w.value); // latest write wins
+        final_values.insert((w.account, w.account_key), w.value);
     }
-    map
+
+    let mut map = HashMap::new();
+    for ((account, slot), value) in final_values {
+        let prev_value = B256::from(cache_db.db.storage_ref(account, slot.into())?);
+        if prev_value != value {
+            map.insert((account, slot), value);
+        }
+    }
+    Ok(map)
 }
 
 fn build_revm_accounts<DB>(
@@ -245,9 +266,9 @@ where
             if code.is_empty() {
                 B256::ZERO
             } else {
-                match code {
-                    Bytecode::LegacyAnalyzed(legacy_code) => calculate_bytecode_hash(legacy_code),
-                    _ => {
+                match code.kind() {
+                    BytecodeKind::LegacyAnalyzed => calculate_bytecode_hash(code),
+                    BytecodeKind::Eip7702 => {
                         return Err(anyhow::anyhow!(
                             "EIP-7702 bytecode is not supported on Consistency Checker"
                         ));
@@ -427,7 +448,10 @@ fn compare_accounts(
 
 #[inline]
 fn code_hash_equivalent(a: B256, b: B256) -> bool {
-    a == b
-        || (a == EMPTY_BYTE_CODE_HASH && b == B256::ZERO)
-        || (a == B256::ZERO && b == EMPTY_BYTE_CODE_HASH)
+    a == b || (is_empty_code_hash(a) && is_empty_code_hash(b))
+}
+
+#[inline]
+fn is_empty_code_hash(hash: B256) -> bool {
+    hash == B256::ZERO || hash == EMPTY_BYTE_CODE_HASH || hash == KECCAK256_EMPTY
 }
