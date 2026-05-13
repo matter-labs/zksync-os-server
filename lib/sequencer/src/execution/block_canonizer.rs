@@ -25,7 +25,7 @@ where
     pub consensus: Consensus,
     /// Channel to send new canonized blocks to for the node to replay.
     /// They are sent to `NodeCommandSource` and then through the whole pipeline.
-    pub canonized_blocks_for_execution: mpsc::Sender<ReplayRecord>,
+    pub canonized_blocks_for_execution: mpsc::UnboundedSender<ReplayRecord>,
 }
 
 #[async_trait]
@@ -144,7 +144,7 @@ where
                             record.block_output_hash,
                         );
 
-                        self.canonized_blocks_for_execution.send(record).await?;
+                        self.canonized_blocks_for_execution.send(record)?;
                     }
                 }
                 // Select arm that receives executed blocks from `BlockExecutor` (upstream).

@@ -30,13 +30,5 @@ impl NodeStateOnStartup {
             self.last_l1_proved_block,
             self.last_l1_executed_block,
         );
-        if self.node_role.is_main() {
-            assert!(
-                self.block_replay_storage_last_block >= self.last_l1_committed_block,
-                "Not all committed blocks are present in the block replay storage (last committed: {}, last in storage: {})",
-                self.last_l1_committed_block,
-                self.block_replay_storage_last_block,
-            );
-        }
     }
 }

@@ -12,6 +12,9 @@ use vise::{Counter, Metrics};
 pub struct RevmCheckerPushMetrics {
     /// Number of REVM divergences detected during this run. Used for alerts.
     pub revm_divergences_detected: Counter,
+    /// Number of blocks the checker skipped because a tx could not be converted
+    /// into a revm tx env. Non-zero values indicate silent coverage gaps.
+    pub revm_blocks_skipped: Counter,
 }
 
 #[vise::register]

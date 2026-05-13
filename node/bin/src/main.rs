@@ -313,7 +313,6 @@ fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
         path = %tempdir_path.display(),
         "Ephemeral mode enabled. Using temporary directory for RocksDB and proof storage"
     );
-
     // Update config to use temporary directory
     config.general_config.rocks_db_path = tempdir_path.join("node");
     config.prover_api_config.proof_storage = ProofStorageConfig {

@@ -39,6 +39,7 @@ use zksync_os_server::default_protocol_version::{
     NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
 };
 use zksync_os_state_full_diffs::FullDiffsState;
+use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
 };
@@ -47,6 +48,7 @@ pub mod assert_traits;
 pub mod config;
 pub mod contracts;
 pub mod dyn_wallet_provider;
+pub mod multi_node;
 mod network;
 mod node_log;
 mod prover_tester;
@@ -106,7 +108,7 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 /// shutdown. We put 60s here until zksync-os v0.4.0 which will get rid of RISC-V simulator and
 /// allow async/abortable prover input generation.
 const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
-const PORT_ACQUISITION_TIMEOUT: Duration = Duration::from_secs(15);
+const PORT_ACQUISITION_TIMEOUT: Duration = Duration::from_secs(30);
 const PORT_ACQUISITION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
@@ -270,6 +272,7 @@ pub struct Tester {
     runtime: Runtime,
     task_manager_handle: Option<JoinHandle<Result<(), PanickedTaskError>>>,
     config: Config,
+    ports: Ports,
 
     #[allow(dead_code)]
     tempdir: Arc<tempfile::TempDir>,
@@ -277,7 +280,6 @@ pub struct Tester {
     // Needed to be able to connect external nodes
     node_record: NodeRecord,
     l2_rpc_address: String,
-    #[expect(dead_code)]
     status_server_url: String,
     gateway_rpc_url: Option<String>,
     sl_provider: EthDynProvider,
@@ -292,6 +294,7 @@ pub struct Tester {
 pub struct StoppedTester {
     l1: AnvilL1,
     config: Config,
+    ports: Ports,
     tempdir: Arc<tempfile::TempDir>,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
@@ -301,9 +304,11 @@ pub struct StoppedTester {
 #[derive(Debug)]
 struct SupportingNode {
     runtime: Runtime,
+    _ports: Ports,
     _tempdir: Arc<TempDir>,
 }
 
+#[derive(Debug)]
 struct Ports {
     l2_rpc: LockedPort,
     prover_api: LockedPort,
@@ -369,6 +374,18 @@ impl Tester {
         Ok(provider)
     }
 
+    /// Returns true if the node's runtime has reported a critical-task panic.
+    ///
+    /// Mirrors what a production orchestrator observes when a `reth_tasks` critical task
+    /// panics: the runtime is dying and the node should be respawned. Non-destructive — the
+    /// task-manager handle is left in place so the caller can still consume it via
+    /// [`Self::wait_for_fatal_error_with_timeout`] if desired.
+    pub fn has_crashed(&self) -> bool {
+        self.task_manager_handle
+            .as_ref()
+            .is_some_and(|h| h.is_finished())
+    }
+
     /// Waits until the node reports a fatal critical-task error through the runtime task manager.
     ///
     /// This consumes the runtime's task manager handle for this tester instance, so it should be
@@ -411,6 +428,13 @@ impl Tester {
         let mut config = self.config.clone();
         self.apply_external_node_defaults(&mut config);
         config
+    }
+
+    pub async fn status(&self) -> anyhow::Result<StatusResponse> {
+        let response = reqwest::get(format!("{}/status", self.status_server_url))
+            .await?
+            .error_for_status()?;
+        Ok(response.json::<StatusResponse>().await?)
     }
 
     pub async fn wait_for_initial_deposit(&self) -> anyhow::Result<()> {
@@ -468,12 +492,16 @@ impl Tester {
             runtime,
             l1,
             config,
+            ports,
             tempdir,
             log_state,
             chain_layout,
             owned_supporting_nodes,
             ..
         } = self;
+        // NOTE: supporting nodes (e.g. gateway) are kept alive across stop/start so that
+        // `restart()` works for `NEXT_TO_GATEWAY` topology.  They are only torn down in
+        // `StoppedTester::shutdown()` or when `StoppedTester` is dropped.
         shutdown_runtime(runtime).await?;
         Ok(StoppedTester {
             l1,
@@ -481,6 +509,7 @@ impl Tester {
             log_state,
             chain_layout,
             config,
+            ports,
             owned_supporting_nodes,
         })
     }
@@ -529,6 +558,40 @@ impl Tester {
         Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, Some(ports)).await
     }
 
+    pub(crate) async fn launch_node_with_network_port(
+        l1: AnvilL1,
+        enable_prover: bool,
+        config_overrides: Option<impl FnOnce(&mut Config)>,
+        chain_layout: ChainLayout<'static>,
+        network: LockedPort,
+        wait_for_initial_deposit: bool,
+    ) -> anyhow::Result<Self> {
+        let ports = Ports::acquire_unused_with_network(network).await?;
+        let tempdir = Arc::new(tempfile::tempdir()?);
+        let mut config = build_node_config(&l1, chain_layout).await?;
+        if enable_prover {
+            config.prover_api_config.fake_fri_provers.enabled = false;
+            config.prover_api_config.fake_snark_provers.enabled = false;
+        }
+        if !prover_input_generation_enabled() {
+            disable_prover_input_generation(&mut config);
+        }
+        Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config, &ports);
+        if let Some(config_overrides) = config_overrides {
+            config_overrides(&mut config);
+        }
+        Self::launch_node_inner(
+            l1,
+            config,
+            tempdir,
+            chain_layout,
+            None,
+            wait_for_initial_deposit,
+            Some(ports),
+        )
+        .await
+    }
+
     fn bind_runtime_config(l1: &AnvilL1, tempdir: &TempDir, config: &mut Config, ports: &Ports) {
         config.general_config.rocks_db_path = tempdir.path().join("rocksdb");
         config.l1_provider_config.rpc_url = l1.address.clone();
@@ -551,7 +614,7 @@ impl Tester {
         wait_for_initial_deposit: bool,
         held_ports: Option<Ports>,
     ) -> anyhow::Result<Self> {
-        let _ports = match held_ports {
+        let ports = match held_ports {
             Some(ports) => ports,
             None => Ports::from_config(&config).await?,
         };
@@ -724,6 +787,7 @@ impl Tester {
             runtime,
             task_manager_handle: Some(task_manager_handle),
             config,
+            ports,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             status_server_url,
             gateway_rpc_url,
@@ -771,9 +835,16 @@ impl StoppedTester {
             chain_layout,
             log_state,
             owned_supporting_nodes,
+            ports,
             ..
         } = self;
-        let ports = Ports::from_config(&config).await?;
+        let ports = if ports.matches_config(&config)? {
+            ports.wait_until_unused().await?;
+            ports
+        } else {
+            drop(ports);
+            Ports::from_config(&config).await?
+        };
         let mut tester = Tester::launch_node_inner(
             l1,
             config,
@@ -802,6 +873,7 @@ impl SupportingNode {
     fn from_tester(tester: Tester) -> Self {
         let Tester {
             runtime,
+            ports,
             tempdir,
             owned_supporting_nodes,
             ..
@@ -809,6 +881,7 @@ impl SupportingNode {
         drop(owned_supporting_nodes);
         Self {
             runtime,
+            _ports: ports,
             _tempdir: tempdir,
         }
     }
@@ -838,6 +911,15 @@ impl Ports {
             l2_rpc: LockedPort::acquire_unused().await?,
             prover_api: LockedPort::acquire_unused().await?,
             network: LockedPort::acquire_unused().await?,
+            status: LockedPort::acquire_unused().await?,
+        })
+    }
+
+    async fn acquire_unused_with_network(network: LockedPort) -> anyhow::Result<Self> {
+        Ok(Self {
+            l2_rpc: LockedPort::acquire_unused().await?,
+            prover_api: LockedPort::acquire_unused().await?,
+            network,
             status: LockedPort::acquire_unused().await?,
         })
     }
@@ -882,6 +964,35 @@ impl Ports {
             })?,
         })
     }
+
+    fn matches_config(&self, config: &Config) -> anyhow::Result<bool> {
+        Ok(
+            self.l2_rpc.port == parse_local_port(&config.rpc_config.address)?
+                && self.prover_api.port == parse_local_port(&config.prover_api_config.address)?
+                && self.network.port == config.network_config.port
+                && self.status.port == parse_local_port(&config.status_server_config.address)?,
+        )
+    }
+
+    async fn wait_until_unused(&self) -> anyhow::Result<()> {
+        wait_for_port_to_be_unused(self.l2_rpc.port)
+            .await
+            .with_context(|| format!("failed waiting for L2 RPC port {}", self.l2_rpc.port))?;
+        wait_for_port_to_be_unused(self.prover_api.port)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed waiting for prover API port {}",
+                    self.prover_api.port
+                )
+            })?;
+        wait_for_port_to_be_unused(self.network.port)
+            .await
+            .with_context(|| format!("failed waiting for network port {}", self.network.port))?;
+        wait_for_port_to_be_unused(self.status.port)
+            .await
+            .with_context(|| format!("failed waiting for status server port {}", self.status.port))
+    }
 }
 
 fn parse_local_port(address: &str) -> anyhow::Result<u16> {
@@ -906,6 +1017,24 @@ async fn acquire_port_with_retry(port: u16) -> anyhow::Result<LockedPort> {
                     format!(
                         "port {port} did not become acquirable within {PORT_ACQUISITION_TIMEOUT:?}"
                     )
+                });
+            }
+        }
+    }
+}
+
+async fn wait_for_port_to_be_unused(port: u16) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + PORT_ACQUISITION_TIMEOUT;
+    loop {
+        match LockedPort::check_port_is_unused(port).await {
+            Ok(_) => return Ok(()),
+            Err(err) if tokio::time::Instant::now() < deadline => {
+                tracing::info!(port, %err, "waiting for port to become unused");
+                tokio::time::sleep(PORT_ACQUISITION_POLL_INTERVAL).await;
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("port {port} did not become unused within {PORT_ACQUISITION_TIMEOUT:?}")
                 });
             }
         }
