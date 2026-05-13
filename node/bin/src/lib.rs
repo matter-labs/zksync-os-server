@@ -69,6 +69,7 @@ use zksync_os_interface::types::BlockHashes;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
+use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
@@ -1199,27 +1200,26 @@ async fn run_main_node_pipeline(
     }
 
     // Pick the L1Sender config based on whether the chain is currently settling on Gateway:
-    // when it is, gw_sender operator keys (funded on Gateway) and gw_sender fee caps are used;
+    // when it is, gateway_sender operator keys (funded on Gateway) and gateway_sender fee caps are used;
     // otherwise the L1-targeted l1_sender config is used.
     let commit_sender_config: zksync_os_l1_sender::config::L1SenderConfig<CommitCommand> =
         if settles_on_gateway {
-            config.gw_sender_config.clone().into()
+            config.gateway_sender_config.clone().into()
         } else {
             config.l1_sender_config.clone().into()
         };
     let prove_sender_config: zksync_os_l1_sender::config::L1SenderConfig<ProofCommand> =
         if settles_on_gateway {
-            config.gw_sender_config.clone().into()
+            config.gateway_sender_config.clone().into()
         } else {
             config.l1_sender_config.clone().into()
         };
-    let execute_sender_config: zksync_os_l1_sender::config::L1SenderConfig<
-        zksync_os_l1_sender::commands::execute::ExecuteCommand,
-    > = if settles_on_gateway {
-        config.gw_sender_config.clone().into()
-    } else {
-        config.l1_sender_config.clone().into()
-    };
+    let execute_sender_config: zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> =
+        if settles_on_gateway {
+            config.gateway_sender_config.clone().into()
+        } else {
+            config.l1_sender_config.clone().into()
+        };
 
     let pipeline = pipeline
         .pipe(ProverInputGenerator {
@@ -1512,11 +1512,11 @@ fn effective_main_node_pubdata_mode(config: &Config, settles_on_gateway: bool) -
 
 /// Validates that the operator keys required for the L1Sender pipeline are present in config,
 /// based on the settlement layer discovered at startup. When settling on L1, `l1_sender.operator_*_sk`
-/// are required; when settling on Gateway, `gw_sender.operator_*_sk` are required. Reports all
+/// are required; when settling on Gateway, `gateway_sender.operator_*_sk` are required. Reports all
 /// missing keys at once via panic so the operator can fix them in a single restart.
 fn check_required_operator_keys(config: &Config, settles_on_gateway: bool) {
     let (section, missing): (&str, Vec<&str>) = if settles_on_gateway {
-        let gw = &config.gw_sender_config;
+        let gw = &config.gateway_sender_config;
         let mut missing = vec![];
         if gw.operator_commit_sk.is_none() {
             missing.push("operator_commit_sk");
@@ -1527,7 +1527,7 @@ fn check_required_operator_keys(config: &Config, settles_on_gateway: bool) {
         if gw.operator_execute_sk.is_none() {
             missing.push("operator_execute_sk");
         }
-        ("gw_sender", missing)
+        ("gateway_sender", missing)
     } else {
         let l1 = &config.l1_sender_config;
         let mut missing = vec![];

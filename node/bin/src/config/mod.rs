@@ -61,7 +61,7 @@ pub struct Config {
     #[config_validate(async_validate(Self::validate_operator_signers))]
     pub l1_sender_config: L1SenderConfig,
     #[config_validate(async_validate(Self::validate_gw_operator_signers))]
-    pub gw_sender_config: GwSenderConfig,
+    pub gateway_sender_config: GatewaySenderConfig,
     pub l1_watcher_config: L1WatcherConfig,
     pub batcher_config: BatcherConfig,
     pub prover_input_generator_config: ProverInputGeneratorConfig,
@@ -211,8 +211,8 @@ impl Config {
             .insert(&L1SenderConfig::DESCRIPTION, "l1_sender")
             .expect("Failed to insert l1_sender config");
         schema
-            .insert(&GwSenderConfig::DESCRIPTION, "gw_sender")
-            .expect("Failed to insert gw_sender config");
+            .insert(&GatewaySenderConfig::DESCRIPTION, "gateway_sender")
+            .expect("Failed to insert gateway_sender config");
         schema
             .insert(&L1WatcherConfig::DESCRIPTION, "l1_watcher")
             .expect("Failed to insert l1_watcher config");
@@ -341,23 +341,23 @@ impl Config {
 
     async fn validate_gw_operator_signers(
         root: &Self,
-        gw_sender_config: &GwSenderConfig,
+        gateway_sender_config: &GatewaySenderConfig,
         errors: &mut Vec<ValidationError>,
     ) -> anyhow::Result<()> {
         if !root.general_config.node_role.is_main() {
             return Ok(());
         }
 
-        // gw_sender operator keys are optional at config-validation time; their presence is
+        // gateway_sender operator keys are optional at config-validation time; their presence is
         // enforced at runtime when the chain is discovered to be settling on Gateway. Skip the
         // uniqueness check unless all three are configured.
-        let Some(commit) = &gw_sender_config.operator_commit_sk else {
+        let Some(commit) = &gateway_sender_config.operator_commit_sk else {
             return Ok(());
         };
-        let Some(prove) = &gw_sender_config.operator_prove_sk else {
+        let Some(prove) = &gateway_sender_config.operator_prove_sk else {
             return Ok(());
         };
-        let Some(execute) = &gw_sender_config.operator_execute_sk else {
+        let Some(execute) = &gateway_sender_config.operator_execute_sk else {
             return Ok(());
         };
 
@@ -365,7 +365,7 @@ impl Config {
             Ok(address) => Some(address),
             Err(err) => {
                 errors.push(ValidationError::new(
-                    "gw_sender.operator_commit_sk",
+                    "gateway_sender.operator_commit_sk",
                     format!("failed to resolve signer address: {err}"),
                 ));
                 None
@@ -375,7 +375,7 @@ impl Config {
             Ok(address) => Some(address),
             Err(err) => {
                 errors.push(ValidationError::new(
-                    "gw_sender.operator_prove_sk",
+                    "gateway_sender.operator_prove_sk",
                     format!("failed to resolve signer address: {err}"),
                 ));
                 None
@@ -385,7 +385,7 @@ impl Config {
             Ok(address) => Some(address),
             Err(err) => {
                 errors.push(ValidationError::new(
-                    "gw_sender.operator_execute_sk",
+                    "gateway_sender.operator_execute_sk",
                     format!("failed to resolve signer address: {err}"),
                 ));
                 None
@@ -399,10 +399,10 @@ impl Config {
                 || execute_addr == commit_addr)
         {
             errors.push(ValidationError::new(
-                "gw_sender.operator_commit_sk",
+                "gateway_sender.operator_commit_sk",
                 format!(
-                    "must be different from `gw_sender.operator_prove_sk` and \
-                     `gw_sender.operator_execute_sk`; got commit={commit_addr}, \
+                    "must be different from `gateway_sender.operator_prove_sk` and \
+                     `gateway_sender.operator_execute_sk`; got commit={commit_addr}, \
                      prove={prove_addr}, execute={execute_addr}"
                 ),
             ));
@@ -845,7 +845,7 @@ pub struct L1SenderConfig {
     /// Must be consistent with the operator key set on the contract (permissioned!)
     /// Not required for External Nodes, which do not send L1 transactions.
     /// On a Main Node, required at runtime only when the chain is discovered to be settling on
-    /// L1 (otherwise `gw_sender.operator_commit_sk` is used). Whether the chain settles on L1 or
+    /// L1 (otherwise `gateway_sender.operator_commit_sk` is used). Whether the chain settles on L1 or
     /// Gateway is determined from on-chain state at startup, which is why presence is not
     /// enforced here.
     #[config(secret, alias = "operator_commit_pk", with = SignerConfigDeserializer)]
@@ -955,7 +955,7 @@ fn is_positive_f64(&val: &f64) -> bool {
 /// time; their presence is enforced at runtime once the settlement layer is discovered.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
-pub struct GwSenderConfig {
+pub struct GatewaySenderConfig {
     /// Signer to commit batches to the Gateway.
     /// Must be consistent with the operator key set on the Gateway chain admin (permissioned!).
     /// Required at runtime when the chain settles on Gateway.
@@ -1635,7 +1635,7 @@ impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<Execut
     }
 }
 
-impl GwSenderConfig {
+impl GatewaySenderConfig {
     fn into_lib_l1_sender_config<Input>(
         self,
         operator_signer: SignerConfig,
@@ -1666,32 +1666,32 @@ impl GwSenderConfig {
     }
 }
 
-impl From<GwSenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<CommitCommand> {
-    fn from(c: GwSenderConfig) -> Self {
+impl From<GatewaySenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<CommitCommand> {
+    fn from(c: GatewaySenderConfig) -> Self {
         let signer = c
             .operator_commit_sk
             .clone()
-            .expect("gw_sender.operator_commit_sk must be set when settling on Gateway");
+            .expect("gateway_sender.operator_commit_sk must be set when settling on Gateway");
         c.into_lib_l1_sender_config(signer)
     }
 }
 
-impl From<GwSenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ProofCommand> {
-    fn from(c: GwSenderConfig) -> Self {
+impl From<GatewaySenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ProofCommand> {
+    fn from(c: GatewaySenderConfig) -> Self {
         let signer = c
             .operator_prove_sk
             .clone()
-            .expect("gw_sender.operator_prove_sk must be set when settling on Gateway");
+            .expect("gateway_sender.operator_prove_sk must be set when settling on Gateway");
         c.into_lib_l1_sender_config(signer)
     }
 }
 
-impl From<GwSenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> {
-    fn from(c: GwSenderConfig) -> Self {
+impl From<GatewaySenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> {
+    fn from(c: GatewaySenderConfig) -> Self {
         let signer = c
             .operator_execute_sk
             .clone()
-            .expect("gw_sender.operator_execute_sk must be set when settling on Gateway");
+            .expect("gateway_sender.operator_execute_sk must be set when settling on Gateway");
         c.into_lib_l1_sender_config(signer)
     }
 }
@@ -2019,7 +2019,7 @@ mod tests {
                 pubdata_mode: Some(PubdataMode::Blobs),
                 max_batch_diff_to_upstream: None,
             },
-            gw_sender_config: GwSenderConfig::default(),
+            gateway_sender_config: GatewaySenderConfig::default(),
             l1_watcher_config: L1WatcherConfig::default(),
             batcher_config: BatcherConfig::default(),
             prover_input_generator_config: ProverInputGeneratorConfig::default(),
@@ -2170,29 +2170,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn main_node_can_omit_l1_sender_operator_keys_when_gw_sender_keys_set() {
+    async fn main_node_can_omit_l1_sender_operator_keys_when_gateway_sender_keys_set() {
         let mut config = base_config(NodeRole::MainNode);
         config.l1_sender_config.operator_commit_sk = None;
         config.l1_sender_config.operator_prove_sk = None;
         config.l1_sender_config.operator_execute_sk = None;
-        config.gw_sender_config.operator_commit_sk = Some(local_signer(0x44));
-        config.gw_sender_config.operator_prove_sk = Some(local_signer(0x55));
-        config.gw_sender_config.operator_execute_sk = Some(local_signer(0x66));
+        config.gateway_sender_config.operator_commit_sk = Some(local_signer(0x44));
+        config.gateway_sender_config.operator_prove_sk = Some(local_signer(0x55));
+        config.gateway_sender_config.operator_execute_sk = Some(local_signer(0x66));
 
         config.validate().await.unwrap();
     }
 
     #[tokio::test]
-    async fn main_node_validation_rejects_duplicate_gw_sender_addresses() {
+    async fn main_node_validation_rejects_duplicate_gateway_sender_addresses() {
         let mut config = base_config(NodeRole::MainNode);
         let signer = local_signer(0x77);
-        config.gw_sender_config.operator_commit_sk = Some(signer.clone());
-        config.gw_sender_config.operator_prove_sk = Some(signer);
-        config.gw_sender_config.operator_execute_sk = Some(local_signer(0x88));
+        config.gateway_sender_config.operator_commit_sk = Some(signer.clone());
+        config.gateway_sender_config.operator_prove_sk = Some(signer);
+        config.gateway_sender_config.operator_execute_sk = Some(local_signer(0x88));
 
         let err = config.validate().await.unwrap_err().to_string();
 
-        assert!(err.contains("`gw_sender.operator_commit_sk`"));
+        assert!(err.contains("`gateway_sender.operator_commit_sk`"));
         assert!(err.contains("must be different"));
     }
 
