@@ -1020,8 +1020,8 @@ pub struct L1SenderConfig {
     pub enabled: bool,
 
     /// Pubdata mode used by block-producing components on the Main Node. Only read from config
-    /// when the chain settles on L1; when settling on Gateway, the effective mode is always
-    /// [`PubdataMode::RelayedL2Calldata`] regardless of this value. Required at runtime only
+    /// when the chain settles on L1; when settling on Gateway, the effective mode is derived
+    /// from the gateway's DA input mode and this value is ignored. Required at runtime only
     /// for Main Nodes settling on L1; External Nodes never produce blocks and may leave it unset.
     #[config(with = Serde![str])]
     pub pubdata_mode: Option<PubdataMode>,

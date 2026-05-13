@@ -249,12 +249,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     // Effective pubdata mode used by all block-producing components: read from config only when
-    // the chain settles on L1. When settling on Gateway, it is always
-    // `PubdataMode::RelayedL2Calldata` regardless of what is configured.
+    // the chain settles on L1. When settling on Gateway, it is derived from the gateway's DA
+    // input mode: Rollup gateway -> RelayedL2Calldata, Validium gateway -> Validium.
     let effective_pubdata_mode: Option<PubdataMode> = if node_role.is_main() {
         Some(effective_main_node_pubdata_mode(
             &config,
             settles_on_gateway,
+            l1_state.da_input_mode,
         ))
     } else {
         // External nodes do not produce blocks; pubdata mode is irrelevant for them.
@@ -1550,12 +1551,20 @@ fn check_batch_verification_mismatch(
 }
 
 /// Returns the pubdata mode used by all block-producing components on the Main Node, taking
-/// settlement-layer discovery into account: when the chain settles on Gateway it is always
-/// [`PubdataMode::RelayedL2Calldata`]; when it settles on L1, the configured
+/// settlement-layer discovery into account: when the chain settles on Gateway, the mode is
+/// derived from the gateway's DA input mode (`Rollup` → [`PubdataMode::RelayedL2Calldata`],
+/// `Validium` → [`PubdataMode::Validium`]); when it settles on L1, the configured
 /// `l1_sender.pubdata_mode` is used (and its presence is enforced here).
-fn effective_main_node_pubdata_mode(config: &Config, settles_on_gateway: bool) -> PubdataMode {
+fn effective_main_node_pubdata_mode(
+    config: &Config,
+    settles_on_gateway: bool,
+    da_input_mode: BatchDaInputMode,
+) -> PubdataMode {
     if settles_on_gateway {
-        PubdataMode::RelayedL2Calldata
+        match da_input_mode {
+            BatchDaInputMode::Rollup => PubdataMode::RelayedL2Calldata,
+            BatchDaInputMode::Validium => PubdataMode::Validium,
+        }
     } else {
         config
             .l1_sender_config
