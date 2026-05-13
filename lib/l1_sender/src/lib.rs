@@ -27,7 +27,7 @@ use alloy::transports::TransportError;
 use anyhow::Context as _;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState, StateLabel};
@@ -70,6 +70,7 @@ const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 /// In case there's only one chain connected to gateway, it is very likely that there will be not enough block production
 /// to reach 3 confirmations for such transactions
 const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
+const OPERATOR_METRICS_POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy)]
 struct FeeParams {
@@ -110,7 +111,7 @@ where
     Input: SendToL1 + Send + 'static,
 {
     pub async fn run_l1_sender(
-        mut self,
+        &self,
         // == plumbing ==
         mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
         outbound: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
@@ -120,7 +121,6 @@ where
         let fee_config = self.config.fee_config;
         let force_transaction_resubmission = self.config.force_transaction_resubmission;
 
-        self.register_operator().await?;
         let mut cmd_buffer = Vec::with_capacity(self.config.command_limit);
         // Process all potential passthrough commands first
         if self
@@ -722,6 +722,22 @@ where
         Ok(())
     }
 
+    async fn report_operator_metrics_loop(&self) -> anyhow::Result<()> {
+        let command_name = Input::COMPONENT_ID.as_str();
+        let mut timer = tokio::time::interval(OPERATOR_METRICS_POLL_INTERVAL);
+        loop {
+            timer.tick().await;
+            let operator_address = self.operator_address().await?;
+            let balance = format_ether(self.provider.get_balance(operator_address).await?);
+            let nonce = self
+                .provider
+                .get_transaction_count(operator_address)
+                .await?;
+            L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
+            L1_SENDER_METRICS.nonce[&command_name].set(nonce);
+        }
+    }
+
     /// Estimates EIP-1559 fees using the provided percentile of priority fees over the specified
     /// fee-history window.
     ///
@@ -749,13 +765,10 @@ where
         let address = self
             .config
             .operator_signer
-            .clone()
             .register_with_wallet(self.provider.wallet_mut())
             .await?;
 
         let balance = self.provider.get_balance(address).await?;
-        L1_SENDER_METRICS.balance[&Input::COMPONENT_ID.as_str()]
-            .set(format_ether(balance).parse()?);
         let address_string: &'static str = address.to_string().leak();
         L1_SENDER_METRICS.l1_operator_address[&(Input::COMPONENT_ID.as_str(), address_string)]
             .set(1);

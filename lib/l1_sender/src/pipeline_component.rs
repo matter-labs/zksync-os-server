@@ -36,11 +36,15 @@ where
     const COMPONENT_ID: zksync_os_pipeline::ComponentId = C::COMPONENT_ID;
 
     async fn run(
-        self,
+        mut self,
         input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        self.run_l1_sender(input, output, state_reporter).await
+        self.register_operator().await?;
+        tokio::select! {
+            result = self.run_l1_sender(input, output, state_reporter) => result,
+            result = self.report_operator_metrics_loop() => result,
+        }
     }
 }
