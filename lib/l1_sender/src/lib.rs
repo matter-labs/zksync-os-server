@@ -120,16 +120,11 @@ where
         let fee_config = self.config.fee_config;
         let force_transaction_resubmission = self.config.force_transaction_resubmission;
 
-        let operator_address = self.register_operator().await?;
+        self.register_operator().await?;
         let mut cmd_buffer = Vec::with_capacity(self.config.command_limit);
         // Process all potential passthrough commands first
         if self
-            .process_prepending_passthrough_commands(
-                &mut inbound,
-                &outbound,
-                &state_reporter,
-                command_name,
-            )
+            .process_prepending_passthrough_commands(&mut inbound, &outbound, &state_reporter)
             .await?
             .is_none()
         {
@@ -143,12 +138,7 @@ where
             vec![]
         } else {
             match self
-                .recover_in_flight_txs(
-                    operator_address,
-                    &mut inbound,
-                    command_name,
-                    &state_reporter,
-                )
+                .recover_in_flight_txs(&mut inbound, &state_reporter)
                 .await
             {
                 Ok(paired) => paired,
@@ -170,14 +160,8 @@ where
                     (fut, cmd, Instant::now())
                 })
                 .collect();
-            self.wait_for_txs_and_forward(
-                pending_txs,
-                operator_address,
-                command_name,
-                &state_reporter,
-                &outbound,
-            )
-            .await?;
+            self.wait_for_txs_and_forward(pending_txs, &state_reporter, &outbound)
+                .await?;
         }
 
         // At this point, recovered in-flight transactions are confirmed. If force resubmission is
@@ -233,6 +217,7 @@ where
                         force_transaction_resubmission,
                     )
                     .await?;
+                    let operator_address = self.operator_address().await?;
                     let mut tx_request = self
                         .tx_request_with_gas_fields(operator_address, fee_params)
                         .with_to(self.to_address)
@@ -313,14 +298,8 @@ where
                 .try_collect::<Vec<_>>()
                 .await?;
             tracing::info!(command_name, range, "sent to L1, waiting for inclusion");
-            self.wait_for_txs_and_forward(
-                pending_txs,
-                operator_address,
-                command_name,
-                &state_reporter,
-                &outbound,
-            )
-            .await?;
+            self.wait_for_txs_and_forward(pending_txs, &state_reporter, &outbound)
+                .await?;
         }
     }
 
@@ -329,11 +308,10 @@ where
     async fn wait_for_txs_and_forward(
         &self,
         pending_txs: Vec<PendingTx<Input>>,
-        operator_address: Address,
-        command_name: &'static str,
         state_reporter: &ComponentStateReporter,
         outbound: &mpsc::Sender<SignedBatchEnvelope<FriProof>>,
     ) -> anyhow::Result<()> {
+        let command_name = Input::COMPONENT_ID.as_str();
         state_reporter.enter_state(L1SenderState::WaitingL1Inclusion);
 
         let completed_commands: Vec<Input> = async {
@@ -352,6 +330,7 @@ where
         .await?;
 
         let range = Input::display_range(&completed_commands);
+        let operator_address = self.operator_address().await?;
         let balance = format_ether(self.provider.get_balance(operator_address).await?);
         let nonce = self
             .provider
@@ -460,11 +439,11 @@ where
     /// cause us to mis-count in-flight txs and crash on calldata mismatch.
     async fn recover_in_flight_txs(
         &self,
-        operator_address: Address,
         inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
-        command_name: &str,
         state_reporter: &ComponentStateReporter,
     ) -> anyhow::Result<Vec<(alloy::primitives::B256, Input)>> {
+        let command_name = Input::COMPONENT_ID.as_str();
+        let operator_address = self.operator_address().await?;
         let latest_nonce = self
             .provider
             .get_transaction_count(operator_address)
@@ -582,8 +561,8 @@ where
         inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
         outbound: &mpsc::Sender<SignedBatchEnvelope<FriProof>>,
         state_reporter: &ComponentStateReporter,
-        command_name: &str,
     ) -> anyhow::Result<Option<()>> {
+        let command_name = Input::COMPONENT_ID.as_str();
         loop {
             state_reporter.enter_state(L1SenderState::Idle);
             match inbound
@@ -766,7 +745,7 @@ where
         ))
     }
 
-    async fn register_operator(&mut self) -> anyhow::Result<Address> {
+    async fn register_operator(&mut self) -> anyhow::Result<()> {
         let address = self
             .config
             .operator_signer
@@ -791,7 +770,7 @@ where
             %address,
             "initialized L1 sender",
         );
-        Ok(address)
+        Ok(())
     }
 
     async fn validate_tx_receipt(
