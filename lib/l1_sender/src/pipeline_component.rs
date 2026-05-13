@@ -1,6 +1,5 @@
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
-use crate::run_l1_sender;
 use alloy::network::{Ethereum, EthereumWallet};
 use alloy::primitives::Address;
 use alloy::providers::fillers::{FillProvider, TxFiller};
@@ -42,17 +41,6 @@ where
         output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        run_l1_sender(
-            input,
-            output,
-            self.to_address,
-            self.provider,
-            self.config,
-            self.gateway,
-            state_reporter,
-            self.commit_submitted_tx,
-            self.sl_block_number,
-        )
-        .await
+        self.run_l1_sender(input, output, state_reporter).await
     }
 }
