@@ -15,7 +15,7 @@ pub enum BlockBoundary {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChainHead {
     pub latest_block: BlockNumber,
-    pub finalized_block: Option<BlockNumber>,
+    pub finalized_block: BlockNumber,
 }
 
 /// Used for reading L1 data which might be used by more than one watcher.
@@ -40,7 +40,7 @@ impl WatcherCache {
         self.l1_head.subscribe()
     }
 
-    pub fn get_block_number(&self, boundary: BlockBoundary) -> Option<BlockNumber> {
+    pub fn get_block_number(&self, boundary: BlockBoundary) -> BlockNumber {
         self.l1_head.borrow().get_block_number(boundary)
     }
 
@@ -67,7 +67,8 @@ impl WatcherCache {
         let finalized_block = self
             .provider
             .get_block_number_by_id(BlockId::finalized())
-            .await?;
+            .await?
+            .expect("no finalized blocks yet");
         let next = ChainHead {
             latest_block,
             finalized_block,
@@ -85,44 +86,12 @@ impl WatcherCache {
 }
 
 impl ChainHead {
-    fn get_block_number(&self, boundary: BlockBoundary) -> Option<BlockNumber> {
+    fn get_block_number(&self, boundary: BlockBoundary) -> BlockNumber {
         match boundary {
             BlockBoundary::Confirmed { confirmations } => {
-                Some(self.latest_block.saturating_sub(confirmations))
+                self.latest_block.saturating_sub(confirmations)
             }
             BlockBoundary::Finalized => self.finalized_block,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn confirmed_boundary_saturates() {
-        let state = ChainHead {
-            latest_block: 7,
-            finalized_block: Some(3),
-        };
-
-        assert_eq!(
-            state.get_block_number(BlockBoundary::Confirmed { confirmations: 10 }),
-            Some(0)
-        );
-        assert_eq!(
-            state.get_block_number(BlockBoundary::Confirmed { confirmations: 2 }),
-            Some(5)
-        );
-    }
-
-    #[test]
-    fn finalized_boundary_can_be_missing() {
-        let state = ChainHead {
-            latest_block: 7,
-            finalized_block: None,
-        };
-
-        assert_eq!(state.get_block_number(BlockBoundary::Finalized), None);
     }
 }

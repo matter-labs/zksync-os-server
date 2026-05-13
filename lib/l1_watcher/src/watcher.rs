@@ -109,27 +109,7 @@ impl L1Watcher {
             // so the confirmation/finalization window doesn't apply and we don't need an
             // additional RPC.
             Some(eb) => eb,
-            None => {
-                let Some(block_number) = self.watcher_cache.get_block_number(self.block_boundary)
-                else {
-                    match self.block_boundary {
-                        BlockBoundary::Finalized => {
-                            tracing::debug!(
-                                event_name = &self.processor.name(),
-                                "no finalized L1 block available yet"
-                            );
-                            return Ok(());
-                        }
-                        BlockBoundary::Confirmed { confirmations } => {
-                            return Err(L1WatcherError::Other(anyhow::anyhow!(
-                                "watcher cache did not return confirmed L1 block \
-                                 with {confirmations} confirmations"
-                            )));
-                        }
-                    }
-                };
-                block_number
-            }
+            None => self.watcher_cache.get_block_number(self.block_boundary),
         };
 
         while self.next_block <= cap {
