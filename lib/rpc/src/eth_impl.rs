@@ -793,7 +793,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
                 EthSendRawTransactionSyncError::Regular(inner) => {
                     TX_SUBMISSION.rejections[&TxRejectionReason::from(inner)].inc();
                 }
-                EthSendRawTransactionSyncError::RejectedDuringExecution { .. } => {
+                EthSendRawTransactionSyncError::RejectedDuringExecution(_) => {
                     TX_SUBMISSION.rejections[&TxRejectionReason::RejectedDuringExecution].inc();
                 }
                 EthSendRawTransactionSyncError::Timeout(_) => {}

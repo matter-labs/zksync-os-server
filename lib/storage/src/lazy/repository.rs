@@ -243,7 +243,7 @@ impl WriteRepository for RepositoryManager {
         let notification = BlockNotification {
             block,
             transactions,
-            failed_transactions: failed_transactions.into_iter().collect(),
+            failed_transactions: Arc::new(failed_transactions.into_iter().collect()),
         };
         // Ignore error if there are no subscribed receivers
         let _ = self.block_sender.send(notification);

@@ -15,7 +15,7 @@ pub struct BlockNotification {
     pub transactions: HashMap<TxHash, Arc<StoredTxData>>,
     /// Txs the VM rejected during block building. Not part of the canonical block.
     /// Surfaced so RPC subscribers can report a reason instead of timing out.
-    pub failed_transactions: HashMap<TxHash, InvalidTransaction>,
+    pub failed_transactions: Arc<HashMap<TxHash, InvalidTransaction>>,
 }
 
 /// A type that allows to register block subscriptions.
