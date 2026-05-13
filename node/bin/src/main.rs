@@ -23,9 +23,6 @@ use zksync_os_state_full_diffs::FullDiffsState;
 #[global_allocator]
 static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-#[cfg(all(feature = "jemalloc", target_family = "unix"))]
-mod jemalloc_metrics;
-
 const IMMEDIATE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// Push interval for push exporter (almost all metrics are pull)
@@ -192,7 +189,7 @@ pub async fn main() {
         None
     } else {
         #[cfg(all(feature = "jemalloc", target_family = "unix"))]
-        jemalloc_metrics::register();
+        zksync_os_observability::jemalloc::register_monitor();
 
         runtime.spawn_critical_with_graceful_shutdown_signal("prometheus", |shutdown| async move {
             let prometheus: PrometheusExporterConfig =

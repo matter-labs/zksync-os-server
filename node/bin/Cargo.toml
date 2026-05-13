@@ -17,8 +17,7 @@ path = "src/main.rs"
 default = ["jemalloc"]
 jemalloc = [
     "dep:tikv-jemallocator",
-    "dep:tikv-jemalloc-ctl",
-    "tikv-jemalloc-ctl/stats",
+    "zksync_os_observability/jemalloc",
     "tikv-jemallocator/stats",
 ]
 
@@ -120,4 +119,3 @@ tar.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = { workspace = true, optional = true }
-tikv-jemalloc-ctl = { workspace = true, optional = true }

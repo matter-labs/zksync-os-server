@@ -34,7 +34,7 @@ static METRICS: Collector<JemallocMetrics> = Collector::new();
 
 static WARN_ON_COLLECT_ERROR: Once = Once::new();
 
-pub(crate) fn register() {
+pub fn register_monitor() {
     METRICS.before_scrape(scrape).ok();
 }
 
