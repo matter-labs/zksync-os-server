@@ -59,12 +59,12 @@ Current archive implementations:
 
 Current reader implementation:
 
-- `FileSystemReplayArchiveReader`: lists and reads archive objects from the filesystem layout.
+- `FileSystemReplayArchiveReader`: lists archive objects from the filesystem layout.
 
 Other storage backends, such as S3, should implement:
 
 - `ReplayArchiveStorage` for node-side append/check operations.
-- `ReplayArchiveStorageReader` for recovery-side listing and reading.
+- `ReplayArchiveStorageReader` for recovery-side object listing.
 
 ## Encryption
 

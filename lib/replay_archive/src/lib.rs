@@ -25,7 +25,7 @@ pub use init::{
     InitializedReplayArchive, ReplayArchiveConfig, ReplayArchiveEncryptionConfig,
     init_replay_archive,
 };
-pub use reader::{ReplayArchiveObjectStream, ReplayArchiveStorageReader};
+pub use reader::{ReplayArchiveObject, ReplayArchiveObjectStream, ReplayArchiveStorageReader};
 pub use recovery::{
     decrypt_downloaded_replay_archive_objects, download_all_replay_archive_objects,
     recover_replay_records_to_rocksdb, recover_replay_records_to_rocksdb_with_optional_decryption,

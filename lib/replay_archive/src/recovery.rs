@@ -27,16 +27,12 @@ where
         output_root = %output_root.display(),
         "Starting replay archive object download"
     );
-    let mut keys = reader.list_objects().await;
+    let mut objects = reader.list_objects().await;
     let mut downloaded = 0;
 
-    while let Some(key) = keys.next().await {
-        let key = key?;
-        let object = reader
-            .read_object(&key)
-            .await
-            .with_context(|| format!("failed to read replay archive object {key}"))?;
-        write_downloaded_object(output_root, &key, object).await?;
+    while let Some(object) = objects.next().await {
+        let object = object?;
+        write_downloaded_object(output_root, &object.key, object.bytes).await?;
         downloaded += 1;
         log_recovery_progress(downloaded, || {
             tracing::info!(downloaded, "Downloaded replay archive objects");

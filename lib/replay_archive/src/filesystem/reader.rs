@@ -1,5 +1,6 @@
 use crate::{
-    ReplayArchiveKey, ReplayArchiveObjectStream, ReplayArchiveSession, ReplayArchiveStorageReader,
+    ReplayArchiveKey, ReplayArchiveObject, ReplayArchiveObjectStream, ReplayArchiveSession,
+    ReplayArchiveStorageReader,
 };
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
@@ -26,10 +27,6 @@ impl FileSystemReplayArchiveReader {
     pub fn root_path(&self) -> &Path {
         &self.root_path
     }
-
-    fn object_path(&self, key: &ReplayArchiveKey) -> PathBuf {
-        self.root_path.join(key.object_path())
-    }
 }
 
 #[async_trait]
@@ -44,21 +41,11 @@ impl ReplayArchiveStorageReader for FileSystemReplayArchiveReader {
         });
         ReceiverStream::new(receiver).boxed()
     }
-
-    async fn read_object(&self, key: &ReplayArchiveKey) -> anyhow::Result<Vec<u8>> {
-        let object_path = self.object_path(key);
-        tokio::fs::read(&object_path).await.with_context(|| {
-            format!(
-                "failed to read replay archive object {}",
-                object_path.display()
-            )
-        })
-    }
 }
 
 async fn list_objects(
     root_path: PathBuf,
-    sender: mpsc::Sender<anyhow::Result<ReplayArchiveKey>>,
+    sender: mpsc::Sender<anyhow::Result<ReplayArchiveObject>>,
 ) -> anyhow::Result<()> {
     let mut session_entries = tokio::fs::read_dir(&root_path)
         .await
@@ -133,7 +120,19 @@ async fn list_objects(
 
                 let block_hash = parse_block_hash_entry(&object_entry)?;
                 let key = ReplayArchiveKey::new(session.clone(), block_number, block_hash);
-                if sender.send(Ok(key)).await.is_err() {
+                let bytes = tokio::fs::read(object_entry.path())
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to read replay archive object {}",
+                            object_entry.path().display()
+                        )
+                    })?;
+                if sender
+                    .send(Ok(ReplayArchiveObject { key, bytes }))
+                    .await
+                    .is_err()
+                {
                     return Ok(());
                 }
             }
