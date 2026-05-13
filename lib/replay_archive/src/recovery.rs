@@ -27,7 +27,7 @@ where
         output_root = %output_root.display(),
         "Starting replay archive object download"
     );
-    let mut keys = reader.list_objects().await?;
+    let mut keys = reader.list_objects().await;
     let mut downloaded = 0;
 
     while let Some(key) = keys.next().await {

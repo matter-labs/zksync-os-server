@@ -10,7 +10,7 @@ pub type ReplayArchiveObjectStream = BoxStream<'static, anyhow::Result<ReplayArc
 #[async_trait]
 pub trait ReplayArchiveStorageReader {
     /// Lists all stored replay archive objects.
-    async fn list_objects(&self) -> anyhow::Result<ReplayArchiveObjectStream>;
+    async fn list_objects(&self) -> ReplayArchiveObjectStream;
 
     /// Reads an object by its normalized archive key.
     async fn read_object(&self, key: &ReplayArchiveKey) -> anyhow::Result<Vec<u8>>;

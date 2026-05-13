@@ -34,7 +34,7 @@ impl FileSystemReplayArchiveReader {
 
 #[async_trait]
 impl ReplayArchiveStorageReader for FileSystemReplayArchiveReader {
-    async fn list_objects(&self) -> anyhow::Result<ReplayArchiveObjectStream> {
+    async fn list_objects(&self) -> ReplayArchiveObjectStream {
         let root_path = self.root_path.clone();
         let (sender, receiver) = mpsc::channel(LIST_OBJECTS_CHANNEL_SIZE);
         tokio::spawn(async move {
@@ -42,7 +42,7 @@ impl ReplayArchiveStorageReader for FileSystemReplayArchiveReader {
                 let _ = sender.send(Err(err)).await;
             }
         });
-        Ok(ReceiverStream::new(receiver).boxed())
+        ReceiverStream::new(receiver).boxed()
     }
 
     async fn read_object(&self, key: &ReplayArchiveKey) -> anyhow::Result<Vec<u8>> {
