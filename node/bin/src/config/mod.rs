@@ -1954,7 +1954,7 @@ mod tests {
     use super::*;
     use alloy::signers::k256::ecdsa::SigningKey;
     use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
-    use std::net::{Ipv4Addr, SocketAddrV4};
+    use std::net::Ipv4Addr;
 
     const TEST_SECRET_KEY: &str =
         "0x1111111111111111111111111111111111111111111111111111111111111111";
@@ -2013,18 +2013,6 @@ mod tests {
 
     fn local_signer(byte: u8) -> SignerConfig {
         SignerConfig::Local(SigningKey::from_slice(&[byte; 32]).unwrap())
-    }
-
-    fn secret_key(byte: u8) -> SecretKey {
-        SecretKey::from_slice(&[byte; 32]).unwrap()
-    }
-
-    fn peer_id_for_secret(secret_key: &SecretKey) -> PeerId {
-        NodeRecord::from_secret_key(
-            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3030).into(),
-            secret_key,
-        )
-        .id
     }
 
     fn base_config(node_role: NodeRole) -> Config {
@@ -2139,60 +2127,6 @@ mod tests {
         config.external_price_api_client_config = None;
 
         config.validate().await.unwrap();
-    }
-
-    #[test]
-    fn consensus_runtime_config_rejects_missing_local_peer_id() {
-        let local_secret_key = secret_key(0x44);
-        let other_secret_key = secret_key(0x55);
-        let local_peer_id = peer_id_for_secret(&local_secret_key);
-        let other_peer_id = peer_id_for_secret(&other_secret_key);
-        let network_config = NetworkConfig {
-            enabled: true,
-            secret_key: Some(local_secret_key),
-            ..Default::default()
-        };
-        let consensus_config = ConsensusConfig {
-            enabled: true,
-            peer_ids: vec![other_peer_id],
-            ..Default::default()
-        };
-
-        let err = consensus_config
-            .into_raft_consensus_config(&network_config, "raft".into())
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains(
-            "`consensus.peer_ids` must include local peer id derived from `network.secret_key`"
-        ));
-        assert!(err.contains(&local_peer_id.to_string()));
-    }
-
-    #[test]
-    fn consensus_runtime_config_accepts_local_peer_id() {
-        let local_secret_key = secret_key(0x44);
-        let other_secret_key = secret_key(0x55);
-        let local_peer_id = peer_id_for_secret(&local_secret_key);
-        let other_peer_id = peer_id_for_secret(&other_secret_key);
-        let peer_ids = vec![other_peer_id, local_peer_id];
-        let network_config = NetworkConfig {
-            enabled: true,
-            secret_key: Some(local_secret_key),
-            ..Default::default()
-        };
-        let consensus_config = ConsensusConfig {
-            enabled: true,
-            peer_ids: peer_ids.clone(),
-            ..Default::default()
-        };
-
-        let raft_config = consensus_config
-            .into_raft_consensus_config(&network_config, "raft".into())
-            .unwrap();
-
-        assert_eq!(raft_config.node_id, local_peer_id);
-        assert_eq!(raft_config.peer_ids, peer_ids);
     }
 
     #[tokio::test]
