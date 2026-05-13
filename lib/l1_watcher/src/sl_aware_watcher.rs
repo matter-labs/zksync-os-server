@@ -1,6 +1,6 @@
 use crate::util;
 use crate::watcher::L1Watcher;
-use crate::{L1WatcherConfig, ProcessRawEvents};
+use crate::{L1WatcherConfig, ProcessRawEvents, WatcherCache};
 use alloy::providers::DynProvider;
 use anyhow::Context;
 use std::collections::VecDeque;
@@ -13,6 +13,8 @@ use zksync_os_contract_interface::ZkChain;
 pub struct SegmentSpec {
     /// ZKChain (diamond proxy + provider) that hosts commit/execute events for this segment.
     pub zk_chain: ZkChain<DynProvider>,
+    /// Block boundary cache for the segment's settlement-layer provider.
+    pub watcher_cache: WatcherCache,
     /// First batch, inclusive, whose commit block the watcher should resolve to its scan start.
     pub first_batch: u64,
     /// Last batch, inclusive, whose execute block closes the segment. `None` means open-ended.
@@ -126,7 +128,7 @@ async fn run_segment(
     // so persistence-style processors only react to irreversibly observed events.
     let mut watcher = L1Watcher::new_finalized(
         config,
-        zk_chain.provider().clone(),
+        segment.watcher_cache,
         (*zk_chain.address()).into(),
         start_block,
         end_block,

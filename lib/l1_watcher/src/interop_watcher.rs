@@ -11,7 +11,7 @@ use zksync_os_types::IndexedInteropRoot;
 
 use crate::util::find_l1_block_by_interop_root_id;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, ProcessRawEvents};
+use crate::{L1WatcherConfig, ProcessRawEvents, WatcherCache};
 
 /// Watches interop root updates on the settlement layer and feeds them into the interop subpool.
 ///
@@ -30,6 +30,7 @@ impl InteropWatcher {
         starting_interop_root_id: u64,
         interop_roots_subpool: InteropRootsSubpool,
         l1_chain_id: u64,
+        watcher_cache: WatcherCache,
     ) -> anyhow::Result<L1Watcher> {
         let contract_address = bridgehub.message_root_address().await?;
 
@@ -49,7 +50,7 @@ impl InteropWatcher {
 
         L1Watcher::new(
             config,
-            bridgehub.provider().clone(),
+            watcher_cache,
             contract_address.into(),
             next_l1_block,
             None,

@@ -3,6 +3,9 @@ pub use config::L1WatcherConfig;
 
 mod metrics;
 
+mod watcher_cache;
+pub use watcher_cache::{BlockBoundary, ChainHead, WatcherCache};
+
 mod tx_watcher;
 pub use tx_watcher::L1TxWatcher;
 

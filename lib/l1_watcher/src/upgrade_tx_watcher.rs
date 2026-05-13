@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::util::ANVIL_L1_CHAIN_ID;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, ProcessL1Event, util};
+use crate::{L1WatcherConfig, ProcessL1Event, WatcherCache, util};
 use alloy::dyn_abi::SolType;
 use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
 use alloy::providers::{DynProvider, Provider};
@@ -68,6 +68,7 @@ impl L1UpgradeTxWatcher {
         bytecode_supplier_address: Address,
         current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
+        watcher_cache: WatcherCache,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             config.max_blocks_to_process,
@@ -119,7 +120,7 @@ impl L1UpgradeTxWatcher {
         };
         L1Watcher::new(
             config,
-            zk_chain_l1.provider().clone(),
+            watcher_cache,
             admin_l1.into(),
             last_l1_block,
             None,
