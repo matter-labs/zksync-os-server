@@ -28,16 +28,11 @@ impl<Storage> AgeEncryptedReplayArchiver<Storage> {
         Ok(Self::new(storage, recipient))
     }
 
-    pub fn storage(&self) -> &Storage {
-        &self.storage
-    }
-
-    pub fn recipient(&self) -> &age::x25519::Recipient {
-        &self.recipient
-    }
-
-    pub fn encrypt_replay_record(&self, replay_record: &ReplayRecord) -> anyhow::Result<Vec<u8>> {
-        let encoded = encode_replay_record(replay_record)?;
+    pub(crate) fn encrypt_replay_record(
+        &self,
+        replay_record: &ReplayRecord,
+    ) -> anyhow::Result<Vec<u8>> {
+        let encoded = encode_replay_record(replay_record);
         let encoded_len = encoded.len();
         REPLAY_ARCHIVE_METRICS.object_bytes[&"plaintext"].observe(encoded_len);
 
@@ -59,7 +54,7 @@ impl<Storage> AgeEncryptedReplayArchiver<Storage> {
 #[async_trait]
 impl<Storage> ReplayArchiver for AgeEncryptedReplayArchiver<Storage>
 where
-    Storage: ReplayArchiveStorage + Send + Sync,
+    Storage: ReplayArchiveStorage,
 {
     async fn append_replay_record(
         &self,

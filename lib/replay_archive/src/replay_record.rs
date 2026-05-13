@@ -1,7 +1,6 @@
 use crate::metrics::REPLAY_ARCHIVE_METRICS;
 use crate::{ReplayArchiveStorage, ReplayArchiver};
 use alloy::primitives::{BlockHash, BlockNumber};
-use anyhow::Context as _;
 use async_trait::async_trait;
 use zksync_os_storage_api::ReplayRecord;
 
@@ -24,7 +23,7 @@ impl<Storage> ReplayRecordArchiver<Storage> {
 #[async_trait]
 impl<Storage> ReplayArchiver for ReplayRecordArchiver<Storage>
 where
-    Storage: ReplayArchiveStorage + Send + Sync,
+    Storage: ReplayArchiveStorage,
 {
     async fn append_replay_record(
         &self,
@@ -32,7 +31,7 @@ where
         replay_record: ReplayRecord,
     ) -> anyhow::Result<()> {
         let block_number = replay_record.block_context.block_number;
-        let encoded = encode_replay_record(&replay_record)?;
+        let encoded = encode_replay_record(&replay_record);
         REPLAY_ARCHIVE_METRICS.object_bytes[&"stored"].observe(encoded.len());
         self.storage
             .append_object(block_number, block_hash, encoded)
@@ -48,6 +47,6 @@ where
     }
 }
 
-pub(crate) fn encode_replay_record(replay_record: &ReplayRecord) -> anyhow::Result<Vec<u8>> {
-    serde_json::to_vec(replay_record).context("failed to encode replay record")
+pub(crate) fn encode_replay_record(replay_record: &ReplayRecord) -> Vec<u8> {
+    serde_json::to_vec(replay_record).expect("failed to encode replay record")
 }

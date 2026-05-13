@@ -17,8 +17,8 @@ pub struct ReplayArchiveGateComponent<Archive, ReplayStorage> {
 
 impl<Archive, ReplayStorage> ReplayArchiveGateComponent<Archive, ReplayStorage>
 where
-    Archive: ReplayArchiver + Send + Sync + 'static,
-    ReplayStorage: ReadReplay + Send + Sync + 'static,
+    Archive: ReplayArchiver,
+    ReplayStorage: ReadReplay,
 {
     pub fn new(archive: Archive, replay_storage: ReplayStorage) -> Self {
         Self {
@@ -57,8 +57,8 @@ where
 impl<Archive, ReplayStorage> PipelineComponent
     for ReplayArchiveGateComponent<Archive, ReplayStorage>
 where
-    Archive: ReplayArchiver + Send + Sync + 'static,
-    ReplayStorage: ReadReplay + Send + Sync + 'static,
+    Archive: ReplayArchiver,
+    ReplayStorage: ReadReplay,
 {
     type Input = L1SenderCommand<CommitCommand>;
     type Output = L1SenderCommand<CommitCommand>;

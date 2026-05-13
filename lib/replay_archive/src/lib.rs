@@ -165,7 +165,7 @@ fn format_block_hash(block_hash: BlockHash) -> String {
 /// identical. This is intentionally stricter than idempotent object-store writes so that bugs do
 /// not silently replace archived replay data.
 #[async_trait]
-pub trait ReplayArchiveStorage: Sized {
+pub trait ReplayArchiveStorage: Sized + Send + Sync + 'static {
     /// Backend-specific configuration needed to create session-bound storage.
     type Config: Send;
 
@@ -196,7 +196,7 @@ pub trait ReplayArchiveStorage: Sized {
 
 /// Session-bound archive for replay records.
 #[async_trait]
-pub trait ReplayArchiver {
+pub trait ReplayArchiver: Send + Sync + 'static {
     /// Appends `replay_record` at
     /// `<session>/<replay_record.block_context.block_number>/<block_hash>`.
     async fn append_replay_record(
@@ -219,7 +219,7 @@ pub trait ReplayArchiver {
 #[async_trait]
 impl<T> ReplayArchiver for Arc<T>
 where
-    T: ReplayArchiver + ?Sized + Send + Sync,
+    T: ReplayArchiver + ?Sized,
 {
     async fn append_replay_record(
         &self,
@@ -320,7 +320,7 @@ mod tests {
         let replay_record = test_replay_record(7);
 
         let encrypted = archive.encrypt_replay_record(&replay_record).unwrap();
-        let encoded = encode_replay_record(&replay_record).unwrap();
+        let encoded = encode_replay_record(&replay_record);
 
         assert_ne!(encrypted, encoded);
         let decrypted = age::decrypt(&identity, encrypted.as_slice()).unwrap();

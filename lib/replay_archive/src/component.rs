@@ -19,7 +19,7 @@ pub struct ReplayArchiveComponent<Archive> {
 
 impl<Archive> ReplayArchiveComponent<Archive>
 where
-    Archive: ReplayArchiver + Send + Sync + 'static,
+    Archive: ReplayArchiver,
 {
     pub fn new(archive: Archive) -> (ReplayArchiveSender, Self) {
         let (sender, records) = mpsc::channel(REPLAY_ARCHIVE_QUEUE_SIZE);

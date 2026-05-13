@@ -147,18 +147,6 @@ impl FileSystemReplayArchiver {
         let storage = FileSystemReplayArchiveStorage::init(root_path, session).await?;
         Ok(Self::new(storage))
     }
-
-    pub fn storage(&self) -> &FileSystemReplayArchiveStorage {
-        self.inner.storage()
-    }
-
-    pub fn root_path(&self) -> &Path {
-        self.storage().root_path()
-    }
-
-    pub fn session(&self) -> &ReplayArchiveSession {
-        self.storage().session()
-    }
 }
 
 #[async_trait]

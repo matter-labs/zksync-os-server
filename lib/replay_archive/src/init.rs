@@ -13,7 +13,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum ReplayArchiveConfig {
-    Noop {},
+    Noop,
     FileSystem {
         root_path: PathBuf,
         encryption: ReplayArchiveEncryptionConfig,
@@ -22,21 +22,18 @@ pub enum ReplayArchiveConfig {
 
 #[derive(Debug, Clone)]
 pub enum ReplayArchiveEncryptionConfig {
-    Noop {},
+    Noop,
     AgeX25519 { recipient: String },
 }
 
-pub type InitializedReplayArchive = (
-    ReplayArchiveSender,
-    Arc<dyn ReplayArchiver + Send + Sync + 'static>,
-);
+pub type InitializedReplayArchive = (ReplayArchiveSender, Arc<dyn ReplayArchiver>);
 
 pub async fn init_replay_archive(
     config: ReplayArchiveConfig,
     runtime: &Runtime,
 ) -> Option<InitializedReplayArchive> {
     match config {
-        ReplayArchiveConfig::Noop {} => None,
+        ReplayArchiveConfig::Noop => None,
         ReplayArchiveConfig::FileSystem {
             root_path,
             encryption,
@@ -49,8 +46,8 @@ pub async fn init_replay_archive(
                 .await
                 .with_context(|| format!("failed to create replay archive session {session}"))
                 .expect("failed to initialize replay archive");
-            let archive: Arc<dyn ReplayArchiver + Send + Sync> = match &encryption {
-                ReplayArchiveEncryptionConfig::Noop {} => {
+            let archive: Arc<dyn ReplayArchiver> = match &encryption {
+                ReplayArchiveEncryptionConfig::Noop => {
                     Arc::new(FileSystemReplayArchiver::new(storage))
                 }
                 ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => Arc::new(

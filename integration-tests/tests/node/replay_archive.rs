@@ -63,7 +63,7 @@ async fn encrypted_replay_archive_recovers_node_storage_end_to_end(
 
     let archive_root = match &tester.config().replay_archive_config {
         ReplayArchiveConfig::FileSystem { root_path, .. } => root_path.clone(),
-        ReplayArchiveConfig::Noop {} => unreachable!("test enables replay archive"),
+        ReplayArchiveConfig::Noop => unreachable!("test enables replay archive"),
     };
     let rocks_db_path = tester.config().general_config.rocks_db_path.clone();
     let stopped = tester.stop().await?;
@@ -142,7 +142,7 @@ async fn recover_replay_storage_from_archive(
     let decrypted = decrypt_downloaded_replay_archive_objects(
         &downloaded_root,
         &decrypted_root,
-        PathBuf::from(REPLAY_ARCHIVE_IDENTITY_FILE),
+        &PathBuf::from(REPLAY_ARCHIVE_IDENTITY_FILE),
     )
     .await?;
     assert_eq!(
@@ -152,7 +152,7 @@ async fn recover_replay_storage_from_archive(
 
     let recovered = recover_replay_records_to_rocksdb(
         &decrypted_root,
-        rocks_db_path.join("block_replay_wal"),
+        &rocks_db_path.join("block_replay_wal"),
         latest_block_number,
         latest_block_hash,
     )

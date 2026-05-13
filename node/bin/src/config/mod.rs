@@ -1339,7 +1339,7 @@ pub struct ProofStorageConfig {
 #[config(tag = "type", derive(Default))]
 pub enum ReplayArchiveConfig {
     #[config(default)]
-    Noop {},
+    Noop,
     FileSystem {
         /// Root directory for replay archive sessions.
         root_path: PathBuf,
@@ -1353,7 +1353,7 @@ pub enum ReplayArchiveConfig {
 #[config(tag = "type", derive(Default))]
 pub enum ReplayArchiveEncryptionConfig {
     #[config(default)]
-    Noop {},
+    Noop,
     AgeX25519 {
         /// age X25519 recipient public key. The node only needs this public key.
         recipient: String,
@@ -1363,7 +1363,7 @@ pub enum ReplayArchiveEncryptionConfig {
 impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig {
     fn from(config: ReplayArchiveConfig) -> Self {
         match config {
-            ReplayArchiveConfig::Noop {} => zksync_os_replay_archive::ReplayArchiveConfig::Noop {},
+            ReplayArchiveConfig::Noop => zksync_os_replay_archive::ReplayArchiveConfig::Noop,
             ReplayArchiveConfig::FileSystem {
                 root_path,
                 encryption,
@@ -1380,8 +1380,8 @@ impl From<ReplayArchiveEncryptionConfig>
 {
     fn from(config: ReplayArchiveEncryptionConfig) -> Self {
         match config {
-            ReplayArchiveEncryptionConfig::Noop {} => {
-                zksync_os_replay_archive::ReplayArchiveEncryptionConfig::Noop {}
+            ReplayArchiveEncryptionConfig::Noop => {
+                zksync_os_replay_archive::ReplayArchiveEncryptionConfig::Noop
             }
             ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                 zksync_os_replay_archive::ReplayArchiveEncryptionConfig::AgeX25519 { recipient }
@@ -2063,7 +2063,7 @@ mod tests {
     fn replay_archive_config_defaults_to_noop() {
         let config = parse_replay_archive_config([]);
 
-        assert!(matches!(config, ReplayArchiveConfig::Noop {}));
+        assert!(matches!(config, ReplayArchiveConfig::Noop));
     }
 
     #[test]
@@ -2079,9 +2079,9 @@ mod tests {
                 encryption,
             } => {
                 assert_eq!(root_path, PathBuf::from("/tmp/replay-archive"));
-                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop {}));
+                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
-            ReplayArchiveConfig::Noop {} => panic!("expected file system replay archive config"),
+            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
         }
     }
 
@@ -2099,11 +2099,11 @@ mod tests {
                 ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                     assert_eq!(recipient, "age1recipient");
                 }
-                ReplayArchiveEncryptionConfig::Noop {} => {
+                ReplayArchiveEncryptionConfig::Noop => {
                     panic!("expected age X25519 replay archive encryption")
                 }
             },
-            ReplayArchiveConfig::Noop {} => panic!("expected file system replay archive config"),
+            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
         }
     }
 

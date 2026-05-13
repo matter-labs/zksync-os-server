@@ -1149,7 +1149,7 @@ async fn run_main_node_pipeline(
     settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
     replay_archive_sender: Option<ReplayArchiveSender>,
-    replay_archiver: Option<impl ReplayArchiver + Send + Sync + 'static>,
+    replay_archiver: Option<impl ReplayArchiver>,
 ) -> watch::Receiver<TransactionAcceptanceState> {
     let priority_tree_db_path = config
         .general_config

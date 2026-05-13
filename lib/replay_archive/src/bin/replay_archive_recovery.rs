@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
             output_root,
         } => {
             let reader = FileSystemReplayArchiveReader::new(archive_root);
-            let downloaded = download_all_replay_archive_objects(&reader, output_root).await?;
+            let downloaded = download_all_replay_archive_objects(&reader, &output_root).await?;
             println!("Downloaded {downloaded} replay archive objects");
         }
         Command::DecryptDownloaded {
@@ -70,9 +70,12 @@ async fn main() -> anyhow::Result<()> {
             output_root,
             identity_file,
         } => {
-            let decrypted =
-                decrypt_downloaded_replay_archive_objects(input_root, output_root, identity_file)
-                    .await?;
+            let decrypted = decrypt_downloaded_replay_archive_objects(
+                &input_root,
+                &output_root,
+                &identity_file,
+            )
+            .await?;
             println!("Decrypted {decrypted} replay archive objects");
         }
         Command::RecoverRocksdb {
@@ -82,8 +85,8 @@ async fn main() -> anyhow::Result<()> {
             anchor_block_hash,
         } => {
             let recovered = recover_replay_records_to_rocksdb(
-                input_root,
-                replay_db_path,
+                &input_root,
+                &replay_db_path,
                 anchor_block_number,
                 anchor_block_hash,
             )

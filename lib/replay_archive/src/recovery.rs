@@ -18,12 +18,11 @@ use zksync_os_storage_api::{ReplayRecord, WriteReplay};
 /// This keeps all session copies for the same replay record next to each other.
 pub async fn download_all_replay_archive_objects<Reader>(
     reader: &Reader,
-    output_root: impl AsRef<Path>,
+    output_root: &Path,
 ) -> anyhow::Result<usize>
 where
     Reader: ReplayArchiveStorageReader + Sync,
 {
-    let output_root = output_root.as_ref();
     tracing::info!(
         output_root = %output_root.display(),
         "Starting replay archive object download"
@@ -53,16 +52,14 @@ where
 /// The input is expected to use the layout created by [`download_all_replay_archive_objects`].
 /// The same relative layout is preserved under `output_root`.
 pub async fn decrypt_downloaded_replay_archive_objects(
-    input_root: impl AsRef<Path>,
-    output_root: impl AsRef<Path>,
-    identity_file: impl AsRef<Path>,
+    input_root: &Path,
+    output_root: &Path,
+    identity_file: &Path,
 ) -> anyhow::Result<usize> {
-    let input_root = input_root.as_ref();
-    let output_root = output_root.as_ref();
     tracing::info!(
         input_root = %input_root.display(),
         output_root = %output_root.display(),
-        identity_file = %identity_file.as_ref().display(),
+        identity_file = %identity_file.display(),
         "Starting replay archive object decryption"
     );
     let identity = read_age_x25519_identity(identity_file).await?;
@@ -115,13 +112,11 @@ pub async fn decrypt_downloaded_replay_archive_objects(
 /// the same `(block_number, block_hash)` are equal, and writes the recovered canonical chain into
 /// `replay_db_path` using the node replay storage format.
 pub async fn recover_replay_records_to_rocksdb(
-    input_root: impl AsRef<Path>,
-    replay_db_path: impl AsRef<Path>,
+    input_root: &Path,
+    replay_db_path: &Path,
     anchor_block_number: BlockNumber,
     anchor_block_hash: BlockHash,
 ) -> anyhow::Result<usize> {
-    let input_root = input_root.as_ref();
-    let replay_db_path = replay_db_path.as_ref();
     tracing::info!(
         input_root = %input_root.display(),
         replay_db_path = %replay_db_path.display(),
@@ -391,10 +386,7 @@ async fn decrypt_downloaded_object(
     Ok(())
 }
 
-async fn read_age_x25519_identity(
-    identity_file: impl AsRef<Path>,
-) -> anyhow::Result<age::x25519::Identity> {
-    let identity_file = identity_file.as_ref();
+async fn read_age_x25519_identity(identity_file: &Path) -> anyhow::Result<age::x25519::Identity> {
     let contents = tokio::fs::read_to_string(identity_file)
         .await
         .with_context(|| {
