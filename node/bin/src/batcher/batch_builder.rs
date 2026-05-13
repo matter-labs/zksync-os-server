@@ -116,7 +116,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             blob_sidecar,
             first_block_number: block_number_from,
             last_block_number: block_number_to,
-            last_block_hash,
+            last_block_hash: Some(last_block_hash),
             pubdata_mode,
             tx_count: blocks
                 .iter()

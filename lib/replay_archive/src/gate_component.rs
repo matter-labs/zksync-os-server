@@ -94,7 +94,10 @@ where
             );
 
             // Iterates in reverse order so that block hash can be tracked easily.
-            let mut block_hash = envelope.batch.last_block_hash;
+            let mut block_hash = envelope
+                .batch
+                .last_block_hash
+                .expect("Missing last_block_hash");
             for block_number in block_range.rev() {
                 let replay_record = self
                     .replay_storage
