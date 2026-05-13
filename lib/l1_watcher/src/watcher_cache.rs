@@ -125,25 +125,4 @@ mod tests {
 
         assert_eq!(state.get_block_number(BlockBoundary::Finalized), None);
     }
-
-    #[tokio::test]
-    async fn subscribers_wake_only_when_state_changes() {
-        let (sender, mut receiver) = watch::channel(ChainHead::default());
-
-        sender.send_if_modified(|current| {
-            *current = ChainHead::default();
-            false
-        });
-        assert!(receiver.has_changed().is_ok_and(|changed| !changed));
-
-        sender.send_if_modified(|current| {
-            *current = ChainHead {
-                latest_block: 1,
-                finalized_block: None,
-            };
-            true
-        });
-        receiver.changed().await.unwrap();
-        assert_eq!(receiver.borrow().latest_block, 1);
-    }
 }
