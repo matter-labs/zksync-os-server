@@ -96,20 +96,14 @@ struct FeeParams {
 /// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
 impl<LF, LP, Input> L1Sender<LF, LP, Input>
 where
-    LF: TxFiller<Ethereum>,
-    LP: Provider<Ethereum>,
-{
-    pub async fn operator_address(&self) -> anyhow::Result<Address> {
-        self.config.operator_signer.address().await
-    }
-}
-
-impl<LF, LP, Input> L1Sender<LF, LP, Input>
-where
     LF: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
     LP: Provider<Ethereum> + Clone + 'static,
     Input: SendToL1 + Send + 'static,
 {
+    pub async fn operator_address(&self) -> anyhow::Result<Address> {
+        self.config.operator_signer.address().await
+    }
+
     pub async fn run_l1_sender(
         &self,
         // == plumbing ==
@@ -599,38 +593,6 @@ where
             }
         }
     }
-}
-
-impl L1SenderFeeConfig {
-    fn configured_fee_params(self) -> FeeParams {
-        FeeParams {
-            max_fee_per_gas: self.max_fee_per_gas_wei,
-            max_priority_fee_per_gas: self.max_priority_fee_per_gas_wei,
-            max_fee_per_blob_gas: self.max_fee_per_blob_gas_wei,
-        }
-    }
-
-    fn replacement_fee_params(self) -> FeeParams {
-        FeeParams {
-            max_fee_per_gas: ((self.max_fee_per_gas_wei as f64)
-                * self.max_fee_per_gas_replacement_multiplier)
-                .ceil() as u128,
-            max_priority_fee_per_gas: ((self.max_priority_fee_per_gas_wei as f64)
-                * self.max_priority_fee_per_gas_replacement_multiplier)
-                .ceil() as u128,
-            max_fee_per_blob_gas: ((self.max_fee_per_blob_gas_wei as f64)
-                * self.max_fee_per_blob_gas_replacement_multiplier)
-                .ceil() as u128,
-        }
-    }
-}
-
-impl<LF, LP, Input> L1Sender<LF, LP, Input>
-where
-    LF: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
-    LP: Provider<Ethereum> + Clone + 'static,
-    Input: SendToL1 + Send + 'static,
-{
     async fn resolve_fee_params(
         &self,
         fee_config: L1SenderFeeConfig,
@@ -828,6 +790,30 @@ where
                 command,
                 receipt.transaction_hash
             );
+        }
+    }
+}
+
+impl L1SenderFeeConfig {
+    fn configured_fee_params(self) -> FeeParams {
+        FeeParams {
+            max_fee_per_gas: self.max_fee_per_gas_wei,
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas_wei,
+            max_fee_per_blob_gas: self.max_fee_per_blob_gas_wei,
+        }
+    }
+
+    fn replacement_fee_params(self) -> FeeParams {
+        FeeParams {
+            max_fee_per_gas: ((self.max_fee_per_gas_wei as f64)
+                * self.max_fee_per_gas_replacement_multiplier)
+                .ceil() as u128,
+            max_priority_fee_per_gas: ((self.max_priority_fee_per_gas_wei as f64)
+                * self.max_priority_fee_per_gas_replacement_multiplier)
+                .ceil() as u128,
+            max_fee_per_blob_gas: ((self.max_fee_per_blob_gas_wei as f64)
+                * self.max_fee_per_blob_gas_replacement_multiplier)
+                .ceil() as u128,
         }
     }
 }
