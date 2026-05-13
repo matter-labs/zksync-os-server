@@ -175,6 +175,28 @@ impl HttpRpcRecorder {
             samples,
         }
     }
+
+    pub async fn latest_block_number(&self) -> Option<u64> {
+        self.shared
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .find_map(|sample| sample.block_number)
+    }
+
+    pub async fn first_observed_block_at(&self, target_block: u64) -> Option<Duration> {
+        self.shared
+            .lock()
+            .await
+            .iter()
+            .find(|sample| {
+                sample
+                    .block_number
+                    .is_some_and(|block| block >= target_block)
+            })
+            .map(|sample| sample.elapsed)
+    }
 }
 
 impl HttpRpcReport {
@@ -201,6 +223,17 @@ impl HttpRpcReport {
         self.samples
             .iter()
             .find(|sample| sample.is_ready())
+            .map(|sample| sample.elapsed)
+    }
+
+    pub fn first_observed_block_at(&self, target_block: u64) -> Option<Duration> {
+        self.samples
+            .iter()
+            .find(|sample| {
+                sample
+                    .block_number
+                    .is_some_and(|block| block >= target_block)
+            })
             .map(|sample| sample.elapsed)
     }
 

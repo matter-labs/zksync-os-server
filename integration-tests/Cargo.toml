@@ -20,6 +20,7 @@ zksync_os_merkle_tree_api.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_multivm.workspace = true
 zksync_os_network.workspace = true
+zksync_os_status_server.workspace = true
 zksync_os_integration_tests_macros.workspace = true
 zksync_os_verify_storage_proof = { path = "../tools/verify-storage-proof" }
 

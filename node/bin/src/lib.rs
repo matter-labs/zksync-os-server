@@ -24,6 +24,7 @@ use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_ba
 use crate::command_source::{ConsensusNodeCommandSource, ExternalNodeCommandSource};
 use crate::config::{
     Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
+    report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -99,7 +100,8 @@ use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_raft::{
-    BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, loopback_consensus,
+    BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, init_consensus,
+    loopback_consensus,
 };
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
@@ -123,6 +125,7 @@ use zksync_os_types::{
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
+const RAFT_DB_NAME: &str = "raft";
 const STATE_TREE_DB_NAME: &str = "tree";
 const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
 const REPOSITORY_DB_NAME: &str = "repository";
@@ -134,6 +137,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     runtime: &Runtime,
     config: Config,
 ) {
+    report_static_config_metrics(&config);
+
     let node_role = config.general_config.node_role;
     let role: &'static str = node_role.as_str();
 
@@ -203,8 +208,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
 
     tracing::info!("Reading L1 state");
-    let l1_state = if node_role.is_main() {
-        // On the main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
+    let l1_state = if node_role.is_main() && config.batcher_config.enabled {
+        // The batcher node must wait for any pending L1 commit/prove/execute transactions
+        // (from a prior run) to be mined before starting, so it doesn't conflict with itself.
+        // Non-batcher consensus nodes never submit L1 transactions, so they don't need this
+        // wait: calling fetch_finalized on them would spuriously fail when a concurrently
+        // running batcher node keeps submitting new batch transactions.
         L1State::fetch_finalized(
             l1_provider.clone().erased(),
             gateway_provider.as_ref().map(|p| p.clone().erased()),
@@ -273,6 +282,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l1_state.diamond_proxy_l1.clone(),
         chain_id,
     );
+
+    prepare_raft_storage(&config).expect("failed to prepare raft storage");
 
     tracing::info!("Initializing BlockReplayStorage");
 
@@ -425,8 +436,34 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let ConsensusRuntimeParts {
         canonization_engine,
         leadership,
-        ..
-    } = loopback_consensus();
+        raft,
+    } = if config.consensus_config.enabled {
+        init_consensus(
+            runtime,
+            config
+                .consensus_config
+                .clone()
+                .into_raft_consensus_config(
+                    &config.network_config,
+                    config.general_config.rocks_db_path.join(RAFT_DB_NAME),
+                )
+                .expect("failed to build raft consensus config"),
+            Box::new(block_replay_storage.clone()),
+        )
+        .await
+        .expect("failed to initialize consensus engine")
+    } else {
+        tracing::info!("openraft consensus is disabled - assuming perpetual leader role");
+        loopback_consensus()
+    };
+    let (raft_protocol_handler, raft_bootstrapper, raft_status_rx) = match raft {
+        Some(raft) => (
+            Some(raft.protocol_handler),
+            raft.bootstrapper,
+            Some(raft.status_rx),
+        ),
+        None => (None, None, None),
+    };
     if config.network_config.enabled {
         tracing::info!("initializing p2p networking");
         let batch_verification_policy_config: BatchVerificationPolicyConfig =
@@ -442,7 +479,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
-                None,
+                raft_protocol_handler,
             )
             .await
         } else {
@@ -474,12 +511,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
-                None,
+                raft_protocol_handler,
             )
             .await
         }
         .expect("failed to create network service");
         network_service.spawn(runtime, node_role.is_main().then_some(verify_request_rx));
+        if let Some(bootstrapper) = raft_bootstrapper {
+            bootstrapper
+                .bootstrap_if_needed()
+                .await
+                .expect("failed to run raft bootstrap process");
+        }
     } else if node_role.is_main() {
         tracing::info!(
             "p2p networking is disabled; to enable set `network.enabled=true` and populate `network.secret_key`"
@@ -510,7 +553,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             finality_storage.clone(),
             l1_state.sl_block_number,
             node_startup_state.l1_state.l1_chain_id,
-            node_role.is_main().then_some(commit_submitted_rx),
+            // Only nodes that actually submit commit txs locally should arm the
+            // `UnexpectedCommit` guard — otherwise consensus followers configured with
+            // `batcher_config.enabled = false` panic the moment the leader's commit lands on L1.
+            (node_role.is_main() && config.batcher_config.enabled).then_some(commit_submitted_rx),
         )
         .await
         .expect("failed to start L1 commit watcher")
@@ -1010,9 +1056,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .address
             .parse()
             .expect("malformed `status_server.address`");
-        runtime.spawn_critical_with_graceful_shutdown_signal("status server", |shutdown| {
-            run_status_server(addr, shutdown)
-        });
+        runtime.spawn_critical_with_graceful_shutdown_signal(
+            "status server",
+            |shutdown| async move {
+                run_status_server(addr, shutdown, raft_status_rx)
+                    .await
+                    .expect("failed to run status server");
+            },
+        );
     }
 
     // =========== Start JSON RPC ========
@@ -1089,7 +1140,7 @@ async fn run_main_node_pipeline(
 
     let monitor = BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver);
 
-    let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::channel(8);
+    let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::unbounded_channel();
     let (applied_block_number_sender, applied_block_number_receiver) =
         watch::channel(starting_block - 1);
 
@@ -1146,6 +1197,10 @@ async fn run_main_node_pipeline(
         let pipeline = pipeline.pipe(NoOpSink::new());
         let components = pipeline.components();
         pipeline.spawn();
+        runtime.spawn_critical_task(
+            "clear failing block config",
+            clear_failing_block_config_task(finality, internal_config_manager),
+        );
         let snapshot_rx = PipelineTracker::spawn(runtime, components);
         return monitor.spawn(runtime, snapshot_rx);
     }
@@ -1478,7 +1533,6 @@ fn check_batch_verification_mismatch(
     if !server_config.server_enabled {
         return false;
     }
-
     let l1_threshold = match l1_config {
         BatchVerificationSL::Enabled(config) => config.threshold,
         BatchVerificationSL::Disabled => return false,
@@ -1770,6 +1824,53 @@ async fn find_last_matching_main_node_block(
         }
     }
     Ok(left)
+}
+
+fn prepare_raft_storage(config: &Config) -> anyhow::Result<()> {
+    let raft_storage_path = config.general_config.rocks_db_path.join(RAFT_DB_NAME);
+    if config.consensus_config.force_clear_raft_history
+        && raft_storage_path_exists(&raft_storage_path)?
+    {
+        tracing::warn!(
+            path = %raft_storage_path.display(),
+            "force-clearing persisted raft history before startup"
+        );
+        // Use DB::destroy rather than remove_dir_all so that only files RocksDB
+        // tracks are removed; an arbitrary path misconfiguration cannot wipe more.
+        zksync_os_rocksdb::rocksdb::DB::destroy(
+            &zksync_os_rocksdb::rocksdb::Options::default(),
+            &raft_storage_path,
+        )
+        .with_context(|| {
+            format!(
+                "failed to destroy raft storage at {}",
+                raft_storage_path.display()
+            )
+        })?;
+        // DB::destroy leaves behind an empty directory; remove it so the next
+        // open starts completely clean (RocksDB recreates the dir on open).
+        let _ = std::fs::remove_dir(&raft_storage_path);
+    }
+
+    if !config.consensus_config.enabled && raft_storage_path_exists(&raft_storage_path)? {
+        anyhow::bail!(
+            "consensus is disabled but persisted raft history exists at {}; \
+             either re-enable consensus or set `consensus.force_clear_raft_history=true` \
+             to delete stale raft state before startup",
+            raft_storage_path.display()
+        );
+    }
+
+    Ok(())
+}
+
+fn raft_storage_path_exists(path: &Path) -> anyhow::Result<bool> {
+    path.try_exists().with_context(|| {
+        format!(
+            "failed to check whether raft storage exists at {}",
+            path.display()
+        )
+    })
 }
 
 #[cfg(test)]

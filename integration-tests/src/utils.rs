@@ -4,9 +4,14 @@ use std::{
     fs::File,
     io::ErrorKind,
     net::{Ipv4Addr, SocketAddrV4, UdpSocket},
+    time::Duration,
 };
 use tokio::net::TcpListener;
 
+const UNUSED_PORT_RETRY_ATTEMPTS: usize = 1_000;
+const UNUSED_PORT_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+
+#[derive(Debug)]
 pub struct LockedPort {
     pub port: u16,
     lockfile: File,
@@ -15,7 +20,7 @@ pub struct LockedPort {
 impl LockedPort {
     /// Checks if the requested port is free.
     /// Returns the unused port (same value as input, except for `0`).
-    async fn check_port_is_unused(port: u16) -> anyhow::Result<u16> {
+    pub(crate) async fn check_port_is_unused(port: u16) -> anyhow::Result<u16> {
         let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
         let tcp_listener = TcpListener::bind(addr)
             .await
@@ -39,12 +44,20 @@ impl LockedPort {
     /// Acquire an unused port and lock it (meaning no other competing callers of this method can
     /// take this lock). Lock lasts until the returned `LockedPort` instance is dropped.
     pub async fn acquire_unused() -> anyhow::Result<Self> {
-        loop {
-            let port = Self::pick_unused_port().await?;
-            if let Ok(locked_port) = Self::try_lock(port).await {
-                break Ok(locked_port);
+        let mut last_error = None;
+        for _ in 0..UNUSED_PORT_RETRY_ATTEMPTS {
+            match Self::pick_unused_port().await {
+                Ok(port) => match Self::try_lock(port).await {
+                    Ok(locked_port) => return Ok(locked_port),
+                    Err(error) => last_error = Some(error),
+                },
+                Err(error) => last_error = Some(error),
             }
+            tokio::time::sleep(UNUSED_PORT_RETRY_INTERVAL).await;
         }
+
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no unused port acquisition attempted")))
+            .context("failed to acquire an unused port")
     }
 
     /// Acquire a specific port and lock it. Lock lasts until the returned `LockedPort` is dropped.
