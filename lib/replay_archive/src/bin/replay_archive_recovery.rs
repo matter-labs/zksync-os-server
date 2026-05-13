@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use zksync_os_replay_archive::{
-    FileSystemReplayArchiveReader, decrypt_downloaded_replay_archive_objects,
-    download_all_replay_archive_objects, recover_replay_records_to_rocksdb,
+    FileSystemReplayArchiveReader, download_all_replay_archive_objects,
+    recover_replay_records_to_rocksdb_with_optional_decryption,
 };
 
 #[derive(Debug, Parser)]
@@ -23,21 +23,9 @@ enum Command {
         #[arg(long)]
         output_root: PathBuf,
     },
-    /// Decrypt previously downloaded replay archive objects to local disk.
-    DecryptDownloaded {
-        /// Local folder produced by the download command.
-        #[arg(long)]
-        input_root: PathBuf,
-        /// Local folder where decrypted objects should be written.
-        #[arg(long)]
-        output_root: PathBuf,
-        /// age identity file containing AGE-SECRET-KEY.
-        #[arg(long)]
-        identity_file: PathBuf,
-    },
-    /// Rebuild node replay RocksDB from downloaded plaintext replay records.
+    /// Rebuild node replay RocksDB from downloaded replay records.
     RecoverRocksdb {
-        /// Local folder containing plaintext replay records.
+        /// Local folder containing downloaded replay records.
         #[arg(long)]
         input_root: PathBuf,
         /// Output RocksDB path for block replay WAL.
@@ -49,6 +37,9 @@ enum Command {
         /// Canonical anchor block hash.
         #[arg(long)]
         anchor_block_hash: alloy::primitives::BlockHash,
+        /// age identity file containing AGE-SECRET-KEY. If provided, records are decrypted in memory.
+        #[arg(long)]
+        identity_file: Option<PathBuf>,
     },
 }
 
@@ -65,30 +56,19 @@ async fn main() -> anyhow::Result<()> {
             let downloaded = download_all_replay_archive_objects(&reader, &output_root).await?;
             println!("Downloaded {downloaded} replay archive objects");
         }
-        Command::DecryptDownloaded {
-            input_root,
-            output_root,
-            identity_file,
-        } => {
-            let decrypted = decrypt_downloaded_replay_archive_objects(
-                &input_root,
-                &output_root,
-                &identity_file,
-            )
-            .await?;
-            println!("Decrypted {decrypted} replay archive objects");
-        }
         Command::RecoverRocksdb {
             input_root,
             replay_db_path,
             anchor_block_number,
             anchor_block_hash,
+            identity_file,
         } => {
-            let recovered = recover_replay_records_to_rocksdb(
+            let recovered = recover_replay_records_to_rocksdb_with_optional_decryption(
                 &input_root,
                 &replay_db_path,
                 anchor_block_number,
                 anchor_block_hash,
+                identity_file.as_deref(),
             )
             .await?;
             println!("Recovered {recovered} replay records to RocksDB");

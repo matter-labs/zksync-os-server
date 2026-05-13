@@ -9,8 +9,8 @@ use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert}
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, test_multisetup};
 use zksync_os_replay_archive::{
-    FileSystemReplayArchiveReader, decrypt_downloaded_replay_archive_objects,
-    download_all_replay_archive_objects, recover_replay_records_to_rocksdb,
+    FileSystemReplayArchiveReader, download_all_replay_archive_objects,
+    recover_replay_records_to_rocksdb_with_optional_decryption,
 };
 use zksync_os_server::config::{ReplayArchiveConfig, ReplayArchiveEncryptionConfig};
 
@@ -122,7 +122,6 @@ async fn recover_replay_storage_from_archive(
         .context("archive root should have a parent")?
         .join("replay_archive_recovery");
     let downloaded_root = recovery_root.join("downloaded");
-    let decrypted_root = recovery_root.join("decrypted");
     tokio::fs::create_dir_all(rocks_db_path)
         .await
         .with_context(|| {
@@ -139,22 +138,12 @@ async fn recover_replay_storage_from_archive(
         "replay archive should contain encrypted objects"
     );
 
-    let decrypted = decrypt_downloaded_replay_archive_objects(
+    let recovered = recover_replay_records_to_rocksdb_with_optional_decryption(
         &downloaded_root,
-        &decrypted_root,
-        &PathBuf::from(REPLAY_ARCHIVE_IDENTITY_FILE),
-    )
-    .await?;
-    assert_eq!(
-        decrypted, downloaded,
-        "every downloaded replay archive object should decrypt"
-    );
-
-    let recovered = recover_replay_records_to_rocksdb(
-        &decrypted_root,
         &rocks_db_path.join("block_replay_wal"),
         latest_block_number,
         latest_block_hash,
+        Some(Path::new(REPLAY_ARCHIVE_IDENTITY_FILE)),
     )
     .await?;
     assert_eq!(

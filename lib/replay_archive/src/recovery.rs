@@ -117,6 +117,27 @@ pub async fn recover_replay_records_to_rocksdb(
     anchor_block_number: BlockNumber,
     anchor_block_hash: BlockHash,
 ) -> anyhow::Result<usize> {
+    recover_replay_records_to_rocksdb_with_optional_decryption(
+        input_root,
+        replay_db_path,
+        anchor_block_number,
+        anchor_block_hash,
+        None,
+    )
+    .await
+}
+
+/// Rebuilds node replay RocksDB from downloaded replay records.
+///
+/// If `identity_file` is provided, every downloaded object is decrypted in memory before replay
+/// record decoding. No decrypted archive objects are written to disk.
+pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
+    input_root: &Path,
+    replay_db_path: &Path,
+    anchor_block_number: BlockNumber,
+    anchor_block_hash: BlockHash,
+    identity_file: Option<&Path>,
+) -> anyhow::Result<usize> {
     tracing::info!(
         input_root = %input_root.display(),
         replay_db_path = %replay_db_path.display(),
@@ -124,6 +145,18 @@ pub async fn recover_replay_records_to_rocksdb(
         %anchor_block_hash,
         "Starting replay archive RocksDB recovery"
     );
+    let decoder = ReplayRecordDecoder {
+        identity: match identity_file {
+            Some(identity_file) => {
+                tracing::info!(
+                    identity_file = %identity_file.display(),
+                    "Replay archive RocksDB recovery will decrypt objects in memory"
+                );
+                Some(read_age_x25519_identity(identity_file).await?)
+            }
+            None => None,
+        },
+    };
 
     let mut canonical_chain = Vec::new();
     let mut block_number = anchor_block_number;
@@ -135,11 +168,12 @@ pub async fn recover_replay_records_to_rocksdb(
         "Walking canonical replay archive chain from anchor"
     );
     loop {
-        let replay_record = read_verified_replay_record(input_root, block_number, block_hash)
-            .await
-            .with_context(|| {
-                format!("failed to recover replay record #{block_number}, {block_hash}")
-            })?;
+        let replay_record =
+            read_verified_replay_record(input_root, block_number, block_hash, &decoder)
+                .await
+                .with_context(|| {
+                    format!("failed to recover replay record #{block_number}, {block_hash}")
+                })?;
         anyhow::ensure!(
             replay_record.block_context.block_number == block_number,
             "replay record path block number {block_number} does not match record block number {}",
@@ -178,11 +212,14 @@ pub async fn recover_replay_records_to_rocksdb(
         "Writing recovered replay records to RocksDB"
     );
     for (block_number, block_hash) in canonical_chain {
-        let replay_record = read_verified_replay_record(input_root, block_number, block_hash)
-            .await
-            .with_context(|| {
-                format!("failed to read replay record #{block_number}, {block_hash} for writing")
-            })?;
+        let replay_record =
+            read_verified_replay_record(input_root, block_number, block_hash, &decoder)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to read replay record #{block_number}, {block_hash} for writing"
+                    )
+                })?;
         anyhow::ensure!(
             replay_storage.write(Sealed::new_unchecked(replay_record, block_hash), false),
             "replay record #{block_number} already exists in recovered RocksDB"
@@ -260,6 +297,7 @@ async fn read_verified_replay_record(
     input_root: &Path,
     block_number: BlockNumber,
     block_hash: BlockHash,
+    decoder: &ReplayRecordDecoder,
 ) -> anyhow::Result<ReplayRecord> {
     let replay_record_dir = input_root
         .join(block_number.to_string())
@@ -297,12 +335,7 @@ async fn read_verified_replay_record(
                 entry.path().display()
             )
         })?;
-        let record: ReplayRecord = serde_json::from_slice(&record_bytes).with_context(|| {
-            format!(
-                "failed to decode replay archive record file {}",
-                entry.path().display()
-            )
-        })?;
+        let record = decoder.decode(record_bytes, &entry.path())?;
         if let Some(canonical_record) = &canonical_record {
             anyhow::ensure!(
                 canonical_record == &record,
@@ -320,6 +353,29 @@ async fn read_verified_replay_record(
         "no replay archive record files found for block #{block_number}, {block_hash}"
     );
     canonical_record.context("replay archive record count was non-zero but no record was loaded")
+}
+
+struct ReplayRecordDecoder {
+    identity: Option<age::x25519::Identity>,
+}
+
+impl ReplayRecordDecoder {
+    fn decode(&self, mut record_bytes: Vec<u8>, path: &Path) -> anyhow::Result<ReplayRecord> {
+        if let Some(identity) = &self.identity {
+            record_bytes = age::decrypt(identity, record_bytes.as_slice()).with_context(|| {
+                format!(
+                    "failed to decrypt replay archive record file {}",
+                    path.display()
+                )
+            })?;
+        }
+        serde_json::from_slice(&record_bytes).with_context(|| {
+            format!(
+                "failed to decode replay archive record file {}",
+                path.display()
+            )
+        })
+    }
 }
 
 async fn decrypt_downloaded_object(
@@ -570,6 +626,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recover_records_to_rocksdb_decrypts_records_in_memory() {
+        let input_root = tempfile::tempdir().unwrap();
+        let replay_db = tempfile::tempdir().unwrap();
+        let identity_file = tempfile::NamedTempFile::new().unwrap();
+        let identity = age::x25519::Identity::generate();
+        let recipient = identity.to_public();
+        let genesis_hash = B256::with_last_byte(1);
+        let block_hash = B256::with_last_byte(2);
+        let genesis_record = test_replay_record(0, B256::ZERO);
+        let block_record = test_replay_record(1, genesis_hash);
+
+        write_downloaded_encrypted_replay_record(
+            input_root.path(),
+            0,
+            genesis_hash,
+            "42-node-a",
+            &genesis_record,
+            &recipient,
+        )
+        .await;
+        write_downloaded_encrypted_replay_record(
+            input_root.path(),
+            1,
+            block_hash,
+            "42-node-a",
+            &block_record,
+            &recipient,
+        )
+        .await;
+        tokio::fs::write(
+            identity_file.path(),
+            format!(
+                "# public key: {}\n{}\n",
+                recipient,
+                identity.to_string().expose_secret()
+            ),
+        )
+        .await
+        .unwrap();
+
+        let recovered = recover_replay_records_to_rocksdb_with_optional_decryption(
+            input_root.path(),
+            replay_db.path(),
+            1,
+            block_hash,
+            Some(identity_file.path()),
+        )
+        .await
+        .unwrap();
+
+        let replay_storage = BlockReplayStorage::new_without_genesis(replay_db.path());
+        assert_eq!(recovered, 2);
+        assert_eq!(replay_storage.get_replay_record(0).unwrap(), genesis_record);
+        assert_eq!(replay_storage.get_replay_record(1).unwrap(), block_record);
+    }
+
+    #[tokio::test]
     async fn recover_records_rejects_different_session_copies() {
         let input_root = tempfile::tempdir().unwrap();
         let replay_db = tempfile::tempdir().unwrap();
@@ -622,6 +735,26 @@ mod tests {
         tokio::fs::write(path, serde_json::to_vec(record).unwrap())
             .await
             .unwrap();
+    }
+
+    async fn write_downloaded_encrypted_replay_record(
+        input_root: &Path,
+        block_number: BlockNumber,
+        block_hash: BlockHash,
+        session: &str,
+        record: &ReplayRecord,
+        recipient: &age::x25519::Recipient,
+    ) {
+        let path = input_root
+            .join(block_number.to_string())
+            .join(format_block_hash(block_hash))
+            .join(session);
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        let encrypted =
+            age::encrypt(recipient, serde_json::to_vec(record).unwrap().as_slice()).unwrap();
+        tokio::fs::write(path, encrypted).await.unwrap();
     }
 
     fn test_replay_record(

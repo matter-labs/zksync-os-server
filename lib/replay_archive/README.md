@@ -87,7 +87,7 @@ re-encrypt a replay record and compare bytes.
 
 ## Recovery
 
-Recovery has three steps.
+Recovery has two steps.
 
 First, download all archive objects into a local recovery layout:
 
@@ -95,14 +95,14 @@ First, download all archive objects into a local recovery layout:
 <output_root>/<block_number>/<block_hash>/<session>
 ```
 
-Second, decrypt the downloaded objects if the archive was encrypted. The decrypted output preserves
-the same local layout.
-
-Third, rebuild the node replay RocksDB from a canonical anchor:
+Second, rebuild the node replay RocksDB from a canonical anchor:
 
 ```text
 anchor = (latest_block_number, latest_block_hash)
 ```
+
+If the archive was encrypted, recovery decrypts downloaded objects in memory when an age identity
+file is provided. Decrypted replay records are not written to disk.
 
 The recovery logic starts from the anchor, reads the replay record for that block, extracts the
 previous block hash from the replay record, and walks backward until block `0`. It then writes the
@@ -124,25 +124,27 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   --output-root ./replay_archive_downloaded
 ```
 
-Decrypt downloaded objects:
-
-```bash
-cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
-  decrypt-downloaded \
-  --input-root ./replay_archive_downloaded \
-  --output-root ./replay_archive_decrypted \
-  --identity-file ./replay-archive.key
-```
-
 Rebuild replay RocksDB:
 
 ```bash
 cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   recover-rocksdb \
-  --input-root ./replay_archive_decrypted \
+  --input-root ./replay_archive_downloaded \
   --replay-db-path ./db/block_replay_wal \
   --anchor-block-number 123 \
   --anchor-block-hash 0x...
+```
+
+For encrypted archives, pass the age identity file to `recover-rocksdb`:
+
+```bash
+cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
+  recover-rocksdb \
+  --input-root ./replay_archive_downloaded \
+  --replay-db-path ./db/block_replay_wal \
+  --anchor-block-number 123 \
+  --anchor-block-hash 0x... \
+  --identity-file ./replay-archive.key
 ```
 
 `--replay-db-path` must point to the `block_replay_wal` RocksDB directory, not the parent node
@@ -169,4 +171,3 @@ replay_archive:
     type: AgeX25519
     recipient: age1...
 ```
-
