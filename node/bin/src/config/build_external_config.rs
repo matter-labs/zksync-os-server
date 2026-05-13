@@ -1,10 +1,10 @@
 use crate::config::{
     BackpressureConfig, BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig,
     Config, ConsensusConfig, ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig,
-    GeneralConfig, GenesisConfig, InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig,
-    MempoolConfig, MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig, ProverApiConfig,
-    ProverInputGeneratorConfig, ProviderConfig, ReplayArchiveConfig, RpcConfig, SequencerConfig,
-    StatusServerConfig,
+    GatewaySenderConfig, GeneralConfig, GenesisConfig, InteropFeeUpdaterConfig, L1SenderConfig,
+    L1WatcherConfig, MempoolConfig, MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, ProviderConfig, ReplayArchiveConfig, RpcConfig,
+    SequencerConfig, StatusServerConfig,
 };
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use std::fs;
@@ -83,6 +83,12 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         // This line just enforces that we expect no pubdata mode for external node.
         l1_sender_config.pubdata_mode = None;
     }
+
+    let gateway_sender_config = repo
+        .single::<GatewaySenderConfig>()
+        .expect("Failed to load Gateway sender config")
+        .parse()
+        .expect("Failed to parse Gateway sender config");
 
     let l1_watcher_config = repo
         .single::<L1WatcherConfig>()
@@ -180,6 +186,7 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         tx_validator_config,
         sequencer_config,
         l1_sender_config,
+        gateway_sender_config,
         l1_watcher_config,
         batcher_config,
         prover_input_generator_config,

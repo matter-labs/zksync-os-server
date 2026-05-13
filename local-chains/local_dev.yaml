@@ -24,7 +24,7 @@ observability:
     use_color: true
 
 sequencer:
-  revm_consistency_checker_enabled: false
+  revm_consistency_checker_revert_on_divergence: true
 
 external_price_api_client:
   source: Forced

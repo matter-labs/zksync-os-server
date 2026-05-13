@@ -15,6 +15,7 @@ mod metrics;
 mod ots_impl;
 mod result;
 mod rpc_storage;
+mod simulate;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
 pub mod js_tracer;

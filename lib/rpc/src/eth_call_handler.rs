@@ -22,9 +22,8 @@ use zksync_os_interface::{
     error::InvalidTransaction,
     types::{BlockContext, ExecutionResult},
 };
-use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::{
-    RepositoryError, StateError, state_override_view::OverriddenStateView,
+    RepositoryError, StateError, ViewState, state_override_view::OverriddenStateView,
 };
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
@@ -34,11 +33,10 @@ use zksync_os_types::{
 };
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
-
 #[derive(Clone, Debug)]
 pub struct EthCallHandler<RpcStorage> {
-    config: RpcConfig,
-    storage: RpcStorage,
+    pub(crate) config: RpcConfig,
+    pub(crate) storage: RpcStorage,
     chain_id: u64,
     /// Last block context constructed by sequencer but not necessarily executed yet.
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
@@ -64,7 +62,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         }
     }
 
-    fn create_tx_from_request(
+    pub(crate) fn create_tx_from_request(
         &self,
         request: TransactionRequest,
         block_context: &BlockContext,
@@ -209,7 +207,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     }
 
     /// Builds new block context for theoretical pending block using current system state.
-    fn build_pending_block_context(&self) -> BlockContext {
+    pub(crate) fn build_pending_block_context(&self) -> BlockContext {
         let latest_block_number = self.storage.replay_storage().latest_record();
         let latest_block = self
             .storage
@@ -716,6 +714,18 @@ pub enum EthCallError {
     // todo: temporary, needs to be supported eventually
     #[error("block overrides are not supported in `eth_call`")]
     BlockOverridesNotSupported,
+    #[error("invalid `eth_simulateV1` params: {0}")]
+    SimulateInvalidParams(String),
+    #[error("invalid block override in `eth_simulateV1`: {0}")]
+    SimulateInvalidBlockOverride(&'static str),
+    #[error("block numbers must be in order: {got} <= {parent}")]
+    SimulateBlockNumberInvalid { got: u64, parent: u64 },
+    #[error("block timestamps must be in order: {got} <= {parent}")]
+    SimulateBlockTimestampInvalid { got: u64, parent: u64 },
+    #[error("block gas limit exceeded by the block's transactions")]
+    SimulateBlockGasLimitExceeded,
+    #[error("movePrecompileToAddress is not supported by this execution backend")]
+    SimulateMovePrecompileNotSupported,
     // todo(EIP-4844)
     #[error("EIP-4844 transactions are not supported")]
     Eip4844NotSupported,
