@@ -636,6 +636,7 @@ impl NetworkConfig {
 #[config(derive(Default))]
 pub struct ConsensusConfig {
     /// Whether OpenRaft-based consensus should be enabled.
+    /// WARNING: This is an experimental feature and will change in the future.
     #[config(default_t = false)]
     #[config_validate(custom(
         |root: &Config, value: &bool| !*value || root.general_config.node_role.is_main(),
