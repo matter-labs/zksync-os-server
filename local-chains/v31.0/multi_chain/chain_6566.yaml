@@ -7,11 +7,9 @@ genesis:
   bytecode_supplier_address: '0x04e7cfe87caff2c17cadb4b708ba08cc86a029bc'
   genesis_input_path: ./local-chains/v31.0/genesis.json
   chain_id: 6566
-l1_sender:
-  pubdata_mode: RelayedL2Calldata
+gateway_sender:
   operator_commit_sk: '0x0982b9d2a78fb2f0722210b8b6fe2a674cd1a8428b813a20f6029a199ab20ecc'
   operator_prove_sk: '0x8b8512336265a63d5189116369cb1dca25db91e3175cbaca7ecfa14eb23302ad'
   operator_execute_sk: '0x90d67bea96e11edfdc542c12b92228a8e92414f95e602560f2cf953c13121316'
 rpc:
   address: 0.0.0.0:3051
-

@@ -92,6 +92,24 @@ impl SettlementLayerIntervals {
         &self.intervals
     }
 
+    /// Settlement layer of the currently-active (open-ended) interval — i.e. where the chain is
+    /// currently committing batches.
+    pub fn current_settlement_layer(&self) -> &IntervalSettlementLayer {
+        &self
+            .intervals
+            .last()
+            .expect("settlement layer intervals are never empty")
+            .settlement_layer
+    }
+
+    /// `true` when the chain is currently committing batches to a Gateway.
+    pub fn settles_on_gateway(&self) -> bool {
+        matches!(
+            self.current_settlement_layer(),
+            IntervalSettlementLayer::Gateway(_)
+        )
+    }
+
     /// Returns the diamond proxy that should be used to fetch data about `batch_number`, based on
     /// which settlement layer interval it falls into.
     pub fn resolve_proxy(&self, batch_number: u64) -> anyhow::Result<&ZkChain<DynProvider>> {
