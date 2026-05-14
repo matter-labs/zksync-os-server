@@ -140,6 +140,7 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
                 err.to_string(),
                 None,
             ),
+            EthCallError::CallFees(_) => invalid_params_rpc_err(err.to_string()),
             err => internal_rpc_err(err.to_string()),
         })
     }

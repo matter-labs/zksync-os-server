@@ -17,7 +17,7 @@ use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
     AccountInfo, BlockOverrides, Bundle, EIP1186AccountProofResponse, EthCallResponse, FeeHistory,
-    Index, Log, StateContext, SyncStatus, TransactionRequest,
+    FillTransaction, Index, Log, StateContext, SyncStatus, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
@@ -35,7 +35,7 @@ use zksync_os_rpc_api::types::{
 };
 use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
 use zksync_os_tx_validators::policy_client::PolicyClient;
-use zksync_os_types::{L2Envelope, TransactionAcceptanceState, ZkReceiptEnvelope};
+use zksync_os_types::{L2Envelope, TransactionAcceptanceState, ZkEnvelope, ZkReceiptEnvelope};
 
 pub struct EthNamespace<RpcStorage, Mempool> {
     config: RpcConfig,
@@ -705,6 +705,29 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
     ) -> RpcResult<Bytes> {
         self.eth_call_handler
             .call_impl(request, block_number, state_overrides, block_overrides)
+            .to_rpc_result()
+    }
+
+    fn fill_transaction(
+        &self,
+        request: TransactionRequest,
+    ) -> RpcResult<FillTransaction<ZkEnvelope>> {
+        let pending_nonce = if request.nonce.is_none() {
+            self.transaction_count_impl(request.from.unwrap_or_default(), Some(BlockId::pending()))
+                .to_rpc_result()?
+                .saturating_to()
+        } else {
+            0
+        };
+
+        let fill_gas_price = if request.gas_price.is_none() && request.max_fee_per_gas.is_none() {
+            self.gas_price_impl().to_rpc_result()?
+        } else {
+            U256::ZERO
+        };
+
+        self.eth_call_handler
+            .fill_transaction_impl(request, pending_nonce, fill_gas_price)
             .to_rpc_result()
     }
 
