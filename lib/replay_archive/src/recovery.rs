@@ -2,7 +2,7 @@ use crate::{ReplayArchiveKey, ReplayArchiveStorageReader, format_block_hash};
 use alloy::primitives::{BlockHash, BlockNumber, Sealed};
 use anyhow::Context as _;
 use futures::StreamExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt as _;
 use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage_api::{ReplayRecord, WriteReplay};
@@ -252,6 +252,7 @@ async fn read_verified_replay_record(
         })?;
 
     let mut canonical_record: Option<ReplayRecord> = None;
+    let mut canonical_path: Option<PathBuf> = None;
     let mut records_count = 0;
     while let Some(entry) = entries.next_entry().await.with_context(|| {
         format!(
@@ -279,11 +280,13 @@ async fn read_verified_replay_record(
         if let Some(canonical_record) = &canonical_record {
             anyhow::ensure!(
                 canonical_record == &record,
-                "replay archive record {} differs from another session copy for block #{block_number}, {block_hash}",
-                entry.path().display()
+                "Replay archive record differs between sessions for block #{block_number}, {block_hash}. Paths: {}, {}",
+                entry.path().display(),
+                canonical_path.unwrap().display(),
             );
         } else {
             canonical_record = Some(record);
+            canonical_path = Some(entry.path());
         }
         records_count += 1;
     }
