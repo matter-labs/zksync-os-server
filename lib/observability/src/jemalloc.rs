@@ -9,22 +9,22 @@ use vise::{Collector, Gauge, Metrics, Unit};
 struct JemallocMetrics {
     /// Live application heap payload allocated through jemalloc.
     #[metrics(unit = Unit::Bytes)]
-    allocated_bytes: Gauge<usize>,
+    allocated: Gauge<usize>,
     /// Jemalloc pages backing active allocations.
     #[metrics(unit = Unit::Bytes)]
-    active_bytes: Gauge<usize>,
+    active: Gauge<usize>,
     /// Jemalloc memory currently resident in RAM.
     #[metrics(unit = Unit::Bytes)]
-    resident_bytes: Gauge<usize>,
+    resident: Gauge<usize>,
     /// Virtual memory mapped by jemalloc.
     #[metrics(unit = Unit::Bytes)]
-    mapped_bytes: Gauge<usize>,
+    mapped: Gauge<usize>,
     /// Virtual memory retained by jemalloc for reuse.
     #[metrics(unit = Unit::Bytes)]
-    retained_bytes: Gauge<usize>,
+    retained: Gauge<usize>,
     /// Memory used by jemalloc metadata.
     #[metrics(unit = Unit::Bytes)]
-    metadata_bytes: Gauge<usize>,
+    metadata: Gauge<usize>,
     /// Whether jemalloc stats were successfully collected during the scrape.
     stats_available: Gauge<u64>,
 }
@@ -63,22 +63,22 @@ fn collect_stats() -> Result<JemallocMetrics> {
 
     let metrics = JemallocMetrics::default();
     metrics
-        .allocated_bytes
+        .allocated
         .set(read_ctl("stats.allocated", stats::allocated::read)?);
     metrics
-        .active_bytes
+        .active
         .set(read_ctl("stats.active", stats::active::read)?);
     metrics
-        .resident_bytes
+        .resident
         .set(read_ctl("stats.resident", stats::resident::read)?);
     metrics
-        .mapped_bytes
+        .mapped
         .set(read_ctl("stats.mapped", stats::mapped::read)?);
     metrics
-        .retained_bytes
+        .retained
         .set(read_ctl("stats.retained", stats::retained::read)?);
     metrics
-        .metadata_bytes
+        .metadata
         .set(read_ctl("stats.metadata", stats::metadata::read)?);
     metrics.stats_available.set(1);
 
