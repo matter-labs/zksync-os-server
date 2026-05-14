@@ -2,7 +2,7 @@ use crate::{ReplayArchiveKey, ReplayArchiveStorageReader, format_block_hash};
 use alloy::primitives::{BlockHash, BlockNumber, Sealed};
 use anyhow::Context as _;
 use futures::StreamExt as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::io::AsyncWriteExt as _;
 use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage_api::{ReplayRecord, WriteReplay};
@@ -41,64 +41,6 @@ where
 
     tracing::info!(downloaded, "Finished replay archive object download");
     Ok(downloaded)
-}
-
-/// Decrypts downloaded replay archive objects into a separate local output directory.
-///
-/// The input is expected to use the layout created by [`download_all_replay_archive_objects`].
-/// The same relative layout is preserved under `output_root`.
-pub async fn decrypt_downloaded_replay_archive_objects(
-    input_root: &Path,
-    output_root: &Path,
-    identity_file: &Path,
-) -> anyhow::Result<usize> {
-    tracing::info!(
-        input_root = %input_root.display(),
-        output_root = %output_root.display(),
-        identity_file = %identity_file.display(),
-        "Starting replay archive object decryption"
-    );
-    let identity = read_age_x25519_identity(identity_file).await?;
-
-    let mut dirs = vec![input_root.to_path_buf()];
-    let mut decrypted = 0;
-    while let Some(dir) = dirs.pop() {
-        let mut entries = tokio::fs::read_dir(&dir).await.with_context(|| {
-            format!(
-                "failed to read downloaded replay archive directory {}",
-                dir.display()
-            )
-        })?;
-        while let Some(entry) = entries.next_entry().await.with_context(|| {
-            format!(
-                "failed to read downloaded replay archive entry {}",
-                dir.display()
-            )
-        })? {
-            let file_type = entry.file_type().await.with_context(|| {
-                format!(
-                    "failed to read downloaded replay archive entry type {}",
-                    entry.path().display()
-                )
-            })?;
-            if file_type.is_dir() {
-                dirs.push(entry.path());
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-
-            decrypt_downloaded_object(input_root, output_root, &identity, entry.path()).await?;
-            decrypted += 1;
-            log_recovery_progress(decrypted, || {
-                tracing::info!(decrypted, "Decrypted replay archive objects");
-            });
-        }
-    }
-
-    tracing::info!(decrypted, "Finished replay archive object decryption");
-    Ok(decrypted)
 }
 
 /// Rebuilds node replay RocksDB from downloaded plaintext replay records.
@@ -376,70 +318,6 @@ impl ReplayRecordDecoder {
     }
 }
 
-async fn decrypt_downloaded_object(
-    input_root: &Path,
-    output_root: &Path,
-    identity: &age::x25519::Identity,
-    input_path: PathBuf,
-) -> anyhow::Result<()> {
-    let relative_path = input_path.strip_prefix(input_root).with_context(|| {
-        format!(
-            "downloaded replay archive object {} is not under input root {}",
-            input_path.display(),
-            input_root.display()
-        )
-    })?;
-    let output_path = output_root.join(relative_path);
-
-    let encrypted = tokio::fs::read(&input_path).await.with_context(|| {
-        format!(
-            "failed to read encrypted replay archive object {}",
-            input_path.display()
-        )
-    })?;
-    let plaintext = age::decrypt(identity, encrypted.as_slice()).with_context(|| {
-        format!(
-            "failed to decrypt replay archive object {}",
-            input_path.display()
-        )
-    })?;
-
-    let parent = output_path
-        .parent()
-        .expect("decrypted replay archive object path must have a parent");
-    tokio::fs::create_dir_all(parent).await.with_context(|| {
-        format!(
-            "failed to create decrypted replay archive directory {}",
-            parent.display()
-        )
-    })?;
-
-    let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&output_path)
-        .await
-        .with_context(|| {
-            format!(
-                "failed to create decrypted replay archive object {}",
-                output_path.display()
-            )
-        })?;
-    file.write_all(&plaintext).await.with_context(|| {
-        format!(
-            "failed to write decrypted replay archive object {}",
-            output_path.display()
-        )
-    })?;
-    file.flush().await.with_context(|| {
-        format!(
-            "failed to flush decrypted replay archive object {}",
-            output_path.display()
-        )
-    })?;
-    Ok(())
-}
-
 async fn read_age_x25519_identity(identity_file: &Path) -> anyhow::Result<age::x25519::Identity> {
     let contents = tokio::fs::read_to_string(identity_file)
         .await
@@ -532,48 +410,6 @@ mod tests {
             .await
             .unwrap(),
             b"second"
-        );
-    }
-
-    #[tokio::test]
-    async fn decrypt_downloaded_objects_preserves_layout() {
-        let input_root = tempfile::tempdir().unwrap();
-        let output_root = tempfile::tempdir().unwrap();
-        let identity_file = tempfile::NamedTempFile::new().unwrap();
-        let identity = age::x25519::Identity::generate();
-        let recipient = identity.to_public();
-        let encrypted = age::encrypt(&recipient, b"replay-record".as_slice()).unwrap();
-        let input_path = input_root.path().join("7").join("0x01").join("42-node-a");
-
-        tokio::fs::create_dir_all(input_path.parent().unwrap())
-            .await
-            .unwrap();
-        tokio::fs::write(&input_path, encrypted).await.unwrap();
-        tokio::fs::write(
-            identity_file.path(),
-            format!(
-                "# public key: {}\n{}\n",
-                recipient,
-                identity.to_string().expose_secret()
-            ),
-        )
-        .await
-        .unwrap();
-
-        let decrypted = decrypt_downloaded_replay_archive_objects(
-            input_root.path(),
-            output_root.path(),
-            identity_file.path(),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(decrypted, 1);
-        assert_eq!(
-            tokio::fs::read(output_root.path().join("7").join("0x01").join("42-node-a"))
-                .await
-                .unwrap(),
-            b"replay-record"
         );
     }
 
