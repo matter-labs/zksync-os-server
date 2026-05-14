@@ -46,7 +46,7 @@ async fn poll(
     let finalized_block = provider
         .get_block_number_by_id(BlockId::finalized())
         .await?
-        .expect("no finalized blocks yet");
+        .expect("The chain does not have any finalized blocks yet.");
     let next = ChainHead {
         latest_block,
         finalized_block,
