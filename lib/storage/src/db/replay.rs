@@ -497,7 +497,7 @@ impl WriteReplay for BlockReplayStorage {
         let block_record = sealed_record.as_ref();
         let block_context = &sealed_record.block_context;
         let current_latest_record = self.latest_record_checked();
-        if current_latest_record.is_none() {
+        let Some(current_latest_record) = current_latest_record else {
             assert_eq!(
                 block_context.block_number, 0,
                 "tried to append first replay record with non-zero block number: {}",
@@ -506,9 +506,8 @@ impl WriteReplay for BlockReplayStorage {
             self.write_replay_unchecked(sealed_record, true);
             latency_observer.observe();
             return true;
-        }
+        };
 
-        let current_latest_record = current_latest_record.expect("checked above");
         if block_context.block_number <= current_latest_record && !override_allowed {
             // todo: consider asserting that the passed `ReplayRecord` matches the one currently stored
             tracing::debug!(

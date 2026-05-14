@@ -27,7 +27,7 @@ where
         }
     }
 
-    pub async fn wait_for_archive_to_contain_block(
+    async fn wait_for_archive_to_contain_block(
         &self,
         block_number: u64,
         block_hash: B256,
