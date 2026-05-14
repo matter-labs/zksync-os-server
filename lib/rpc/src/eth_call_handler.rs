@@ -38,7 +38,7 @@ const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
 pub struct EthCallHandler<RpcStorage> {
     pub(crate) config: RpcConfig,
     pub(crate) storage: RpcStorage,
-    chain_id: u64,
+    pub(crate) chain_id: u64,
     /// Last block context constructed by sequencer but not necessarily executed yet.
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     /// Optional policy client. When set, `eth_call` and `eth_estimateGas`

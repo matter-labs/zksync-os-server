@@ -33,8 +33,8 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
-pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::config::{Config, ProviderConfig};
+pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::{
     NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
 };

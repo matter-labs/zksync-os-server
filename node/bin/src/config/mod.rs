@@ -11,7 +11,7 @@ use smart_config::metadata::{SizeUnit, TimeUnit};
 use smart_config::value::SecretString;
 use smart_config::{
     ByteSize, ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig,
-    EtherAmount, ErrorWithOrigin, ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
+    ErrorWithOrigin, EtherAmount, ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
@@ -853,7 +853,10 @@ pub struct SequencerConfig {
 /// Configuration for all transaction validators applied during block production.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
-#[config(validate(Self::check_mutual_exclusion, "deployment_filter cannot be enabled at the same time as policy_service.url; express the allow-list via the policy service"))]
+#[config(validate(
+    Self::check_mutual_exclusion,
+    "deployment_filter cannot be enabled at the same time as policy_service.url; express the allow-list via the policy service"
+))]
 pub struct TxValidatorConfig {
     /// Deployment filter configuration.
     #[config(nest)]
@@ -883,7 +886,10 @@ pub struct DeploymentFilterConfig {
 /// service).
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
-#[config(validate(Self::check_auth_required, "auth_token is required when using `http://` transport"))]
+#[config(validate(
+    Self::check_auth_required,
+    "auth_token is required when using `http://` transport"
+))]
 pub struct PolicyServiceConfig {
     /// `http://host:port` or `unix:///path/to/socket`.
     #[config(with = Serde![str], validate(check_url_scheme, "URL must use scheme `http` or `unix`"))]
@@ -2315,10 +2321,8 @@ mod tests {
     fn parse_policy_service_config<const N: usize>(
         env_vars: [(&str, &str); N],
     ) -> Result<PolicyServiceConfig, ParseErrors> {
-        let schema =
-            ConfigSchema::new(&PolicyServiceConfig::DESCRIPTION, "policy_service");
-        let repo =
-            ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
+        let schema = ConfigSchema::new(&PolicyServiceConfig::DESCRIPTION, "policy_service");
+        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
         repo.single::<PolicyServiceConfig>().unwrap().parse()
     }
 
@@ -2328,7 +2332,11 @@ mod tests {
             ("POLICY_SERVICE_URL", "http://policy.local:9000"),
             ("POLICY_SERVICE_AUTH_TOKEN", "secret"),
         ]);
-        assert!(result.is_ok(), "http URL with token should be accepted, got: {:?}", result.unwrap_err());
+        assert!(
+            result.is_ok(),
+            "http URL with token should be accepted, got: {:?}",
+            result.unwrap_err()
+        );
     }
 
     #[test]
@@ -2346,7 +2354,11 @@ mod tests {
     fn policy_service_accepts_unix_url_without_token() {
         let result =
             parse_policy_service_config([("POLICY_SERVICE_URL", "unix:///run/policy.sock")]);
-        assert!(result.is_ok(), "unix URL without token should be accepted, got: {:?}", result.unwrap_err());
+        assert!(
+            result.is_ok(),
+            "unix URL without token should be accepted, got: {:?}",
+            result.unwrap_err()
+        );
     }
 
     #[test]

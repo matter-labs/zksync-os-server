@@ -37,9 +37,7 @@ pub(crate) enum TransportConfig {
     },
     /// Unix domain socket. Socket-path filesystem permissions are the access
     /// control; bearer token is not applicable and not sent.
-    Unix {
-        socket_path: PathBuf,
-    },
+    Unix { socket_path: PathBuf },
 }
 
 /// A pooled HTTP client plus the base URL to POST against.

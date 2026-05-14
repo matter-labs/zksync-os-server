@@ -15,7 +15,11 @@ use zksync_os_types::BOOTLOADER_FORMAL_ADDRESS;
 
 fn policy_service(server: &MockServer) -> PolicyServiceConfig {
     PolicyServiceConfig {
-        url: Some(format!("http://{}:{}", server.host(), server.port()).parse().unwrap()),
+        url: Some(
+            format!("http://{}:{}", server.host(), server.port())
+                .parse()
+                .unwrap(),
+        ),
         request_timeout: Duration::from_secs(5),
         protocol_version: "1".into(),
         expected_protocol_version: None,
@@ -209,9 +213,9 @@ async fn deny_response_rejects_eth_estimate_gas() -> Result<()> {
 /// falls through to the allow-mock installed after it.
 ///
 /// Body shape: `/admit` exposes a flat `to` field; `/judge` carries a
-/// nested `trace.frames[0].callee`. EOA-to-EOA simulations produce empty
-/// frames, so `/judge` denials in those scenarios use
-/// [`deny_judge_for_signer`] instead.
+/// nested `trace.frame.callee` (root of the captured call tree). EOA-to-EOA
+/// simulations produce no frames, so `/judge` denials in those scenarios
+/// use [`deny_judge_for_signer`] instead.
 async fn deny_for_target<'s>(
     server: &'s MockServer,
     path: &'static str,
@@ -270,9 +274,20 @@ async fn deny_judge_for_signer<'s>(server: &'s MockServer, signer: Address) -> h
         .await
 }
 
+/// Total frames in the captured call tree rooted at `frame` (root + every
+/// descendant). `/judge` ships a nested tree, not a flat list.
+fn count_frames(frame: &serde_json::Value) -> usize {
+    let children = frame
+        .get("children")
+        .and_then(|c| c.as_array())
+        .map(|c| c.iter().map(count_frames).sum::<usize>())
+        .unwrap_or(0);
+    1 + children
+}
+
 /// Returns true if the request body addresses the denied target. Inspects
-/// `to` for `/admit` (flat shape) and the trace's first frame `callee` for
-/// `/judge` (nested shape).
+/// `to` for `/admit` (flat shape) and the trace's root frame `callee` for
+/// `/judge` (nested tree shape).
 fn payload_targets(parsed: &serde_json::Value, target: &str) -> bool {
     if let Some(to) = parsed.get("to").and_then(|v| v.as_str())
         && to.to_ascii_lowercase() == target
@@ -281,9 +296,7 @@ fn payload_targets(parsed: &serde_json::Value, target: &str) -> bool {
     }
     parsed
         .get("trace")
-        .and_then(|t| t.get("frames"))
-        .and_then(|frames| frames.as_array())
-        .and_then(|frames| frames.first())
+        .and_then(|t| t.get("frame"))
         .and_then(|frame| frame.get("callee"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_ascii_lowercase() == target)
@@ -456,9 +469,8 @@ async fn rpc_judge_first_body_has_frames_for_contract_call() -> Result<()> {
     let parsed: serde_json::Value = serde_json::from_slice(&first_body_during_test_call)?;
     let frames = parsed
         .get("trace")
-        .and_then(|t| t.get("frames"))
-        .and_then(|f| f.as_array())
-        .map(|f| f.len())
+        .and_then(|t| t.get("frame"))
+        .map(count_frames)
         .unwrap_or(0);
     assert!(
         frames >= 2,

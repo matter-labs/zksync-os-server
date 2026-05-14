@@ -52,7 +52,9 @@ async fn run_begin_tx(
     mut session: PolicySession,
     ctx: BeginTxContext<'static>,
 ) -> Result<(), InvalidTransaction> {
-    spawn_blocking(move || session.begin_tx(&ctx)).await.unwrap()
+    spawn_blocking(move || session.begin_tx(&ctx))
+        .await
+        .unwrap()
 }
 
 // ---------- Admit path ----------
@@ -182,10 +184,12 @@ async fn serialized_request_matches_context() {
     let body: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let body_c = body.clone();
     server.mock(|when, then| {
-        when.method(Method::POST).path("/admit").is_true(move |req| {
-            *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
-            true
-        });
+        when.method(Method::POST)
+            .path("/admit")
+            .is_true(move |req| {
+                *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
+                true
+            });
         then.status(200).json_body(json!({"allow": true}));
     });
     let client = PolicyClient::new(base_config(&server)).unwrap();
@@ -214,10 +218,12 @@ async fn admit_serializes_access_type_read() {
     let body: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let body_c = body.clone();
     server.mock(|when, then| {
-        when.method(Method::POST).path("/admit").is_true(move |req| {
-            *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
-            true
-        });
+        when.method(Method::POST)
+            .path("/admit")
+            .is_true(move |req| {
+                *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
+                true
+            });
         then.status(200).json_body(json!({"allow": true}));
     });
     let client = PolicyClient::new(base_config(&server)).unwrap();
@@ -243,35 +249,42 @@ async fn bearer_token_sent_when_configured() {
     cfg.auth_token = Some("secret-token".into());
     let client = PolicyClient::new(cfg).unwrap();
     let res = run_begin_tx(client.session(AccessType::Write), test_context()).await;
-    assert!(res.is_ok(), "request with correct auth token should succeed");
+    assert!(
+        res.is_ok(),
+        "request with correct auth token should succeed"
+    );
 }
 
 #[test]
 fn unsupported_scheme_rejected_at_construction() {
-    assert!(PolicyClient::new(Config {
-        url: "ftp://example.com".into(),
-        component: Component::Rpc,
-        auth_token: None,
-        request_timeout: Duration::from_millis(500),
-        protocol_version: "1".into(),
-        expected_protocol_version: None,
-        bypass_from: Default::default(),
-    })
-    .is_err());
+    assert!(
+        PolicyClient::new(Config {
+            url: "ftp://example.com".into(),
+            component: Component::Rpc,
+            auth_token: None,
+            request_timeout: Duration::from_millis(500),
+            protocol_version: "1".into(),
+            expected_protocol_version: None,
+            bypass_from: Default::default(),
+        })
+        .is_err()
+    );
 }
 
 #[test]
 fn invalid_url_rejected_at_construction() {
-    assert!(PolicyClient::new(Config {
-        url: "not a url".into(),
-        component: Component::Rpc,
-        auth_token: None,
-        request_timeout: Duration::from_millis(500),
-        protocol_version: "1".into(),
-        expected_protocol_version: None,
-        bypass_from: Default::default(),
-    })
-    .is_err());
+    assert!(
+        PolicyClient::new(Config {
+            url: "not a url".into(),
+            component: Component::Rpc,
+            auth_token: None,
+            request_timeout: Duration::from_millis(500),
+            protocol_version: "1".into(),
+            expected_protocol_version: None,
+            bypass_from: Default::default(),
+        })
+        .is_err()
+    );
 }
 
 #[test]
@@ -291,16 +304,18 @@ fn http_url_accepted_at_construction() {
 
 #[test]
 fn https_url_rejected_at_construction() {
-    assert!(PolicyClient::new(Config {
-        url: "https://policy.local:9000".into(),
-        component: Component::Rpc,
-        auth_token: None,
-        request_timeout: Duration::from_millis(500),
-        protocol_version: "1".into(),
-        expected_protocol_version: None,
-        bypass_from: Default::default(),
-    })
-    .is_err());
+    assert!(
+        PolicyClient::new(Config {
+            url: "https://policy.local:9000".into(),
+            component: Component::Rpc,
+            auth_token: None,
+            request_timeout: Duration::from_millis(500),
+            protocol_version: "1".into(),
+            expected_protocol_version: None,
+            bypass_from: Default::default(),
+        })
+        .is_err()
+    );
 }
 
 #[tokio::test]
@@ -505,7 +520,11 @@ async fn judge_bypass_from_skips_call() {
     let res = run_full_tx(session, tracer, test_context(), one_frame()).await;
 
     assert!(res.is_ok(), "bypassed tx should not be judged");
-    assert_eq!(judge_mock.calls(), 0, "bypass must not reach the policy service");
+    assert_eq!(
+        judge_mock.calls(),
+        0,
+        "bypass must not reach the policy service"
+    );
 }
 
 #[tokio::test]
@@ -518,10 +537,12 @@ async fn judge_serialized_request_carries_captured_frames() {
     let body: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let body_c = body.clone();
     server.mock(|when, then| {
-        when.method(Method::POST).path("/judge").is_true(move |req| {
-            *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
-            true
-        });
+        when.method(Method::POST)
+            .path("/judge")
+            .is_true(move |req| {
+                *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
+                true
+            });
         then.status(200).json_body(json!({"allow": true}));
     });
     let client = PolicyClient::new(base_config(&server)).unwrap();
@@ -595,10 +616,12 @@ async fn judge_serialized_frames_carry_call_kind_for_delegatecall_and_static() {
     let body: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let body_c = body.clone();
     server.mock(|when, then| {
-        when.method(Method::POST).path("/judge").is_true(move |req| {
-            *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
-            true
-        });
+        when.method(Method::POST)
+            .path("/judge")
+            .is_true(move |req| {
+                *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
+                true
+            });
         then.status(200).json_body(json!({"allow": true}));
     });
     let client = PolicyClient::new(base_config(&server)).unwrap();
@@ -658,10 +681,12 @@ async fn judge_serializes_access_type_read() {
     let body: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let body_c = body.clone();
     server.mock(|when, then| {
-        when.method(Method::POST).path("/judge").is_true(move |req| {
-            *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
-            true
-        });
+        when.method(Method::POST)
+            .path("/judge")
+            .is_true(move |req| {
+                *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
+                true
+            });
         then.status(200).json_body(json!({"allow": true}));
     });
     let client = PolicyClient::new(base_config(&server)).unwrap();

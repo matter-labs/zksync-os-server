@@ -3,11 +3,11 @@
 //! parsing error is fail-closed.
 
 mod metrics;
+#[cfg(test)]
+mod tests;
 mod tracer;
 mod transport;
 mod wire;
-#[cfg(test)]
-mod tests;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -60,7 +60,6 @@ pub struct Config {
     pub auth_token: Option<SecretString>,
 }
 
-
 #[derive(Debug)]
 struct PolicyClientInner {
     transport: Transport,
@@ -82,7 +81,9 @@ impl PolicyClient {
         let transport_config = match parsed.scheme() {
             "http" => TransportConfig::Http {
                 url: parsed,
-                auth_token: config.auth_token.clone()
+                auth_token: config
+                    .auth_token
+                    .clone()
                     .expect("auth_token is required for http://; enforced by config validation"),
             },
             "unix" => {
@@ -96,9 +97,7 @@ impl PolicyClient {
                     socket_path: std::path::PathBuf::from(parsed.path()),
                 }
             }
-            other => anyhow::bail!(
-                "unsupported URL scheme `{other}` (expected `http` or `unix`)"
-            ),
+            other => anyhow::bail!("unsupported URL scheme `{other}` (expected `http` or `unix`)"),
         };
         let transport = Transport::from_config(transport_config)
             .map_err(|e| anyhow::anyhow!("failed to build transport: {e}"))?;
@@ -174,7 +173,11 @@ impl PolicySession {
         }
     }
 
-    async fn judge(&self, from: Option<Address>, root: Option<CapturedFrame>) -> TxValidationResult {
+    async fn judge(
+        &self,
+        from: Option<Address>,
+        root: Option<CapturedFrame>,
+    ) -> TxValidationResult {
         let metrics = self.metrics();
         if let Some(from) = from
             && self.client.bypass_from.contains(&from)
@@ -182,8 +185,12 @@ impl PolicySession {
             metrics.judge_bypassed.inc();
             return Ok(());
         }
-        let request =
-            JudgeRequest::new(&self.client.protocol_version, from, root.as_ref(), self.access_type);
+        let request = JudgeRequest::new(
+            &self.client.protocol_version,
+            from,
+            root.as_ref(),
+            self.access_type,
+        );
         let started = Instant::now();
         let result = self.post_and_parse(Endpoint::Judge(request)).await;
         metrics.judge_latency.observe(started.elapsed());
@@ -221,7 +228,11 @@ impl PolicySession {
                 return Err(err);
             }
             Err(_) => {
-                tracing::warn!(?timeout, endpoint = endpoint_name, "policy request timed out");
+                tracing::warn!(
+                    ?timeout,
+                    endpoint = endpoint_name,
+                    "policy request timed out"
+                );
                 return Err(TransportError::Timeout(timeout));
             }
         };
