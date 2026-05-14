@@ -3,13 +3,14 @@ use std::sync::Arc;
 
 use crate::util::ANVIL_L1_CHAIN_ID;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, ProcessL1Event, WatcherCache, util};
+use crate::{ChainHead, L1WatcherConfig, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
 use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use blake2::{Blake2s256, Digest};
+use tokio::sync::watch;
 use zksync_os_contract_interface::IBytecodeSupplier::EVMBytecodePublished;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
@@ -68,7 +69,7 @@ impl L1UpgradeTxWatcher {
         bytecode_supplier_address: Address,
         current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
-        watcher_cache: WatcherCache,
+        block_updates: watch::Receiver<ChainHead>,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             config.max_blocks_to_process,
@@ -120,7 +121,8 @@ impl L1UpgradeTxWatcher {
         };
         L1Watcher::new(
             config,
-            watcher_cache,
+            zk_chain_l1.provider().clone(),
+            block_updates,
             admin_l1.into(),
             last_l1_block,
             None,

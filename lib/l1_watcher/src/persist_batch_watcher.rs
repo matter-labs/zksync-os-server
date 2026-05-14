@@ -1,10 +1,11 @@
 use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
-use crate::{L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, WatcherCache, util};
+use crate::{ChainHead, L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use std::collections::HashMap;
+use tokio::sync::watch;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
 use zksync_os_contract_interface::ZkChain;
@@ -46,8 +47,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         config: L1WatcherConfig,
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
-        l1_watcher_cache: WatcherCache,
-        sl_watcher_cache: WatcherCache,
+        l1_block_updates: watch::Receiver<ChainHead>,
+        sl_block_updates: watch::Receiver<ChainHead>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(
@@ -80,9 +81,9 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             }
 
             let zk_chain = intervals.resolve_proxy(interval.first_batch)?.clone();
-            let watcher_cache = match &interval.settlement_layer {
-                IntervalSettlementLayer::L1 => l1_watcher_cache.clone(),
-                IntervalSettlementLayer::Gateway(_) => sl_watcher_cache.clone(),
+            let block_updates = match &interval.settlement_layer {
+                IntervalSettlementLayer::L1 => l1_block_updates.clone(),
+                IntervalSettlementLayer::Gateway(_) => sl_block_updates.clone(),
             };
             let first_batch = if segments.is_empty() {
                 anyhow::ensure!(
@@ -99,7 +100,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             };
             segments.push(SegmentSpec {
                 zk_chain,
-                watcher_cache,
+                block_updates,
                 first_batch,
                 last_batch: interval.last_batch,
             });

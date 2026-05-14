@@ -1,5 +1,5 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, ProcessRawEvents, WatcherCache, util};
+use crate::{ChainHead, L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, U256};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
@@ -36,7 +36,7 @@ impl MigrationFinalizedWatcher {
         l1_chain_id: u64,
         config: L1WatcherConfig,
         last_finalized_migration: watch::Sender<u64>,
-        watcher_cache: WatcherCache,
+        block_updates: watch::Receiver<ChainHead>,
     ) -> anyhow::Result<Option<L1Watcher>> {
         let active_migration_number = (intervals.intervals().len() - 1) as u64;
         let sl_migration_number: u64 = bridgehub_sl
@@ -82,7 +82,8 @@ impl MigrationFinalizedWatcher {
 
         let watcher = L1Watcher::new(
             config,
-            watcher_cache,
+            zk_chain.provider().clone(),
+            block_updates,
             chain_asset_handler.into(),
             starting_block,
             None,

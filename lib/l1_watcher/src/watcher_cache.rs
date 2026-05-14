@@ -18,75 +18,60 @@ pub struct ChainHead {
     pub finalized_block: BlockNumber,
 }
 
-/// Used for reading L1 data which might be used by more than one watcher.
-/// Currently only block numbers.
-#[derive(Clone, Debug)]
-pub struct WatcherCache {
+pub fn run(
     provider: DynProvider,
-    l1_head: watch::Sender<ChainHead>,
+    runtime: &Runtime,
+    task_name: &'static str,
+    poll_interval: Duration,
+) -> watch::Receiver<ChainHead> {
+    let (l1_head, receiver) = watch::channel(ChainHead::default());
+    runtime.spawn_critical_task(task_name, async move {
+        run_inner(provider, l1_head, poll_interval).await;
+    });
+    receiver
 }
 
-impl WatcherCache {
-    pub fn new(provider: DynProvider) -> Self {
-        let (l1_head, _) = watch::channel(ChainHead::default());
-        Self { provider, l1_head }
-    }
-
-    pub(crate) fn provider(&self) -> &DynProvider {
-        &self.provider
-    }
-
-    pub fn subscribe(&self) -> watch::Receiver<ChainHead> {
-        self.l1_head.subscribe()
-    }
-
-    pub fn get_block_number(&self, boundary: BlockBoundary) -> BlockNumber {
-        self.l1_head.borrow().get_block_number(boundary)
-    }
-
-    pub fn run(&self, runtime: &Runtime, task_name: &'static str, poll_interval: Duration) {
-        let this = self.clone();
-        runtime.spawn_critical_task(task_name, async move {
-            this.run_inner(poll_interval).await;
-        });
-    }
-
-    async fn run_inner(self, poll_interval: Duration) {
-        let mut timer = tokio::time::interval(poll_interval);
-        loop {
-            timer.tick().await;
-            if let Err(e) = self.poll().await {
-                tracing::error!("watcher cache fatal error: {e}");
-                panic!("watcher cache failed: {e}");
-            }
+async fn run_inner(
+    provider: DynProvider,
+    l1_head: watch::Sender<ChainHead>,
+    poll_interval: Duration,
+) {
+    let mut timer = tokio::time::interval(poll_interval);
+    loop {
+        timer.tick().await;
+        if let Err(e) = poll(&provider, &l1_head).await {
+            tracing::error!("watcher cache fatal error: {e}");
+            panic!("watcher cache failed: {e}");
         }
     }
+}
 
-    async fn poll(&self) -> alloy::transports::TransportResult<()> {
-        let latest_block = self.provider.get_block_number().await?;
-        let finalized_block = self
-            .provider
-            .get_block_number_by_id(BlockId::finalized())
-            .await?
-            .expect("no finalized blocks yet");
-        let next = ChainHead {
-            latest_block,
-            finalized_block,
-        };
-        self.l1_head.send_if_modified(|current| {
-            if *current == next {
-                false
-            } else {
-                *current = next;
-                true
-            }
-        });
-        Ok(())
-    }
+async fn poll(
+    provider: &DynProvider,
+    l1_head: &watch::Sender<ChainHead>,
+) -> alloy::transports::TransportResult<()> {
+    let latest_block = provider.get_block_number().await?;
+    let finalized_block = provider
+        .get_block_number_by_id(BlockId::finalized())
+        .await?
+        .expect("no finalized blocks yet");
+    let next = ChainHead {
+        latest_block,
+        finalized_block,
+    };
+    l1_head.send_if_modified(|current| {
+        if *current == next {
+            false
+        } else {
+            *current = next;
+            true
+        }
+    });
+    Ok(())
 }
 
 impl ChainHead {
-    fn get_block_number(&self, boundary: BlockBoundary) -> BlockNumber {
+    pub(crate) fn get_block_number(&self, boundary: BlockBoundary) -> BlockNumber {
         match boundary {
             BlockBoundary::Confirmed { confirmations } => {
                 self.latest_block.saturating_sub(confirmations)

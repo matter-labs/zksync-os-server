@@ -1,8 +1,9 @@
 use crate::metrics::METRICS;
-use crate::{BlockBoundary, L1WatcherConfig, ProcessRawEvents, WatcherCache};
+use crate::{BlockBoundary, ChainHead, L1WatcherConfig, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
+use tokio::sync::watch;
 
 /// An abstract watcher for events.
 /// Handles polling for new blocks and extracting logs,
@@ -18,21 +19,22 @@ pub struct L1Watcher {
     end_block: Option<BlockNumber>,
     max_blocks_to_process: u64,
     block_boundary: BlockBoundary,
-    watcher_cache: WatcherCache,
+    block_updates: watch::Receiver<ChainHead>,
     pub(crate) processor: Box<dyn ProcessRawEvents>,
 }
 
 impl L1Watcher {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         config: L1WatcherConfig,
-        watcher_cache: WatcherCache,
+        provider: DynProvider,
+        block_updates: watch::Receiver<ChainHead>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
         end_block: Option<BlockNumber>,
         l1_chain_id: u64,
         processor: Box<dyn ProcessRawEvents>,
     ) -> anyhow::Result<Self> {
-        let provider = watcher_cache.provider().clone();
         let confirmations = if provider.get_chain_id().await? != l1_chain_id {
             // Gateway case, zero out confirmations.
             0
@@ -47,20 +49,20 @@ impl L1Watcher {
             end_block,
             max_blocks_to_process: config.max_blocks_to_process,
             block_boundary: BlockBoundary::Confirmed { confirmations },
-            watcher_cache,
+            block_updates,
             processor,
         })
     }
 
     pub(crate) fn new_finalized(
         config: L1WatcherConfig,
-        watcher_cache: WatcherCache,
+        provider: DynProvider,
+        block_updates: watch::Receiver<ChainHead>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
         end_block: Option<BlockNumber>,
         processor: Box<dyn ProcessRawEvents>,
     ) -> Self {
-        let provider = watcher_cache.provider().clone();
         Self {
             provider,
             address,
@@ -68,7 +70,7 @@ impl L1Watcher {
             end_block,
             max_blocks_to_process: config.max_blocks_to_process,
             block_boundary: BlockBoundary::Finalized,
-            watcher_cache,
+            block_updates,
             processor,
         }
     }
@@ -85,7 +87,6 @@ impl L1Watcher {
 
     /// Non-consuming version of `run`, intended for internal usage in this crate.
     pub(crate) async fn run_inner(&mut self) {
-        let mut block_updates = self.watcher_cache.subscribe();
         loop {
             if let Err(e) = self.poll().await {
                 tracing::error!("l1 watcher fatal error: {e}");
@@ -96,7 +97,7 @@ impl L1Watcher {
             {
                 return;
             }
-            if let Err(e) = block_updates.changed().await {
+            if let Err(e) = self.block_updates.changed().await {
                 tracing::error!("l1 watcher block update channel closed: {e}");
                 panic!("l1 watcher block update channel closed: {e}");
             }
@@ -109,7 +110,10 @@ impl L1Watcher {
             // so the confirmation/finalization window doesn't apply and we don't need an
             // additional RPC.
             Some(eb) => eb,
-            None => self.watcher_cache.get_block_number(self.block_boundary),
+            None => self
+                .block_updates
+                .borrow()
+                .get_block_number(self.block_boundary),
         };
 
         while self.next_block <= cap {

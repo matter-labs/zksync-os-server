@@ -3,6 +3,7 @@ use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use std::collections::HashMap;
+use tokio::sync::watch;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMessageRoot::NewInteropRoot;
 use zksync_os_contract_interface::InteropRoot;
@@ -11,7 +12,7 @@ use zksync_os_types::IndexedInteropRoot;
 
 use crate::util::find_l1_block_by_interop_root_id;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, ProcessRawEvents, WatcherCache};
+use crate::{ChainHead, L1WatcherConfig, ProcessRawEvents};
 
 /// Watches interop root updates on the settlement layer and feeds them into the interop subpool.
 ///
@@ -30,7 +31,7 @@ impl InteropWatcher {
         starting_interop_root_id: u64,
         interop_roots_subpool: InteropRootsSubpool,
         l1_chain_id: u64,
-        watcher_cache: WatcherCache,
+        block_updates: watch::Receiver<ChainHead>,
     ) -> anyhow::Result<L1Watcher> {
         let contract_address = bridgehub.message_root_address().await?;
 
@@ -50,7 +51,8 @@ impl InteropWatcher {
 
         L1Watcher::new(
             config,
-            watcher_cache,
+            bridgehub.provider().clone(),
+            block_updates,
             contract_address.into(),
             next_l1_block,
             None,
