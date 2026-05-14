@@ -991,11 +991,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    let replay_archive = if node_role.is_main() {
-        init_replay_archive(config.replay_archive_config.clone().into(), runtime).await
-    } else {
-        None
-    };
+    let replay_archive =
+        init_replay_archive(config.replay_archive_config.clone().into(), runtime).await;
     if let (Some((replay_archive_sender, _)), Some(inserted_genesis_replay_record)) =
         (&replay_archive, inserted_genesis_replay_record)
     {
@@ -1057,6 +1054,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             verify_batch_rx,
             outgoing_verify_results.clone(),
+            replay_archive_sender,
         )
         .await
     };
@@ -1419,6 +1417,7 @@ async fn run_en_pipeline(
     chain_id: u64,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
+    replay_archive_sender: Option<ReplayArchiveSender>,
 ) -> watch::Receiver<TransactionAcceptanceState> {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
@@ -1450,7 +1449,7 @@ async fn run_en_pipeline(
             repositories: repositories.clone(),
             config: config.into(),
             applied_block_number_sender,
-            replay_archive_sender: None,
+            replay_archive_sender,
         })
         .pipe_opt(
             config
