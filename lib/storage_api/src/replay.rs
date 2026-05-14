@@ -182,5 +182,5 @@ pub trait WriteReplay: ReadReplay {
         &self,
         record: Sealed<ReplayRecord>,
         override_allowed: bool,
-    ) -> impl Future<Output = bool> + Send;
+    ) -> impl Future<Output = anyhow::Result<bool>> + Send;
 }

@@ -1,6 +1,7 @@
 use crate::ReplayArchiveSender;
 use crate::metrics::REPLAY_ARCHIVE_METRICS;
 use alloy::primitives::{BlockNumber, Sealed};
+use anyhow::Context;
 use std::fmt::Debug;
 use std::time::Instant;
 use zksync_os_interface::types::BlockContext;
@@ -51,7 +52,11 @@ impl<Replay> WriteReplay for ReplayArchivingWriteReplay<Replay>
 where
     Replay: WriteReplay,
 {
-    async fn write(&self, record: Sealed<ReplayRecord>, override_allowed: bool) -> bool {
+    async fn write(
+        &self,
+        record: Sealed<ReplayRecord>,
+        override_allowed: bool,
+    ) -> anyhow::Result<bool> {
         let (replay_record, block_hash) = record.clone().split();
         let written = self.replay.write(record, override_allowed).await;
 
@@ -60,14 +65,16 @@ where
                 .queue_depth
                 .set(replay_archive_queue_depth(archive_sender));
             let started_at = Instant::now();
-            let send_result = archive_sender.send((block_hash, replay_record)).await;
+            archive_sender
+                .send((block_hash, replay_record))
+                .await
+                .context("archive_sender closed")?;
             REPLAY_ARCHIVE_METRICS
                 .enqueue_latency
                 .observe(started_at.elapsed());
             REPLAY_ARCHIVE_METRICS
                 .queue_depth
                 .set(replay_archive_queue_depth(archive_sender));
-            send_result.expect("replay archive component stopped before accepting replay record");
         }
 
         written

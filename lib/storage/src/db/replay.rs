@@ -492,7 +492,11 @@ impl ReadReplay for BlockReplayStorage {
 }
 
 impl WriteReplay for BlockReplayStorage {
-    async fn write(&self, sealed_record: Sealed<ReplayRecord>, override_allowed: bool) -> bool {
+    async fn write(
+        &self,
+        sealed_record: Sealed<ReplayRecord>,
+        override_allowed: bool,
+    ) -> anyhow::Result<bool> {
         let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
         let block_record = sealed_record.as_ref();
         let block_context = &sealed_record.block_context;
@@ -505,7 +509,7 @@ impl WriteReplay for BlockReplayStorage {
             );
             self.write_replay_unchecked(sealed_record, true);
             latency_observer.observe();
-            return true;
+            return Ok(true);
         };
 
         if block_context.block_number <= current_latest_record && !override_allowed {
@@ -514,7 +518,7 @@ impl WriteReplay for BlockReplayStorage {
                 block_number = block_context.block_number,
                 "not appending block: already exists in block replay storage",
             );
-            return false;
+            return Ok(false);
         } else if block_context.block_number > current_latest_record + 1 {
             panic!(
                 "tried to append non-sequential replay record: {} > {}",
@@ -544,7 +548,7 @@ impl WriteReplay for BlockReplayStorage {
 
         self.write_replay_unchecked(sealed_record, true);
         latency_observer.observe();
-        true
+        Ok(true)
     }
 }
 

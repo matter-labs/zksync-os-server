@@ -64,12 +64,17 @@ where
 
             state_reporter.enter_state(BlockApplierState::AddingToStorage);
             tracing::info!(block_number, "Persisting block {block_number}");
-            self.replay
+            if let Err(err) = self
+                .replay
                 .write(
                     Sealed::new_unchecked(executed_replay.clone(), block_hash),
                     override_allowed,
                 )
-                .await;
+                .await
+            {
+                tracing::info!("Failed to write replay record: {err}, shutting down");
+                return Ok(());
+            }
 
             self.state.add_block_result(
                 block_number,
