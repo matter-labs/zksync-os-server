@@ -3,7 +3,7 @@ use alloy::primitives::{BlockHash, BlockNumber, Sealed};
 use anyhow::Context as _;
 use futures::StreamExt as _;
 use std::path::{Path, PathBuf};
-use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage_api::{ReplayRecord, WriteReplay};
 
@@ -322,7 +322,7 @@ impl ReplayRecordDecoder {
 }
 
 async fn read_age_x25519_identity(identity_file: &Path) -> anyhow::Result<age::x25519::Identity> {
-    let contents = tokio::fs::read_to_string(identity_file)
+    let file = tokio::fs::File::open(identity_file)
         .await
         .with_context(|| {
             format!(
@@ -330,7 +330,13 @@ async fn read_age_x25519_identity(identity_file: &Path) -> anyhow::Result<age::x
                 identity_file.display()
             )
         })?;
-    for line in contents.lines() {
+    let mut lines = BufReader::new(file).lines();
+    while let Some(line) = lines.next_line().await.with_context(|| {
+        format!(
+            "failed to read age identity file {}",
+            identity_file.display()
+        )
+    })? {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
