@@ -13,6 +13,8 @@ pub(crate) struct ReplayArchiveMetrics {
 
     pub queue_depth: Gauge<usize>,
 
+    pub last_archived_block_number: Gauge<u64>,
+
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES)]
     pub enqueue_latency: Histogram<Duration>,
 

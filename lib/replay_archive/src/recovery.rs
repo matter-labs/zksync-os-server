@@ -550,7 +550,7 @@ mod tests {
             "{err:#}"
         );
         assert!(
-            format!("{err:#}").contains("differs from another session copy"),
+            format!("{err:#}").contains("differs between sessions"),
             "{err:#}"
         );
     }

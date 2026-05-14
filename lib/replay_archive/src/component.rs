@@ -1,3 +1,4 @@
+use crate::metrics::REPLAY_ARCHIVE_METRICS;
 use crate::{REPLAY_ARCHIVE_QUEUE_SIZE, ReplayArchiver};
 use alloy::primitives::BlockHash;
 use anyhow::Context as _;
@@ -36,6 +37,9 @@ where
                 .with_context(|| {
                     format!("failed to archive replay record for block {block_number}")
                 })?;
+            REPLAY_ARCHIVE_METRICS
+                .last_archived_block_number
+                .set(block_number);
         }
         Ok(())
     }
