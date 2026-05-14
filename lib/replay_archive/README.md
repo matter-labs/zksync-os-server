@@ -146,6 +146,19 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   --identity-file ./replay-archive.key
 ```
 
+Alternatively, provide the `AGE-SECRET-KEY-...` value directly through
+`REPLAY_ARCHIVE_AGE_SECRET_KEY`:
+
+```bash
+REPLAY_ARCHIVE_AGE_SECRET_KEY='AGE-SECRET-KEY-...' \
+cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
+  recover-rocksdb \
+  --input-root ./replay_archive_downloaded \
+  --replay-db-path ./db/block_replay_wal \
+  --anchor-block-number 123 \
+  --anchor-block-hash 0x...
+```
+
 `--replay-db-path` must point to the `block_replay_wal` RocksDB directory, not the parent node
 storage directory.
 

@@ -9,7 +9,7 @@ use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert}
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, test_multisetup};
 use zksync_os_replay_archive::{
-    FileSystemReplayArchiveReader, download_all_replay_archive_objects,
+    FileSystemReplayArchiveReader, download_all_replay_archive_objects, read_age_x25519_identity,
     recover_replay_records_to_rocksdb_with_optional_decryption,
 };
 use zksync_os_server::config::{ReplayArchiveConfig, ReplayArchiveEncryptionConfig};
@@ -138,12 +138,13 @@ async fn recover_replay_storage_from_archive(
         "replay archive should contain encrypted objects"
     );
 
+    let identity = read_age_x25519_identity(Path::new(REPLAY_ARCHIVE_IDENTITY_FILE)).await?;
     let recovered = recover_replay_records_to_rocksdb_with_optional_decryption(
         &downloaded_root,
         &rocks_db_path.join("block_replay_wal"),
         latest_block_number,
         latest_block_hash,
-        Some(Path::new(REPLAY_ARCHIVE_IDENTITY_FILE)),
+        Some(identity),
     )
     .await?;
     assert_eq!(

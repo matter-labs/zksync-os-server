@@ -28,8 +28,8 @@ pub use init::{
 };
 pub use reader::{ReplayArchiveObject, ReplayArchiveObjectStream, ReplayArchiveStorageReader};
 pub use recovery::{
-    download_all_replay_archive_objects, recover_replay_records_to_rocksdb,
-    recover_replay_records_to_rocksdb_with_optional_decryption,
+    download_all_replay_archive_objects, parse_age_x25519_identity, read_age_x25519_identity,
+    recover_replay_records_to_rocksdb, recover_replay_records_to_rocksdb_with_optional_decryption,
 };
 pub use replay_record::ReplayRecordArchiver;
 pub use write_replay::ReplayArchivingWriteReplay;

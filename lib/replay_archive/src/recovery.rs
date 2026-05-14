@@ -67,14 +67,14 @@ pub async fn recover_replay_records_to_rocksdb(
 
 /// Rebuilds node replay RocksDB from downloaded replay records.
 ///
-/// If `identity_file` is provided, every downloaded object is decrypted in memory before replay
-/// record decoding. No decrypted archive objects are written to disk.
+/// If `identity` is provided, every downloaded object is decrypted in memory before replay record
+/// decoding. No decrypted archive objects are written to disk.
 pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
     input_root: &Path,
     replay_db_path: &Path,
     anchor_block_number: BlockNumber,
     anchor_block_hash: BlockHash,
-    identity_file: Option<&Path>,
+    identity: Option<age::x25519::Identity>,
 ) -> anyhow::Result<usize> {
     tracing::info!(
         input_root = %input_root.display(),
@@ -83,18 +83,10 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
         %anchor_block_hash,
         "Starting replay archive RocksDB recovery"
     );
-    let decoder = ReplayRecordDecoder {
-        identity: match identity_file {
-            Some(identity_file) => {
-                tracing::info!(
-                    identity_file = %identity_file.display(),
-                    "Replay archive RocksDB recovery will decrypt objects in memory"
-                );
-                Some(read_age_x25519_identity(identity_file).await?)
-            }
-            None => None,
-        },
-    };
+    if identity.is_some() {
+        tracing::info!("Replay archive RocksDB recovery will decrypt objects in memory");
+    }
+    let decoder = ReplayRecordDecoder { identity };
 
     let mut canonical_chain = Vec::new();
     let mut block_number = anchor_block_number;
@@ -321,7 +313,9 @@ impl ReplayRecordDecoder {
     }
 }
 
-async fn read_age_x25519_identity(identity_file: &Path) -> anyhow::Result<age::x25519::Identity> {
+pub async fn read_age_x25519_identity(
+    identity_file: &Path,
+) -> anyhow::Result<age::x25519::Identity> {
     let file = tokio::fs::File::open(identity_file)
         .await
         .with_context(|| {
@@ -341,14 +335,18 @@ async fn read_age_x25519_identity(identity_file: &Path) -> anyhow::Result<age::x
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        return line
-            .parse()
-            .map_err(|err| anyhow::anyhow!("failed to parse age X25519 identity: {err}"));
+        return parse_age_x25519_identity(line);
     }
     anyhow::bail!(
         "age identity file {} does not contain an AGE-SECRET-KEY identity",
         identity_file.display()
     );
+}
+
+pub fn parse_age_x25519_identity(identity: &str) -> anyhow::Result<age::x25519::Identity> {
+    identity
+        .parse()
+        .map_err(|err| anyhow::anyhow!("failed to parse age X25519 identity: {err}"))
 }
 
 #[cfg(test)]
@@ -509,12 +507,15 @@ mod tests {
         .await
         .unwrap();
 
+        let identity = read_age_x25519_identity(identity_file.path())
+            .await
+            .unwrap();
         let recovered = recover_replay_records_to_rocksdb_with_optional_decryption(
             input_root.path(),
             replay_db.path(),
             1,
             block_hash,
-            Some(identity_file.path()),
+            Some(identity),
         )
         .await
         .unwrap();

@@ -21,7 +21,7 @@ age.workspace = true
 alloy = { workspace = true, default-features = false }
 anyhow.workspace = true
 async-trait.workspace = true
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "env"] }
 futures.workspace = true
 reth-tasks.workspace = true
 serde_json.workspace = true
