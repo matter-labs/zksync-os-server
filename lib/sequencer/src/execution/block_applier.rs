@@ -1,15 +1,12 @@
 use crate::config::SequencerConfig;
 use crate::execution::metrics::BlockApplierState;
-use crate::execution::metrics::REPLAY_ARCHIVE_METRICS;
 use crate::model::blocks::{AppliedBlock, BlockCommandType, BlockPayload};
 use alloy::consensus::Sealed;
-use alloy::primitives::BlockHash;
 use async_trait::async_trait;
-use std::time::Instant;
 use tokio::sync::{mpsc, watch};
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
-use zksync_os_storage_api::{ReplayRecord, WriteReplay, WriteRepository, WriteState};
+use zksync_os_storage_api::{WriteReplay, WriteRepository, WriteState};
 
 /// Persists blocks in various local storages.
 /// Used to be part of the Sequencer - was split into `BlockExecutor` and `BlockApplier`.
@@ -24,7 +21,6 @@ where
     pub repositories: Repo,
     pub config: SequencerConfig,
     pub applied_block_number_sender: watch::Sender<u64>,
-    pub replay_archive_sender: Option<mpsc::Sender<(BlockHash, ReplayRecord)>>,
 }
 
 #[async_trait]
@@ -68,27 +64,12 @@ where
 
             state_reporter.enter_state(BlockApplierState::AddingToStorage);
             tracing::info!(block_number, "Persisting block {block_number}");
-            self.replay.write(
-                Sealed::new_unchecked(executed_replay.clone(), block_hash),
-                override_allowed,
-            );
-
-            if let Some(replay_archive_sender) = &self.replay_archive_sender {
-                REPLAY_ARCHIVE_METRICS
-                    .queue_depth
-                    .set(replay_archive_queue_depth(replay_archive_sender));
-                let started_at = Instant::now();
-                let send_result = replay_archive_sender
-                    .send((block_hash, executed_replay.clone()))
-                    .await;
-                REPLAY_ARCHIVE_METRICS
-                    .enqueue_latency
-                    .observe(started_at.elapsed());
-                REPLAY_ARCHIVE_METRICS
-                    .queue_depth
-                    .set(replay_archive_queue_depth(replay_archive_sender));
-                send_result.map_err(|_| anyhow::anyhow!("replay archive component stopped"))?;
-            }
+            self.replay
+                .write(
+                    Sealed::new_unchecked(executed_replay.clone(), block_hash),
+                    override_allowed,
+                )
+                .await;
 
             self.state.add_block_result(
                 block_number,
@@ -116,8 +97,4 @@ where
             )?;
         }
     }
-}
-
-fn replay_archive_queue_depth(sender: &mpsc::Sender<(BlockHash, ReplayRecord)>) -> usize {
-    sender.max_capacity() - sender.capacity()
 }

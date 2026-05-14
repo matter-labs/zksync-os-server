@@ -12,6 +12,7 @@ categories.workspace = true
 [dependencies]
 zksync_os_storage.workspace = true
 zksync_os_storage_api.workspace = true
+zksync_os_interface.workspace = true
 zksync_os_l1_sender.workspace = true
 zksync_os_pipeline.workspace = true
 zksync_os_observability.workspace = true
@@ -32,4 +33,3 @@ vise.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-zksync_os_interface.workspace = true

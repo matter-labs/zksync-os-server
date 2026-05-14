@@ -217,7 +217,9 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
                     )
                 })?;
         anyhow::ensure!(
-            replay_storage.write(Sealed::new_unchecked(replay_record, block_hash), false),
+            replay_storage
+                .write(Sealed::new_unchecked(replay_record, block_hash), false)
+                .await,
             "replay record #{block_number} already exists in recovered RocksDB"
         );
         log_recovery_progress((block_number + 1) as usize, || {

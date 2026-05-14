@@ -41,10 +41,9 @@ Implementations of `ReplayArchiveStorage` must be append-only:
 The node constructs a `ReplayArchiver` from the configured backend and starts
 `ReplayArchiveComponent`.
 
-`BlockApplier` sends `(block_hash, ReplayRecord)` to the component through a bounded channel. The
-applier waits only until the component accepts the record into the queue. The actual archive write
-happens asynchronously in the component. If the queue is full, backpressure is applied to the
-applier.
+`ReplayArchivingWriteReplay` writes records to replay storage and sends `(block_hash, ReplayRecord)`
+to the component through a bounded channel. The actual archive write happens asynchronously in the
+component. If the queue is full, backpressure is applied to replay storage writes.
 
 The current queue size is `REPLAY_ARCHIVE_QUEUE_SIZE`.
 

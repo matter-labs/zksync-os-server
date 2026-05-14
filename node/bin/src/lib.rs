@@ -104,7 +104,7 @@ use zksync_os_raft::{
     loopback_consensus,
 };
 use zksync_os_replay_archive::{
-    ReplayArchiveGateComponent, ReplayArchiveSender, ReplayArchiver, init_replay_archive,
+    ReplayArchiveGateComponent, ReplayArchiver, ReplayArchivingWriteReplay, init_replay_archive,
 };
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
@@ -1003,13 +1003,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .expect("replay archive component stopped before accepting genesis replay record");
     }
     let (replay_archive_sender, replay_archiver) = replay_archive.unzip();
+    let archiving_block_replay_storage =
+        ReplayArchivingWriteReplay::new(block_replay_storage, replay_archive_sender);
 
     let backpressure_acceptance_rx = if node_role.is_main() {
         run_main_node_pipeline(
             &config,
             sl_provider.clone(),
             node_startup_state,
-            block_replay_storage.clone(),
+            archiving_block_replay_storage,
             runtime,
             state.clone(),
             starting_block,
@@ -1031,7 +1033,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             migration_triggered_sender,
             settles_on_gateway,
             effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
-            replay_archive_sender,
             replay_archiver,
         )
         .await
@@ -1041,7 +1042,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             replays_for_sequencer,
             committed_batch_provider.clone(),
             node_startup_state,
-            block_replay_storage.clone(),
+            archiving_block_replay_storage,
             runtime,
             starting_block,
             block_context_provider,
@@ -1054,7 +1055,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             verify_batch_rx,
             outgoing_verify_results.clone(),
-            replay_archive_sender,
         )
         .await
     };
@@ -1146,7 +1146,6 @@ async fn run_main_node_pipeline(
     migration_triggered: watch::Sender<Option<u64>>,
     settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
-    replay_archive_sender: Option<ReplayArchiveSender>,
     replay_archiver: Option<impl ReplayArchiver>,
 ) -> watch::Receiver<TransactionAcceptanceState> {
     let priority_tree_db_path = config
@@ -1195,7 +1194,6 @@ async fn run_main_node_pipeline(
             repositories: repositories.clone(),
             config: config.into(),
             applied_block_number_sender,
-            replay_archive_sender,
         })
         .pipe_opt(
             config
@@ -1417,7 +1415,6 @@ async fn run_en_pipeline(
     chain_id: u64,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
-    replay_archive_sender: Option<ReplayArchiveSender>,
 ) -> watch::Receiver<TransactionAcceptanceState> {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
@@ -1449,7 +1446,6 @@ async fn run_en_pipeline(
             repositories: repositories.clone(),
             config: config.into(),
             applied_block_number_sender,
-            replay_archive_sender,
         })
         .pipe_opt(
             config

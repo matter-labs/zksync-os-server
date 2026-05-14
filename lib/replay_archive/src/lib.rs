@@ -14,6 +14,7 @@ mod metrics;
 mod reader;
 mod recovery;
 mod replay_record;
+mod write_replay;
 
 pub use age_encrypted::AgeEncryptedReplayArchiver;
 pub use component::{ReplayArchiveComponent, ReplayArchiveRecord, ReplayArchiveSender};
@@ -31,6 +32,7 @@ pub use recovery::{
     recover_replay_records_to_rocksdb, recover_replay_records_to_rocksdb_with_optional_decryption,
 };
 pub use replay_record::ReplayRecordArchiver;
+pub use write_replay::ReplayArchivingWriteReplay;
 
 pub const REPLAY_ARCHIVE_QUEUE_SIZE: usize = 128;
 

@@ -492,7 +492,7 @@ impl ReadReplay for BlockReplayStorage {
 }
 
 impl WriteReplay for BlockReplayStorage {
-    fn write(&self, sealed_record: Sealed<ReplayRecord>, override_allowed: bool) -> bool {
+    async fn write(&self, sealed_record: Sealed<ReplayRecord>, override_allowed: bool) -> bool {
         let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
         let block_record = sealed_record.as_ref();
         let block_context = &sealed_record.block_context;
