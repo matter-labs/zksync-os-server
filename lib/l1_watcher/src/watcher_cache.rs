@@ -26,24 +26,16 @@ pub fn run(
 ) -> watch::Receiver<ChainHead> {
     let (l1_head, receiver) = watch::channel(ChainHead::default());
     runtime.spawn_critical_task(task_name, async move {
-        run_inner(provider, l1_head, poll_interval).await;
+        let mut timer = tokio::time::interval(poll_interval);
+        loop {
+            timer.tick().await;
+            if let Err(e) = poll(&provider, &l1_head).await {
+                tracing::error!("watcher cache fatal error: {e}");
+                panic!("watcher cache failed: {e}");
+            }
+        }
     });
     receiver
-}
-
-async fn run_inner(
-    provider: DynProvider,
-    l1_head: watch::Sender<ChainHead>,
-    poll_interval: Duration,
-) {
-    let mut timer = tokio::time::interval(poll_interval);
-    loop {
-        timer.tick().await;
-        if let Err(e) = poll(&provider, &l1_head).await {
-            tracing::error!("watcher cache fatal error: {e}");
-            panic!("watcher cache failed: {e}");
-        }
-    }
 }
 
 async fn poll(
