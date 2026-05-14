@@ -2,6 +2,7 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
+use zksync_os_l1_watcher::MigrationTrigger;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{ComponentId, PeekableReceiver, PipelineComponent, SendAndRecordExt};
 
@@ -22,9 +23,10 @@ pub struct MigrationGate {
     /// `IChainAssetHandler.migrationNumber(chainId)` and updated only by
     /// [`MigrationFinalizedWatcher`][zksync_os_l1_watcher::MigrationFinalizedWatcher].
     pub last_finalized_migration: watch::Receiver<u64>,
-    /// Notifies `SettlementLayerWatcher` of the batch number that contains `SetSLChainId`.
-    /// Sent as soon as the triggering batch is detected, before entering the wait.
-    pub migration_triggered: watch::Sender<Option<u64>>,
+    /// Notifies downstream consumers (`SettlementLayerWatcher`, the `zks_lastSettlementChangeBlock`
+    /// RPC) of the batch and block number that contains `SetSLChainId`. Sent as soon as the
+    /// triggering batch is detected, before entering the wait.
+    pub migration_triggered: watch::Sender<Option<MigrationTrigger>>,
 }
 
 #[async_trait::async_trait]
@@ -52,27 +54,33 @@ impl PipelineComponent for MigrationGate {
 
             // Only `SendToL1` batches go through the gate; already-committed `Passthrough`
             // batches are forwarded unconditionally.
-            let pending_migration_number = if let L1SenderCommand::SendToL1(command) = &item {
+            let pending_trigger = if let L1SenderCommand::SendToL1(command) = &item {
                 // CommitCommand always contains exactly one envelope; use AsRef to access it.
-                command
-                    .as_ref()
-                    .first()
-                    .and_then(|e| e.batch.set_sl_chain_id_migration_number)
-                    .filter(|&n| n > *self.last_finalized_migration.borrow())
+                command.as_ref().first().and_then(|e| {
+                    let migration_number = e.batch.set_sl_chain_id_migration_number?;
+                    if migration_number <= *self.last_finalized_migration.borrow() {
+                        return None;
+                    }
+                    Some((migration_number, e.batch.first_block_number))
+                })
             } else {
                 None
             };
 
-            if let Some(migration_number) = pending_migration_number {
+            if let Some((migration_number, block_number)) = pending_trigger {
                 let trigger_batch_number = item.first_batch_number();
                 tracing::info!(
                     migration_number,
                     trigger_batch_number,
+                    block_number,
                     "SetSLChainId batch detected; signalling settlement layer watcher and pausing commit pipeline"
                 );
                 // Signal before waiting so SettlementLayerWatcher can immediately start checking
                 // the executed-batch precondition.
-                let _ = self.migration_triggered.send(Some(trigger_batch_number));
+                let _ = self.migration_triggered.send(Some(MigrationTrigger {
+                    batch_number: trigger_batch_number,
+                    block_number,
+                }));
 
                 self.last_finalized_migration
                     .wait_for(|n| *n >= migration_number)

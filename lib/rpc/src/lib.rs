@@ -51,8 +51,10 @@ use jsonrpsee::ws_client::RpcServiceBuilder;
 use reth_rpc_eth_types::EthSubscriptionIdProvider;
 use reth_tasks::Runtime;
 use tower_http::cors::{Any, CorsLayer};
+use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_genesis::GenesisInputSource;
 use zksync_os_interface::types::BlockContext;
+use zksync_os_l1_watcher::MigrationTrigger;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
@@ -79,6 +81,8 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     tx_forwarder: Option<DynProvider>,
     gateway_provider: Option<DynProvider>,
+    settlement_layer_intervals: SettlementLayerIntervals,
+    migration_triggered: watch::Receiver<Option<MigrationTrigger>>,
     runtime: &Runtime,
     wait_for_db: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
@@ -117,6 +121,8 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             genesis_input_source,
             chain_id,
             gateway_provider,
+            settlement_layer_intervals,
+            migration_triggered,
         )
         .into_rpc(),
     )?;

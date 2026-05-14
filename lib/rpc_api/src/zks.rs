@@ -39,4 +39,10 @@ pub trait ZksApi {
         keys: Vec<B256>,
         batch_number: u64,
     ) -> RpcResult<Option<BatchStorageProof>>;
+
+    /// Returns the block number of the most recent `SetSLChainId` system transaction — i.e. the
+    /// block at which this chain last switched settlement layers. Returns `None` if the chain has
+    /// never migrated.
+    #[method(name = "lastSettlementChangeBlock")]
+    fn last_settlement_change_block(&self) -> RpcResult<Option<u64>>;
 }

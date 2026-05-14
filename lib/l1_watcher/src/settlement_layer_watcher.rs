@@ -1,3 +1,4 @@
+use crate::MigrationTrigger;
 use alloy::eips::BlockId;
 use alloy::primitives::Address;
 use alloy::providers::DynProvider;
@@ -21,9 +22,9 @@ pub struct SettlementLayerWatcher {
     /// Value of `getSettlementLayer()` at the time the node started.
     initial_settlement_layer: Address,
     poll_interval: Duration,
-    /// Receives the trigger batch number from `MigrationGate` once it has detected and forwarded
-    /// the `SetSLChainId` batch. `None` means no migration has been triggered yet.
-    migration_triggered: watch::Receiver<Option<u64>>,
+    /// Receives the trigger from `MigrationGate` once it has detected and forwarded the
+    /// `SetSLChainId` batch. `None` means no migration has been triggered yet.
+    migration_triggered: watch::Receiver<Option<MigrationTrigger>>,
 }
 
 impl SettlementLayerWatcher {
@@ -31,7 +32,7 @@ impl SettlementLayerWatcher {
         diamond_proxy_l1: ZkChain<DynProvider>,
         initial_settlement_layer: Address,
         poll_interval: Duration,
-        migration_triggered: watch::Receiver<Option<u64>>,
+        migration_triggered: watch::Receiver<Option<MigrationTrigger>>,
     ) -> Self {
         Self {
             diamond_proxy_l1,
@@ -62,7 +63,9 @@ impl SettlementLayerWatcher {
             }
 
             // Condition 2: MigrationGate must have forwarded the SetSLChainId batch.
-            let Some(trigger_batch_number) = *self.migration_triggered.borrow() else {
+            let Some(trigger_batch_number) =
+                self.migration_triggered.borrow().map(|t| t.batch_number)
+            else {
                 tracing::info!(
                     initial = %self.initial_settlement_layer,
                     current  = %current,

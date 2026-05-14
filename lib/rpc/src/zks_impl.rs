@@ -11,8 +11,11 @@ use futures::{FutureExt, TryFutureExt};
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use std::sync::Arc;
+use tokio::sync::watch;
 use zk_ee::common_structs::derive_flat_storage_key;
+use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_genesis::{GenesisInput, GenesisInputSource};
+use zksync_os_l1_watcher::MigrationTrigger;
 use zksync_os_merkle_tree_api::flat::StorageSlotProof;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_rpc_api::{
@@ -34,9 +37,12 @@ pub struct ZksNamespace<RpcStorage> {
     genesis_input_source: Arc<dyn GenesisInputSource>,
     l2_chain_id: u64,
     gateway_provider: Option<DynProvider>,
+    settlement_layer_intervals: SettlementLayerIntervals,
+    migration_triggered: watch::Receiver<Option<MigrationTrigger>>,
 }
 
 impl<RpcStorage> ZksNamespace<RpcStorage> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         bridgehub_address: Address,
         bytecode_supplier_address: Address,
@@ -44,6 +50,8 @@ impl<RpcStorage> ZksNamespace<RpcStorage> {
         genesis_input_source: Arc<dyn GenesisInputSource>,
         l2_chain_id: u64,
         gateway_provider: Option<DynProvider>,
+        settlement_layer_intervals: SettlementLayerIntervals,
+        migration_triggered: watch::Receiver<Option<MigrationTrigger>>,
     ) -> Self {
         Self {
             bridgehub_address,
@@ -52,6 +60,8 @@ impl<RpcStorage> ZksNamespace<RpcStorage> {
             genesis_input_source,
             l2_chain_id,
             gateway_provider,
+            settlement_layer_intervals,
+            migration_triggered,
         }
     }
 }
@@ -287,6 +297,41 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         }))
     }
 
+    fn last_settlement_change_block_impl(&self) -> ZksResult<Option<u64>> {
+        // The block containing the latest `SetSLChainId` comes from one of two sources:
+        //   - `migration_triggered`: an in-flight migration that the `MigrationGate` has just
+        //     forwarded but that has not been persisted to `storage.batch()` yet. Carries the
+        //     block number directly.
+        //   - `SettlementLayerIntervals`: discovered once at startup from on-chain state. The
+        //     latest interval's `first_batch` is the batch of the most recent finalized
+        //     `SetSLChainId`. The block number is derived from the persisted batch.
+        //
+        // When both are present, the larger batch number wins — `migration_triggered` reflects
+        // in-flight work that hasn't yet shown up in the at-startup-discovered intervals.
+        let intervals = self.settlement_layer_intervals.intervals();
+        let finalized_batch = (intervals.len() >= 2).then(|| {
+            intervals
+                .last()
+                .expect("settlement layer intervals are never empty")
+                .first_batch
+        });
+        let in_flight = *self.migration_triggered.borrow();
+
+        match (in_flight, finalized_batch) {
+            (Some(trigger), Some(finalized)) if trigger.batch_number > finalized => {
+                Ok(Some(trigger.block_number))
+            }
+            (Some(trigger), None) => Ok(Some(trigger.block_number)),
+            (_, Some(finalized)) => {
+                let Some(batch) = self.storage.batch().get_batch_by_number(finalized)? else {
+                    return Ok(None);
+                };
+                Ok(Some(batch.first_block_number()))
+            }
+            (None, None) => Ok(None),
+        }
+    }
+
     fn get_block_metadata_by_number_impl(
         &self,
         block_number: u64,
@@ -459,6 +504,10 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
     ) -> RpcResult<Option<BatchStorageProof>> {
         self.get_proof_impl(account, &keys, batch_number)
             .to_rpc_result()
+    }
+
+    fn last_settlement_change_block(&self) -> RpcResult<Option<u64>> {
+        self.last_settlement_change_block_impl().to_rpc_result()
     }
 }
 

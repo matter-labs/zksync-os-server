@@ -77,7 +77,7 @@ use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
     L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, MigrationFinalizedWatcher,
-    SettlementLayerWatcher,
+    MigrationTrigger, SettlementLayerWatcher,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
@@ -650,10 +650,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (last_finalized_migration_sender, last_finalized_migration_receiver) =
         watch::channel::<u64>(0);
 
-    // Carries the trigger batch number from MigrationGate to SettlementLayerWatcher.
-    // None until MigrationGate detects the SetSLChainId batch; Some(N) after detection.
+    // Carries the trigger from MigrationGate to SettlementLayerWatcher and the
+    // `zks_lastSettlementChangeBlock` RPC. `None` until MigrationGate detects the `SetSLChainId`
+    // batch; `Some(_)` after detection.
     let (migration_triggered_sender, migration_triggered_receiver) =
-        watch::channel::<Option<u64>>(None);
+        watch::channel::<Option<MigrationTrigger>>(None);
+    let migration_triggered_rpc_receiver = migration_triggered_sender.subscribe();
 
     if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
         runtime.spawn_critical_task(
@@ -988,6 +990,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
+    // Cloned for the RPC server below; the pipeline takes ownership of `node_startup_state`.
+    let settlement_layer_intervals_for_rpc = node_startup_state
+        .l1_state
+        .settlement_layer_intervals
+        .clone();
+
     let backpressure_acceptance_rx = if node_role.is_main() {
         run_main_node_pipeline(
             &config,
@@ -1087,6 +1095,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_constructed_block_ctx_receiver,
         main_node_provider,
         gateway_provider.map(|p| p.erased()),
+        settlement_layer_intervals_for_rpc,
+        migration_triggered_rpc_receiver,
         runtime,
         wait_for_db,
     )
@@ -1124,7 +1134,7 @@ async fn run_main_node_pipeline(
     verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
     last_finalized_migration: watch::Receiver<u64>,
-    migration_triggered: watch::Sender<Option<u64>>,
+    migration_triggered: watch::Sender<Option<MigrationTrigger>>,
     settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
 ) -> watch::Receiver<TransactionAcceptanceState> {

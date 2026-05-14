@@ -41,3 +41,6 @@ pub use migration_finalized_watcher::MigrationFinalizedWatcher;
 
 mod settlement_layer_watcher;
 pub use settlement_layer_watcher::SettlementLayerWatcher;
+
+mod migration_trigger;
+pub use migration_trigger::MigrationTrigger;
