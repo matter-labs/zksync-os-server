@@ -188,9 +188,6 @@ pub async fn main() {
         tracing::info!("Ephemeral mode enabled, skipping Prometheus push exporter");
         None
     } else {
-        #[cfg(all(feature = "jemalloc", target_family = "unix"))]
-        zksync_os_observability::jemalloc::register_monitor();
-
         runtime.spawn_critical_with_graceful_shutdown_signal("prometheus", |shutdown| async move {
             let prometheus: PrometheusExporterConfig =
                 PrometheusExporterConfig::pull(prometheus_port);
