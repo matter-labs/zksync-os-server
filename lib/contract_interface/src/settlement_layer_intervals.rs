@@ -1,6 +1,6 @@
-use crate::{IChainAssetHandler, ZkChain, is_method_missing};
+use crate::{Bridgehub, IChainAssetHandler, ZkChain, is_method_missing};
 use alloy::primitives::{Address, U256};
-use alloy::providers::DynProvider;
+use alloy::providers::{DynProvider, Provider};
 use anyhow::Context;
 use std::fmt;
 use std::sync::Arc;
@@ -71,16 +71,37 @@ impl SettlementLayerIntervals {
     pub async fn discover(
         chain_asset_handler: Address,
         diamond_proxy_l1: ZkChain<DynProvider>,
-        diamond_proxy_gw: Option<(u64, ZkChain<DynProvider>)>,
-        chain_id: u64,
+        gateway_provider: Option<DynProvider>,
+        l2_chain_id: u64,
     ) -> anyhow::Result<Self> {
         let intervals = find_settlement_layer_intervals(
             chain_asset_handler,
             diamond_proxy_l1.provider().clone(),
-            chain_id,
+            l2_chain_id,
         )
         .await
         .context("failed to discover settlement layer intervals")?;
+        // Resolve historical Gateway diamond proxy if the chain has any Gateway interval AND
+        // gateway_provider is configured.
+        let has_historical_gateway = intervals
+            .iter()
+            .any(|i| matches!(i.settlement_layer, IntervalSettlementLayer::Gateway(_)));
+        let diamond_proxy_gw =
+            if has_historical_gateway && let Some(gateway_provider) = &gateway_provider {
+                let gw_chain_id = gateway_provider.get_chain_id().await?;
+                let bridgehub_gw = Bridgehub::new(
+                    crate::l1_discovery::L2_BRIDGEHUB_ADDRESS,
+                    gateway_provider.clone(),
+                    l2_chain_id,
+                );
+                let historical_diamond_proxy_gw = bridgehub_gw
+                    .zk_chain()
+                    .await
+                    .context("failed to resolve historical Gateway diamond proxy")?;
+                Some((gw_chain_id, historical_diamond_proxy_gw))
+            } else {
+                None
+            };
         Ok(Self {
             intervals: Arc::new(intervals),
             diamond_proxy_l1,
