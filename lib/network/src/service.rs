@@ -23,7 +23,7 @@ use reth_network::{
 use reth_network_peers::PeerId;
 use reth_network_peers::{NodeRecord, TrustedPeer};
 use reth_provider::BlockNumReader;
-use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig, TokioConfig};
+use reth_tasks::Runtime;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
@@ -171,6 +171,7 @@ pub struct PeerVerifyBatchResult {
 impl NetworkService {
     pub async fn new(
         config: NetworkConfig,
+        runtime: Runtime,
         protocol_config: ZksProtocolConfig,
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
@@ -201,11 +202,6 @@ impl NetworkService {
         let boot_nodes = resolve_boot_nodes_with_retry(config.boot_nodes.clone()).await?;
         tracing::info!(?genesis, ?fork_id, "initializing p2p network service");
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
-        let runtime = RuntimeBuilder::new(RuntimeConfig::default().with_tokio(
-            TokioConfig::existing_handle(tokio::runtime::Handle::current()),
-        ))
-        .build()
-        .map_err(|err| io::Error::other(format!("failed to initialize reth runtime: {err}")))?;
         let cfg_builder = RethNetworkConfig::builder(config.secret_key, runtime)
             .boot_nodes(boot_nodes)
             // Configure node identity
