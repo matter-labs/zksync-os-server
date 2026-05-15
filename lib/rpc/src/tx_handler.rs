@@ -204,25 +204,37 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             // No client-side timeout wraps this call so the EN cannot disagree
             // with main on the outcome. The trade-off is that main's config
             // default bounds the wait, not the caller's max_wait_ms.
+            //
+            // If the future is dropped before we learn main's verdict (e.g.,
+            // client disconnect), `local_cleanup` removes the orphaned local
+            // mempool entry on drop. Disarm only when we explicitly want to
+            // keep the local mirror: forward succeeded, or main reported an
+            // EIP-7966 timeout (tx still pending on main).
+            let mut local_cleanup = RemoveOnDrop::new(&self.mempool, tx_hash);
             let forwarding_result: Result<ZkTransactionReceipt, _> = {
                 let _guard = ForwardingLatencyGuard::new();
                 forwarder
                     .raw_request("eth_sendRawTransactionSync".into(), (bytes,))
                     .await
             };
-            return forwarding_result.map_err(|err| {
-                tracing::debug!(%err, "sync forwarding error from main node back to user");
-                // Main returned EIP-7966 timeout (code 4). Tx is still pending
-                // on main, so keep our local mirror and propagate as timeout.
-                if let RpcError::ErrorResp(payload) = &err
-                    && payload.code == EIP_7966_TIMEOUT_CODE
-                {
-                    return EthSendRawTransactionSyncError::Timeout(timeout_duration);
+            return match forwarding_result {
+                Ok(receipt) => {
+                    local_cleanup.disarm();
+                    Ok(receipt)
                 }
-                // Real rejection or transport failure. Drop the local mirror.
-                self.mempool.remove_transactions(vec![tx_hash]);
-                EthSendRawTransactionError::ForwardError(err).into()
-            });
+                Err(err) => {
+                    tracing::debug!(%err, "sync forwarding error from main node back to user");
+                    if let RpcError::ErrorResp(payload) = &err
+                        && payload.code == EIP_7966_TIMEOUT_CODE
+                    {
+                        local_cleanup.disarm();
+                        return Err(EthSendRawTransactionSyncError::Timeout(timeout_duration));
+                    }
+                    // Real rejection or transport failure. Let `local_cleanup`
+                    // remove the local mirror as it drops.
+                    Err(EthSendRawTransactionError::ForwardError(err).into())
+                }
+            };
         }
 
         // Main node: wait for the tx to land in a locally-applied block.
@@ -386,5 +398,37 @@ impl ForwardingLatencyGuard {
 impl Drop for ForwardingLatencyGuard {
     fn drop(&mut self) {
         TX_SUBMISSION.forwarding_latency.observe(self.0.elapsed());
+    }
+}
+
+/// Removes a tx from the local mempool on drop, unless explicitly disarmed.
+/// Lets callers reconcile a half-finished forward with the local mirror:
+/// if the handler future is dropped (e.g., client disconnect) before the
+/// forward returns a verdict, the orphan entry is cleaned up.
+struct RemoveOnDrop<'a, Mempool: L2Subpool> {
+    mempool: &'a Mempool,
+    tx_hash: B256,
+    armed: bool,
+}
+
+impl<'a, Mempool: L2Subpool> RemoveOnDrop<'a, Mempool> {
+    fn new(mempool: &'a Mempool, tx_hash: B256) -> Self {
+        Self {
+            mempool,
+            tx_hash,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl<Mempool: L2Subpool> Drop for RemoveOnDrop<'_, Mempool> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.mempool.remove_transactions(vec![self.tx_hash]);
+        }
     }
 }
