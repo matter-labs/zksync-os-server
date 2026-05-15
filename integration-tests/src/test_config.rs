@@ -28,10 +28,8 @@ pub(crate) async fn build_node_config(
     }
     config.sequencer_config.fee_collector_address = Address::random();
     config.rpc_config.send_raw_transaction_sync_timeout = Duration::from_secs(10);
-    if !with_proofs {
-        config.prover_api_config.fake_fri_provers.enabled = true;
-        config.prover_api_config.fake_snark_provers.enabled = true;
-    }
+    config.prover_api_config.fake_fri_provers.enabled = !with_proofs;
+    config.prover_api_config.fake_snark_provers.enabled = !with_proofs;
     config.batch_verification_config.server_enabled = false;
     config.batch_verification_config.client_enabled = false;
     config.batch_verification_config.threshold = 1;
