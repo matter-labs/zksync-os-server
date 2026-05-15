@@ -257,6 +257,7 @@ impl TestEnvironment {
         if enable_prover {
             let mut sequencer_urls = vec![tester.prover_api_address.clone()];
             for node in &tester.owned_supporting_nodes {
+                sequencer_urls.pop();
                 sequencer_urls.push(format!("http://localhost:{}", node._ports.prover_api.port));
             }
             spawn_prover_service(&tester, &sequencer_urls, sequencer_urls.len()).await;
