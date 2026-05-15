@@ -21,6 +21,7 @@ pub struct L1Watcher {
     max_blocks_to_process: u64,
     block_boundary: BlockBoundary,
     poll_interval: Duration,
+    poll_iteration_timeout: Duration,
     pub(crate) processor: Box<dyn ProcessRawEvents>,
 }
 
@@ -54,6 +55,7 @@ impl L1Watcher {
             max_blocks_to_process: config.max_blocks_to_process,
             block_boundary: BlockBoundary::Confirmed { confirmations },
             poll_interval: config.poll_interval,
+            poll_iteration_timeout: config.poll_iteration_timeout,
             processor,
         })
     }
@@ -74,6 +76,7 @@ impl L1Watcher {
             max_blocks_to_process: config.max_blocks_to_process,
             block_boundary: BlockBoundary::Finalized,
             poll_interval: config.poll_interval,
+            poll_iteration_timeout: config.poll_iteration_timeout,
             processor,
         }
     }
@@ -91,11 +94,29 @@ impl L1Watcher {
     /// Non-consuming version of `run`, intended for internal usage in this crate.
     pub(crate) async fn run_inner(&mut self) {
         let mut timer = tokio::time::interval(self.poll_interval);
+        let event_name = self.processor.name();
         loop {
             timer.tick().await;
-            if let Err(e) = self.poll().await {
-                tracing::error!("l1 watcher fatal error: {e}");
-                panic!("watcher failed: {e}");
+            METRICS.poll_iterations[&event_name].inc();
+            match tokio::time::timeout(self.poll_iteration_timeout, self.poll()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::error!(event_name, "l1 watcher fatal error: {e}");
+                    panic!("watcher failed: {e}");
+                }
+                Err(_) => {
+                    tracing::error!(
+                        event_name,
+                        timeout_secs = self.poll_iteration_timeout.as_secs(),
+                        next_block = self.next_block,
+                        "l1 watcher poll iteration timed out — likely a hung RPC call; \
+                         panicking so the critical-task supervisor recycles us with fresh state"
+                    );
+                    panic!(
+                        "l1 watcher {event_name} poll iteration timed out after {:?}",
+                        self.poll_iteration_timeout
+                    );
+                }
             }
             if let Some(eb) = self.end_block
                 && self.next_block > eb

@@ -1122,6 +1122,18 @@ pub struct L1WatcherConfig {
     /// How often to poll L1 for new priority requests.
     #[config(default_t = 1 * TimeUnit::Seconds)]
     pub poll_interval: Duration,
+
+    /// Max wall-clock time a single watcher `poll()` invocation may take. Exceeding it indicates
+    /// a silent hang (e.g. an RPC call stuck on a half-dead TCP connection); the watcher panics
+    /// so its critical-task supervisor recycles it with fresh state.
+    #[config(default_t = 600 * TimeUnit::Seconds)]
+    pub poll_iteration_timeout: Duration,
+
+    /// Max wall-clock time the priority-tx watcher will wait for a freshly observed L1 priority
+    /// op to become visible on the settlement layer before erroring out (which panics and
+    /// recycles the task). Caps a previously unbounded poll loop.
+    #[config(default_t = 300 * TimeUnit::Seconds)]
+    pub sl_wait_timeout: Duration,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1805,6 +1817,8 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
             max_blocks_to_process: c.max_blocks_to_process,
             confirmations: c.confirmations,
             poll_interval: c.poll_interval,
+            poll_iteration_timeout: c.poll_iteration_timeout,
+            sl_wait_timeout: c.sl_wait_timeout,
         }
     }
 }

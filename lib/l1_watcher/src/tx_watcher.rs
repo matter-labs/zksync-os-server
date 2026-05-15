@@ -21,6 +21,7 @@ pub struct L1TxWatcher {
     zk_chain_sl: ZkChain<DynProvider>,
     cached_total_priority_ops_resp: Option<u64>,
     l1_subpool: L1Subpool,
+    sl_wait_timeout: Duration,
 }
 
 impl L1TxWatcher {
@@ -49,6 +50,7 @@ impl L1TxWatcher {
             zk_chain_sl,
             cached_total_priority_ops_resp: None,
             l1_subpool,
+            sl_wait_timeout: config.sl_wait_timeout,
         };
         L1Watcher::new(
             config,
@@ -104,9 +106,18 @@ impl ProcessL1Event for L1TxWatcher {
                     hash = ?tx.hash(),
                     "waiting for tx to be processed on SL"
                 );
+                let deadline = tokio::time::Instant::now() + self.sl_wait_timeout;
                 let mut timer = tokio::time::interval(Duration::from_secs(10));
                 loop {
                     timer.tick().await;
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(L1WatcherError::Other(anyhow::anyhow!(
+                            "timed out after {:?} waiting for priority_id {} to be visible on \
+                             the settlement layer; the SL RPC is most likely serving stale data",
+                            self.sl_wait_timeout,
+                            tx.priority_id(),
+                        )));
+                    }
                     let total_priority_ops = self
                         .zk_chain_sl
                         .get_total_priority_txs_at_block(BlockId::Number(BlockNumberOrTag::Latest))
