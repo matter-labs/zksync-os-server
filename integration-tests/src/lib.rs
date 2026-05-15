@@ -64,7 +64,7 @@ const L1_CHAIN_ID: u64 = 31337;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettlementLayer {
     L1,
-    Gateway,
+    Gateway { with_proofs: bool },
 }
 
 pub use zksync_os_integration_tests_macros::test_multisetup;
@@ -86,7 +86,14 @@ impl TestCase {
     pub const fn next_to_gateway() -> Self {
         Self {
             protocol_version: NEXT_PROTOCOL_VERSION,
-            settlement_layer: SettlementLayer::Gateway,
+            settlement_layer: SettlementLayer::Gateway { with_proofs: false },
+        }
+    }
+
+    pub const fn next_to_gateway_with_proofs() -> Self {
+        Self {
+            protocol_version: NEXT_PROTOCOL_VERSION,
+            settlement_layer: SettlementLayer::Gateway { with_proofs: true },
         }
     }
 
@@ -97,6 +104,7 @@ impl TestCase {
 
 pub const CURRENT_TO_L1: TestCase = TestCase::current_to_l1();
 pub const NEXT_TO_GATEWAY: TestCase = TestCase::next_to_gateway();
+pub const NEXT_TO_GATEWAY_WITH_PROOFS: TestCase = TestCase::next_to_gateway_with_proofs();
 
 /// Set of private keys for batch verification participants.
 pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
@@ -164,7 +172,7 @@ impl TestEnvironment {
                     prepared_runtime,
                 })
             }
-            SettlementLayer::Gateway => {
+            SettlementLayer::Gateway { with_proofs } => {
                 let protocol_version = case.protocol_version;
                 let chain_layout = ChainLayout::GatewayChain {
                     protocol_version,
@@ -172,7 +180,8 @@ impl TestEnvironment {
                 };
                 let l1 = AnvilL1::start(ChainLayout::Gateway { protocol_version }).await?;
                 let mut gateway_config =
-                    build_node_config(&l1, ChainLayout::Gateway { protocol_version }).await?;
+                    build_node_config(&l1, ChainLayout::Gateway { protocol_version }, with_proofs)
+                        .await?;
                 if !prover_input_generation_enabled() {
                     disable_prover_input_generation(&mut gateway_config);
                 }
@@ -195,7 +204,7 @@ impl TestEnvironment {
     }
 
     pub async fn default_config(&self) -> anyhow::Result<Config> {
-        let mut config = build_node_config(&self.l1, self.chain_layout).await?;
+        let mut config = build_node_config(&self.l1, self.chain_layout, false).await?;
         if let Some(gateway) = &self.gateway {
             config.gateway_provider_config = Some(ProviderConfig::new(
                 gateway.rpc_url.clone(),
@@ -582,7 +591,7 @@ impl Tester {
     ) -> anyhow::Result<Self> {
         let ports = Ports::acquire_unused_with_network(network).await?;
         let tempdir = Arc::new(tempfile::tempdir()?);
-        let mut config = build_node_config(&l1, chain_layout).await?;
+        let mut config = build_node_config(&l1, chain_layout, false).await?;
         if enable_prover {
             config.prover_api_config.fake_fri_provers.enabled = false;
             config.prover_api_config.fake_snark_provers.enabled = false;
@@ -1206,7 +1215,7 @@ impl GatewayTesterBuilder {
         let protocol_version = self.protocol_version;
         let l1 = AnvilL1::start(ChainLayout::Gateway { protocol_version }).await?;
         let mut gateway_config =
-            build_node_config(&l1, ChainLayout::Gateway { protocol_version }).await?;
+            build_node_config(&l1, ChainLayout::Gateway { protocol_version }, false).await?;
         if !prover_input_generation_enabled() {
             disable_prover_input_generation(&mut gateway_config);
         }
@@ -1234,7 +1243,7 @@ impl GatewayTesterBuilder {
             let deployment_filter = self.deployment_filter.clone();
             let policy_service = self.policy_service.clone();
 
-            let mut tester_config = build_node_config(&l1, chain_layout).await?;
+            let mut tester_config = build_node_config(&l1, chain_layout, false).await?;
             if !prover_input_generation_enabled() {
                 disable_prover_input_generation(&mut tester_config);
             }
