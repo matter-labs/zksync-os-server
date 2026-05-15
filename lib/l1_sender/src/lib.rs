@@ -62,15 +62,45 @@ impl StateLabel for L1SenderState {
 
 /// A code for "method not found" error response as declared in JSON-RPC 2.0 spec.
 const METHOD_NOT_FOUND_CODE: i64 = -32601;
-/// Future that resolves into a (fallible) transaction receipt.
-type TransactionReceiptFuture = BoxFuture<'static, anyhow::Result<TransactionReceipt>>;
-type PendingTx<Input> = (TransactionReceiptFuture, Input, Instant);
+
+/// Outcome of waiting for an L1 transaction to be confirmed.
+enum WaitOutcome {
+    Confirmed(TransactionReceipt),
+    /// The configured `transaction_timeout` elapsed without the tx being confirmed
+    /// (and with no RPC errors). The caller decides whether to resubmit at a higher
+    /// fee or escalate.
+    Timeout,
+}
+
+/// Future that resolves into a (fallible) wait outcome.
+type WaitFuture = BoxFuture<'static, anyhow::Result<WaitOutcome>>;
+
+/// A transaction we have submitted and are waiting on, along with the data needed
+/// to resubmit it at the same nonce if the wait times out.
+struct PendingTx<Input> {
+    receipt_fut: WaitFuture,
+    cmd: Input,
+    submitted_at: Instant,
+    nonce: u64,
+    /// Fees used for the most recent submission attempt. On resubmit we bump
+    /// these (rather than re-applying the replacement multiplier to the
+    /// configured fees) so that each successive resubmit clears the previous
+    /// attempt's `priceBump` threshold.
+    current_fee_params: FeeParams,
+    /// How many more times we may resubmit this tx at a bumped fee before giving up.
+    resubmits_remaining: u32,
+}
 
 const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 /// In case there's only one chain connected to gateway, it is very likely that there will be not enough block production
 /// to reach 3 confirmations for such transactions
 const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
 const OPERATOR_METRICS_POLL_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Cap on automatic resubmissions per pending tx when waits keep timing out.
+/// After this many attempts at bumped fees, the sender bails up to the supervisor
+/// so an operator gets paged rather than retrying forever.
+const MAX_RESUBMITS_PER_TX: u32 = 5;
 
 #[derive(Debug, Clone, Copy)]
 struct FeeParams {
@@ -149,9 +179,15 @@ where
         if !recovered.is_empty() {
             let pending_txs: Vec<PendingTx<Input>> = recovered
                 .into_iter()
-                .map(|(tx_hash, cmd)| {
-                    let fut = self.wait_for_confirmed_receipt(tx_hash);
-                    (fut, cmd, Instant::now())
+                .map(|(tx_hash, cmd, nonce)| PendingTx {
+                    receipt_fut: self.wait_for_confirmed_receipt(tx_hash),
+                    cmd,
+                    submitted_at: Instant::now(),
+                    nonce,
+                    // Best-effort baseline: assume the prior session submitted at
+                    // the configured fees. The first resubmit will bump from here.
+                    current_fee_params: self.config.fee_config.configured_fee_params(),
+                    resubmits_remaining: MAX_RESUBMITS_PER_TX,
                 })
                 .collect();
             self.wait_for_txs_and_forward(pending_txs, &state_reporter, &outbound)
@@ -202,64 +238,13 @@ where
             // so that we send them downstream also in order.
             // This holds true because l1 transactions are included in the order of sender nonce.
             // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
-            let pending_txs: Vec<PendingTx<Input>> =
-            futures::stream::iter(commands.drain(..))
+            let pending_txs: Vec<PendingTx<Input>> = futures::stream::iter(commands.drain(..))
                 .then(|mut cmd| async {
                     let fee_params = self
-                        .resolve_fee_params(
-                        fee_config,
-                        force_transaction_resubmission,
-                    )
-                    .await?;
-                    let operator_address = self.operator_address().await?;
-                    let mut tx_request = self
-                        .tx_request_with_gas_fields(operator_address, fee_params)
-                        .with_to(self.to_address)
-                        .with_input(cmd.solidity_call(self.gateway, &operator_address));
-
-                    if let Some(blob_sidecar) = cmd.blob_sidecar() {
-                        let fee_per_blob_gas = self.provider.get_blob_base_fee().await?;
-                        L1_SENDER_METRICS
-                            .report_blob_base_fee(fee_per_blob_gas)?;
-                        let max_fee_per_blob_gas = fee_params.max_fee_per_blob_gas;
-
-                        if fee_per_blob_gas > max_fee_per_blob_gas {
-                            tracing::warn!(
-                                max_fee_per_blob_gas,
-                                fee_per_blob_gas,
-                                "L1 sender's configured maxFeePerBlobGas is lower than the one estimated from network"
-                            );
-                        }
-                        tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
-                        tx_request.set_blob_sidecar(blob_sidecar);
-                    };
-
-                    // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an
-                    // envelope.
-                    let envelope = self.provider.fill(tx_request).await?.try_into_envelope()?.try_into_pooled()?;
-
-                    let pending_block = self.provider.get_block(BlockId::pending()).await?.expect("no pending block");
-                    // todo: make conversion unconditional (and remove respective config) once anvil
-                    //       supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
-                    let tx = if self.config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
-                        // Convert the envelope into an EIP-7594 transaction by converting the sidecar
-                        envelope.try_map_eip4844(|tx| {
-                            tx.try_map_sidecar(|sidecar| {
-                                Ok::<_, BlobTransactionValidationError>(
-                                    BlobTransactionSidecarVariant::Eip7594(sidecar.try_into_eip7594()?)
-                                )
-                            })
-                        })?
-                    } else {
-                        // Keep the regular EIP-4844 sidecar
-                        envelope
-                    };
-
-                    let pending_tx = self.provider
-                        .send_raw_transaction(&tx.encoded_2718())
+                        .resolve_fee_params(fee_config, force_transaction_resubmission)
                         .await?;
-                    let submitted_at = Instant::now();
-                    let tx_hash = *pending_tx.tx_hash();
+                    let (tx_hash, submitted_at, nonce) =
+                        self.build_and_send_tx(&cmd, fee_params, None).await?;
                     let receipt_fut = self.wait_for_confirmed_receipt(tx_hash);
                     tracing::info!(
                         "{command_name}: L1 transaction submitted for {range}. Hash: {tx_hash:?} Waiting for inclusion...",
@@ -285,7 +270,14 @@ where
                     cmd.as_mut()
                         .iter_mut()
                         .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
-                    anyhow::Ok((receipt_fut, cmd, submitted_at))
+                    anyhow::Ok(PendingTx {
+                        receipt_fut,
+                        cmd,
+                        submitted_at,
+                        nonce,
+                        current_fee_params: fee_params,
+                        resubmits_remaining: MAX_RESUBMITS_PER_TX,
+                    })
                 })
                 // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
                 // but this is not necessary for now - we wait for them to be included in parallel
@@ -299,6 +291,13 @@ where
 
     /// Waits for all pending L1 transaction receipts, validates them, logs balance/nonce
     /// metrics, and forwards the completed commands downstream.
+    ///
+    /// If a wait times out (the L1 node hasn't confirmed the tx within
+    /// `transaction_timeout`), the tx is resubmitted at the same nonce with bumped
+    /// fees — this clears stuck mempool entries (e.g. txs that were never
+    /// propagated to peers) without operator intervention. After
+    /// `MAX_RESUBMITS_PER_TX` failed attempts the function bails so the supervisor
+    /// is alerted instead of looping forever.
     async fn wait_for_txs_and_forward(
         &self,
         pending_txs: Vec<PendingTx<Input>>,
@@ -306,18 +305,53 @@ where
         outbound: &mpsc::Sender<SignedBatchEnvelope<FriProof>>,
     ) -> anyhow::Result<()> {
         let command_name = Input::COMPONENT_ID.as_str();
+        let fee_config = self.config.fee_config;
         state_reporter.enter_state(L1SenderState::WaitingL1Inclusion);
 
         let completed_commands: Vec<Input> = async {
             let mut completed = Vec::with_capacity(pending_txs.len());
-            for (receipt_fut, command, submitted_at) in pending_txs.into_iter() {
-                let receipt = receipt_fut.await;
-                // Observe latency before propagating errors so timeout cases are recorded.
-                L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
-                    .observe(submitted_at.elapsed().as_secs_f64());
-                let receipt = receipt?;
-                self.validate_tx_receipt(&command, receipt).await?;
-                completed.push(command);
+            for mut pending in pending_txs.into_iter() {
+                let receipt = loop {
+                    let outcome = pending.receipt_fut.await;
+                    // Observe latency before propagating errors so timeout cases are recorded.
+                    L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
+                        .observe(pending.submitted_at.elapsed().as_secs_f64());
+                    match outcome? {
+                        WaitOutcome::Confirmed(receipt) => break receipt,
+                        WaitOutcome::Timeout => {
+                            if pending.resubmits_remaining == 0 {
+                                anyhow::bail!(
+                                    "L1 transaction at nonce {} has not been confirmed after \
+                                     {} resubmits at bumped fees — giving up so the supervisor \
+                                     can intervene",
+                                    pending.nonce,
+                                    MAX_RESUBMITS_PER_TX,
+                                );
+                            }
+                            pending.resubmits_remaining -= 1;
+                            let bumped_fee_params = fee_config.bumped(pending.current_fee_params);
+                            let (new_tx_hash, new_submitted_at, _nonce) = self
+                                .build_and_send_tx(
+                                    &pending.cmd,
+                                    bumped_fee_params,
+                                    Some(pending.nonce),
+                                )
+                                .await?;
+                            pending.current_fee_params = bumped_fee_params;
+                            tracing::warn!(
+                                command_name,
+                                nonce = pending.nonce,
+                                new_tx_hash = ?new_tx_hash,
+                                attempts_left = pending.resubmits_remaining,
+                                "wait timed out; resubmitted at bumped fees"
+                            );
+                            pending.receipt_fut = self.wait_for_confirmed_receipt(new_tx_hash);
+                            pending.submitted_at = new_submitted_at;
+                        }
+                    }
+                };
+                self.validate_tx_receipt(&pending.cmd, receipt).await?;
+                completed.push(pending.cmd);
             }
             anyhow::Ok(completed)
         }
@@ -349,7 +383,11 @@ where
         Ok(())
     }
 
-    fn wait_for_confirmed_receipt(&self, tx_hash: B256) -> TransactionReceiptFuture {
+    /// Polls for the receipt of `tx_hash` until it is confirmed (`required_confirmations`
+    /// blocks deep) or `transaction_timeout` elapses. Returns `WaitOutcome::Timeout` on
+    /// deadline so the caller can resubmit at a bumped fee. `timeout == 0` disables the
+    /// deadline.
+    fn wait_for_confirmed_receipt(&self, tx_hash: B256) -> WaitFuture {
         let provider = self.provider.root().clone();
         let required_confirmations = if self.gateway {
             REQUIRED_CONFIRMATIONS_GATEWAY
@@ -358,59 +396,46 @@ where
         };
         let timeout = self.config.transaction_timeout;
         async move {
-            let started_at = Instant::now();
-            let poll_interval = provider.client().poll_interval();
-            let mut next_warning_at = if timeout.is_zero() {
+            let deadline = if timeout.is_zero() {
                 None
             } else {
-                Some(timeout)
+                Some(Instant::now() + timeout)
             };
+            let poll_interval = provider.client().poll_interval();
 
             loop {
                 let latest_block = provider.get_block_number().await.map_err(|err| {
-                tracing::warn!(
-                    "Failed to fetch latest L1 block while waiting for transaction confirmation \
-                 for tx {tx_hash}: {err}",
-                );
-                anyhow::Error::from(err)
-            })?;
+                    tracing::warn!(
+                        "Failed to fetch latest L1 block while waiting for transaction confirmation \
+                         for tx {tx_hash}: {err}",
+                    );
+                    anyhow::Error::from(err)
+                })?;
                 let receipt = match provider.get_transaction_receipt(tx_hash).await {
                     Ok(receipt) => receipt,
                     Err(err) => {
                         tracing::warn!(
                             "Failed to fetch transaction receipt while waiting for confirmation \
-                     for tx {tx_hash}: {err}",
+                             for tx {tx_hash}: {err}",
                         );
                         return Err(err.into());
                     }
                 };
-                if let Some(receipt) = receipt.as_ref() {
+                if let Some(receipt) = receipt {
                     let receipt_block_number = receipt
                         .block_number
                         .context("transaction receipt missing block number")?;
                     let confirmed_at = receipt_block_number
                         .saturating_add(required_confirmations.saturating_sub(1));
                     if latest_block >= confirmed_at {
-                        return Ok(receipt.clone());
+                        return Ok(WaitOutcome::Confirmed(receipt));
                     }
                 }
 
-                let elapsed = started_at.elapsed();
-                if let Some(warning_at) = next_warning_at
-                    && elapsed >= warning_at
+                if let Some(deadline) = deadline
+                    && Instant::now() >= deadline
                 {
-                    let receipt_block_number =
-                        receipt.as_ref().and_then(|receipt| receipt.block_number);
-                    let confirmed_at = receipt_block_number
-                        .map(|block| block + required_confirmations.saturating_sub(1));
-                    tracing::warn!(
-                        "Still waiting for L1 transaction confirmation for tx {tx_hash}. \
-                 required_confirmations={required_confirmations}, \
-                 waited_secs={}, latest_l1_block={latest_block}, \
-                 receipt_block_number={receipt_block_number:?}, confirmed_at={confirmed_at:?}",
-                        elapsed.as_secs_f64(),
-                    );
-                    next_warning_at = Some(warning_at + timeout);
+                    return Ok(WaitOutcome::Timeout);
                 }
 
                 tokio::time::sleep(poll_interval).await;
@@ -435,7 +460,7 @@ where
         &self,
         inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
         state_reporter: &ComponentStateReporter,
-    ) -> anyhow::Result<Vec<(alloy::primitives::B256, Input)>> {
+    ) -> anyhow::Result<Vec<(alloy::primitives::B256, Input, u64)>> {
         let command_name = Input::COMPONENT_ID.as_str();
         let operator_address = self.operator_address().await?;
         let latest_nonce = self
@@ -535,7 +560,7 @@ where
                     else {
                         unreachable!("peek succeeded, recv must return the same item");
                     };
-                    paired.push((tx.tx_hash(), cmd));
+                    paired.push((tx.tx_hash(), cmd, nonce));
                 }
             }
         }
@@ -658,6 +683,77 @@ where
             .with_max_fee_per_gas(fee_params.max_fee_per_gas)
             .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
             .with_gas_limit(15000000)
+    }
+
+    /// Builds, signs, and submits an L1 transaction for `cmd`.
+    ///
+    /// When `nonce_override` is `Some`, that nonce is set explicitly (used on resubmit
+    /// to replace a stuck tx at the same slot). When `None`, Alloy's `NonceFiller`
+    /// picks the next nonce from L1. The chosen nonce is returned in either case so
+    /// the caller can later resubmit at the same slot.
+    async fn build_and_send_tx(
+        &self,
+        cmd: &Input,
+        fee_params: FeeParams,
+        nonce_override: Option<u64>,
+    ) -> anyhow::Result<(B256, Instant, u64)> {
+        let operator_address = self.operator_address().await?;
+        let mut tx_request = self
+            .tx_request_with_gas_fields(operator_address, fee_params)
+            .with_to(self.to_address)
+            .with_input(cmd.solidity_call(self.gateway, &operator_address));
+        if let Some(nonce) = nonce_override {
+            tx_request.set_nonce(nonce);
+        }
+
+        if let Some(blob_sidecar) = cmd.blob_sidecar() {
+            let fee_per_blob_gas = self.provider.get_blob_base_fee().await?;
+            L1_SENDER_METRICS.report_blob_base_fee(fee_per_blob_gas)?;
+            let max_fee_per_blob_gas = fee_params.max_fee_per_blob_gas;
+            if fee_per_blob_gas > max_fee_per_blob_gas {
+                tracing::warn!(
+                    max_fee_per_blob_gas,
+                    fee_per_blob_gas,
+                    "L1 sender's configured maxFeePerBlobGas is lower than the one estimated from network"
+                );
+            }
+            tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
+            tx_request.set_blob_sidecar(blob_sidecar);
+        };
+
+        let envelope = self
+            .provider
+            .fill(tx_request)
+            .await?
+            .try_into_envelope()?
+            .try_into_pooled()?;
+        let nonce = ConsensusTransaction::nonce(&envelope);
+
+        let pending_block = self
+            .provider
+            .get_block(BlockId::pending())
+            .await?
+            .expect("no pending block");
+        // todo: make conversion unconditional (and remove respective config) once anvil
+        //       supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
+        let tx = if self.config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
+            envelope.try_map_eip4844(|tx| {
+                tx.try_map_sidecar(|sidecar| {
+                    Ok::<_, BlobTransactionValidationError>(BlobTransactionSidecarVariant::Eip7594(
+                        sidecar.try_into_eip7594()?,
+                    ))
+                })
+            })?
+        } else {
+            envelope
+        };
+
+        let pending_tx = self
+            .provider
+            .send_raw_transaction(&tx.encoded_2718())
+            .await?;
+        let submitted_at = Instant::now();
+        Ok((*pending_tx.tx_hash(), submitted_at, nonce))
     }
 
     async fn report_custom_priority_fee_metrics(&self) -> anyhow::Result<()> {
@@ -812,6 +908,23 @@ impl L1SenderFeeConfig {
                 * self.max_priority_fee_per_gas_replacement_multiplier)
                 .ceil() as u128,
             max_fee_per_blob_gas: ((self.max_fee_per_blob_gas_wei as f64)
+                * self.max_fee_per_blob_gas_replacement_multiplier)
+                .ceil() as u128,
+        }
+    }
+
+    /// Multiplies `current` by the configured replacement multipliers. Used to bump
+    /// fees on each successive resubmit so that consecutive attempts at the same
+    /// nonce satisfy the L1 node's per-step `priceBump` requirement.
+    fn bumped(self, current: FeeParams) -> FeeParams {
+        FeeParams {
+            max_fee_per_gas: ((current.max_fee_per_gas as f64)
+                * self.max_fee_per_gas_replacement_multiplier)
+                .ceil() as u128,
+            max_priority_fee_per_gas: ((current.max_priority_fee_per_gas as f64)
+                * self.max_priority_fee_per_gas_replacement_multiplier)
+                .ceil() as u128,
+            max_fee_per_blob_gas: ((current.max_fee_per_blob_gas as f64)
                 * self.max_fee_per_blob_gas_replacement_multiplier)
                 .ceil() as u128,
         }
