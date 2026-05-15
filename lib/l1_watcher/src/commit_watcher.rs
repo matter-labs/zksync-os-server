@@ -1,6 +1,6 @@
 use crate::committed_batch_provider::CommittedBatchProvider;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{ChainHead, L1WatcherConfig, ProcessL1Event, util};
+use crate::{BlockUpdates, L1WatcherConfig, ProcessL1Event, util};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::Log;
 use tokio::sync::watch;
@@ -40,7 +40,7 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
         finality: Finality,
         sl_block_initial_finality_init_at: u64,
         l1_chain_id: u64,
-        block_updates: watch::Receiver<ChainHead>,
+        block_updates: watch::Receiver<BlockUpdates>,
         commit_submitted_rx: Option<watch::Receiver<u64>>,
     ) -> anyhow::Result<L1Watcher> {
         let last_committed_batch = finality.get_finality_status().last_committed_batch;

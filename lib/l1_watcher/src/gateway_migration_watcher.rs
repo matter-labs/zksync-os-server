@@ -1,5 +1,5 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{ChainHead, L1WatcherConfig, ProcessRawEvents, util};
+use crate::{BlockUpdates, L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, ChainId, U256};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
@@ -40,7 +40,7 @@ impl GatewayMigrationWatcher {
         next_migration_number: u64,
         config: L1WatcherConfig,
         sl_chain_id_subpool: SlChainIdSubpool,
-        block_updates: watch::Receiver<ChainHead>,
+        block_updates: watch::Receiver<BlockUpdates>,
     ) -> anyhow::Result<L1Watcher> {
         let server_notifier_contract = zk_chain.get_server_notifier_address().await?;
         let chain_asset_handler_address = bridgehub.chain_asset_handler_address().await?;

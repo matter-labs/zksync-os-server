@@ -77,7 +77,7 @@ use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
     L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, MigrationFinalizedWatcher,
-    SettlementLayerWatcher, watcher_cache,
+    SettlementLayerWatcher, block_updates,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
@@ -233,23 +233,23 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to fetch L1 state")
     };
     let settles_on_gateway = l1_state.settles_on_gateway();
-    let l1_block_updates = watcher_cache::run(
+    let l1_block_updates = block_updates::run(
         l1_state.diamond_proxy_l1.provider().clone(),
         runtime,
-        "l1 watcher cache",
+        "l1 block updates",
         config.l1_watcher_config.poll_interval,
     );
     let (sl_provider, sl_block_updates) = if l1_state.l1_chain_id == l1_state.sl_chain_id {
         (l1_provider.clone(), l1_block_updates.clone())
     } else {
         let sl_provider = gateway_provider.clone().unwrap();
-        let block_updates = watcher_cache::run(
+        let sl_block_updates = block_updates::run(
             l1_state.diamond_proxy_sl.provider().clone(),
             runtime,
-            "sl watcher cache",
+            "sl block updates",
             config.l1_watcher_config.poll_interval,
         );
-        (sl_provider, block_updates)
+        (sl_provider, sl_block_updates)
     };
     tracing::info!(?l1_state, settles_on_gateway, "L1 state");
     l1_state.report_metrics();

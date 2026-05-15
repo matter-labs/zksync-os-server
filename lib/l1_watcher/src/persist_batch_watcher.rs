@@ -1,6 +1,6 @@
 use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
-use crate::{ChainHead, L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
+use crate::{BlockUpdates, L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
@@ -48,8 +48,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         config: L1WatcherConfig,
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
-        l1_block_updates: watch::Receiver<ChainHead>,
-        sl_block_updates: watch::Receiver<ChainHead>,
+        l1_block_updates: watch::Receiver<BlockUpdates>,
+        sl_block_updates: watch::Receiver<BlockUpdates>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(

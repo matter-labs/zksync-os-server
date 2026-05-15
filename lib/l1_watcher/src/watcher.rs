@@ -1,5 +1,5 @@
 use crate::metrics::METRICS;
-use crate::{BlockBoundary, ChainHead, L1WatcherConfig, ProcessRawEvents};
+use crate::{BlockBoundary, BlockUpdates, L1WatcherConfig, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
@@ -19,7 +19,7 @@ pub struct L1Watcher {
     end_block: Option<BlockNumber>,
     max_blocks_to_process: u64,
     block_boundary: BlockBoundary,
-    block_updates: watch::Receiver<ChainHead>,
+    block_updates: watch::Receiver<BlockUpdates>,
     pub(crate) processor: Box<dyn ProcessRawEvents>,
 }
 
@@ -28,7 +28,7 @@ impl L1Watcher {
     pub(crate) async fn new(
         config: L1WatcherConfig,
         provider: DynProvider,
-        block_updates: watch::Receiver<ChainHead>,
+        block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
         end_block: Option<BlockNumber>,
@@ -57,7 +57,7 @@ impl L1Watcher {
     pub(crate) fn new_finalized(
         config: L1WatcherConfig,
         provider: DynProvider,
-        block_updates: watch::Receiver<ChainHead>,
+        block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
         end_block: Option<BlockNumber>,
