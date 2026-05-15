@@ -65,7 +65,9 @@ const METHOD_NOT_FOUND_CODE: i64 = -32601;
 
 /// Outcome of waiting for an L1 transaction to be confirmed.
 enum WaitOutcome {
-    Confirmed(TransactionReceipt),
+    // `TransactionReceipt` is large (~576 bytes) and `Timeout` is empty, so the
+    // receipt is boxed to keep the enum slim.
+    Confirmed(Box<TransactionReceipt>),
     /// The configured `transaction_timeout` elapsed without the tx being confirmed
     /// (and with no RPC errors). The caller decides whether to resubmit at a higher
     /// fee or escalate.
@@ -317,7 +319,7 @@ where
                     L1_SENDER_METRICS.tx_inclusion_latency_seconds[&command_name]
                         .observe(pending.submitted_at.elapsed().as_secs_f64());
                     match outcome? {
-                        WaitOutcome::Confirmed(receipt) => break receipt,
+                        WaitOutcome::Confirmed(receipt) => break *receipt,
                         WaitOutcome::Timeout => {
                             if pending.resubmits_remaining == 0 {
                                 anyhow::bail!(
@@ -428,7 +430,7 @@ where
                     let confirmed_at = receipt_block_number
                         .saturating_add(required_confirmations.saturating_sub(1));
                     if latest_block >= confirmed_at {
-                        return Ok(WaitOutcome::Confirmed(receipt));
+                        return Ok(WaitOutcome::Confirmed(Box::new(receipt)));
                     }
                 }
 
