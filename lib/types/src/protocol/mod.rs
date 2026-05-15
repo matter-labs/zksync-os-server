@@ -49,17 +49,13 @@ impl ProtocolSemanticVersion {
 
     /// Returns `true` if the system is live (or expected to be live) on any of the existing envs.
     /// Must be updated when a new version is ready to be released.
-    //
-    // TODO: Do not update to v31 without devp2p upgrade on batch verification. With current code, only v1 batch verification transport is supported (pre-v31).
-    // As such, batch verification will be incomplete and will compromise 2FA security on v31.
-    // v2 wire transport is needed for batch verification to work on v31.
     pub fn is_live(&self) -> bool {
         if self.major != 0 {
             return false;
         }
         // Patch versions can always be live, as they don't change the state transition function.
         match self.minor {
-            30 => true,
+            30 | 31 => true,
             // When updating this function, make sure to insert the new non-live version here.
             _ => false,
         }
@@ -231,7 +227,8 @@ mod tests {
             ((0, 30, 0), true),
             ((0, 30, 1), true),
             ((0, 30, 99), true),
-            ((0, 31, 0), false), // When updating this test, make sure to insert the new non-live version here.
+            ((0, 31, 0), true),
+            ((0, 32, 0), false), // When updating this test, make sure to insert the new non-live version here.
         ];
         for ((major, minor, patch), expected) in test_vector.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);

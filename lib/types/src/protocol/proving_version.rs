@@ -91,6 +91,7 @@ impl ProvingVersion {
             Self::V4_VK_HASH => Ok(Self::V4),
             Self::V5_VK_HASH => Ok(Self::V5),
             Self::V6_VK_HASH => Ok(Self::V6),
+            Self::V7_VK_HASH => Ok(Self::V7),
             val => Err(ProvingVersionError::UnsupportedVkHash(val.to_string())),
         }
     }
