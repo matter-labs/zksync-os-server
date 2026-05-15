@@ -86,6 +86,12 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionError> for Result<Ok, EthSendRawTr
             EthSendRawTransactionError::ForwardError(ref rpc_err) => {
                 forward_error_to_rpc_err(rpc_err, &err)
             }
+            EthSendRawTransactionError::PolicyDenied => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
+            ),
+            EthSendRawTransactionError::JudgeSimFailed(_) => internal_rpc_err(err.to_string()),
         })
     }
 }
@@ -111,6 +117,28 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
                 EthRpcErrorCode::ExecutionError.code(),
                 revert.to_string(),
                 revert.output.as_ref().map(|out| out.as_ref()),
+            ),
+            EthCallError::SimulateInvalidParams(_)
+            | EthCallError::SimulateInvalidBlockOverride(_) => {
+                invalid_params_rpc_err(err.to_string())
+            }
+            // Error codes -380xx follow the reth implementation of the eth_simulateV1 spec.
+            EthCallError::SimulateBlockNumberInvalid { .. } => {
+                rpc_error_with_code(-38020, err.to_string())
+            }
+            EthCallError::SimulateBlockTimestampInvalid { .. } => {
+                rpc_error_with_code(-38021, err.to_string())
+            }
+            EthCallError::SimulateBlockGasLimitExceeded => {
+                rpc_error_with_code(-38015, err.to_string())
+            }
+            EthCallError::SimulateMovePrecompileNotSupported => {
+                invalid_params_rpc_err(err.to_string())
+            }
+            EthCallError::PolicyDenied => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
             ),
             err => internal_rpc_err(err.to_string()),
         })

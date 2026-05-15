@@ -32,6 +32,9 @@ pub use metrics::GENERAL_METRICS;
 
 pub mod tokio_runtime;
 
+#[cfg(all(feature = "jemalloc", target_family = "unix"))]
+pub mod jemalloc;
+
 mod component_state_reporter;
 pub use component_state_reporter::{ComponentState, ComponentStateReporter, TrackingCoordinates};
 

@@ -9,6 +9,9 @@ license.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+jemalloc = ["dep:tikv-jemalloc-ctl", "tikv-jemalloc-ctl/stats"]
+
 [dependencies]
 anyhow.workspace = true
 chrono = { workspace = true, default-features = false, features = ["now"] }
@@ -41,3 +44,6 @@ opentelemetry-appender-tracing.workspace = true
 
 tokio-metrics.workspace = true
 reth-tasks.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+tikv-jemalloc-ctl = { workspace = true, optional = true }

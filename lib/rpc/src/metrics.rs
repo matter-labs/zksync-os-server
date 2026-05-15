@@ -188,6 +188,11 @@ pub enum TxRejectionReason {
     PoolEip7702Error,
     /// Other pool error.
     PoolOther,
+    /// External policy service denied the transaction at admit or judge.
+    PolicyDenied,
+    /// Local simulation needed to capture a judge trace failed for an
+    /// internal reason (storage error, etc.) and the tx was rejected.
+    JudgeSimFailed,
 }
 
 /// Single task monitor covering all RPC request futures.

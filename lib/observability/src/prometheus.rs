@@ -7,6 +7,8 @@ use reth_tasks::shutdown::GracefulShutdown;
 use vise::{MetricsCollection, Registry};
 use vise_exporter::MetricsExporter;
 
+#[cfg(all(feature = "jemalloc", target_family = "unix"))]
+use crate::jemalloc;
 use crate::tokio_runtime;
 
 #[derive(Debug, Clone)]
@@ -65,6 +67,9 @@ impl PrometheusExporterConfig {
     /// Runs the exporter. This future should be spawned in a separate Tokio task.
     pub async fn run(self, shutdown: GracefulShutdown) -> anyhow::Result<()> {
         tokio_runtime::register_monitor();
+        #[cfg(all(feature = "jemalloc", target_family = "unix"))]
+        jemalloc::register_monitor();
+
         let registry = self.registry();
         // ignore_guard will drop the guard too early, so clone is used.
         let metrics_exporter = MetricsExporter::new(registry.into())
