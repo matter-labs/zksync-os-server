@@ -1359,6 +1359,11 @@ impl AnvilL1 {
 
         // --slots-in-an-epoch defines what blocks are "finalized" in Anvil, last finalized block is `latest - 2 * slots_in_an_epoch`
         // so we set block time to 0.25s and slots in epoch set to 10 and finalization delays is about 10*0.25s*2=5s which is reasonable for tests.
+        //
+        // --max-persisted-states overrides anvil's default 3,600-block on-disk state cache. With
+        // --block-time 0.25, the default would evict state for blocks older than ~15min wall-clock,
+        // which breaks long-running tests that need to query historical state (e.g. L1 commit
+        // watcher startup binary-searching for the block where a long-ago batch was committed).
         let provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
             anvil
                 .port(locked_port.port)
@@ -1370,6 +1375,8 @@ impl AnvilL1 {
                 .arg(l1_state_path)
                 .arg("--slots-in-an-epoch")
                 .arg("10")
+                .arg("--max-persisted-states")
+                .arg("10000")
         })?;
 
         let wallet = provider.wallet().clone();
