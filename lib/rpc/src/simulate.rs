@@ -21,7 +21,7 @@ use zksync_os_interface::types::{
     BlockContext, BlockOutput, ExecutionOutput, ExecutionResult, TxOutput,
 };
 use zksync_os_multivm::run_block;
-use zksync_os_rpc_api::types::ZkApiBlock;
+use zksync_os_rpc_api::types::{ZkApiBlock, ZkHeader};
 use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::state_override_view::{
     OverriddenStateView, OwnedOverrides, build_state_override_maps,
@@ -330,6 +330,7 @@ fn build_simulated_block_response(
         simulated_txs.push(simulated_tx);
     }
 
+    let block_hash = sealed_header.hash();
     let mut header = sealed_header.unseal();
     header.base_fee_per_gas = Some(block_context.eip1559_basefee.saturating_to());
     header.logs_bloom = block_bloom;
@@ -342,8 +343,36 @@ fn build_simulated_block_response(
     header.transactions_root = calculate_transaction_root(&executed_envelopes);
     header.receipts_root = calculate_receipt_root(&receipts);
 
-    let header = alloy::rpc::types::Header::new(header);
-    let block_hash = header.hash;
+    let header = ZkHeader::from_consensus(
+        alloy::consensus::Header {
+            parent_hash: header.parent_hash,
+            ommers_hash: header.ommers_hash,
+            beneficiary: header.beneficiary,
+            state_root: header.state_root,
+            transactions_root: header.transactions_root,
+            receipts_root: header.receipts_root,
+            logs_bloom: header.logs_bloom,
+            difficulty: header.difficulty,
+            number: header.number,
+            gas_limit: header.gas_limit,
+            gas_used: header.gas_used,
+            timestamp: header.timestamp,
+            extra_data: header.extra_data,
+            mix_hash: header.mix_hash,
+            nonce: header.nonce,
+            base_fee_per_gas: header.base_fee_per_gas,
+            withdrawals_root: header.withdrawals_root,
+            blob_gas_used: header.blob_gas_used,
+            excess_blob_gas: header.excess_blob_gas,
+            parent_beacon_block_root: header.parent_beacon_block_root,
+            requests_hash: header.requests_hash,
+            block_access_list_hash: None,
+            slot_number: None,
+        }
+        .seal(block_hash),
+        Some(U256::ZERO),
+        None,
+    );
     let calls = simulated_txs
         .iter()
         .map(|tx| tx.to_call_result(block_hash, block_context))
@@ -427,6 +456,7 @@ fn apply_simulate_block_overrides(
         base_fee,
         blob_base_fee,
         block_hash,
+        beacon_root: _,
         // ZKsync OS uses mix_hash for prevrandao and has no separate difficulty field; ignored.
         difficulty: _,
     } = overrides;
@@ -556,7 +586,8 @@ impl SimulatedTx {
                             return_data.clone(),
                             Some(SimulateError {
                                 code: -32000,
-                                message: RevertError::new(return_data).to_string(),
+                                message: RevertError::new(return_data.clone()).to_string(),
+                                data: Some(return_data.clone()),
                             }),
                         )
                     }
@@ -566,6 +597,7 @@ impl SimulatedTx {
                     return_data,
                     logs,
                     gas_used: output.gas_used,
+                    max_used_gas: Some(output.gas_used),
                     status: error.is_none(),
                     error,
                 }
@@ -574,10 +606,12 @@ impl SimulatedTx {
                 return_data: Bytes::default(),
                 logs: vec![],
                 gas_used: 0,
+                max_used_gas: None,
                 status: false,
                 error: Some(SimulateError {
                     code: -32015,
                     message: format!("vm execution error: {err}"),
+                    data: None,
                 }),
             },
         }
