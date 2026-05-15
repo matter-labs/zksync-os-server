@@ -59,7 +59,7 @@ impl InteropWatcher {
                 continue;
             }
 
-            let gw_zk_chain = intervals.resolve_proxy(interval.first_batch)?.clone();
+            let gw_zk_chain = &interval.proxy;
             let bridgehub = Bridgehub::new(
                 L2_BRIDGEHUB_ADDRESS,
                 gw_zk_chain.provider().clone(),

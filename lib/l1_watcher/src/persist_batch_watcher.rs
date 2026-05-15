@@ -77,7 +77,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 continue;
             }
 
-            let zk_chain = intervals.resolve_proxy(interval.first_batch)?.clone();
+            let zk_chain = &interval.proxy;
             let first_batch = if is_first {
                 anyhow::ensure!(
                     interval.first_batch <= last_persisted_batch + 1,
