@@ -112,8 +112,7 @@ impl ProcessL1Event for L1TxWatcher {
                     timer.tick().await;
                     if tokio::time::Instant::now() >= deadline {
                         return Err(L1WatcherError::Other(anyhow::anyhow!(
-                            "timed out after {:?} waiting for priority_id {} to be visible on \
-                             the settlement layer; the SL RPC is most likely serving stale data",
+                            "timed out after {:?} waiting for priority_id {} on SL",
                             self.sl_wait_timeout,
                             tx.priority_id(),
                         )));

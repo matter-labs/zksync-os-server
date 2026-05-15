@@ -7,8 +7,7 @@ pub struct L1Metrics {
     pub most_recently_scanned_l1_block: LabeledFamily<&'static str, Gauge<BlockNumber>>,
     #[metrics(labels = ["event"])]
     pub events_loaded: LabeledFamily<&'static str, Counter>,
-    /// Incremented once per `poll()` invocation. A flat counter means the watcher task is
-    /// silently stuck — distinguishes "task alive, nothing to scan" from "task wedged inside poll".
+    /// Heartbeat: incremented once per `poll()` call. A flat counter means the watcher is stuck.
     #[metrics(labels = ["event"])]
     pub poll_iterations: LabeledFamily<&'static str, Counter>,
 }

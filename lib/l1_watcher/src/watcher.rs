@@ -109,8 +109,7 @@ impl L1Watcher {
                         event_name,
                         timeout_secs = self.poll_iteration_timeout.as_secs(),
                         next_block = self.next_block,
-                        "l1 watcher poll iteration timed out — likely a hung RPC call; \
-                         panicking so the critical-task supervisor recycles us with fresh state"
+                        "l1 watcher poll timed out, panicking to get restarted"
                     );
                     panic!(
                         "l1 watcher {event_name} poll iteration timed out after {:?}",

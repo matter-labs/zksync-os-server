@@ -12,13 +12,9 @@ pub struct L1WatcherConfig {
     /// How often to poll L1 for new priority requests.
     pub poll_interval: Duration,
 
-    /// Max wall-clock time a single `poll()` invocation may take. Exceeding it indicates a
-    /// silent hang (e.g. an RPC call that never returns on a half-dead TCP connection); the
-    /// watcher task panics so its critical-task supervisor restarts it with fresh state.
+    /// Max duration of a single `poll()` call before the watcher panics and gets restarted.
     pub poll_iteration_timeout: Duration,
 
-    /// Max wall-clock time `L1TxWatcher` will wait for a freshly observed L1 priority op to
-    /// become visible on the settlement layer before erroring out (which panics & recycles the
-    /// task). Caps the otherwise-unbounded poll loop that re-queries the SL every 10s.
+    /// Max time to wait for a priority op to appear on the settlement layer.
     pub sl_wait_timeout: Duration,
 }
