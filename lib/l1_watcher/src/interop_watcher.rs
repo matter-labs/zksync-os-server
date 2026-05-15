@@ -35,7 +35,7 @@ pub struct InteropWatcher {
 }
 
 impl InteropWatcher {
-    /// Builds the watcher iff the chain has at least one Gateway interval. Returns `Ok(None)`
+    /// Builds the watcher if the chain has at least one Gateway interval. Returns `Ok(None)`
     /// for chains that have only ever settled on L1 — those have no interop roots to watch.
     pub async fn create_watcher(
         intervals: SettlementLayerIntervals,
