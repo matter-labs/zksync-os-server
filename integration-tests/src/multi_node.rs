@@ -463,7 +463,9 @@ impl MultiNodeTester {
         while Instant::now() < deadline {
             let respawned = self.respawn_crashed_running_nodes().await?;
             if respawned > 0 {
-                deadline = deadline.max(Instant::now() + RESPAWN_GRACE).min(hard_deadline);
+                deadline = deadline
+                    .max(Instant::now() + RESPAWN_GRACE)
+                    .min(hard_deadline);
             }
             let cluster_state =
                 ClusterState::collect_indices(&self.nodes, node_indices.iter().copied()).await;
