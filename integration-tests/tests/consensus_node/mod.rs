@@ -11,8 +11,8 @@ use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::multi_node::MultiNodeTester;
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 
-const CLUSTER_FORMATION_TIMEOUT: Duration = Duration::from_secs(60);
-const REPLICATION_TIMEOUT: Duration = Duration::from_secs(30);
+const CLUSTER_FORMATION_TIMEOUT: Duration = Duration::from_secs(30);
+const REPLICATION_TIMEOUT: Duration = Duration::from_secs(20);
 const L1_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(60);
 
 mod restarted_node_catchup;
