@@ -171,6 +171,7 @@ pub struct PeerVerifyBatchResult {
 impl NetworkService {
     pub async fn new(
         config: NetworkConfig,
+        runtime: Runtime,
         protocol_config: ZksProtocolConfig,
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
@@ -201,7 +202,7 @@ impl NetworkService {
         let boot_nodes = resolve_boot_nodes_with_retry(config.boot_nodes.clone()).await?;
         tracing::info!(?genesis, ?fork_id, "initializing p2p network service");
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
-        let cfg_builder = RethNetworkConfig::builder(config.secret_key)
+        let cfg_builder = RethNetworkConfig::builder(config.secret_key, runtime)
             .boot_nodes(boot_nodes)
             // Configure node identity
             .apply(|builder| {

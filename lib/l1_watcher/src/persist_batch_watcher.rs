@@ -4,6 +4,7 @@ use crate::{L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
+use anyhow::Context;
 use std::collections::HashMap;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
@@ -33,14 +34,14 @@ pub struct L1PersistBatchWatcher<BatchStorage> {
 
 impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     /// Builds an [`SlAwareL1Watcher`] that walks every settlement-layer interval still relevant
-    /// to persistence, in order. Returns cheaply: per-segment block resolution and event
-    /// scanning happen lazily inside the watcher's `run()` loop.
+    /// to persistence, in order. Per-segment block resolution happens here; event scanning
+    /// happens lazily inside the watcher's `run()` loop.
     ///
     /// The migration contract requires `totalBatchesCommitted == totalBatchesExecuted` before a
     /// chain can migrate off an SL (`Migrator.sol`), so each closed interval is self-contained:
     /// every commit on that SL has a matching execute on the same SL, and the in-memory
     /// `committed_batches` map is empty at interval boundaries.
-    pub fn create_watcher(
+    pub async fn create_watcher(
         config: L1WatcherConfig,
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
@@ -57,8 +58,9 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         // Build segment specs from the relevant intervals. The first non-skipped segment is
         // adjusted to start at `last_persisted_batch` (so we re-validate it on resume), unless
         // we're at genesis — in which case `0` triggers the batch-0 fast path inside
-        // `find_l1_commit_block_by_batch_number` on the watcher side.
+        // `find_l1_commit_block_by_batch_number`.
         let mut segments = Vec::new();
+        let mut is_first = true;
         for interval in intervals.intervals() {
             // Empty interval: a migration can close without any new batches on the SL.
             if interval
@@ -75,8 +77,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 continue;
             }
 
-            let zk_chain = intervals.resolve_proxy(interval.first_batch)?.clone();
-            let first_batch = if segments.is_empty() {
+            let zk_chain = &interval.proxy;
+            let first_batch = if is_first {
                 anyhow::ensure!(
                     interval.first_batch <= last_persisted_batch + 1,
                     "first SL interval ({interval}) must start at or before first non-persisted batch ({})",
@@ -84,15 +86,39 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 );
                 last_persisted_batch
             } else {
-                // First batch in the interval might not have been committed yet. We will find the
-                // canonical start of the segment instead where previous batch got imported during
-                // migration.
+                // First batch in the interval might not have been committed yet. We resolve the
+                // canonical start of the segment from the previous batch's import block.
                 interval.first_batch - 1
             };
-            segments.push(SegmentSpec {
-                zk_chain,
+            is_first = false;
+
+            let start_block = util::find_l1_commit_block_by_batch_number(
+                zk_chain.clone(),
                 first_batch,
-                last_batch: interval.last_batch,
+                config.max_blocks_to_process,
+            )
+            .await
+            .with_context(|| {
+                format!("failed to find L1 commit for batch #{first_batch} in interval {interval}")
+            })?;
+            let end_block = match interval.last_batch {
+                Some(last_batch) => Some(
+                    util::find_l1_execute_block_by_batch_number(zk_chain.clone(), last_batch)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to find L1 execute for batch #{last_batch} in interval {interval}"
+                            )
+                        })?,
+                ),
+                None => None,
+            };
+
+            segments.push(SegmentSpec {
+                provider: zk_chain.provider().clone(),
+                address: (*zk_chain.address()).into(),
+                start_block,
+                end_block,
             });
         }
 

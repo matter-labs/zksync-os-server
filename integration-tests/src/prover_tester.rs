@@ -32,6 +32,25 @@ impl ProverTester {
         }
     }
 
+    pub async fn last_proven_batch(&self) -> anyhow::Result<u64> {
+        let bridgehub_address = self.l2_zk_provider.get_bridgehub_contract().await?;
+        let chain_id = self.l2_provider.get_chain_id().await?;
+
+        // Get L1/SL state which contains diamond proxy address
+        let l1_state = L1State::fetch(
+            self.l1_provider.clone().erased(),
+            self.gateway_provider.as_ref().map(|p| p.clone().erased()),
+            bridgehub_address,
+            chain_id,
+        )
+        .await?;
+        let total_batches_proved = l1_state
+            .diamond_proxy_sl
+            .get_total_batches_proved(BlockNumberOrTag::Latest.into())
+            .await?;
+        Ok(total_batches_proved)
+    }
+
     /// Checks batch status by verifying that the proof has been verified on L1.
     /// Returns `true` if batch has been proven and verified on L1, `false` otherwise.
     pub async fn check_batch_status(&self, batch_number: u64) -> anyhow::Result<bool> {

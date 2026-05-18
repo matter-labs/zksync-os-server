@@ -4,7 +4,7 @@ use crate::js_tracer;
 use crate::metrics::API_METRICS;
 use crate::result::RevertError;
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
-use crate::sandbox::{call_trace_simulate, execute};
+use crate::sandbox::{call_trace_simulate, execute, execute_with};
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::BlockId;
@@ -17,7 +17,7 @@ use serde_json::Value as JsonValue;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zk_os_api::helpers::{get_balance, get_nonce};
-use zksync_os_interface::types::{BlockHashes, ExecutionOutput};
+use zksync_os_interface::types::{BlockHashes, ExecutionOutput, TxOutput};
 use zksync_os_interface::{
     error::InvalidTransaction,
     types::{BlockContext, ExecutionResult},
@@ -25,6 +25,7 @@ use zksync_os_interface::{
 use zksync_os_storage_api::{
     RepositoryError, StateError, ViewState, state_override_view::OverriddenStateView,
 };
+use zksync_os_tx_validators::policy_client::{AccessType, PolicyClient, PolicySession};
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
     L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
@@ -37,14 +38,60 @@ const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
 pub struct EthCallHandler<RpcStorage> {
     pub(crate) config: RpcConfig,
     pub(crate) storage: RpcStorage,
-    chain_id: u64,
+    pub(crate) chain_id: u64,
     /// Last block context constructed by sequencer but not necessarily executed yet.
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
+    /// Optional policy client. When set, `eth_call` and `eth_estimateGas`
+    /// route their simulation through it (admit + judge fired by the
+    /// bootloader inside `simulate_tx`). Block-build remains authoritative.
+    policy_client: Option<PolicyClient>,
 }
 
 struct ExecutionEnv {
     block_context: BlockContext,
     transaction: ZkTransaction,
+}
+
+/// Builds new block context for theoretical pending block using current system state.
+pub(crate) fn build_pending_block_context(
+    storage: &impl ReadRpcStorage,
+    chain_id: u64,
+) -> BlockContext {
+    let latest_block_number = storage.replay_storage().latest_record();
+    let latest_block = storage
+        .replay_storage()
+        .get_replay_record(latest_block_number)
+        .expect("latest block record must exist");
+    let latest_block_context = latest_block.block_context;
+
+    // Shift block hashes one to the left and append latest block's hash
+    let mut block_hashes = latest_block_context.block_hashes.0;
+    block_hashes.rotate_left(1);
+    block_hashes[255] = U256::from_be_bytes(latest_block.block_output_hash.0);
+
+    // Use current timestamp for pending block
+    let millis_since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("incorrect system time")
+        .as_millis();
+    let timestamp = (millis_since_epoch / 1000) as u64;
+
+    BlockContext {
+        chain_id,
+        block_number: latest_block_number + 1,
+        block_hashes: BlockHashes(block_hashes),
+        timestamp,
+        // Presume all other fields are the same as latest block, subject to change in the future
+        eip1559_basefee: latest_block_context.eip1559_basefee,
+        pubdata_price: latest_block_context.pubdata_price,
+        native_price: latest_block_context.native_price,
+        coinbase: latest_block_context.coinbase,
+        gas_limit: latest_block_context.gas_limit,
+        pubdata_limit: latest_block_context.pubdata_limit,
+        mix_hash: latest_block_context.mix_hash,
+        execution_version: latest_block_context.execution_version,
+        blob_fee: latest_block_context.blob_fee,
+    }
 }
 
 impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
@@ -53,12 +100,14 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         storage: RpcStorage,
         chain_id: u64,
         last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
+        policy_client: Option<PolicyClient>,
     ) -> Self {
         Self {
             config,
             storage,
             chain_id,
             last_constructed_block_context,
+            policy_client,
         }
     }
 
@@ -206,46 +255,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         Ok(Recovered::new_unchecked(tx, from).into())
     }
 
-    /// Builds new block context for theoretical pending block using current system state.
-    pub(crate) fn build_pending_block_context(&self) -> BlockContext {
-        let latest_block_number = self.storage.replay_storage().latest_record();
-        let latest_block = self
-            .storage
-            .replay_storage()
-            .get_replay_record(latest_block_number)
-            .expect("latest block record must exist");
-        let latest_block_context = latest_block.block_context;
-
-        // Shift block hashes one to the left and append latest block's hash
-        let mut block_hashes = latest_block_context.block_hashes.0;
-        block_hashes.rotate_left(1);
-        block_hashes[255] = U256::from_be_bytes(latest_block.block_output_hash.0);
-
-        // Use current timestamp for pending block
-        let millis_since_epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("incorrect system time")
-            .as_millis();
-        let timestamp = (millis_since_epoch / 1000) as u64;
-
-        BlockContext {
-            chain_id: self.chain_id,
-            block_number: latest_block_number + 1,
-            block_hashes: BlockHashes(block_hashes),
-            timestamp,
-            // Presume all other fields are the same as latest block, subject to change in the future
-            eip1559_basefee: latest_block_context.eip1559_basefee,
-            pubdata_price: latest_block_context.pubdata_price,
-            native_price: latest_block_context.native_price,
-            coinbase: latest_block_context.coinbase,
-            gas_limit: latest_block_context.gas_limit,
-            pubdata_limit: latest_block_context.pubdata_limit,
-            mix_hash: latest_block_context.mix_hash,
-            execution_version: latest_block_context.execution_version,
-            blob_fee: latest_block_context.blob_fee,
-        }
-    }
-
     fn resolve_block_context(
         &self,
         block_id: Option<BlockId>,
@@ -261,7 +270,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 Ok(pending_block_context)
             } else {
                 // If it has, we build new block context using current system state
-                Ok(self.build_pending_block_context())
+                Ok(build_pending_block_context(&self.storage, self.chain_id))
             }
         } else {
             let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
@@ -311,13 +320,22 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             state_overrides.unwrap_or_default(),
         );
 
-        let res = execute(
+        let tx_type = execution_env.transaction.tx_type();
+        // New session per call so concurrent simulations don't share captured
+        // frames. Read intent because `eth_call` is read-only.
+        let mut policy_session = self
+            .policy_client
+            .as_ref()
+            .filter(|_| tx_type_runs_policy(tx_type))
+            .map(|client| client.session(AccessType::Read));
+        let res = simulate_with_optional_policy(
             execution_env.transaction,
             execution_env.block_context,
             state_view,
+            policy_session.as_mut(),
         )
         .map_err(EthCallError::ForwardSubsystemError)?
-        .map_err(EthCallError::InvalidTransaction)?;
+        .map_err(map_simulate_invalid_to_call_error)?;
 
         API_METRICS.call_gas_used[&"eth_call".to_string()].observe(res.gas_used);
 
@@ -388,6 +406,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                     view.clone(),
                     view,
                     &mut tracer,
+                    &mut zksync_os_interface::tracing::NopValidator,
                 )
                 .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))
                 .and_then(|inner| inner.map_err(EthCallError::InvalidTransaction))?;
@@ -404,6 +423,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                     storage_view.clone(),
                     storage_view,
                     &mut tracer,
+                    &mut zksync_os_interface::tracing::NopValidator,
                 )
                 .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))
                 .and_then(|inner| inner.map_err(EthCallError::InvalidTransaction))?;
@@ -653,11 +673,68 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         }
         tracing::trace!("Estimated gas limit: {highest_gas_limit}");
 
+        // Re-execute the resolved gas limit once with the validator wired in.
+        // The binary search runs without the validator (one round-trip per
+        // iteration would be 30+ calls). `Write` intent: gas is
+        // state-dependent, so a read-only caller estimating gas would
+        // sidechannel state.
+        if let Some(policy_client) = &self.policy_client
+            && tx_type_runs_policy(tx.tx_type())
+        {
+            let mut judged_tx = tx.clone();
+            set_gas_limit(&mut judged_tx, highest_gas_limit);
+            let mut policy_session = policy_client.session(AccessType::Write);
+            simulate_with_optional_policy(
+                judged_tx,
+                block_context,
+                storage_view,
+                Some(&mut policy_session),
+            )
+            .map_err(EthCallError::ForwardSubsystemError)?
+            .map_err(map_simulate_invalid_to_call_error)?;
+        }
+
         Ok(U256::from(highest_gas_limit))
     }
 
     pub fn last_constructed_block_context(&self) -> Option<BlockContext> {
         *self.last_constructed_block_context.borrow()
+    }
+}
+
+/// Simulate `tx`, optionally wiring `policy` as the validator. With a
+/// validator, the bootloader fires admit + judge inline; without, the
+/// simulation runs with `NopValidator` + `NopTracer`.
+fn simulate_with_optional_policy<V: ViewState>(
+    tx: ZkTransaction,
+    block_context: BlockContext,
+    view: V,
+    policy: Option<&mut PolicySession>,
+) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
+    if let Some(policy) = policy {
+        let mut tracer = policy.paired_tracer();
+        execute_with(tx, block_context, view, &mut tracer, policy)
+    } else {
+        execute(tx, block_context, view)
+    }
+}
+
+/// Surface validator denials as `PolicyDenied` so the rpc layer maps them
+/// to `TransactionRejected` rather than a generic invalid-transaction error.
+fn map_simulate_invalid_to_call_error(err: InvalidTransaction) -> EthCallError {
+    match err {
+        InvalidTransaction::FilteredByValidator => EthCallError::PolicyDenied,
+        _ => EthCallError::InvalidTransaction(err),
+    }
+}
+
+/// L1 priority and upgrade txs bypass the validator end-to-end (block-build
+/// doesn't fire it on them either). Exhaustive match (no `_` arm) so a
+/// future `ZkTxType` variant can't silently bypass the policy.
+fn tx_type_runs_policy(tx_type: ZkTxType) -> bool {
+    match tx_type {
+        ZkTxType::L2(_) => true,
+        ZkTxType::L1 | ZkTxType::Upgrade | ZkTxType::System => false,
     }
 }
 
@@ -711,6 +788,10 @@ pub fn update_estimated_gas_range(
 /// Error types returned by `eth_call` implementation
 #[derive(Debug, thiserror::Error)]
 pub enum EthCallError {
+    /// Policy service rejected the simulation request at the RPC admit
+    /// boundary.
+    #[error("simulation denied by policy service")]
+    PolicyDenied,
     // todo: temporary, needs to be supported eventually
     #[error("block overrides are not supported in `eth_call`")]
     BlockOverridesNotSupported,
@@ -768,4 +849,19 @@ pub enum EthCallError {
     /// Error occurred during debug tracing
     #[error("Tracer error: {0:?}")]
     CallTracerError(anyhow::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tx_type_runs_policy_only_for_l2_variants() {
+        use alloy::consensus::TxType;
+        assert!(tx_type_runs_policy(ZkTxType::L2(TxType::Legacy.into())));
+        assert!(tx_type_runs_policy(ZkTxType::L2(TxType::Eip1559.into())));
+        assert!(!tx_type_runs_policy(ZkTxType::L1));
+        assert!(!tx_type_runs_policy(ZkTxType::Upgrade));
+        assert!(!tx_type_runs_policy(ZkTxType::System));
+    }
 }

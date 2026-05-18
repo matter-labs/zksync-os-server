@@ -11,7 +11,7 @@ use smart_config::metadata::{SizeUnit, TimeUnit};
 use smart_config::value::SecretString;
 use smart_config::{
     ByteSize, ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig,
-    EtherAmount, ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
+    ErrorWithOrigin, EtherAmount, ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
@@ -640,6 +640,7 @@ impl NetworkConfig {
 #[config(derive(Default))]
 pub struct ConsensusConfig {
     /// Whether OpenRaft-based consensus should be enabled.
+    /// WARNING: This is an experimental feature and will change in the future.
     #[config(default_t = false)]
     #[config_validate(custom(
         |root: &Config, value: &bool| !*value || root.general_config.node_role.is_main(),
@@ -668,22 +669,6 @@ pub struct ConsensusConfig {
         |root: &Config, value: &Vec<PeerId>| !root.consensus_config.enabled || !value.is_empty(),
         "must not be empty when `consensus.enabled=true`"
     ))]
-    #[config_validate(custom(
-        |root: &Config, value: &Vec<PeerId>| {
-            if !root.consensus_config.enabled {
-                return true;
-            }
-            let Some(secret_key) = root.network_config.secret_key.as_ref() else {
-                return true;
-            };
-            let local_peer_id = NodeRecord::from_secret_key(
-                SocketAddrV4::new(root.network_config.address, root.network_config.port).into(),
-                secret_key,
-            ).id;
-            value.contains(&local_peer_id)
-        },
-        "must include local peer id derived from `network.secret_key`"
-    ))]
     pub peer_ids: Vec<PeerId>,
     /// WARNING: Assumes all configured consensus nodes are already caught up to the same
     /// canonical L2 state. Bootstrap does not catch up stale nodes before admitting them
@@ -710,6 +695,10 @@ impl ConsensusConfig {
         storage_path: PathBuf,
     ) -> anyhow::Result<RaftConsensusConfig> {
         let node_id = network_config.derived_peer_id()?;
+        anyhow::ensure!(
+            self.peer_ids.contains(&node_id),
+            "`consensus.peer_ids` must include local peer id derived from `network.secret_key`: {node_id}"
+        );
         Ok(RaftConsensusConfig {
             node_id,
             peer_ids: self.peer_ids,
@@ -868,10 +857,18 @@ pub struct SequencerConfig {
 /// Configuration for all transaction validators applied during block production.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
+#[config(validate(
+    Self::check_mutual_exclusion,
+    "deployment_filter cannot be enabled at the same time as policy_service.url; express the allow-list via the policy service"
+))]
 pub struct TxValidatorConfig {
     /// Deployment filter configuration.
     #[config(nest)]
     pub deployment_filter: DeploymentFilterConfig,
+
+    /// Prividium policy-service client configuration.
+    #[config(nest)]
+    pub policy_service: PolicyServiceConfig,
 }
 
 /// Configuration for the deployment filter.
@@ -886,6 +883,48 @@ pub struct DeploymentFilterConfig {
     /// List of addresses allowed to deploy contracts.
     #[config(default, with = Serde![*])]
     pub allowed_deployers: Vec<Address>,
+}
+
+/// Policy-service client configuration. A `None` `url` means no client is
+/// wired (preserves today's behaviour for chains that don't run a policy
+/// service).
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+#[config(validate(
+    Self::check_auth_required,
+    "auth_token is required when using `http://` transport"
+))]
+pub struct PolicyServiceConfig {
+    /// `http://host:port` or `unix:///path/to/socket`.
+    #[config(with = Serde![str], validate(check_url_scheme, "URL must use scheme `http` or `unix`"))]
+    pub url: Option<url::Url>,
+
+    /// Per-request timeout. Fail-closed on exceed.
+    #[config(default_t = Duration::from_secs(1))]
+    pub request_timeout: Duration,
+
+    /// Sent on every request. Opaque to the server.
+    #[config(default_t = "1".into())]
+    pub protocol_version: String,
+
+    /// If set, responses whose `protocolVersion` is not exactly equal are
+    /// rejected.
+    pub expected_protocol_version: Option<String>,
+
+    /// Source addresses whose txs skip the policy service. Defaults to the
+    /// protocol-internal senders so the chain's own system txs can't be
+    /// denied by a misconfigured service.
+    #[config(default_t = vec![
+        zksync_os_types::BOOTLOADER_FORMAL_ADDRESS,
+        zksync_os_tx_validators::deployment_filter::FORCE_DEPLOYER_ADDRESS,
+    ])]
+    pub bypass_from: Vec<Address>,
+
+    /// Bearer token sent as `Authorization: Bearer <token>` on every request.
+    /// Required for `http://` transports. Ignored for `unix://` transports,
+    /// where socket-path filesystem permissions are the access control.
+    #[config(secret)]
+    pub auth_token: Option<SecretString>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1727,6 +1766,61 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
     }
 }
 
+impl TxValidatorConfig {
+    fn check_mutual_exclusion(&self) -> Result<(), ErrorWithOrigin> {
+        if self.deployment_filter.enabled && self.policy_service.url.is_some() {
+            Err(ErrorWithOrigin::custom(
+                "deployment_filter cannot be enabled at the same time as policy_service.url; express the allow-list via the policy service",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn check_url_scheme(url: &url::Url) -> Result<(), ErrorWithOrigin> {
+    match url.scheme() {
+        "http" | "unix" => Ok(()),
+        other => Err(ErrorWithOrigin::custom(format!(
+            "unsupported URL scheme `{other}`; expected `http` or `unix`"
+        ))),
+    }
+}
+
+impl PolicyServiceConfig {
+    fn check_auth_required(&self) -> Result<(), ErrorWithOrigin> {
+        let Some(url) = &self.url else { return Ok(()) };
+        if url.scheme() == "http" && self.auth_token.is_none() {
+            return Err(ErrorWithOrigin::custom(
+                "auth_token is required when using `http://` transport",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Build a `PolicyClient`, or `None` when no service is configured.
+    /// Panics on invalid URL: config validation already ran at load time.
+    pub fn build_client(
+        &self,
+        component: zksync_os_tx_validators::policy_client::Component,
+    ) -> Option<zksync_os_tx_validators::policy_client::PolicyClient> {
+        self.url.as_ref().map(|url| {
+            zksync_os_tx_validators::policy_client::PolicyClient::new(
+                zksync_os_tx_validators::policy_client::Config {
+                    url: url.to_string(),
+                    component,
+                    request_timeout: self.request_timeout,
+                    protocol_version: self.protocol_version.clone(),
+                    expected_protocol_version: self.expected_protocol_version.clone(),
+                    bypass_from: self.bypass_from.iter().copied().collect(),
+                    auth_token: self.auth_token.clone(),
+                },
+            )
+            .expect("failed to build PolicyClient from `policy_service`")
+        })
+    }
+}
+
 impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
     fn from(c: &Config) -> Self {
         Self {
@@ -1746,6 +1840,11 @@ impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
                     } else {
                         deployment_filter::Config::Unrestricted
                     },
+                    policy_client: c
+                        .sequencer_config
+                        .tx_validator
+                        .policy_service
+                        .build_client(zksync_os_tx_validators::policy_client::Component::Sequencer),
                 }
             },
         }
@@ -2336,6 +2435,60 @@ mod tests {
         );
         assert!(
             err.contains("`batch_verification.client_enabled` requires `network.enabled=true`")
+        );
+    }
+
+    fn parse_policy_service_config<const N: usize>(
+        env_vars: [(&str, &str); N],
+    ) -> Result<PolicyServiceConfig, ParseErrors> {
+        let schema = ConfigSchema::new(&PolicyServiceConfig::DESCRIPTION, "policy_service");
+        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
+        repo.single::<PolicyServiceConfig>().unwrap().parse()
+    }
+
+    #[test]
+    fn policy_service_accepts_http_url_with_token() {
+        let result = parse_policy_service_config([
+            ("POLICY_SERVICE_URL", "http://policy.local:9000"),
+            ("POLICY_SERVICE_AUTH_TOKEN", "secret"),
+        ]);
+        assert!(
+            result.is_ok(),
+            "http URL with token should be accepted, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn policy_service_rejects_http_url_without_token() {
+        let err = parse_policy_service_config([("POLICY_SERVICE_URL", "http://policy.local:9000")])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("auth_token is required"),
+            "expected token-required error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn policy_service_accepts_unix_url_without_token() {
+        let result =
+            parse_policy_service_config([("POLICY_SERVICE_URL", "unix:///run/policy.sock")]);
+        assert!(
+            result.is_ok(),
+            "unix URL without token should be accepted, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn policy_service_rejects_unsupported_scheme() {
+        let err = parse_policy_service_config([("POLICY_SERVICE_URL", "ftp://policy.local:9000")])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("unsupported URL scheme"),
+            "expected scheme rejection, got: {err}"
         );
     }
 }

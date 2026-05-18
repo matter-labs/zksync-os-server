@@ -1,5 +1,4 @@
 use crate::config::SequencerConfig;
-use crate::config::TxValidatorConfig;
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::execute_block_in_vm::execute_block_in_vm;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
@@ -16,6 +15,7 @@ use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{OverlayBuffer, ReadStateHistory, WriteState};
 use zksync_os_tx_validators::deployment_filter;
+use zksync_os_tx_validators::policy_client::AccessType;
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
 /// Executes blocks, while only updating local in-memory state (mempool, block context).
@@ -123,8 +123,30 @@ where
                 .sync_with_base_and_build_view_for_block(&self.state, block_number)?;
 
             let is_produce = matches!(cmd_type, BlockCommandType::Produce);
-            let (tracer, validator) = make_tx_validator(is_produce, &self.config.tx_validator);
-            let (block_output, replay_record, purged_txs, strict_subpool_cleanup) = {
+            // Policy priority: when a `PolicyClient` is configured for a
+            // produce block, the policy service is the sole arbiter and the
+            // deployment filter is bypassed entirely (the policy service can
+            // express the same allow-list via its rules). Replay/rebuild
+            // traffic was already consulted against the policy service at
+            // original sequencing, so it always falls back to the deployment
+            // filter (with `Unrestricted` config to avoid re-filtering).
+            let policy_client = is_produce
+                .then_some(self.config.tx_validator.policy_client.as_ref())
+                .flatten();
+            let exec_result = if let Some(policy_client) = policy_client {
+                let policy_session = policy_client.session(AccessType::Write);
+                let policy_tracer = policy_session.paired_tracer();
+                execute_block_in_vm(
+                    prepared_command,
+                    exec_view,
+                    &state_reporter,
+                    policy_tracer,
+                    policy_session,
+                )
+                .await
+            } else {
+                let (tracer, validator) =
+                    make_deployment_filter(is_produce, &self.config.tx_validator.deployment_filter);
                 execute_block_in_vm(
                     prepared_command,
                     exec_view,
@@ -133,16 +155,17 @@ where
                     validator,
                 )
                 .await
-            }
-            .map_err(|dump| {
-                let error = anyhow::anyhow!("{}", dump.error);
-                tracing::info!("Saving dump..");
-                if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump) {
-                    tracing::error!(?err, "Failed to write block dump");
-                }
-                error
-            })
-            .context("execute_block_in_vm")?;
+            };
+            let (block_output, replay_record, purged_txs, strict_subpool_cleanup) = exec_result
+                .map_err(|dump| {
+                    let error = anyhow::anyhow!("{}", dump.error);
+                    tracing::info!("Saving dump..");
+                    if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump) {
+                        tracing::error!(?err, "Failed to write block dump");
+                    }
+                    error
+                })
+                .context("execute_block_in_vm")?;
 
             let time_since_last_block = last_processed_block_at
                 .map(|last_processed_block_at| last_processed_block_at.elapsed());
@@ -249,13 +272,6 @@ async fn check_block_production_limit(
         state_reporter.enter_state(SequencerState::ConfiguredBlockLimitReached);
         std::future::pending::<()>().await;
     }
-}
-
-fn make_tx_validator(
-    is_produce: bool,
-    config: &TxValidatorConfig,
-) -> (deployment_filter::Tracer, deployment_filter::Validator) {
-    make_deployment_filter(is_produce, &config.deployment_filter)
 }
 
 fn make_deployment_filter(
