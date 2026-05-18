@@ -753,7 +753,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             next_cursors.interop_root_id,
             interop_roots_subpool.clone(),
-            sl_block_updates.clone(),
+            gateway_block_updates.clone(),
         )
         .await
         .expect("failed to start L1 interop roots watcher")

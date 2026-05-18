@@ -29,6 +29,10 @@ pub fn run(
         let mut timer = tokio::time::interval(poll_interval);
         loop {
             timer.tick().await;
+            if l1_head.receiver_count() == 0 {
+                tracing::info!("block updates have no subscribers; stopping");
+                return;
+            }
             if let Err(e) = poll(&provider, &l1_head).await {
                 tracing::error!("block updates fatal error: {e}");
                 panic!("block updates failed: {e}");
