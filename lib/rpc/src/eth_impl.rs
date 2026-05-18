@@ -912,6 +912,7 @@ pub fn build_api_tx(tx: zksync_os_types::ZkTransaction, meta: Option<&TxMeta>) -
         inner: tx.inner,
         block_hash: meta.map(|meta| meta.block_hash),
         block_number: meta.map(|meta| meta.block_number),
+        block_timestamp: meta.map(|meta| meta.block_timestamp),
         transaction_index: meta.map(|meta| meta.tx_index_in_block),
         effective_gas_price: meta.map(|meta| meta.effective_gas_price),
     }

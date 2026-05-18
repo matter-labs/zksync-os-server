@@ -474,6 +474,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 effective_verification_policy(&batch_verification_policy_config, &l1_state);
             NetworkService::new(
                 config.network_config.clone().into(),
+                runtime.clone(),
                 ZksProtocolConfig::MainNode(MainNodeProtocolConfig {
                     accepted_verifier_signers,
                     verify_result_tx: verify_result_tx.clone(),
@@ -495,6 +496,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .collect();
             NetworkService::new(
                 config.network_config.clone().into(),
+                runtime.clone(),
                 ZksProtocolConfig::ExternalNode(ExternalNodeProtocolConfig {
                     starting_block: Arc::new(RwLock::new(starting_block)),
                     record_overrides,

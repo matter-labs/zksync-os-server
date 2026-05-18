@@ -231,7 +231,8 @@ where
                             );
                         }
                         tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
-                        tx_request.set_blob_sidecar(blob_sidecar);
+                        tx_request
+                            .set_blob_sidecar(BlobTransactionSidecarVariant::Eip4844(blob_sidecar));
                     };
 
                     // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an

@@ -50,7 +50,7 @@ resolver = "3"
 default-members = ["node/bin"]
 
 [workspace.package]
-version = "0.20.2"
+version = "0.20.3"
 edition = "2024"
 authors = ["The Matter Labs Team <hello@matterlabs.dev>"]
 homepage = "https://zksync.io/"
@@ -64,11 +64,11 @@ auto_impl = "1.3.0"
 blake2 = "0.10.6"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-alloy = { version = "1.7.3", default-features = false, features = [
+alloy = { version = "2.0.1", default-features = false, features = [
     "serde",
     "serde-bincode-compat",
 ] }
-alloy-rlp = { version = "0.3.12" }
+alloy-rlp = { version = "0.3.13" }
 anyhow = "1"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
@@ -247,74 +247,74 @@ opentelemetry-semantic-conventions = "0.31.0"
 opentelemetry-appender-tracing = "0.31.1"
 
 # Reth dependencies
-# currently pinned to specific commit that bounds the per-connection RLPx multiplexer outbound buffer
-reth-db-models = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-evm-ethereum = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-chainspec = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-trie-common = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-primitives = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-primitives-traits = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-revm = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-storage-api = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-transaction-pool = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-execution-types = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-network = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-network-peers = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-net-nat = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-eth-wire = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-discv5 = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-provider = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-rpc-eth-types = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
-reth-tasks = { git = "https://github.com/EmilLuta/reth.git", rev = "2bb8f26ac1086a06ba6cf2fb413e9469756de766" }
+# pinned to a v2.2.0-based fork with the RLPx buffer fix applied
+reth-db-models = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-evm-ethereum = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-chainspec = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-trie-common = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-ethereum-primitives = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-primitives-traits = { version = "0.3.1", default-features = false }
+reth-revm = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-storage-api = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-transaction-pool = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-execution-types = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-network = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-network-peers = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-net-nat = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-eth-wire = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-discv5 = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-provider = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-rpc-eth-types = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
+reth-tasks = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
 
 zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.1.0" }
 revm = { version = "=38.0.0", features = ["optional_balance_check"] }
 
 # "Local" dependencies
-zksync_os_contract_interface = { version = "=0.20.2", path = "lib/contract_interface" }
-zksync_os_consensus_types = { version = "=0.20.2", path = "lib/consensus_types" }
-zksync_os_crypto = { version = "=0.20.2", path = "lib/crypto" }
-zksync_os_l1_sender = { version = "=0.20.2", path = "lib/l1_sender" }
-zksync_os_l1_watcher = { version = "=0.20.2", path = "lib/l1_watcher" }
-zksync_os_mempool = { version = "=0.20.2", path = "lib/mempool" }
-zksync_os_mini_merkle_tree = { version = "=0.20.2", path = "lib/mini_merkle_tree" }
-zksync_os_merkle_tree = { version = "=0.20.2", path = "lib/merkle_tree" }
-zksync_os_config_validation_macros = { version = "=0.20.2", path = "node/config-validation-macros" }
-zksync_os_merkle_tree_api = { version = "=0.20.2", path = "lib/merkle_tree_api" }
-zksync_os_priority_tree = { version = "=0.20.2", path = "lib/priority_tree" }
-zksync_os_observability = { version = "=0.20.2", path = "lib/observability" }
-zksync_os_rocksdb = { version = "=0.20.2", path = "lib/rocksdb" }
-zksync_os_rpc = { version = "=0.20.2", path = "lib/rpc" }
-zksync_os_rpc_api = { version = "=0.20.2", path = "lib/rpc_api" }
-zksync_os_sequencer = { version = "=0.20.2", path = "lib/sequencer" }
-zksync_os_state = { version = "=0.20.2", path = "lib/state" }
-zksync_os_state_full_diffs = { version = "=0.20.2", path = "lib/state_full_diffs" }
-zksync_os_storage = { version = "=0.20.2", path = "lib/storage" }
-zksync_os_storage_api = { version = "=0.20.2", path = "lib/storage_api" }
-zksync_os_types = { version = "=0.20.2", path = "lib/types" }
-zksync_os_genesis = { version = "=0.20.2", path = "lib/genesis" }
-zksync_os_status_server = { version = "=0.20.2", path = "lib/status" }
-zksync_os_multivm = { version = "=0.20.2", path = "lib/multivm" }
-zksync_os_pipeline = { version = "=0.20.2", path = "lib/pipeline" }
-zksync_os_backpressure = { version = "=0.20.2", path = "lib/backpressure" }
-zksync_os_revm_consistency_checker = { version = "=0.20.2", path = "lib/revm_consistency_checker" }
-zksync_os_gas_adjuster = { version = "=0.20.2", path = "lib/gas_adjuster" }
-zksync_os_batch_verification = { version = "=0.20.2", path = "lib/batch_verification" }
-zksync_os_batch_types = { version = "=0.20.2", path = "lib/batch_types" }
-zksync_os_batcher_metrics = { version = "=0.20.2", path = "lib/batcher_metrics" }
-zksync_os_internal_config = { version = "=0.20.2", path = "lib/internal_config" }
-zksync_os_interop_fee_updater = { version = "=0.20.2", path = "lib/interop_fee_updater" }
-zksync_os_network = { version = "=0.20.2", path = "lib/network" }
-zksync_os_raft = { version = "=0.20.2", path = "lib/raft" }
-zksync_os_metadata = { version = "=0.20.2", path = "lib/metadata" }
-zksync_os_external_price_api = { version = "=0.20.2", path = "lib/external_price_api" }
-zksync_os_base_token_adjuster = { version = "=0.20.2", path = "lib/base_token_adjuster" }
-zksync_os_reth_compat = { version = "=0.20.2", path = "lib/reth_compat" }
-zksync_os_operator_signer = { version = "=0.20.2", path = "lib/operator_signer" }
-zksync_os_integration_tests_macros = { version = "=0.20.2", path = "integration-tests-macros" }
-zksync_os_tx_validators = { version = "=0.20.2", path = "lib/tx_validators" }
+zksync_os_contract_interface = { version = "=0.20.3", path = "lib/contract_interface" }
+zksync_os_consensus_types = { version = "=0.20.3", path = "lib/consensus_types" }
+zksync_os_crypto = { version = "=0.20.3", path = "lib/crypto" }
+zksync_os_l1_sender = { version = "=0.20.3", path = "lib/l1_sender" }
+zksync_os_l1_watcher = { version = "=0.20.3", path = "lib/l1_watcher" }
+zksync_os_mempool = { version = "=0.20.3", path = "lib/mempool" }
+zksync_os_mini_merkle_tree = { version = "=0.20.3", path = "lib/mini_merkle_tree" }
+zksync_os_merkle_tree = { version = "=0.20.3", path = "lib/merkle_tree" }
+zksync_os_config_validation_macros = { version = "=0.20.3", path = "node/config-validation-macros" }
+zksync_os_merkle_tree_api = { version = "=0.20.3", path = "lib/merkle_tree_api" }
+zksync_os_priority_tree = { version = "=0.20.3", path = "lib/priority_tree" }
+zksync_os_observability = { version = "=0.20.3", path = "lib/observability" }
+zksync_os_rocksdb = { version = "=0.20.3", path = "lib/rocksdb" }
+zksync_os_rpc = { version = "=0.20.3", path = "lib/rpc" }
+zksync_os_rpc_api = { version = "=0.20.3", path = "lib/rpc_api" }
+zksync_os_sequencer = { version = "=0.20.3", path = "lib/sequencer" }
+zksync_os_state = { version = "=0.20.3", path = "lib/state" }
+zksync_os_state_full_diffs = { version = "=0.20.3", path = "lib/state_full_diffs" }
+zksync_os_storage = { version = "=0.20.3", path = "lib/storage" }
+zksync_os_storage_api = { version = "=0.20.3", path = "lib/storage_api" }
+zksync_os_types = { version = "=0.20.3", path = "lib/types" }
+zksync_os_genesis = { version = "=0.20.3", path = "lib/genesis" }
+zksync_os_status_server = { version = "=0.20.3", path = "lib/status" }
+zksync_os_multivm = { version = "=0.20.3", path = "lib/multivm" }
+zksync_os_pipeline = { version = "=0.20.3", path = "lib/pipeline" }
+zksync_os_backpressure = { version = "=0.20.3", path = "lib/backpressure" }
+zksync_os_revm_consistency_checker = { version = "=0.20.3", path = "lib/revm_consistency_checker" }
+zksync_os_gas_adjuster = { version = "=0.20.3", path = "lib/gas_adjuster" }
+zksync_os_batch_verification = { version = "=0.20.3", path = "lib/batch_verification" }
+zksync_os_batch_types = { version = "=0.20.3", path = "lib/batch_types" }
+zksync_os_batcher_metrics = { version = "=0.20.3", path = "lib/batcher_metrics" }
+zksync_os_internal_config = { version = "=0.20.3", path = "lib/internal_config" }
+zksync_os_interop_fee_updater = { version = "=0.20.3", path = "lib/interop_fee_updater" }
+zksync_os_network = { version = "=0.20.3", path = "lib/network" }
+zksync_os_raft = { version = "=0.20.3", path = "lib/raft" }
+zksync_os_metadata = { version = "=0.20.3", path = "lib/metadata" }
+zksync_os_external_price_api = { version = "=0.20.3", path = "lib/external_price_api" }
+zksync_os_base_token_adjuster = { version = "=0.20.3", path = "lib/base_token_adjuster" }
+zksync_os_reth_compat = { version = "=0.20.3", path = "lib/reth_compat" }
+zksync_os_operator_signer = { version = "=0.20.3", path = "lib/operator_signer" }
+zksync_os_integration_tests_macros = { version = "=0.20.3", path = "integration-tests-macros" }
+zksync_os_tx_validators = { version = "=0.20.3", path = "lib/tx_validators" }
 
-zksync_os_server = { version = "=0.20.2", path = "node/bin" }
+zksync_os_server = { version = "=0.20.3", path = "node/bin" }
 
 #[patch.crates-io]
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }

@@ -20,7 +20,7 @@ use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
-use reth_tasks::{PanickedTaskError, Runtime, RuntimeBuilder, RuntimeConfig};
+use reth_tasks::{PanickedTaskError, Runtime, RuntimeBuilder, RuntimeConfig, TokioConfig};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
@@ -673,9 +673,11 @@ impl Tester {
             .clone()
             .replace("0.0.0.0:", "http://localhost:");
 
-        let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
-            .build()
-            .expect("failed to build runtime");
+        let runtime = RuntimeBuilder::new(
+            RuntimeConfig::default().with_tokio(TokioConfig::existing_handle(Handle::current())),
+        )
+        .build()
+        .expect("failed to build runtime");
         let node_span = tracing::info_span!(
             "node",
             node = %log_tag,
