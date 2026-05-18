@@ -110,12 +110,36 @@ pub struct RaftNetworkClient {
     timeout: Duration,
 }
 
+/// How long to wait for a peer to appear in the RaftRouter before giving up and returning
+/// Unreachable. When one cluster node drops, devp2p briefly drops and re-establishes
+/// connections between the remaining nodes (connection churn). Without this wait,
+/// OpenRaft would immediately see Unreachable and back off for a full election timeout
+/// (5–10 s), causing many failed elections before the connection stabilises.
+const PEER_CONNECT_WAIT: Duration = Duration::from_secs(3);
+const PEER_CONNECT_POLL: Duration = Duration::from_millis(50);
+
 impl RaftNetworkClient {
     async fn send_rpc<E: std::error::Error>(
         &self,
         request: RaftRequest,
         timeout_dur: Duration,
     ) -> Result<RaftResponse, RPCError<PeerId, RaftNode, E>> {
+        // If the peer isn't registered yet, wait briefly before failing with Unreachable.
+        // Returning Unreachable immediately would cause OpenRaft to back off for a full
+        // election timeout and stall leader election during transient devp2p connection churn.
+        if !self.router.is_peer_connected(self.peer_id) {
+            let connect_deadline = tokio::time::Instant::now() + PEER_CONNECT_WAIT;
+            loop {
+                tokio::time::sleep(PEER_CONNECT_POLL).await;
+                if self.router.is_peer_connected(self.peer_id) {
+                    break;
+                }
+                if tokio::time::Instant::now() >= connect_deadline {
+                    return Err(rpc_unreachable("peer not connected"));
+                }
+            }
+        }
+
         let rx = self
             .router
             .send_request(self.peer_id, request)

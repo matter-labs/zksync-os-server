@@ -147,6 +147,10 @@ impl RaftRouter {
         Err(RaftTransportError::SendFailed(peer_id))
     }
 
+    pub fn is_peer_connected(&self, peer_id: PeerId) -> bool {
+        self.peers.contains_key(&peer_id)
+    }
+
     pub fn connected_peers(&self) -> Vec<PeerId> {
         self.peers.iter().map(|entry| *entry.key()).collect()
     }
