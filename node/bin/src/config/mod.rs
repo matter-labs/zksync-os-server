@@ -11,10 +11,14 @@ use smart_config::metadata::{SizeUnit, TimeUnit};
 use smart_config::value::SecretString;
 use smart_config::{
     ByteSize, ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig,
-    ErrorWithOrigin, EtherAmount, ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
+    ErrorWithOrigin, EtherAmount, ParseErrors, Serde,
+    de::{Delimited, Entries},
+    metadata::EtherUnit,
+    pat::lazy_regex,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
+use std::num::NonZeroU32;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_config_validation_macros::ConfigValidate;
@@ -984,6 +988,18 @@ pub struct RpcConfig {
     /// because pubdata price increases or native price decreases in-between estimation and sequencing.
     #[config(default_t = 2.0)]
     pub estimate_gas_pubdata_price_factor: f64,
+
+    /// Per-method rate limits: map from RPC method name to max requests per second (across all
+    /// callers).  Use `"*"` for a global limit applied before per-method limits.  Methods absent
+    /// from the map are unrestricted.
+    ///
+    /// Accepts a JSON object or a comma-separated `method = rps` string, e.g.
+    /// `* = 500, eth_call = 100, debug_traceTransaction = 5`.
+    #[config(default, with = Entries::WELL_KNOWN.delimited(
+        lazy_regex!(ref r"\s*,\s*"),
+        lazy_regex!(ref r"\s*=\s*"),
+    ))]
+    pub rate_limits: HashMap<String, NonZeroU32>,
 }
 
 /// L1 sender configuration. The signing key fields are only required on the Main Node;
@@ -1702,6 +1718,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
             gas_price_scale_factor: c.gas_price_scale_factor,
             estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
+            rate_limits: c.rate_limits.into_iter().map(Into::into).collect(),
         }
     }
 }
