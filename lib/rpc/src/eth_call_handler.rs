@@ -543,11 +543,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         // to succeed.
         // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L152>
         let mut mid = range.biased_midpoint();
-        while !range.is_empty() {
-            // Stop once error is within 1.5% of the highest gas limit.
-            if range.is_narrow_enough() {
-                break;
-            }
+        while !range.is_narrow_enough() {
             tracing::trace!("Trying to simulate transaction with gas_limit {mid}");
             range.apply_probe(run_at(mid)?, Probe::Midpoint(mid))?;
             mid = range.midpoint();
@@ -649,10 +645,6 @@ struct GasRange {
 impl GasRange {
     fn new(lowest: u64, highest: u64) -> Self {
         Self { lowest, highest }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.lowest + 1 >= self.highest
     }
 
     fn is_narrow_enough(&self) -> bool {
