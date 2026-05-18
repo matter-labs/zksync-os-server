@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use std::time::Instant;
-use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::Bridgehub;
+use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL, ReceiptAssert};
 use zksync_os_integration_tests::config::{ChainLayout, load_chain_config};
 use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
@@ -116,8 +116,7 @@ async fn revert_batches_on_l1(stopped: &StoppedTester, new_last_batch: u64) -> a
     let validator_timelock_address = bridgehub.validator_timelock_address().await?;
     let chain_address = *bridgehub.zk_chain().await?.address();
 
-    let operator =
-        PrivateKeySigner::from_str(&load_operator_private_key(chain_layout, chain_id)?)?;
+    let operator = PrivateKeySigner::from_str(&load_operator_private_key(chain_layout, chain_id)?)?;
     let operator_address = operator.address();
     let mut l1_provider = stopped.l1_provider().clone();
     l1_provider.wallet_mut().register_signer(operator);
@@ -363,9 +362,7 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
 ///   5. Confirm the node is alive by sending and confirming a new L2 transaction.
 #[test_multisetup([CURRENT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
-async fn rebuild_after_l1_revert_starts_successfully(
-    env: TestEnvironment,
-) -> anyhow::Result<()> {
+async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
     make_commit_only_config(&mut config);
     let tester = env.launch(config).await?;
@@ -453,10 +450,8 @@ async fn rebuild_panics_if_from_block_is_already_committed(
     // spawned), so it panics through `start_with_config`. Isolate it in a spawned task so
     // the JoinError captures the panic instead of unwinding the test thread.
     let stopped = tester.stop().await?;
-    let join_result = tokio::task::spawn(async move {
-        stopped.start_with_config(restarted_config).await
-    })
-    .await;
+    let join_result =
+        tokio::task::spawn(async move { stopped.start_with_config(restarted_config).await }).await;
 
     let join_err = join_result.expect_err("expected node startup to panic");
     assert!(join_err.is_panic(), "expected a panic, got a cancellation");
