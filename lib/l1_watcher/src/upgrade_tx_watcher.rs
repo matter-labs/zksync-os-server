@@ -11,7 +11,9 @@ use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use blake2::{Blake2s256, Digest};
 use zksync_os_contract_interface::IBytecodeSupplier::EVMBytecodePublished;
-use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
+use zksync_os_contract_interface::IChainTypeManager::{
+    NewProtocolVersion, NewUpgradeCutData, ProposedUpgrade,
+};
 use zksync_os_contract_interface::ServerNotifier::UpgradeTimestampUpdated;
 use zksync_os_contract_interface::is_method_missing;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
@@ -270,12 +272,23 @@ impl L1UpgradeTxWatcher {
     /// Pre-V31 fallback: scan `UPGRADE_DATA_LOOKBEHIND_BLOCKS` worth of `NewUpgradeCutData`
     /// events backward on the SL CTM. Pre-V31 chains do not have Gateway migrations, so the
     /// cut always lives on the SL CTM (which equals the L1 CTM in that era).
-    async fn legacy_backward_scan(&self, raw_protocol_version: U256) -> anyhow::Result<Log> {
-        let mut current_block = self.provider_sl.get_block_number().await?;
+    ///
+    /// Pre-V31 CTMs emit `NewUpgradeCutData` indexed by the new (target) version rather than
+    /// the old one. We first resolve old→new via the `NewProtocolVersion` event (emitted in the
+    /// same tx as `NewUpgradeCutData`), then filter by that new version.
+    async fn legacy_backward_scan(&self, raw_old_protocol_version: U256) -> anyhow::Result<Log> {
+        let current_block = self.provider_sl.get_block_number().await?;
         let start_block = current_block
             .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS)
             .max(1u64);
 
+        // Resolve the new (target) version from the NewProtocolVersion event.
+        let new_protocol_version = self
+            .find_new_protocol_version(raw_old_protocol_version, start_block, current_block)
+            .await?;
+
+        // Now scan for NewUpgradeCutData indexed by that new version.
+        let mut current_block = current_block;
         let mut upgrade_cut_data_logs = Vec::new();
         while current_block >= start_block && upgrade_cut_data_logs.is_empty() {
             let from_block = current_block
@@ -287,22 +300,54 @@ impl L1UpgradeTxWatcher {
                 .to_block(current_block)
                 .address(self.ctm_sl)
                 .event_signature(NewUpgradeCutData::SIGNATURE_HASH)
-                .topic1(raw_protocol_version);
+                .topic1(new_protocol_version);
             upgrade_cut_data_logs = self.provider_sl.get_logs(&filter).await?;
             current_block = from_block.saturating_sub(1);
         }
 
         if upgrade_cut_data_logs.is_empty() {
-            anyhow::bail!("no upgrade cut found for raw protocol version {raw_protocol_version}");
+            anyhow::bail!(
+                "no upgrade cut found for raw protocol version {raw_old_protocol_version}"
+            );
         }
         if upgrade_cut_data_logs.len() > 1 {
             tracing::warn!(
-                %raw_protocol_version,
+                %raw_old_protocol_version,
                 "multiple upgrade cuts found; picking the most recent one"
             );
         }
         // `last()` because each scan batch returns logs in ascending order.
         Ok(upgrade_cut_data_logs.pop().unwrap())
+    }
+
+    /// Scans for `NewProtocolVersion(oldVersion, newVersion)` to resolve the target version for
+    /// a pre-V31 upgrade.
+    async fn find_new_protocol_version(
+        &self,
+        raw_old_protocol_version: U256,
+        start_block: u64,
+        end_block: u64,
+    ) -> anyhow::Result<U256> {
+        let filter = Filter::new()
+            .from_block(start_block)
+            .to_block(end_block)
+            .address(self.ctm_sl)
+            .event_signature(NewProtocolVersion::SIGNATURE_HASH)
+            .topic1(raw_old_protocol_version);
+        let mut logs = self.provider_sl.get_logs(&filter).await?;
+        if logs.len() > 1 {
+            tracing::warn!(
+                %raw_old_protocol_version,
+                "multiple NewProtocolVersion events found; picking the most recent one"
+            );
+        }
+        let log = logs.pop().ok_or_else(|| {
+            anyhow::anyhow!(
+                "no NewProtocolVersion event found for old protocol version {raw_old_protocol_version}"
+            )
+        })?;
+        let event: NewProtocolVersion = log.log_decode()?.inner.data;
+        Ok(event.newProtocolVersion)
     }
 
     async fn wait_until_timestamp(&self, target_timestamp: u64) {
