@@ -660,7 +660,7 @@ impl GasRange {
     }
 
     fn midpoint(&self) -> u64 {
-        ((self.highest as u128 + self.lowest as u128) / 2) as u64
+        u64::midpoint(self.lowest, self.highest)
     }
 
     fn biased_midpoint(&self) -> u64 {
