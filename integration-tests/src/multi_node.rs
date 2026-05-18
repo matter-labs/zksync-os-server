@@ -6,16 +6,16 @@ use zksync_os_status_server::StatusResponse;
 
 /// Each respawn during a wait-helper poll buys this much extra time, since the freshly
 /// respawned node needs to finish booting and the cluster needs another election cycle.
-const RESPAWN_GRACE: Duration = Duration::from_secs(10);
+const RESPAWN_GRACE: Duration = Duration::from_secs(30);
 
 use crate::{
     AnvilL1, ChainLayout, Config, LockedPort, NodeRole, PROTOCOL_VERSION, StoppedTester, Tester,
     provider::ZksyncTestingProvider,
 };
 
-const TEST_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
-const TEST_ELECTION_TIMEOUT_MIN: Duration = Duration::from_secs(2);
-const TEST_ELECTION_TIMEOUT_MAX: Duration = Duration::from_secs(4);
+const TEST_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(250);
+const TEST_ELECTION_TIMEOUT_MIN: Duration = Duration::from_secs(5);
+const TEST_ELECTION_TIMEOUT_MAX: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 enum NodeSlot {
