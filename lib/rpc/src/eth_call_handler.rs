@@ -532,7 +532,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L135>
         const GAS_STIPEND: u64 = 2_300;
         let optimistic_gas_limit = (gas_used + res.gas_refunded + GAS_STIPEND) * 64 / 63;
-        if optimistic_gas_limit < range.highest {
+        if optimistic_gas_limit > range.lowest && optimistic_gas_limit < range.highest {
             range.apply_probe(
                 run_at(optimistic_gas_limit)?,
                 Probe::Optimistic(optimistic_gas_limit),
