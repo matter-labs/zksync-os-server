@@ -454,12 +454,16 @@ impl MultiNodeTester {
         }
 
         let mut deadline = Instant::now() + timeout;
+        // Hard cap: never wait longer than timeout + 3 respawn graces total, regardless of
+        // how many nodes crash. Without this, rapid crash cycles under stress-test load can
+        // extend the deadline indefinitely.
+        let hard_deadline = Instant::now() + timeout + RESPAWN_GRACE * 3;
         let mut last_summary = String::new();
 
         while Instant::now() < deadline {
             let respawned = self.respawn_crashed_running_nodes().await?;
             if respawned > 0 {
-                deadline = deadline.max(Instant::now() + RESPAWN_GRACE);
+                deadline = deadline.max(Instant::now() + RESPAWN_GRACE).min(hard_deadline);
             }
             let cluster_state =
                 ClusterState::collect_indices(&self.nodes, node_indices.iter().copied()).await;
