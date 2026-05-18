@@ -1,4 +1,4 @@
-use crate::eth_call_handler::{EthCallError, EthCallHandler};
+use crate::eth_call_handler::{EthCallError, EthCallHandler, build_pending_block_context};
 use crate::eth_impl::{build_api_log, build_api_tx};
 use crate::result::RevertError;
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
@@ -188,7 +188,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 .get_context(parent_block)
                 .ok_or(RpcStorageError::BlockNotFound(block))?;
             return Ok(SimulationStartContext {
-                block_context: self.build_pending_block_context(),
+                block_context: build_pending_block_context(&self.storage, self.chain_id),
                 parent_block_number: parent_block,
                 parent_timestamp: parent_context.timestamp,
             });

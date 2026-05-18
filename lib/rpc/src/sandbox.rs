@@ -4,8 +4,8 @@ use alloy::sol_types::{ContractError, GenericRevertReason};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{
-    AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer,
-    NopTracer, NopValidator,
+    AnyTracer, AnyTxValidator, CallModifier, CallResult, EvmFrameInterface, EvmRequest,
+    EvmResources, EvmTracer, NopTracer, NopValidator,
 };
 use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
 use zksync_os_interface::types::{BlockContext, ExecutionResult, TxOutput};
@@ -35,6 +35,25 @@ pub fn execute(
     block_context: BlockContext,
     state_view: impl ViewState,
 ) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
+    execute_with(
+        tx,
+        block_context,
+        state_view,
+        &mut NopTracer,
+        &mut NopValidator,
+    )
+}
+
+/// Same as [`execute`] but threads caller-supplied tracer + validator
+/// through the VM. The bootloader fires `validator.begin_tx` and
+/// `validator.finish_tx` around EVM execution.
+pub fn execute_with<T: AnyTracer, V: AnyTxValidator>(
+    tx: ZkTransaction,
+    block_context: BlockContext,
+    state_view: impl ViewState,
+    tracer: &mut T,
+    validator: &mut V,
+) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
     let encoded_tx = tx.encode();
 
     simulate_tx(
@@ -42,7 +61,8 @@ pub fn execute(
         block_context,
         state_view.clone(),
         state_view,
-        &mut NopTracer,
+        tracer,
+        validator,
     )
 }
 
@@ -67,6 +87,7 @@ pub fn call_trace_simulate(
         state_view.clone(),
         state_view,
         &mut tracer,
+        &mut NopValidator,
     )?;
 
     let frame = tracer

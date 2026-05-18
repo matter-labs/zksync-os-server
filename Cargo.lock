@@ -15090,6 +15090,7 @@ dependencies = [
  "flate2",
  "fs2",
  "futures",
+ "httpmock",
  "regex",
  "reqwest 0.12.28",
  "reth-tasks",
@@ -15113,6 +15114,7 @@ dependencies = [
  "zksync_os_server",
  "zksync_os_state_full_diffs",
  "zksync_os_status_server",
+ "zksync_os_tx_validators",
  "zksync_os_types",
  "zksync_os_verify_storage_proof",
 ]
@@ -15570,6 +15572,7 @@ dependencies = [
  "zksync_os_rpc_api",
  "zksync_os_storage",
  "zksync_os_storage_api",
+ "zksync_os_tx_validators",
  "zksync_os_types",
 ]
 
@@ -15722,6 +15725,7 @@ dependencies = [
  "tokio-util",
  "tower",
  "tracing",
+ "url",
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260421)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.9-interface-v0.0.15)",
@@ -15871,7 +15875,17 @@ name = "zksync_os_tx_validators"
 version = "0.20.2"
 dependencies = [
  "alloy 2.0.4",
+ "anyhow",
+ "httpmock",
+ "reqwest 0.12.28",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
  "tracing",
+ "url",
+ "vise",
  "zksync_os_evm_errors",
  "zksync_os_interface",
 ]
