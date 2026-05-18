@@ -49,7 +49,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
         l1_block_updates: watch::Receiver<BlockUpdates>,
-        sl_block_updates: watch::Receiver<BlockUpdates>,
+        gateway_block_updates: Option<watch::Receiver<BlockUpdates>>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(
@@ -85,7 +85,11 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             let zk_chain = &interval.proxy;
             let block_updates = match &interval.settlement_layer {
                 IntervalSettlementLayer::L1 => l1_block_updates.clone(),
-                IntervalSettlementLayer::Gateway(_) => sl_block_updates.clone(),
+                IntervalSettlementLayer::Gateway(_) => {
+                    gateway_block_updates.clone().with_context(|| {
+                        format!("Gateway block updates are missing for interval {interval}")
+                    })?
+                }
             };
             let first_batch = if is_first {
                 anyhow::ensure!(

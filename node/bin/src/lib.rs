@@ -239,16 +239,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 block updates",
         config.l1_watcher_config.poll_interval,
     );
+    let gateway_block_updates = gateway_provider.as_ref().map(|provider| {
+        block_updates::run(
+            provider.clone().erased(),
+            runtime,
+            "gateway block updates",
+            config.l1_watcher_config.poll_interval,
+        )
+    });
     let (sl_provider, sl_block_updates) = if l1_state.l1_chain_id == l1_state.sl_chain_id {
         (l1_provider.clone(), l1_block_updates.clone())
     } else {
         let sl_provider = gateway_provider.clone().unwrap();
-        let sl_block_updates = block_updates::run(
-            l1_state.diamond_proxy_sl.provider().clone(),
-            runtime,
-            "sl block updates",
-            config.l1_watcher_config.poll_interval,
-        );
+        let sl_block_updates = gateway_block_updates
+            .clone()
+            .expect("gateway block updates must be initialized when SL is Gateway");
         (sl_provider, sl_block_updates)
     };
     tracing::info!(?l1_state, settles_on_gateway, "L1 state");
@@ -942,7 +947,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .clone(),
             persistent_batch_storage.clone(),
             l1_block_updates.clone(),
-            sl_block_updates.clone(),
+            gateway_block_updates.clone(),
         )
         .await
         .expect("failed to start L1 batch persist watcher")
