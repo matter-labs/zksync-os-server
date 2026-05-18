@@ -13,7 +13,7 @@ use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
-use derive_more::{Deref, Display};
+use derive_more::Deref;
 use serde_json::Value as JsonValue;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
@@ -513,7 +513,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         // Execute the transaction with the highest possible gas limit.
         let res = run_at(tx.gas_limit())?.map_err(EthCallError::InvalidTransaction)?;
         tracing::trace!(
-            "Executed tx in eth_estimateGas with gas limit: {}, result {res:?}",
+            "Executed tx in eth_estimateGas with gas limit: {:?}, result {res:?}",
             Probe::Highest(tx.gas_limit())
         );
         if let ExecutionResult::Revert(output) = res.execution_result {
@@ -615,13 +615,10 @@ fn tx_type_runs_policy(tx_type: ZkTxType) -> bool {
     }
 }
 
-#[derive(Debug, Deref, Display)]
+#[derive(Debug, Deref)]
 enum Probe {
-    #[display("Midpoint({_0})")]
     Midpoint(u64),
-    #[display("Highest({_0})")]
     Highest(u64),
-    #[display("Optimistic({_0})")]
     Optimistic(u64),
 }
 
@@ -674,7 +671,7 @@ impl GasRange {
             return Ok(());
         }
         let res = result.map_err(EthCallError::InvalidTransaction)?;
-        tracing::trace!("Executed tx in eth_estimateGas with gas limit: {probe}, result {res:?}");
+        tracing::trace!("Executed tx in eth_estimateGas with gas limit: {probe:?}, result {res:?}");
         match res.execution_result {
             ExecutionResult::Success(_) => self.highest = *probe,
             ExecutionResult::Revert(_) => self.lowest = *probe,
