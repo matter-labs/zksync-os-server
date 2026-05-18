@@ -150,6 +150,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         let hash = self.admit_to_local_mempool(&tx_bytes).await?;
 
         if let Some(tx_forwarder) = self.tx_forwarder.as_ref() {
+            // If the handler future is dropped before the forward returns
+            // (e.g. client disconnect), `local_cleanup` removes the orphaned
+            // local mempool entry on drop. Disarm only on a successful forward.
+            let mut local_cleanup = RemoveOnDrop::new(&self.mempool, hash);
             let forwarding_result = {
                 let _guard = ForwardingLatencyGuard::new();
                 tx_forwarder.send_raw_transaction(&tx_bytes).await
@@ -157,10 +161,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             // We do not need to wait for pending transaction here, so it's safe to forget about it
             if let Err(err) = forwarding_result {
                 tracing::debug!(%err, "forwarding error from main node back to user");
-                // Remove previously added transaction from local mempool
-                self.mempool.remove_transactions(vec![hash]);
+                // `local_cleanup` removes the local mirror as it drops.
                 return Err(err.into());
             }
+            local_cleanup.disarm();
         }
 
         Ok(hash)
