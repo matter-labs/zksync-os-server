@@ -12,7 +12,7 @@ use zksync_os_interface::tracing::{
 };
 
 /// Always allowed to deploy — ensures protocol upgrades are never blocked by the filter.
-const FORCE_DEPLOYER_ADDRESS: Address = address!("0000000000000000000000000000000000008007");
+pub const FORCE_DEPLOYER_ADDRESS: Address = address!("0000000000000000000000000000000000008007");
 
 #[derive(Clone, Debug, Default)]
 pub enum Config {

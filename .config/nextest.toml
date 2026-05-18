@@ -10,11 +10,15 @@ fail-fast = false
 # Save junit report to the project root.
 path = "test-results.xml"
 
+[test-groups]
+prover-serial = { max-threads = 1 }
+
 [[profile.default.overrides]]
 # Tests in `prover.rs` rely on prover (CPU or GPU). CPU prover can take >10m to prove one batch, so we give these tests
-# a longer timeout.
+# a longer timeout. They also need to run one at a time.
 filter = 'binary(prover)'
 slow-timeout = { period = "15m", terminate-after = 3 }
+test-group = 'prover-serial'
 
 [[profile.default.overrides]]
 # Interop tests spin up 3 nodes (2 L2 + 1 L1) and need significant resources.
