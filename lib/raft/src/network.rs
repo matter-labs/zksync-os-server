@@ -115,7 +115,9 @@ pub struct RaftNetworkClient {
 /// connections between the remaining nodes (connection churn). Without this wait,
 /// OpenRaft would immediately see Unreachable and back off for a full election timeout
 /// (5–10 s), causing many failed elections before the connection stabilises.
-const PEER_CONNECT_WAIT: Duration = Duration::from_secs(3);
+/// 500 ms covers the typical devp2p churn window; keeping it short avoids stalling
+/// replication tasks for dead peers during node shutdown.
+const PEER_CONNECT_WAIT: Duration = Duration::from_millis(500);
 const PEER_CONNECT_POLL: Duration = Duration::from_millis(50);
 
 impl RaftNetworkClient {
