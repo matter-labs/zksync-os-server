@@ -347,6 +347,61 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
     Ok(())
 }
 
+/// Verifies that the node panics on startup when `block_rebuild.from_block` points to a block
+/// that is already committed on L1 (i.e. `from_block <= last_l1_committed_block`).
+///
+/// Scenario:
+///   1. Start a node with the batcher enabled and mine a few blocks until at least one batch
+///      is committed to L1.
+///   2. Restart with `block_rebuild.from_block = 1`, which is guaranteed to be within the
+///      already-committed range.
+///   3. Expect a fatal error containing "rebuild_from_block must be > last_l1_committed_block".
+#[test_multisetup([CURRENT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn rebuild_panics_if_from_block_is_already_committed(
+    env: TestEnvironment,
+) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    config.sequencer_config.block_time = Duration::from_millis(50);
+    let tester = env.launch(config).await?;
+
+    // Mine transactions until at least one batch is committed on L1.
+    wait_for_l1_state(&tester, "at least one batch committed on L1", |state| {
+        state.last_committed_batch >= 1
+    })
+    .await?;
+
+    // Block 1 is always within the committed range once any batch has been committed.
+    let mut restarted_config = tester.config().clone();
+    restarted_config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
+        from_block: 1,
+        blocks_to_empty: vec![],
+        reset_timestamps: false,
+    });
+
+    // The assert! fires synchronously during node startup (before any background tasks are
+    // spawned), so it panics through `start_with_config`. Isolate it in a spawned task so
+    // the JoinError captures the panic instead of unwinding the test thread.
+    let stopped = tester.stop().await?;
+    let join_result =
+        tokio::task::spawn(async move { stopped.start_with_config(restarted_config).await }).await;
+
+    let join_err = join_result.expect_err("expected node startup to panic");
+    assert!(join_err.is_panic(), "expected a panic, got a cancellation");
+    let payload = join_err.into_panic();
+    let panic_msg = payload
+        .downcast_ref::<String>()
+        .map(|s| s.as_str())
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .expect("panic payload should be a string");
+    assert!(
+        panic_msg.contains("rebuild_from_block must be > last_l1_committed_block"),
+        "unexpected panic message: {panic_msg}"
+    );
+
+    Ok(())
+}
+
 /// Verifies that after reverting committed L1 batches, the node can restart in rebuild mode and
 /// process new L2 transactions.
 ///
@@ -410,61 +465,6 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
         .await?
         .expect_successful_receipt()
         .await?;
-
-    Ok(())
-}
-
-/// Verifies that the node panics on startup when `block_rebuild.from_block` points to a block
-/// that is already committed on L1 (i.e. `from_block <= last_l1_committed_block`).
-///
-/// Scenario:
-///   1. Start a node with the batcher enabled and mine a few blocks until at least one batch
-///      is committed to L1.
-///   2. Restart with `block_rebuild.from_block = 1`, which is guaranteed to be within the
-///      already-committed range.
-///   3. Expect a fatal error containing "rebuild_from_block must be > last_l1_committed_block".
-#[test_multisetup([CURRENT_TO_L1])]
-#[test_runtime(flavor = "multi_thread")]
-async fn rebuild_panics_if_from_block_is_already_committed(
-    env: TestEnvironment,
-) -> anyhow::Result<()> {
-    let mut config = env.default_config().await?;
-    config.sequencer_config.block_time = Duration::from_millis(50);
-    let tester = env.launch(config).await?;
-
-    // Mine transactions until at least one batch is committed on L1.
-    wait_for_l1_state(&tester, "at least one batch committed on L1", |state| {
-        state.last_committed_batch >= 1
-    })
-    .await?;
-
-    // Block 1 is always within the committed range once any batch has been committed.
-    let mut restarted_config = tester.config().clone();
-    restarted_config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
-        from_block: 1,
-        blocks_to_empty: vec![],
-        reset_timestamps: false,
-    });
-
-    // The assert! fires synchronously during node startup (before any background tasks are
-    // spawned), so it panics through `start_with_config`. Isolate it in a spawned task so
-    // the JoinError captures the panic instead of unwinding the test thread.
-    let stopped = tester.stop().await?;
-    let join_result =
-        tokio::task::spawn(async move { stopped.start_with_config(restarted_config).await }).await;
-
-    let join_err = join_result.expect_err("expected node startup to panic");
-    assert!(join_err.is_panic(), "expected a panic, got a cancellation");
-    let payload = join_err.into_panic();
-    let panic_msg = payload
-        .downcast_ref::<String>()
-        .map(|s| s.as_str())
-        .or_else(|| payload.downcast_ref::<&str>().copied())
-        .expect("panic payload should be a string");
-    assert!(
-        panic_msg.contains("rebuild_from_block must be > last_l1_committed_block"),
-        "unexpected panic message: {panic_msg}"
-    );
 
     Ok(())
 }
