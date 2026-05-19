@@ -1,4 +1,6 @@
+use anyhow::Context as _;
 use futures::future::try_join_all;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tokio::time::Instant;
@@ -10,12 +12,14 @@ const RESPAWN_GRACE: Duration = Duration::from_secs(10);
 
 use crate::{
     AnvilL1, ChainLayout, Config, LockedPort, NodeRole, PROTOCOL_VERSION, StoppedTester, Tester,
-    provider::ZksyncTestingProvider,
+    provider::ZksyncTestingProvider, test_config::disable_prover_input_generation,
 };
 
 const TEST_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 const TEST_ELECTION_TIMEOUT_MIN: Duration = Duration::from_secs(2);
 const TEST_ELECTION_TIMEOUT_MAX: Duration = Duration::from_secs(4);
+const NODE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
+const NODE_START_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(Debug)]
 enum NodeSlot {
@@ -30,6 +34,18 @@ impl NodeSlot {
             Self::Suspended(_) => None,
         }
     }
+}
+
+async fn with_node_lifecycle_timeout<T>(
+    operation: &'static str,
+    index: usize,
+    timeout: Duration,
+    future: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<T> {
+    tokio::time::timeout(timeout, future)
+        .await
+        .with_context(|| format!("timed out {operation} node {index} after {timeout:?}"))?
+        .with_context(|| format!("failed {operation} node {index}"))
 }
 
 /// Represents the consensus state of a Raft cluster based on node status responses
@@ -301,10 +317,26 @@ impl MultiNodeTester {
 
     /// Shuts down all active nodes and drops suspended ones.
     pub async fn shutdown_all(self) -> anyhow::Result<()> {
-        for node in self.nodes {
+        for (index, node) in self.nodes.into_iter().enumerate() {
             match node {
-                NodeSlot::Running(node) => node.shutdown().await?,
-                NodeSlot::Suspended(node) => node.shutdown().await?,
+                NodeSlot::Running(node) => {
+                    with_node_lifecycle_timeout(
+                        "shutting down",
+                        index,
+                        NODE_STOP_TIMEOUT,
+                        node.shutdown(),
+                    )
+                    .await?
+                }
+                NodeSlot::Suspended(node) => {
+                    with_node_lifecycle_timeout(
+                        "shutting down",
+                        index,
+                        NODE_STOP_TIMEOUT,
+                        node.shutdown(),
+                    )
+                    .await?
+                }
             }
         }
         Ok(())
@@ -314,8 +346,24 @@ impl MultiNodeTester {
     pub async fn shutdown_node(&mut self, index: usize) -> anyhow::Result<()> {
         tracing::info!("shutting down node {index}...");
         match self.nodes.remove(index) {
-            NodeSlot::Running(node) => node.shutdown().await,
-            NodeSlot::Suspended(node) => node.shutdown().await,
+            NodeSlot::Running(node) => {
+                with_node_lifecycle_timeout(
+                    "shutting down",
+                    index,
+                    NODE_STOP_TIMEOUT,
+                    node.shutdown(),
+                )
+                .await
+            }
+            NodeSlot::Suspended(node) => {
+                with_node_lifecycle_timeout(
+                    "shutting down",
+                    index,
+                    NODE_STOP_TIMEOUT,
+                    node.shutdown(),
+                )
+                .await
+            }
         }
     }
 
@@ -325,7 +373,10 @@ impl MultiNodeTester {
         tracing::info!("suspending node {index}...");
         let tester = self.nodes.remove(index);
         let stopped = match tester {
-            NodeSlot::Running(tester) => tester.stop().await?,
+            NodeSlot::Running(tester) => {
+                with_node_lifecycle_timeout("suspending", index, NODE_STOP_TIMEOUT, tester.stop())
+                    .await?
+            }
             NodeSlot::Suspended(_) => panic!("node {index} is already suspended"),
         };
         self.nodes
@@ -338,7 +389,10 @@ impl MultiNodeTester {
         tracing::info!("starting suspended node {index}...");
         let suspended = self.nodes.remove(index);
         let started = match suspended {
-            NodeSlot::Suspended(tester) => tester.start().await?,
+            NodeSlot::Suspended(tester) => {
+                with_node_lifecycle_timeout("starting", index, NODE_START_TIMEOUT, tester.start())
+                    .await?
+            }
             NodeSlot::Running(_) => panic!("node {index} is not suspended"),
         };
         self.nodes
@@ -367,10 +421,24 @@ impl MultiNodeTester {
             tracing::warn!("node {idx} crashed (critical task panicked); respawning...");
             let running = self.nodes.remove(idx);
             let stopped = match running {
-                NodeSlot::Running(tester) => tester.stop().await?,
+                NodeSlot::Running(tester) => {
+                    with_node_lifecycle_timeout(
+                        "stopping crashed",
+                        idx,
+                        NODE_STOP_TIMEOUT,
+                        tester.stop(),
+                    )
+                    .await?
+                }
                 NodeSlot::Suspended(_) => unreachable!("filtered to running above"),
             };
-            let restarted = stopped.start().await?;
+            let restarted = with_node_lifecycle_timeout(
+                "restarting crashed",
+                idx,
+                NODE_START_TIMEOUT,
+                stopped.start(),
+            )
+            .await?;
             self.nodes
                 .insert(idx, NodeSlot::Running(Box::new(restarted)));
         }
@@ -385,7 +453,15 @@ impl MultiNodeTester {
         tracing::info!("starting suspended node {index} with config overrides...");
         let suspended = self.nodes.remove(index);
         let started = match suspended {
-            NodeSlot::Suspended(tester) => tester.start_with_overrides(config_overrides).await?,
+            NodeSlot::Suspended(tester) => {
+                with_node_lifecycle_timeout(
+                    "starting with overrides",
+                    index,
+                    NODE_START_TIMEOUT,
+                    tester.start_with_overrides(config_overrides),
+                )
+                .await?
+            }
             NodeSlot::Running(_) => panic!("node {index} is not suspended"),
         };
         self.nodes
@@ -453,13 +529,17 @@ impl MultiNodeTester {
             );
         }
 
-        let mut deadline = Instant::now() + timeout;
+        let wait_started_at = Instant::now();
+        let mut deadline = wait_started_at + timeout;
+        let hard_deadline = wait_started_at + timeout + RESPAWN_GRACE * 3;
         let mut last_summary = String::new();
 
         while Instant::now() < deadline {
             let respawned = self.respawn_crashed_running_nodes().await?;
             if respawned > 0 {
-                deadline = deadline.max(Instant::now() + RESPAWN_GRACE);
+                deadline = deadline
+                    .max(Instant::now() + RESPAWN_GRACE)
+                    .min(hard_deadline);
             }
             let cluster_state =
                 ClusterState::collect_indices(&self.nodes, node_indices.iter().copied()).await;
@@ -477,11 +557,6 @@ impl MultiNodeTester {
                 tracing::info!(
                     "raft cluster formed (node_indices={node_indices:?}): leader_index={leader_index}"
                 );
-                for &index in node_indices {
-                    if let Some(node) = self.nodes.get(index).and_then(NodeSlot::running) {
-                        node.wait_for_initial_deposit().await?;
-                    }
-                }
                 return Ok(leader_index);
             }
 
@@ -603,6 +678,10 @@ impl MultiNodeTesterBuilder {
                             config.general_config.node_role = NodeRole::MainNode;
                             config.general_config.main_node_rpc_url = None;
                             config.batcher_config.enabled = batcher_enabled;
+                            // Consensus integration tests exercise Raft/network recovery, not
+                            // prover input generation. Keeping PIG enabled creates CPU-bound
+                            // background work that makes election timing flaky under suite stress.
+                            disable_prover_input_generation(config);
                             config.network_config.enabled = true;
                             config.network_config.secret_key = Some(secret);
                             config.network_config.address = Ipv4Addr::LOCALHOST;

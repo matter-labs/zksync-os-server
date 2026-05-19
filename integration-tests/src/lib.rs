@@ -110,6 +110,7 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 const PORT_ACQUISITION_TIMEOUT: Duration = Duration::from_secs(30);
 const PORT_ACQUISITION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
     BATCH_VERIFICATION_KEYS
@@ -448,13 +449,26 @@ impl Tester {
     }
 
     pub async fn status(&self) -> anyhow::Result<StatusResponse> {
-        let response = reqwest::get(format!("{}/status", self.status_server_url))
-            .await?
-            .error_for_status()?;
-        Ok(response.json::<StatusResponse>().await?)
+        let url = format!("{}/status", self.status_server_url);
+        tokio::time::timeout(STATUS_REQUEST_TIMEOUT, async {
+            let response = reqwest::get(&url).await?.error_for_status()?;
+            response
+                .json::<StatusResponse>()
+                .await
+                .context("failed to decode node status response")
+        })
+        .await
+        .with_context(|| format!("timed out fetching node status from {url}"))?
+        .with_context(|| format!("failed fetching node status from {url}"))
     }
 
     pub async fn wait_for_initial_deposit(&self) -> anyhow::Result<()> {
+        let beneficiary = self.l2_wallet.default_signer().address();
+        let balance = self.l2_provider.get_balance(beneficiary).await?;
+        if balance > U256::ZERO {
+            return Ok(());
+        }
+
         tokio::time::timeout(
             Duration::from_secs(60),
             self.l2_zk_provider.wait_for_block(2),

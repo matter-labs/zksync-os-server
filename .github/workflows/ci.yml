@@ -18,8 +18,9 @@ env:
   TEST_RESULTS_XML: 'test-results.xml'
   PROVER_GPU_TESTS: 'prover-gpu-tests'
   CUDAARCHS: '80;89;90'
-  # Run tests 10 times in case of push to main branch to catch possible flakiness
-  NEXTEST_ITERATIONS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '--stress-count 10' || '' }}
+  # Run tests 10 times in case of push to main branch to catch possible flakiness.
+  # Also stress this consensus-flakiness PR branch while validating the fix.
+  NEXTEST_ITERATIONS: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'fix/consensus-integration-flakiness') && '--stress-count 10' || '' }}
 
 # Add default permissions for the workflow
 permissions:
