@@ -328,13 +328,23 @@ impl L1UpgradeTxWatcher {
         start_block: u64,
         end_block: u64,
     ) -> anyhow::Result<U256> {
-        let filter = Filter::new()
-            .from_block(start_block)
-            .to_block(end_block)
-            .address(self.ctm_sl)
-            .event_signature(NewProtocolVersion::SIGNATURE_HASH)
-            .topic1(raw_old_protocol_version);
-        let mut logs = self.provider_sl.get_logs(&filter).await?;
+        let mut current_block = end_block;
+        let mut logs = Vec::new();
+        while current_block >= start_block && logs.is_empty() {
+            let from_block = current_block
+                .saturating_sub(self.max_blocks_to_process - 1)
+                .max(start_block);
+
+            let filter = Filter::new()
+                .from_block(from_block)
+                .to_block(current_block)
+                .address(self.ctm_sl)
+                .event_signature(NewProtocolVersion::SIGNATURE_HASH)
+                .topic1(raw_old_protocol_version);
+            logs = self.provider_sl.get_logs(&filter).await?;
+            current_block = from_block.saturating_sub(1);
+        }
+
         if logs.len() > 1 {
             tracing::warn!(
                 %raw_old_protocol_version,
