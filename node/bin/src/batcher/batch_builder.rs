@@ -149,7 +149,7 @@ fn compute_batch_prover_input(
     pubdata_mode: PubdataMode,
 ) -> anyhow::Result<ProverInput> {
     use zk_os_forward_system::run::generate_batch_proof_input;
-    use zk_os_forward_system_dev::run::generate_batch_proof_input as generate_batch_proof_input_dev;
+    use zk_os_forward_system_prev::run::generate_batch_proof_input as generate_batch_proof_input_prev;
 
     if blocks
         .iter()
@@ -168,7 +168,7 @@ fn compute_batch_prover_input(
         }
         ProvingVersion::V6 => {
             // TODO: in the long-term we should generate proof input per batch
-            ProverInput::Real(generate_batch_proof_input(
+            ProverInput::Real(generate_batch_proof_input_prev(
                 blocks
                     .iter()
                     .map(|(_, _, _, prover_input)| prover_input.unwrap_real())
@@ -184,7 +184,7 @@ fn compute_batch_prover_input(
         }
         ProvingVersion::V7 => {
             // TODO: in the long-term we should generate proof input per batch
-            ProverInput::Real(generate_batch_proof_input_dev(
+            ProverInput::Real(generate_batch_proof_input(
                 blocks
                     .iter()
                     .map(|(_, _, _, prover_input)| prover_input.unwrap_real())

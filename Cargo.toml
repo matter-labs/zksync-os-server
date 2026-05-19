@@ -118,28 +118,29 @@ zk_os_forward_system_0_2_8 = { package = "forward_system", git = "https://github
 # After its support is dropped, forward system is moved in the historical section above under a new name.
 # (`zk_os_forward_system_<version>`), while `zk_ee` and `zk_os_basic_system` dependencies are dropped completely.
 
-#zk_ee_prev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4" }
-#zk_os_basic_prev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4" }
-#zk_os_forward_prev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4", features = [
-#    "production",
-#    "no_print",
-#], default-features = false }
-#execution_utils_prev = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.1" }
-#full_statement_verifier_prev = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.1" }
+zk_ee_prev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.15" }
+zk_os_basic_prev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.15" }
+zk_os_forward_system_prev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.15", features = [
+    "production",
+    "no_print",
+], default-features = false }
+zk_os_basic_system_prev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.15" }
+#execution_utils_prev = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "" }
+#full_statement_verifier_prev = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "" }
 
 # Current (as in most recently released) version of zksync-os used to prove and submit new batches. Also includes
 # airbender dependencies that are necessary to verify said proofs on the server end.
 #
 # When a new version is released this version gets downgraded to the "previous version" section above.
 
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.15", features = [
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_ee = { git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.15" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.15" }
-zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.15" }
-zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.15" }
+zk_ee = { git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
+zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
+zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
 execution_utils = { git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
 full_statement_verifier = { git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
 
@@ -147,12 +148,12 @@ full_statement_verifier = { git = "https://github.com/matter-labs/zksync-airbend
 #
 # Can be updated at any time and changing it does not count as a breaking change.
 
-zk_os_forward_system_dev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0", features = [
-    "production",
-    "no_print",
-], default-features = false }
-zk_ee_dev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
-zk_os_basic_system_dev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
+#zk_os_forward_system_dev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0", features = [
+#    "production",
+#    "no_print",
+#], default-features = false }
+#zk_ee_dev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
+#zk_os_basic_system_dev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
 
 # Other dependencies.
 
