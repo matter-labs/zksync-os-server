@@ -15,13 +15,13 @@ use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
 use alloy::network::{
     Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844, TransactionResponse,
 };
+use alloy::primitives::U256;
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::primitives::{Address, B256};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::TxFiller;
 use alloy::providers::utils::Eip1559Estimation;
 use alloy::providers::{Provider, WalletProvider};
-use alloy::primitives::U256;
 use alloy::rpc::types::simulate::{SimBlock, SimulatePayload};
 use alloy::rpc::types::state::{AccountOverride, StateOverridesBuilder};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
@@ -700,7 +700,6 @@ where
         operator_address: Address,
         fee_params: FeeParams,
     ) -> anyhow::Result<Vec<u64>> {
-
         // Anvil parses each simulate call into a typed transaction before executing it, and
         // EIP-4844 parsing requires `nonce` and `gas_limit` to be present. We fetch the
         // operator's pending nonce once and assign sequential values to each call.
