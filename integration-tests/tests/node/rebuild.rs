@@ -415,6 +415,7 @@ async fn rebuild_panics_if_from_block_is_already_committed(
 ///   4. Restart the same node in rebuild mode with from_block = 1, which is now valid because
 ///      from_block (1) > last_l1_committed_block (0) after the revert.
 ///   5. Confirm the node is alive by sending and confirming a new L2 transaction.
+///   6. Verify the server commits a new batch on L1 with the same number as the reverted one.
 #[test_multisetup([CURRENT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
 async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> anyhow::Result<()> {
@@ -422,6 +423,9 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
     make_commit_only_config(&mut config);
     let tester = env.launch(config).await?;
 
+    // Unlike `rebuild_panics_if_from_block_is_already_committed` which uses a fast 50ms block
+    // time, this test uses the default block time, so we send a transaction to give the batcher
+    // real content and trigger a batch commit quickly.
     tester
         .l2_provider
         .send_transaction(
@@ -433,6 +437,8 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
         .expect_successful_receipt()
         .await?;
 
+    // last_executed_batch == 0 is a safety measure: since batch execution is disabled, it
+    // should always satisfy.
     let committed_state = wait_for_l1_state(
         &tester,
         "a committed but not yet executed batch on L1",
@@ -445,6 +451,28 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
     // Without this revert, from_block = 1 would panic at node startup with
     // "rebuild_from_block must be > last_l1_committed_block".
     revert_batches_on_l1(&stopped, committed_state.last_executed_batch).await?;
+
+    // Verify that the revert was successful and last_committed_batch is 0.
+    let chain_config = load_chain_config(stopped.chain_layout()).await;
+    let chain_id = chain_config
+        .genesis_config
+        .chain_id
+        .expect("chain config must contain chain id");
+    let bridgehub_address = chain_config
+        .genesis_config
+        .bridgehub_address
+        .expect("chain config must contain bridgehub address");
+    let reverted_state = L1State::fetch(
+        stopped.l1_provider().clone().erased(),
+        None,
+        bridgehub_address,
+        chain_id,
+    )
+    .await?;
+    assert_eq!(
+        reverted_state.last_committed_batch, 0,
+        "all batches should be reverted on L1 before rebuild"
+    );
 
     let mut restart_config = stopped.config().clone();
     restart_config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
@@ -465,6 +493,16 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
         .await?
         .expect_successful_receipt()
         .await?;
+
+    // Verify the server commits a new batch on L1 with the same number as the reverted one.
+    // After the revert, last_committed_batch on L1 is 0; reaching committed_state.last_committed_batch
+    // again proves the node rebuilt and committed a distinct batch with the same number.
+    wait_for_l1_state(
+        &restarted,
+        "server commits a new batch on L1 after rebuild",
+        |state| state.last_committed_batch >= committed_state.last_committed_batch,
+    )
+    .await?;
 
     Ok(())
 }
