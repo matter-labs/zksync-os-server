@@ -15,12 +15,15 @@ use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
 use alloy::network::{
     Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844, TransactionResponse,
 };
+use alloy::primitives::U256;
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::primitives::{Address, B256};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::TxFiller;
 use alloy::providers::utils::Eip1559Estimation;
 use alloy::providers::{Provider, WalletProvider};
+use alloy::rpc::types::simulate::{SimBlock, SimulatePayload};
+use alloy::rpc::types::state::{AccountOverride, StateOverridesBuilder};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use alloy::transports::TransportError;
@@ -181,7 +184,7 @@ where
                 last.block_timestamp(),
                 Some(last.last_batch_number()),
             );
-            let mut commands = cmd_buffer
+            let commands = cmd_buffer
                 .drain(..)
                 .map(|cmd| -> anyhow::Result<Input> {
                     match cmd {
@@ -198,22 +201,41 @@ where
             let range = Input::display_range(&commands); // Only for logging
             tracing::info!(command_name, range, "sending L1 transactions");
             L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
+
+            // Simulate the whole batch of commands together so that gas estimation accounts
+            // for state changes between successive transactions sharing the same sender and
+            // target contract. Each per-tx gas limit is set to 2x the simulated value.
+            let operator_address = self.operator_address().await?;
+            let sim_fee_params = self
+                .resolve_fee_params(fee_config, force_transaction_resubmission)
+                .await?;
+            let gas_limits = self
+                .estimate_gas_limits(&commands, operator_address, sim_fee_params)
+                .await?;
+            tracing::info!(
+                command_name,
+                range,
+                ?gas_limits,
+                "estimated gas limits via eth_simulateV1",
+            );
+
             // It's important to preserve the order of commands -
             // so that we send them downstream also in order.
             // This holds true because l1 transactions are included in the order of sender nonce.
             // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
             let pending_txs: Vec<PendingTx<Input>> =
-            futures::stream::iter(commands.drain(..))
-                .then(|mut cmd| async {
+            futures::stream::iter(commands.into_iter().zip(gas_limits))
+                .then(|(mut cmd, gas_limit)| {
+                    let range = range.clone();
+                    async move {
                     let fee_params = self
                         .resolve_fee_params(
                         fee_config,
                         force_transaction_resubmission,
                     )
                     .await?;
-                    let operator_address = self.operator_address().await?;
                     let mut tx_request = self
-                        .tx_request_with_gas_fields(operator_address, fee_params)
+                        .tx_request_with_gas_fields(operator_address, fee_params, gas_limit)
                         .with_to(self.to_address)
                         .with_input(cmd.solidity_call(self.gateway, &operator_address));
 
@@ -287,6 +309,7 @@ where
                         .iter_mut()
                         .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
                     anyhow::Ok((receipt_fut, cmd, submitted_at))
+                    }
                 })
                 // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
                 // but this is not necessary for now - we wait for them to be included in parallel
@@ -653,12 +676,117 @@ where
         &self,
         operator_address: Address,
         fee_params: FeeParams,
+        gas_limit: u64,
     ) -> TransactionRequest {
         TransactionRequest::default()
             .with_from(operator_address)
             .with_max_fee_per_gas(fee_params.max_fee_per_gas)
             .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
-            .with_gas_limit(15000000)
+            .with_gas_limit(gas_limit)
+    }
+
+    /// Estimates gas limits for a batch of L1 commands using `eth_simulateV1`.
+    ///
+    /// All calls are placed in a single simulated block so that state changes from earlier
+    /// commands (e.g., updates to the bridge contract by an earlier commit) are visible to
+    /// later commands. Estimating each command independently against the current chain
+    /// state would mis-estimate gas — or revert outright — for any command after the first.
+    ///
+    /// Returns `2 * gas_used` per call to leave headroom for state drift between
+    /// simulation and actual inclusion.
+    async fn estimate_gas_limits(
+        &self,
+        commands: &[Input],
+        operator_address: Address,
+        fee_params: FeeParams,
+    ) -> anyhow::Result<Vec<u64>> {
+        // Anvil parses each simulate call into a typed transaction before executing it, and
+        // EIP-4844 parsing requires `nonce` and `gas_limit` to be present. We fetch the
+        // operator's pending nonce once and assign sequential values to each call.
+        let starting_nonce = self
+            .provider
+            .get_transaction_count(operator_address)
+            .pending()
+            .await
+            .context("get pending nonce for L1 sender gas estimation")?;
+        // Cap gas at a generous upper bound; the simulation reports the actual `gas_used`.
+        const SIM_GAS_LIMIT: u64 = 30_000_000;
+
+        let mut sim_block = SimBlock::default();
+        for (i, cmd) in commands.iter().enumerate() {
+            // Fee fields are required by some L1 providers (e.g., anvil) when parsing the
+            // transaction request, even though `eth_simulateV1` does not run validation by
+            // default. We mirror the fee params we plan to use for the real submission.
+            let mut req = TransactionRequest::default()
+                .with_from(operator_address)
+                .with_to(self.to_address)
+                .with_input(cmd.solidity_call(self.gateway, &operator_address))
+                .with_max_fee_per_gas(fee_params.max_fee_per_gas)
+                .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
+                .with_nonce(starting_nonce + i as u64)
+                .with_gas_limit(SIM_GAS_LIMIT);
+            // Include blob versioned hashes so the BLOBHASH opcode (used by the commit
+            // contract to verify blob commitments) sees the same values it will see on L1.
+            // The KZG sidecar (blobs/commitments/proofs) is not needed: anvil ignores it
+            // during simulation, and real L1 nodes only need the hashes for execution.
+            if let Some(sidecar) = cmd.blob_sidecar() {
+                req.blob_versioned_hashes = Some(sidecar.versioned_hashes().collect());
+                req.max_fee_per_blob_gas = Some(fee_params.max_fee_per_blob_gas);
+                // Anvil's `transaction_request_to_typed` requires an explicit `type=3` to
+                // route a blob-tagged request through the EIP-4844 arm — otherwise it
+                // falls through to the catch-all and returns -32602 missing required fields.
+                req.transaction_type = Some(3);
+            }
+            sim_block = sim_block.call(req);
+        }
+
+        // Some L1 providers (e.g., anvil) check the sender's balance even when
+        // `validation` is false, which would fail with realistic max-fee-per-gas values.
+        // Override the operator's balance to a large value so the simulation runs.
+        sim_block.state_overrides = Some(
+            StateOverridesBuilder::default()
+                .append(
+                    operator_address,
+                    AccountOverride {
+                        balance: Some(U256::MAX),
+                        ..Default::default()
+                    },
+                )
+                .build(),
+        );
+
+        let payload = SimulatePayload {
+            block_state_calls: vec![sim_block],
+            ..Default::default()
+        };
+
+        let results = self
+            .provider
+            .simulate(&payload)
+            .pending()
+            .await
+            .context("eth_simulateV1 for L1 sender gas estimation")?;
+        let block = results
+            .into_iter()
+            .next()
+            .context("eth_simulateV1 returned no blocks")?;
+        anyhow::ensure!(
+            block.calls.len() == commands.len(),
+            "eth_simulateV1 returned {} call results for {} commands",
+            block.calls.len(),
+            commands.len(),
+        );
+
+        let mut gas_limits = Vec::with_capacity(block.calls.len());
+        for (i, call) in block.calls.iter().enumerate() {
+            anyhow::ensure!(
+                call.status,
+                "eth_simulateV1 call {i} reverted: {:?}",
+                call.return_data,
+            );
+            gas_limits.push(call.gas_used.saturating_mul(2));
+        }
+        Ok(gas_limits)
     }
 
     async fn report_custom_priority_fee_metrics(&self) -> anyhow::Result<()> {

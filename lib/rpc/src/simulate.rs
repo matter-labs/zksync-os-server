@@ -45,10 +45,19 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     ///   its block context; use `blockOverrides.random` (prevrandao) instead.
     /// - `blockOverrides.parentBeaconBlockRoot`: silently ignored. There is no corresponding
     ///   field in `BlockContext`.
-    /// - `validation=false` nonce relaxation: partially unsupported. The basefee is zeroed as
-    ///   the spec requires, but nonce checks are not disabled. Transactions without an explicit
-    ///   nonce are auto-filled from state (the common case works), but an explicitly supplied
-    ///   stale nonce will be rejected by the VM.
+    /// - `validation=false` nonce relaxation: partially unsupported. The basefee is zeroed
+    ///   as the spec requires, but nonce checks are not disabled. Transactions without an
+    ///   explicit nonce are auto-filled from state (the common case works), but an
+    ///   explicitly supplied stale nonce will be rejected by the VM.
+    ///
+    /// Note that even with `validation=false`, the returned `gas_used` accounts for the
+    /// bootloader's post-execution pubdata pre-charge using the *response* basefee, not the
+    /// zeroed execution basefee. The V31 bootloader returns `gas_price = 0` whenever
+    /// basefee is zero, which sets `native_per_gas = 0` and takes the "unlimited native"
+    /// branch — the bootloader's own `gas_used` then loses the native cost of pubdata. A
+    /// real submission against a non-zero basefee can fail the pre-charge check at
+    /// `gas_limit = 2 * reported_gas_used`, so we patch in the floor that would let the tx
+    /// clear the check at submission time (see `min_gas_for_pubdata_check`).
     pub fn simulate_v1_impl(
         &self,
         opts: SimulatePayload,
@@ -126,13 +135,16 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             };
             let overridden_view =
                 OverriddenStateView::new(simulation_view, state_overrides.clone());
-            let txs = self.create_simulation_txs(
+            let txs_with_fees = self.create_simulation_txs(
                 sim_block.calls,
                 execution_context,
                 overridden_view.clone(),
             )?;
             let tx_source = TxListSource {
-                transactions: txs.iter().cloned().map(|tx| tx.encode()).collect(),
+                transactions: txs_with_fees
+                    .iter()
+                    .map(|(tx, _)| tx.clone().encode())
+                    .collect(),
             };
             let block_output = run_block(
                 execution_context,
@@ -147,7 +159,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
             let (simulated_block, block_overlay) = build_simulated_block_response(
                 response_context,
-                txs,
+                txs_with_fees,
                 block_output,
                 return_full_transactions,
             )?;
@@ -220,7 +232,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         calls: Vec<TransactionRequest>,
         block_context: BlockContext,
         mut state_view: V,
-    ) -> Result<Vec<ZkTransaction>, EthCallError> {
+    ) -> Result<Vec<(ZkTransaction, RequestFees)>, EthCallError> {
         let default_gas_limit = simulation_default_gas_limit(
             &calls,
             block_context.gas_limit,
@@ -265,7 +277,18 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                             ))?;
                 }
 
-                self.create_tx_from_request(request, &block_context, false)
+                // Capture the request's fee fields *before* `create_tx_from_request` runs
+                // them through `ensure_fees`, which clamps them using the (potentially
+                // zeroed) execution-context basefee. We need the original values to size
+                // the pubdata-pre-charge headroom against the real submission basefee.
+                let request_fees = RequestFees {
+                    max_fee_per_gas: request.max_fee_per_gas,
+                    max_priority_fee_per_gas: request.max_priority_fee_per_gas,
+                    gas_price: request.gas_price,
+                };
+
+                let tx = self.create_tx_from_request(request, &block_context, false)?;
+                Ok((tx, request_fees))
             })
             .collect()
     }
@@ -280,7 +303,7 @@ struct SimulationStartContext {
 
 fn build_simulated_block_response(
     block_context: BlockContext,
-    txs: Vec<ZkTransaction>,
+    txs_with_fees: Vec<(ZkTransaction, RequestFees)>,
     block_output: BlockOutput,
     return_full_transactions: bool,
 ) -> Result<(SimulatedBlock<ZkApiBlock>, OwnedOverrides), EthCallError> {
@@ -299,7 +322,9 @@ fn build_simulated_block_response(
     let mut simulated_txs = Vec::with_capacity(tx_results.len());
     let mut executed_tx_index = 0;
 
-    for (call_index, (tx, result)) in txs.into_iter().zip(tx_results).enumerate() {
+    for (call_index, ((tx, request_fees), result)) in
+        txs_with_fees.into_iter().zip(tx_results).enumerate()
+    {
         let simulated_tx = match result {
             Ok(tx_output) => {
                 let receipt = build_simulated_receipt(&tx, &tx_output, cumulative_gas_used);
@@ -307,6 +332,7 @@ fn build_simulated_block_response(
                 cumulative_gas_used += tx_output.gas_used;
                 let simulated_tx = SimulatedTx {
                     tx,
+                    request_fees,
                     tx_index_in_block: executed_tx_index,
                     number_of_logs_before_this_tx,
                     result: SimulatedTxResult::Executed {
@@ -321,6 +347,7 @@ fn build_simulated_block_response(
             }
             Err(err) => SimulatedTx {
                 tx,
+                request_fees,
                 tx_index_in_block: call_index as u64,
                 number_of_logs_before_this_tx,
                 result: SimulatedTxResult::Invalid(err),
@@ -550,8 +577,21 @@ fn simulation_default_gas_limit(
     Ok(((block_gas_limit - total_specified_gas) / calls_without_gas).min(per_call_gas_cap))
 }
 
+/// The fee-related fields from the original `TransactionRequest`, captured before
+/// `ensure_fees` (called by `create_tx_from_request`) clamps them using the
+/// execution-context basefee. We use these to size the pubdata-pre-charge headroom in
+/// `min_gas_for_pubdata_check` against the response basefee (what production will see).
+#[derive(Clone, Copy, Default)]
+struct RequestFees {
+    max_fee_per_gas: Option<u128>,
+    max_priority_fee_per_gas: Option<u128>,
+    /// Legacy `gasPrice` field. Set when the caller used a legacy-style request.
+    gas_price: Option<u128>,
+}
+
 struct SimulatedTx {
     tx: ZkTransaction,
+    request_fees: RequestFees,
     tx_index_in_block: u64,
     number_of_logs_before_this_tx: u64,
     result: SimulatedTxResult,
@@ -592,10 +632,15 @@ impl SimulatedTx {
                     }
                 };
 
+                let gas_used =
+                    min_gas_for_pubdata_check(output, &self.request_fees, &block_context);
+
                 SimCallResult {
                     return_data,
                     logs,
-                    gas_used: output.gas_used,
+                    gas_used,
+                    // `max_used_gas` reports the bootloader's raw observation; only the
+                    // top-level `gas_used` is patched to cover the pubdata pre-charge.
                     max_used_gas: Some(output.gas_used),
                     status: error.is_none(),
                     error,
@@ -674,6 +719,74 @@ impl SimulatedTx {
             SimulatedTxResult::Invalid(_) => 0,
         }
     }
+}
+
+/// Returns the floor on the L2 `gas_limit` required for the bootloader's post-execution
+/// pubdata pre-charge check to succeed at submission time, given the response context's
+/// real basefee and the original request's fee fields.
+///
+/// The bootloader requires
+///
+/// ```text
+///     gas_limit * native_per_gas >= native_used
+/// ```
+///
+/// where `native_per_gas = ceil(gas_price / native_price)`. Under `validation=false`,
+/// `eth_simulateV1` zeros the execution-context basefee, so the V31 bootloader's
+/// `get_gas_price` short-circuits to zero and takes the "unlimited native" branch — the
+/// reported `gas_used` then loses any signal from pubdata-bound native cost. We patch
+/// `gas_used` to be at least `ceil(native_used / production_native_per_gas)`, where
+/// `production_native_per_gas` is derived from the *response* basefee combined with the
+/// fee fields originally in the request (before `ensure_fees` clamped them against the
+/// zeroed basefee).
+///
+/// When the request provided no fee fields at all, the caller is presumed to want
+/// free-gas semantics in production too, and the reported `gas_used` is returned
+/// unchanged.
+fn min_gas_for_pubdata_check(
+    output: &TxOutput,
+    request_fees: &RequestFees,
+    block_context: &BlockContext,
+) -> u64 {
+    let basefee_u128 = block_context.eip1559_basefee.saturating_to::<u128>();
+
+    // Reconstruct what gas_price would be at submission time, using the same min/max
+    // contortions as the bootloader and `ensure_fees`. For legacy txs (`gas_price` set),
+    // the value is used as both max_fee and effective price.
+    let gas_price = match (
+        request_fees.gas_price,
+        request_fees.max_fee_per_gas,
+        request_fees.max_priority_fee_per_gas,
+    ) {
+        (Some(gp), _, _) => gp,
+        (None, None, None) => {
+            // No fees specified — caller wants free-gas semantics, which in production
+            // also yields `native_per_gas = 0` (unlimited native, no pubdata constraint).
+            return output.gas_used;
+        }
+        (None, max_fee, priority) => {
+            let max_fee = max_fee.unwrap_or(0);
+            let priority = priority.unwrap_or(0);
+            // bootloader: gas_price = min(max_fee, basefee + priority)
+            let tip = basefee_u128.saturating_add(priority);
+            max_fee.min(tip)
+        }
+    };
+
+    if gas_price == 0 || block_context.native_price.is_zero() {
+        return output.gas_used;
+    }
+
+    // Match bootloader's `U256::from(gas_price).div_ceil(native_price)`.
+    let npg = U256::from(gas_price).div_ceil(block_context.native_price);
+    if npg.is_zero() {
+        return output.gas_used;
+    }
+
+    // `gas_limit * npg >= native_used` ⇒ `gas_limit >= ceil(native_used / npg)`.
+    let min_gas = U256::from(output.native_used).div_ceil(npg);
+    let min_gas = u64::try_from(min_gas).unwrap_or(u64::MAX);
+    output.gas_used.max(min_gas)
 }
 
 #[cfg(test)]
