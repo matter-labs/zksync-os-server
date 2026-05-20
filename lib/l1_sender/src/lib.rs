@@ -614,7 +614,7 @@ where
             "estimated priority and max fees"
         );
 
-        let max_fee_per_gas = if eip1559_est.max_fee_per_gas > configured_params.max_fee_per_gas {
+        if eip1559_est.max_fee_per_gas > configured_params.max_fee_per_gas {
             tracing::warn!(
                 "L1 sender's configured maxFeePerGas ({}) \
              is lower than the one estimated from network  ({}), \
@@ -623,10 +623,8 @@ where
                 eip1559_est.max_fee_per_gas,
                 configured_params.max_fee_per_gas,
             );
-            configured_params.max_fee_per_gas
-        } else {
-            eip1559_est.max_fee_per_gas
-        };
+        }
+        
         let max_priority_fee_per_gas =
             if eip1559_est.max_priority_fee_per_gas > configured_params.max_priority_fee_per_gas {
                 tracing::warn!(
@@ -643,7 +641,7 @@ where
             };
 
         Ok(FeeParams {
-            max_fee_per_gas,
+            max_fee_per_gas: configured_params.max_fee_per_gas,
             max_priority_fee_per_gas,
             max_fee_per_blob_gas: configured_params.max_fee_per_blob_gas,
         })
