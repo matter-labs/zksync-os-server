@@ -995,8 +995,8 @@ pub struct RpcConfig {
     /// Accepts a JSON object or a comma-separated `method=rps` string, e.g.
     /// `*=500,eth_call=100,debug_traceTransaction=5`.
     #[config(default, with = Entries::WELL_KNOWN.delimited(",", "="), validate(
-        rate_limits_sum_within_global,
-        "sum of per-method limits must not exceed the global `*` limit"
+        rate_limits_within_global,
+        "each per-method limit must not exceed the global `*` limit"
     ))]
     pub rate_limits: HashMap<String, NonZeroU32>,
 }
@@ -1109,16 +1109,14 @@ pub struct ForceTransactionResubmissionConfig {
     pub max_fee_per_blob_gas_replacement_multiplier: f64,
 }
 
-fn rate_limits_sum_within_global(limits: &HashMap<String, NonZeroU32>) -> bool {
+fn rate_limits_within_global(limits: &HashMap<String, NonZeroU32>) -> bool {
     let Some(&global) = limits.get("*") else {
         return true;
     };
-    let per_method_sum: u64 = limits
+    limits
         .iter()
         .filter(|(k, _)| k.as_str() != "*")
-        .map(|(_, v)| u64::from(v.get()))
-        .sum();
-    per_method_sum <= u64::from(global.get())
+        .all(|(_, &v)| v <= global)
 }
 
 fn is_positive_f64(&val: &f64) -> bool {
