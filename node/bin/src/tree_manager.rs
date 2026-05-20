@@ -17,6 +17,8 @@ use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
 use zksync_os_sequencer::model::blocks::AppliedBlock;
 use zksync_os_storage_api::TreeBlock;
 
+const MAX_BLOCKS_PER_ITERATION: usize = 32;
+
 pub(crate) struct TreeManager {
     pub tree: MerkleTree<RocksDBWrapper>,
 }
@@ -45,7 +47,7 @@ impl PipelineComponent for TreeManager {
             state_reporter.enter_state(GenericComponentState::Idle);
 
             let mut blocks: Vec<AppliedBlock> = vec![];
-            let received = input.recv_many(&mut blocks, usize::MAX).await;
+            let received = input.recv_many(&mut blocks, MAX_BLOCKS_PER_ITERATION).await;
             if received == 0 {
                 tracing::info!("inbound channel closed");
                 return Ok(());
