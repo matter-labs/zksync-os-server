@@ -67,6 +67,10 @@ impl ComponentStateReporter {
         )
     }
 
+    pub fn component_name(&self) -> &'static str {
+        self.component
+    }
+
     /// Transition to a new state.
     pub fn enter_state(&self, new_state: impl StateLabel) {
         let now = Instant::now();

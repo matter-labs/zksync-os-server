@@ -90,13 +90,15 @@ where
 
             self.applied_block_number_sender.send_replace(block_number);
 
-            output.send_and_record(
-                AppliedBlock {
-                    output: block_output,
-                    record: executed_replay,
-                },
-                &state_reporter,
-            )?;
+            output
+                .send_and_record(
+                    AppliedBlock {
+                        output: block_output,
+                        record: executed_replay,
+                    },
+                    &state_reporter,
+                )
+                .await?;
         }
     }
 }

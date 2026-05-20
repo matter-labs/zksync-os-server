@@ -147,14 +147,16 @@ impl PipelineComponent for TreeManager {
                         block: block_number,
                     },
                 };
-                output.send_and_record(
-                    TreeBlock {
-                        output: block_output,
-                        record: replay_record,
-                        tree: tree_block_data,
-                    },
-                    &state_reporter,
-                )?;
+                output
+                    .send_and_record(
+                        TreeBlock {
+                            output: block_output,
+                            record: replay_record,
+                            tree: tree_block_data,
+                        },
+                        &state_reporter,
+                    )
+                    .await?;
             }
         }
     }

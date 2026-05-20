@@ -13,6 +13,7 @@
 pub mod builder;
 pub mod component_id;
 pub mod has_block_range_end;
+pub mod metrics;
 pub mod peekable_receiver;
 pub mod send_and_record;
 pub mod traits;

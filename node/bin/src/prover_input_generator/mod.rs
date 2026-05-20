@@ -67,15 +67,17 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     return Ok(());
                 };
                 state_reporter.enter_state(GenericComponentState::Active);
-                output.send_and_record(
-                    ProverBlock {
-                        output: block_output,
-                        record: replay_record,
-                        prover_input: ProverInput::Fake,
-                        tree,
-                    },
-                    &state_reporter,
-                )?;
+                output
+                    .send_and_record(
+                        ProverBlock {
+                            output: block_output,
+                            record: replay_record,
+                            prover_input: ProverInput::Fake,
+                            tree,
+                        },
+                        &state_reporter,
+                    )
+                    .await?;
             }
         }
         // Process the first item alone — it involves heavy trusted-setup precomputation
@@ -91,7 +93,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             block_number = result.output.header.number,
             "sending block with prover input to batcher",
         );
-        output.send_and_record(result, &state_reporter)?;
+        output.send_and_record(result, &state_reporter).await?;
 
         // Process remaining items with up to `maximum_in_flight_blocks` in parallel.
         // Results are delivered in arrival order via FuturesOrdered.
@@ -124,7 +126,9 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                         block_number = item.output.header.number,
                         "sending block with prover input to batcher",
                     );
-                    output.send_and_record(item, &state_reporter)?;
+                    output
+                        .send_and_record(item, &state_reporter)
+                        .await?;
                 }
             }
         }

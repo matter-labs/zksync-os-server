@@ -106,7 +106,7 @@ impl PipelineComponent for UpgradeGatekeeper {
                     .await?;
             }
 
-            output.send_and_record(command, &state_reporter)?;
+            output.send_and_record(command, &state_reporter).await?;
         }
     }
 }

@@ -84,7 +84,7 @@ impl PipelineComponent for GaplessCommitter {
                                 .map(L1SenderCommand::SendToL1)
                                 .context("Committer batch signature failure")?
                             };
-                            output.send_and_record(result, &state_reporter)?;
+                            output.send_and_record(result, &state_reporter).await?;
                         }
                     }
                 }

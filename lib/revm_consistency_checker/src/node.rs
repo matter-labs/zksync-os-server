@@ -263,13 +263,15 @@ where
                 }
             }
 
-            output.send_and_record(
-                AppliedBlock {
-                    output: block_output.clone(),
-                    record: replay_record.clone(),
-                },
-                &state_reporter,
-            )?;
+            output
+                .send_and_record(
+                    AppliedBlock {
+                        output: block_output.clone(),
+                        record: replay_record.clone(),
+                    },
+                    &state_reporter,
+                )
+                .await?;
         }
     }
 }

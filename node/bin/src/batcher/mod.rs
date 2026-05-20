@@ -200,7 +200,9 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
             }
-            output.send_and_record(batch_envelope, &state_reporter)?;
+            output
+                .send_and_record(batch_envelope, &state_reporter)
+                .await?;
         }
     }
 }
