@@ -222,10 +222,10 @@ fn compute_prover_input(
             panic!("computing prover input for batch with prover version v1-v5 is not supported");
         }
         ProvingVersion::V6 => {
-            use zk_ee::{
+            use zk_ee_prev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
-            use zk_os_forward_system::run::{
+            use zk_os_forward_system_prev::run::{
                 StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
             };
 
@@ -260,10 +260,10 @@ fn compute_prover_input(
             .expect("proof gen failed")
         }
         ProvingVersion::V7 => {
-            use zk_ee_dev::{
+            use zk_ee::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
-            use zk_os_forward_system_dev::run::{
+            use zk_os_forward_system::run::{
                 StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
             };
 

@@ -1,5 +1,5 @@
 use alloy::primitives::ruint::aliases::B160;
-use alloy::primitives::{Address, B256, BlockNumber};
+use alloy::primitives::{Address, B256, BlockNumber, U256};
 use std::fmt::Debug;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
@@ -23,8 +23,15 @@ pub trait ViewState: ReadStorage + PreimageSource + Send + Clone {
     /// Get account's nonce by its address.
     ///
     /// Returns `None` if the account doesn't exist
-    fn account_nonce(&mut self, address: Address) -> Option<u64> {
+    fn nonce(&mut self, address: Address) -> Option<u64> {
         self.get_account(address).map(|a| a.nonce)
+    }
+
+    /// Get account's balance by its address. Returns zero for non-existent accounts.
+    fn balance(&mut self, address: Address) -> U256 {
+        self.get_account(address)
+            .map(|a| a.balance)
+            .unwrap_or_default()
     }
 }
 

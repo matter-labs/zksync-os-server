@@ -8,6 +8,7 @@ use tokio::sync::watch;
 
 mod eth_call_handler;
 pub use eth_call_handler::EthCallHandler;
+mod eth_fill_transaction_handler;
 mod eth_filter;
 mod eth_impl;
 mod eth_pubsub_impl;

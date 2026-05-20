@@ -43,10 +43,16 @@ pub struct UpgradeTester<'a> {
     pub ctm_sl: interfaces::ChainTypeManager::ChainTypeManagerInstance<EthDynProvider>,
     // CTM owner address on SL
     pub ctm_owner_sl: Address,
+    // CTM contract on L1
+    pub ctm_l1: interfaces::ChainTypeManager::ChainTypeManagerInstance<EthDynProvider>,
+    // CTM owner address on L1
+    pub ctm_owner_l1: Address,
     // L1 chain admin contract
     pub l1_chain_admin: interfaces::ChainAdmin::ChainAdminInstance<EthDynProvider>,
     // L1 chain admin owner address
     pub l1_chain_admin_owner: Address,
+    // Server notifier contract on L1
+    pub l1_server_notifier: interfaces::ServerNotifier::ServerNotifierInstance<EthDynProvider>,
     // L1 chain admin for gateway contract address
     pub l1_chain_admin_gateway: Option<Address>,
     // Diamond proxy on the settlement layer
@@ -55,6 +61,8 @@ pub struct UpgradeTester<'a> {
     pub diamond_proxy_admin_sl: Address,
     // Bytecode supplier contract
     pub bytecode_supplier: interfaces::BytecodesSupplier::BytecodesSupplierInstance<EthDynProvider>,
+    // L2 chain id
+    pub chain_id: u64,
     // Current protocol version
     pub protocol_version: ProtocolSemanticVersion,
     // If chain settles to gateway
@@ -98,9 +106,8 @@ impl<'a> UpgradeTester<'a> {
         .await?;
         tracing::info!("Upgrade is set on CTM");
 
-        // Set timestamp for upgrade on a specific chain under stm, `setUpgradeTimestamp` call on L1ChainAdmin
-        self.set_upgrade_timestamp(protocol_upgrade.newProtocolVersion, upgrade_timestamp)
-            .await?;
+        // Set timestamp for upgrade on a specific chain under STM via ServerNotifier.
+        self.set_upgrade_timestamp(upgrade_timestamp).await?;
         tracing::info!("Upgrade scheduled on L1");
 
         if patch_only {
@@ -248,6 +255,11 @@ impl<'a> UpgradeTester<'a> {
         let ctm_l1_address = l1_state.bridgehub_l1.chain_type_manager_address().await?;
         let ctm_l1 =
             interfaces::ChainTypeManager::new(ctm_l1_address, tester.l1_provider().clone());
+        let ctm_owner_l1 = ctm_l1.owner().call().await?;
+        let l1_server_notifier = interfaces::ServerNotifier::new(
+            ctm_l1.serverNotifierAddress().call().await?,
+            tester.l1_provider().clone(),
+        );
         let bytecode_supplier_address = match ctm_l1.L1_BYTECODES_SUPPLIER().call().await {
             Ok(addr) if addr != Address::ZERO => addr,
             Ok(_) => anyhow::bail!(
@@ -273,12 +285,16 @@ impl<'a> UpgradeTester<'a> {
             bridgehub_owner_sl,
             ctm_sl,
             ctm_owner_sl,
+            ctm_l1,
+            ctm_owner_l1,
             diamond_proxy_sl,
             diamond_proxy_admin_sl,
             l1_chain_admin,
             l1_chain_admin_owner,
+            l1_server_notifier,
             l1_chain_admin_gateway,
             bytecode_supplier,
+            chain_id,
             protocol_version,
             settles_to_gateway,
         })
@@ -290,6 +306,7 @@ impl<'a> UpgradeTester<'a> {
         for addr in [
             Some(self.bridgehub_owner_sl),
             Some(self.ctm_owner_sl),
+            Some(self.ctm_owner_l1),
             Some(self.diamond_proxy_admin_sl),
             Some(self.l1_chain_admin_owner),
             self.l1_chain_admin_gateway,
@@ -467,14 +484,16 @@ impl<'a> UpgradeTester<'a> {
         new_version: U256,
     ) -> anyhow::Result<()> {
         if self.settles_to_gateway {
+            let old_version = self
+                .protocol_version
+                .packed()
+                .expect("incorrect protocol version");
             let verifier = self.diamond_proxy_sl.getVerifier().call().await?;
             let calldata = self
                 .ctm_sl
                 .setNewVersionUpgrade(
-                    upgrade_data,
-                    self.protocol_version
-                        .packed()
-                        .expect("incorrect protocol version"),
+                    upgrade_data.clone(),
+                    old_version,
                     deadline,
                     new_version,
                     verifier,
@@ -483,6 +502,13 @@ impl<'a> UpgradeTester<'a> {
                 .clone();
             self.send_l1_to_gateway(self.ctm_owner_sl, *self.ctm_sl.address(), calldata)
                 .await?;
+            // Set the cut hash on the L1 CTM
+            let tx = self
+                .ctm_l1
+                .setUpgradeDiamondCut(upgrade_data, old_version)
+                .into_transaction_request()
+                .with_from(self.ctm_owner_l1);
+            self.send_impersonated_transaction(tx).await?;
         } else {
             let tx = if self.tester.chain_layout.protocol_version().contains("v30") {
                 let ctm = ChainTypeManagerV30Instance::new(
@@ -519,14 +545,39 @@ impl<'a> UpgradeTester<'a> {
         Ok(())
     }
 
-    pub async fn set_upgrade_timestamp(
-        &self,
-        protocol_version: U256,
-        timestamp: U256,
-    ) -> anyhow::Result<()> {
+    pub async fn set_upgrade_timestamp(&self, timestamp: U256) -> anyhow::Result<()> {
+        let data = if self.tester.chain_layout.protocol_version().contains("v30") {
+            // v30.2 ServerNotifier's setUpgradeTimestamp specifies the protocol version being upgraded FROM
+            let server_notifier_v30 = interfaces::ServerNotifierV30::new(
+                *self.l1_server_notifier.address(),
+                self.tester.l1_provider().clone(),
+            );
+            server_notifier_v30
+                .setUpgradeTimestamp(
+                    U256::from(self.chain_id),
+                    self.protocol_version
+                        .packed()
+                        .expect("incorrect protocol version"),
+                    timestamp,
+                )
+                .calldata()
+                .clone()
+        } else {
+            self.l1_server_notifier
+                .setUpgradeTimestamp(U256::from(self.chain_id), timestamp)
+                .calldata()
+                .clone()
+        };
         let tx = self
             .l1_chain_admin
-            .setUpgradeTimestamp(protocol_version, timestamp)
+            .multicall(
+                vec![interfaces::Call {
+                    target: *self.l1_server_notifier.address(),
+                    value: U256::ZERO,
+                    data,
+                }],
+                true,
+            )
             .into_transaction_request()
             .with_from(self.l1_chain_admin_owner);
         self.send_impersonated_transaction(tx).await?;

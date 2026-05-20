@@ -2,6 +2,7 @@ mod api;
 mod call;
 mod debug;
 mod deployment_filter;
+mod fill_transaction;
 mod filter;
 mod policy_client;
 mod pubsub;

@@ -140,6 +140,7 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
                 err.to_string(),
                 None,
             ),
+            EthCallError::CallFees(_) => invalid_params_rpc_err(err.to_string()),
             err => internal_rpc_err(err.to_string()),
         })
     }
@@ -160,6 +161,11 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionSyncError>
                 // Code 4 is used as per EIP-7966 (see https://eips.ethereum.org/EIPS/eip-7966)
                 rpc_error_with_code(4, err.to_string())
             }
+            err @ EthSendRawTransactionSyncError::RejectedDuringExecution(_) => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
+            ),
         })
     }
 }
