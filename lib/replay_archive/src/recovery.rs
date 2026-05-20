@@ -83,8 +83,11 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
         %anchor_block_hash,
         "Starting replay archive RocksDB recovery"
     );
-    if identity.is_some() {
-        tracing::info!("Replay archive RocksDB recovery will decrypt objects in memory");
+    if let Some(identity) = &identity {
+        tracing::info!(
+            "Replay archive RocksDB recovery will decrypt objects in memory, public key: {}",
+            identity.to_public(),
+        );
     }
     let decoder = ReplayRecordDecoder { identity };
 

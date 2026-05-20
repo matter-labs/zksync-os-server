@@ -58,7 +58,7 @@ where
         override_allowed: bool,
     ) -> anyhow::Result<bool> {
         let (replay_record, block_hash) = record.clone().split();
-        let written = self.replay.write(record, override_allowed).await;
+        let written = self.replay.write(record, override_allowed).await?;
 
         if let Some(archive_sender) = &self.archive_sender {
             REPLAY_ARCHIVE_METRICS
@@ -77,7 +77,7 @@ where
                 .set(replay_archive_queue_depth(archive_sender));
         }
 
-        written
+        Ok(written)
     }
 }
 
