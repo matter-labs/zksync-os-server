@@ -1,5 +1,5 @@
 use alloy::eips::Encodable2718;
-use alloy::network::TransactionBuilder;
+use alloy::network::{NetworkTransactionBuilder, TransactionBuilder};
 use alloy::primitives::{Address, TxKind, U256, utils::parse_ether};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
