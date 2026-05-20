@@ -8,8 +8,9 @@ use tokio::{
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::traits::{EncodedTx, NextTxResponse, TxResultCallback, TxSource};
-use zksync_os_interface::types::{BlockOutput, TxProcessingOutputOwned};
+use zksync_os_interface::types::TxProcessingOutputOwned;
 use zksync_os_storage_api::{BlockContext, ViewState};
+use zksync_os_types::block_output::BlockOutput;
 
 /// A one‐by‐one driver around `run_block`, enabling `execute_next_tx` interface
 /// (as opposed to pull interface of `run_block` in zksync-os)

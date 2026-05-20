@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use std::ops;
 use std::ops::{Deref, DerefMut};
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
-use zksync_os_interface::types::{BlockHashes, BlockOutput};
+use zksync_os_interface::types::BlockHashes;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
+use zksync_os_types::block_output::BlockOutput;
 use zksync_os_types::{
     L2_TO_L1_TREE_SIZE, L2ToL1Log, ProtocolSemanticVersion, PubdataMode, ZkEnvelope, ZkTransaction,
 };

@@ -5,8 +5,8 @@ use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::ops::Range;
 use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_rocksdb::rocksdb;
+use zksync_os_types::block_output::BlockOutput;
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 
 /// Log index over persisted blocks, mapping addresses and topics to the block numbers where they

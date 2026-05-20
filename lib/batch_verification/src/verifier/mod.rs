@@ -9,7 +9,6 @@ use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
 use zksync_os_batch_types::{BatchSignature, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
@@ -18,6 +17,7 @@ use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
 use zksync_os_storage_api::{ReplayRecord, StateError, TreeBlock, read_multichain_root};
+use zksync_os_types::block_output::BlockOutput;
 
 mod block_cache;
 mod metrics;

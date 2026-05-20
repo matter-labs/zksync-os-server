@@ -15,13 +15,13 @@ use zksync_os_batch_types::batcher_model::{
 };
 use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_contract_interface::models::StoredBatchInfo;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::PubdataMode;
+use zksync_os_types::block_output::BlockOutput;
 
 pub mod batch_builder;
 mod batch_deadline_policy;
