@@ -212,8 +212,7 @@ where
                     )
                     .await?;
                     let operator_address = self.operator_address().await?;
-                    let mut tx_request = self
-                        .tx_request_with_gas_fields(operator_address, fee_params)
+                    let mut tx_request = tx_request_with_gas_fields(operator_address, fee_params)
                         .with_to(self.to_address)
                         .with_input(cmd.solidity_call(self.gateway, &operator_address));
 
@@ -647,18 +646,6 @@ where
         })
     }
 
-    fn tx_request_with_gas_fields(
-        &self,
-        operator_address: Address,
-        fee_params: FeeParams,
-    ) -> TransactionRequest {
-        TransactionRequest::default()
-            .with_from(operator_address)
-            .with_max_fee_per_gas(fee_params.max_fee_per_gas)
-            .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
-            .with_gas_limit(15000000)
-    }
-
     async fn report_custom_priority_fee_metrics(&self) -> anyhow::Result<()> {
         for (window, blocks_behind) in [
             (PriorityFeeEstimateWindow::Blocks3, 3),
@@ -793,6 +780,22 @@ where
     }
 }
 
+/// Builds a [`TransactionRequest`] preloaded with the operator-configured static
+/// gas fields. `max_fee_per_gas` and `max_priority_fee_per_gas` are taken
+/// verbatim from `fee_params` — they are caps set by the operator, never
+/// adjusted up from network fee estimates. The blob fee (when applicable) is
+/// set separately by the caller, since only commit transactions carry blobs.
+fn tx_request_with_gas_fields(
+    operator_address: Address,
+    fee_params: FeeParams,
+) -> TransactionRequest {
+    TransactionRequest::default()
+        .with_from(operator_address)
+        .with_max_fee_per_gas(fee_params.max_fee_per_gas)
+        .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
+        .with_gas_limit(15000000)
+}
+
 impl L1SenderFeeConfig {
     fn configured_fee_params(self) -> FeeParams {
         FeeParams {
@@ -814,5 +817,42 @@ impl L1SenderFeeConfig {
                 * self.max_fee_per_blob_gas_replacement_multiplier)
                 .ceil() as u128,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::address;
+
+    /// L1 sender transactions must carry the operator-configured fee caps
+    /// verbatim — they are static caps set by the operator, not values derived
+    /// from network estimates. This test pins the wiring in
+    /// [`tx_request_with_gas_fields`] so that a refactor cannot silently swap
+    /// the source of these fields.
+    #[test]
+    fn tx_request_uses_configured_fee_params_verbatim() {
+        let operator = address!("00000000000000000000000000000000000000aa");
+        let fee_params = FeeParams {
+            max_fee_per_gas: 137_000_000_017,
+            max_priority_fee_per_gas: 3_000_000_011,
+            // Blob fee is set elsewhere (only on commit txs); included here to
+            // assert it is *not* leaked into the non-blob request fields.
+            max_fee_per_blob_gas: 7_000_000_019,
+        };
+
+        let req = tx_request_with_gas_fields(operator, fee_params);
+
+        assert_eq!(req.from, Some(operator));
+        assert_eq!(req.max_fee_per_gas, Some(fee_params.max_fee_per_gas));
+        assert_eq!(
+            req.max_priority_fee_per_gas,
+            Some(fee_params.max_priority_fee_per_gas),
+        );
+        // No blob fee on the base request — that field is populated by the
+        // caller only when the transaction carries a blob sidecar.
+        assert_eq!(req.max_fee_per_blob_gas, None);
+        // Legacy gas_price must remain unset so the request is sent as EIP-1559.
+        assert_eq!(req.gas_price, None);
     }
 }
