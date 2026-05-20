@@ -14,7 +14,6 @@ use smart_config::{
     ErrorWithOrigin, EtherAmount, ParseErrors, Serde,
     de::{Delimited, Entries},
     metadata::EtherUnit,
-    pat::lazy_regex,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
@@ -993,12 +992,9 @@ pub struct RpcConfig {
     /// callers).  Use `"*"` for a global limit applied before per-method limits.  Methods absent
     /// from the map are unrestricted.
     ///
-    /// Accepts a JSON object or a comma-separated `method = rps` string, e.g.
-    /// `* = 500, eth_call = 100, debug_traceTransaction = 5`.
-    #[config(default, with = Entries::WELL_KNOWN.delimited(
-        lazy_regex!(ref r"\s*,\s*"),
-        lazy_regex!(ref r"\s*=\s*"),
-    ))]
+    /// Accepts a JSON object or a comma-separated `method=rps` string, e.g.
+    /// `*=500,eth_call=100,debug_traceTransaction=5`.
+    #[config(default, with = Entries::WELL_KNOWN.delimited(",", "="))]
     pub rate_limits: HashMap<String, NonZeroU32>,
 }
 
