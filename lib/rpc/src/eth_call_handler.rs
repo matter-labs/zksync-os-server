@@ -21,10 +21,10 @@ use zk_os_api::helpers::get_nonce;
 use zksync_os_interface::types::{BlockHashes, ExecutionOutput};
 use zksync_os_interface::{
     error::InvalidTransaction,
-    types::{BlockContext, ExecutionResult, TxOutput},
+    types::{ExecutionResult, TxOutput},
 };
 use zksync_os_storage_api::{
-    RepositoryError, StateError, ViewState, state_override_view::OverriddenStateView,
+    BlockContext, RepositoryError, StateError, ViewState, state_override_view::OverriddenStateView,
 };
 use zksync_os_tx_validators::policy_client::{AccessType, PolicyClient, PolicySession};
 use zksync_os_types::ZksyncOsEncode;

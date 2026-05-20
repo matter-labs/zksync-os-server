@@ -14710,8 +14710,8 @@ dependencies = [
  "tokio",
  "zksync_os_api",
  "zksync_os_contract_interface",
- "zksync_os_interface",
  "zksync_os_l1_watcher",
+ "zksync_os_storage_api",
  "zksync_os_types",
 ]
 
@@ -14955,6 +14955,7 @@ dependencies = [
  "tracing",
  "url",
  "zksync_os_interface",
+ "zksync_os_storage_api",
  "zksync_os_types",
 ]
 

@@ -2,9 +2,10 @@ use alloy::primitives::{B256, TxHash};
 use std::fmt::Display;
 use std::time::Duration;
 use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::types::{BlockContext, BlockOutput};
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_mempool::MarkingTxStream;
 use zksync_os_pipeline::HasBlockRangeEnd;
+use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 

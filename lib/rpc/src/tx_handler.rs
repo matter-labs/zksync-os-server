@@ -10,11 +10,11 @@ use alloy::transports::{RpcError, TransportErrorKind};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::PoolError;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{InvalidPoolTransactionError, PoolErrorKind};
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
+use zksync_os_storage_api::BlockContext;
 use zksync_os_tx_validators::policy_client::{AccessType, PolicyClient};
 use zksync_os_types::{
     L2Envelope, L2Transaction, NotAcceptingReason, TransactionAcceptanceState, ZkTransaction,

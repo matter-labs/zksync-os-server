@@ -29,6 +29,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     let block_number_from = blocks.first().unwrap().1.block_context.block_number;
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
     let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
+    let (_, last_replay_record, _, _) = blocks.last().unwrap();
 
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
@@ -36,12 +37,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         blocks
             .iter()
             .map(|(block_output, replay_record, tree, _)| {
-                (
-                    block_output,
-                    &replay_record.block_context,
-                    replay_record.transactions.as_slice(),
-                    tree,
-                )
+                (block_output, replay_record.transactions.as_slice(), tree)
             })
             .collect(),
         chain_id,
@@ -50,6 +46,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         sl_chain_id,
         multichain_root,
         &protocol_version,
+        &last_replay_record.block_context.block_hashes,
     );
 
     let mut logs = Vec::new();

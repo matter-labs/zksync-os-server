@@ -2,7 +2,7 @@ mod metered_state;
 pub use metered_state::{MeteredViewState, StateAccessLabel};
 
 mod model;
-pub use model::{FinalityStatus, ReplayRecord, StoredTxData, TreeBlock, TxMeta};
+pub use model::{BlockContext, FinalityStatus, ReplayRecord, StoredTxData, TreeBlock, TxMeta};
 
 mod replay;
 pub use replay::{ReadReplay, ReadReplayExt, WriteReplay};

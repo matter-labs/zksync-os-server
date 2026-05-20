@@ -1,4 +1,4 @@
-use crate::ReplayRecord;
+use crate::{BlockContext, ReplayRecord};
 use alloy::primitives::{BlockNumber, Sealed};
 use futures::Stream;
 use futures::stream::BoxStream;
@@ -9,7 +9,6 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Sleep};
-use zksync_os_interface::types::BlockContext;
 
 /// Read-only view on block replay storage.
 ///

@@ -7,9 +7,9 @@ use crate::wire::replays::{WireReplayRecord, v0, v1, v2, v3};
 use crate::wire::{BlockHashes, ForcedPreimage};
 use alloy::consensus::crypto::RecoveryError;
 use alloy::primitives::{BlockNumber, Bytes};
-use zksync_os_interface::types::BlockContext as InterfaceBlockContext;
 use zksync_os_interface::types::BlockHashes as InterfaceBlockHashes;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
+use zksync_os_storage_api::BlockContext as StorageBlockContext;
 use zksync_os_storage_api::ReplayRecord as StorageReplayRecord;
 use zksync_os_types::InteropRootsLogIndex;
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
@@ -36,7 +36,7 @@ impl TryFrom<v0::ReplayRecord> for StorageReplayRecord {
     type Error = RecoveryError;
 
     fn try_from(value: v0::ReplayRecord) -> Result<Self, Self::Error> {
-        let block_context = InterfaceBlockContext {
+        let block_context = StorageBlockContext {
             block_number: value.block_number,
             ..Default::default()
         };
@@ -63,8 +63,8 @@ impl WireReplayRecord for v1::ReplayRecord {
     }
 }
 
-impl From<InterfaceBlockContext> for v1::BlockContext {
-    fn from(value: InterfaceBlockContext) -> Self {
+impl From<StorageBlockContext> for v1::BlockContext {
+    fn from(value: StorageBlockContext) -> Self {
         Self {
             chain_id: value.chain_id,
             block_number: value.block_number,
@@ -110,7 +110,7 @@ impl From<StorageReplayRecord> for v1::ReplayRecord {
     }
 }
 
-impl From<v1::BlockContext> for InterfaceBlockContext {
+impl From<v1::BlockContext> for StorageBlockContext {
     fn from(value: v1::BlockContext) -> Self {
         Self {
             chain_id: value.chain_id,
@@ -135,7 +135,7 @@ impl TryFrom<v1::ReplayRecord> for StorageReplayRecord {
 
     fn try_from(value: v1::ReplayRecord) -> Result<Self, Self::Error> {
         Ok(Self {
-            block_context: value.block_context.into(),
+            block_context: StorageBlockContext::from(value.block_context),
             transactions: value
                 .transactions
                 .into_iter()
@@ -172,8 +172,8 @@ impl WireReplayRecord for v2::ReplayRecord {
     }
 }
 
-impl From<InterfaceBlockContext> for v2::BlockContext {
-    fn from(value: InterfaceBlockContext) -> Self {
+impl From<StorageBlockContext> for v2::BlockContext {
+    fn from(value: StorageBlockContext) -> Self {
         Self {
             chain_id: value.chain_id,
             block_number: value.block_number,
@@ -192,7 +192,7 @@ impl From<InterfaceBlockContext> for v2::BlockContext {
     }
 }
 
-impl From<v2::BlockContext> for InterfaceBlockContext {
+impl From<v2::BlockContext> for StorageBlockContext {
     fn from(value: v2::BlockContext) -> Self {
         Self {
             chain_id: value.chain_id,
@@ -246,7 +246,7 @@ impl TryFrom<v2::ReplayRecord> for StorageReplayRecord {
 
     fn try_from(value: v2::ReplayRecord) -> Result<Self, Self::Error> {
         Ok(Self {
-            block_context: value.block_context.into(),
+            block_context: StorageBlockContext::from(value.block_context),
             transactions: value
                 .transactions
                 .into_iter()
@@ -283,8 +283,8 @@ impl WireReplayRecord for v3::ReplayRecord {
     }
 }
 
-impl From<InterfaceBlockContext> for v3::BlockContext {
-    fn from(value: InterfaceBlockContext) -> Self {
+impl From<StorageBlockContext> for v3::BlockContext {
+    fn from(value: StorageBlockContext) -> Self {
         Self {
             chain_id: value.chain_id,
             block_number: value.block_number,
@@ -303,7 +303,7 @@ impl From<InterfaceBlockContext> for v3::BlockContext {
     }
 }
 
-impl From<v3::BlockContext> for InterfaceBlockContext {
+impl From<v3::BlockContext> for StorageBlockContext {
     fn from(value: v3::BlockContext) -> Self {
         Self {
             chain_id: value.chain_id,
@@ -356,7 +356,7 @@ impl TryFrom<v3::ReplayRecord> for StorageReplayRecord {
 
     fn try_from(value: v3::ReplayRecord) -> Result<Self, Self::Error> {
         Ok(Self {
-            block_context: value.block_context.into(),
+            block_context: StorageBlockContext::from(value.block_context),
             transactions: value
                 .transactions
                 .into_iter()

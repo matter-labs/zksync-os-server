@@ -27,13 +27,12 @@ use tokio::sync::watch;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_api::helpers::get_code;
 use zksync_os_interface::traits::ReadStorage;
-use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::types::{
     L2FeeHistory, RpcBlockConvert, ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt,
 };
-use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
+use zksync_os_storage_api::{BlockContext, RepositoryError, StateError, TxMeta, ViewState};
 use zksync_os_tx_validators::policy_client::PolicyClient;
 use zksync_os_types::{L2Envelope, TransactionAcceptanceState, ZkEnvelope, ZkReceiptEnvelope};
 

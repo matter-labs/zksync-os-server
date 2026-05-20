@@ -17,11 +17,10 @@ use zk_os_api::helpers::get_nonce;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{NopTracer, NopValidator};
 use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
-use zksync_os_interface::types::{
-    BlockContext, BlockOutput, ExecutionOutput, ExecutionResult, TxOutput,
-};
+use zksync_os_interface::types::{BlockOutput, ExecutionOutput, ExecutionResult, TxOutput};
 use zksync_os_multivm::run_block;
 use zksync_os_rpc_api::types::{ZkApiBlock, ZkHeader};
+use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::state_override_view::{
     OverriddenStateView, OwnedOverrides, build_state_override_maps,

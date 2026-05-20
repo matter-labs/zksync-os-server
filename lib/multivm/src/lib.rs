@@ -12,8 +12,8 @@ use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::traits::{
     EncodedTx, PreimageSource, ReadStorage, RunBlock, SimulateTx, TxResultCallback, TxSource,
 };
-use zksync_os_interface::types::BlockContext;
 use zksync_os_interface::types::{BlockOutput, TxOutput};
+use zksync_os_storage_api::BlockContext;
 
 mod adapter;
 pub mod apps;
@@ -41,6 +41,7 @@ pub fn run_block<
         .execution_version
         .try_into()
         .expect("Unsupported ZKsync OS execution version");
+    let block_context = block_context.to_interface();
     match execution_version {
         ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
             let object = RunBlockForwardV3 {};
@@ -128,6 +129,7 @@ pub fn simulate_tx<
         .execution_version
         .try_into()
         .expect("Unsupported ZKsync OS execution version");
+    let block_context = block_context.to_interface();
     match execution_version {
         ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
             let object = RunBlockForwardV3 {};
