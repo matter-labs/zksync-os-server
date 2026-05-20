@@ -50,14 +50,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     ///   explicit nonce are auto-filled from state (the common case works), but an
     ///   explicitly supplied stale nonce will be rejected by the VM.
     ///
-    /// Note that even with `validation=false`, the returned `gas_used` accounts for the
-    /// bootloader's post-execution pubdata pre-charge using the *response* basefee, not the
-    /// zeroed execution basefee. The V31 bootloader returns `gas_price = 0` whenever
-    /// basefee is zero, which sets `native_per_gas = 0` and takes the "unlimited native"
-    /// branch — the bootloader's own `gas_used` then loses the native cost of pubdata. A
-    /// real submission against a non-zero basefee can fail the pre-charge check at
-    /// `gas_limit = 2 * reported_gas_used`, so we patch in the floor that would let the tx
-    /// clear the check at submission time (see `min_gas_for_pubdata_check`).
+    /// The returned `gas_used` is patched to cover the bootloader's post-execution pubdata
+    /// pre-charge against the *response* basefee — see [`min_gas_for_pubdata_check`] for
+    /// the rationale.
     pub fn simulate_v1_impl(
         &self,
         opts: SimulatePayload,
