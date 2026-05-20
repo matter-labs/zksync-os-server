@@ -624,7 +624,7 @@ where
                 configured_params.max_fee_per_gas,
             );
         }
-        
+
         let max_priority_fee_per_gas =
             if eip1559_est.max_priority_fee_per_gas > configured_params.max_priority_fee_per_gas {
                 tracing::warn!(
