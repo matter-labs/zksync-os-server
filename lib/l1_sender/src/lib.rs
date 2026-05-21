@@ -645,9 +645,10 @@ where
     }
 
     /// Estimates gas limits for a batch of L1 commands via `eth_simulateV1`, returning
-    /// `2 * gas_used` per call. Calls share a single simulated block so state writes from
-    /// earlier commands are visible to later ones. Falls back to [`L1_GAS_LIMIT_FALLBACK`]
-    /// per tx on any simulate failure.
+    /// `2 * gas_used` per call. Each command goes into its own simulated block so
+    /// cumulative block-gas-limit constraints can't reject the batch, while writes from
+    /// earlier blocks remain visible to later ones (spec-mandated overlay propagation).
+    /// Falls back to [`L1_GAS_LIMIT_FALLBACK`] per tx on any simulate failure.
     async fn estimate_gas_limits(
         &self,
         commands: &[Input],
@@ -665,67 +666,62 @@ where
         // Per-call cap. The simulation reports the actual `gas_used`.
         const SIM_GAS_LIMIT: u64 = 30_000_000;
 
-        let mut sim_block = SimBlock::default();
-        for (i, cmd) in commands.iter().enumerate() {
-            // Mirror submission fees so providers (e.g. anvil) that parse the request as a
-            // typed tx accept it.
-            let mut req = TransactionRequest::default()
-                .with_from(operator_address)
-                .with_to(self.to_address)
-                .with_input(cmd.solidity_call(self.gateway, &operator_address))
-                .with_max_fee_per_gas(fee_params.max_fee_per_gas)
-                .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
-                .with_nonce(starting_nonce + i as u64)
-                .with_gas_limit(SIM_GAS_LIMIT);
-            if let Some(sidecar) = cmd.blob_sidecar() {
-                req.blob_versioned_hashes = Some(sidecar.versioned_hashes().collect());
-                req.max_fee_per_blob_gas = Some(fee_params.max_fee_per_blob_gas);
-                // Anvil routes blob requests through the EIP-4844 arm only when
-                // `type=3` is set explicitly; otherwise it returns -32602.
-                req.transaction_type = Some(3);
-            }
-            sim_block = sim_block.call(req);
-        }
-
         // Some L1 providers check sender balance even with `validation=false`; override
         // to bypass.
-        sim_block.state_overrides = Some(
-            StateOverridesBuilder::default()
-                .append(
-                    operator_address,
-                    AccountOverride {
-                        balance: Some(U256::MAX),
-                        ..Default::default()
-                    },
-                )
-                .build(),
-        );
+        let balance_override = StateOverridesBuilder::default()
+            .append(
+                operator_address,
+                AccountOverride {
+                    balance: Some(U256::MAX),
+                    ..Default::default()
+                },
+            )
+            .build();
+
+        let block_state_calls = commands
+            .iter()
+            .enumerate()
+            .map(|(i, cmd)| {
+                // Mirror submission fees so providers (e.g. anvil) that parse the request
+                // as a typed tx accept it.
+                let mut req = TransactionRequest::default()
+                    .with_from(operator_address)
+                    .with_to(self.to_address)
+                    .with_input(cmd.solidity_call(self.gateway, &operator_address))
+                    .with_max_fee_per_gas(fee_params.max_fee_per_gas)
+                    .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
+                    .with_nonce(starting_nonce + i as u64)
+                    .with_gas_limit(SIM_GAS_LIMIT);
+                if let Some(sidecar) = cmd.blob_sidecar() {
+                    req.blob_versioned_hashes = Some(sidecar.versioned_hashes().collect());
+                    req.max_fee_per_blob_gas = Some(fee_params.max_fee_per_blob_gas);
+                    // Anvil routes blob requests through the EIP-4844 arm only when
+                    // `type=3` is set explicitly; otherwise it returns -32602.
+                    req.transaction_type = Some(3);
+                }
+                let mut sim_block = SimBlock::default().call(req);
+                sim_block.state_overrides = Some(balance_override.clone());
+                sim_block
+            })
+            .collect();
 
         let payload = SimulatePayload {
-            block_state_calls: vec![sim_block],
+            block_state_calls,
             ..Default::default()
         };
 
         // Top-level failures fall back across the batch; per-call reverts fall back only
         // for that tx.
-        let block = match self.provider.simulate(&payload).pending().await {
-            Ok(results) => match results.into_iter().next() {
-                Some(block) if block.calls.len() == commands.len() => block,
-                Some(block) => {
-                    tracing::warn!(
-                        returned = block.calls.len(),
-                        expected = commands.len(),
-                        "eth_simulateV1 returned mismatched call count, falling back to {L1_GAS_LIMIT_FALLBACK} per tx",
-                    );
-                    return Ok(vec![L1_GAS_LIMIT_FALLBACK; commands.len()]);
-                }
-                None => {
-                    tracing::warn!(
-                        "eth_simulateV1 returned no blocks, falling back to {L1_GAS_LIMIT_FALLBACK} per tx",
-                    );
-                    return Ok(vec![L1_GAS_LIMIT_FALLBACK; commands.len()]);
-                }
-            },
+        let blocks = match self.provider.simulate(&payload).pending().await {
+            Ok(blocks) if blocks.len() == commands.len() => blocks,
+            Ok(blocks) => {
+                tracing::warn!(
+                    returned = blocks.len(),
+                    expected = commands.len(),
+                    "eth_simulateV1 returned mismatched block count, falling back to {L1_GAS_LIMIT_FALLBACK} per tx",
+                );
+                return Ok(vec![L1_GAS_LIMIT_FALLBACK; commands.len()]);
+            }
             Err(err) => {
                 tracing::warn!(
                     %err,
@@ -735,18 +731,23 @@ where
             }
         };
 
-        let gas_limits = block
-            .calls
+        let gas_limits = blocks
             .iter()
             .enumerate()
-            .map(|(i, call)| {
-                if call.status {
-                    call.gas_used.saturating_mul(2)
-                } else {
+            .map(|(i, block)| match block.calls.first() {
+                Some(call) if call.status => call.gas_used.saturating_mul(2),
+                Some(call) => {
                     tracing::warn!(
                         tx_index = i,
                         return_data = ?call.return_data,
                         "eth_simulateV1 call reverted, falling back to {L1_GAS_LIMIT_FALLBACK}",
+                    );
+                    L1_GAS_LIMIT_FALLBACK
+                }
+                None => {
+                    tracing::warn!(
+                        tx_index = i,
+                        "eth_simulateV1 block had no call result, falling back to {L1_GAS_LIMIT_FALLBACK}",
                     );
                     L1_GAS_LIMIT_FALLBACK
                 }
