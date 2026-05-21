@@ -216,6 +216,12 @@ pub async fn find_l1_commit_block_by_batch_number(
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<BlockNumber> {
+    if batch_number == 0 {
+        // Batch 0 is the genesis batch; it is not discovered via commit events. Returning the
+        // genesis block avoids historical state lookups on long-running local chains.
+        return Ok(0);
+    }
+
     let is_batch_committed = move |zk: Arc<ZkChain<DynProvider>>, block: BlockNumber| async move {
         let res = zk.get_total_batches_committed(block.into()).await?;
         Ok(res >= batch_number)
@@ -288,6 +294,12 @@ pub async fn find_l1_execute_block_by_batch_number(
     zk_chain: ZkChain<DynProvider>,
     batch_number: u64,
 ) -> anyhow::Result<BlockNumber> {
+    if batch_number == 0 {
+        // Batch 0 is the genesis batch; it is considered executed from genesis and does not
+        // require a historical settlement-layer lookup.
+        return Ok(0);
+    }
+
     // Execution cannot be reverted, so unlike in `find_l1_commit_block_by_batch_number`, we do not need
     // to take L1 reverts into account here.
     find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| async move {

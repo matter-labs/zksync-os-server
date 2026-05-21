@@ -39,6 +39,13 @@ impl RaftBootstrapper {
         if !required_peers.is_empty() {
             tracing::info!("waiting for raft peers to connect: {required_peers:?}");
             loop {
+                if self.raft.is_initialized().await? {
+                    tracing::info!(
+                        "raft cluster became initialized while waiting for peers; skipping bootstrap"
+                    );
+                    return Ok(());
+                }
+
                 match self
                     .router
                     .wait_for_peers(&required_peers, BOOTSTRAP_WAIT_RETRY)
@@ -46,6 +53,13 @@ impl RaftBootstrapper {
                 {
                     Ok(()) => break,
                     Err(missing) => {
+                        if self.raft.is_initialized().await? {
+                            tracing::info!(
+                                "raft cluster became initialized while waiting for peers; skipping bootstrap"
+                            );
+                            return Ok(());
+                        }
+
                         tracing::info!(
                             "still waiting for raft peers before bootstrap: missing={missing:?}, connected={:?}",
                             self.router.connected_peers()
