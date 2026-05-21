@@ -4,7 +4,7 @@ use alloy::primitives::{BlockNumber, Sealed};
 use anyhow::Context;
 use std::fmt::Debug;
 use std::time::Instant;
-use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay, BlockContext};
+use zksync_os_storage_api::{BlockContext, ReadReplay, ReplayRecord, WriteReplay};
 
 /// [`WriteReplay`] wrapper that writes to replay storage and enqueues records for archiving.
 #[derive(Debug, Clone)]
