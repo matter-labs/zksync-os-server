@@ -239,8 +239,11 @@ where
                         force_transaction_resubmission,
                     )
                     .await?;
-                    let mut tx_request = self
-                        .tx_request_with_gas_fields(operator_address, fee_params, gas_limit)
+                    let mut tx_request = TransactionRequest::default()
+                        .with_from(operator_address)
+                        .with_max_fee_per_gas(fee_params.max_fee_per_gas)
+                        .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
+                        .with_gas_limit(gas_limit)
                         .with_to(self.to_address)
                         .with_input(cmd.solidity_call(self.gateway, &operator_address));
 
@@ -644,19 +647,6 @@ where
         );
 
         Ok(apply_fee_caps(configured_params, estimated))
-    }
-
-    fn tx_request_with_gas_fields(
-        &self,
-        operator_address: Address,
-        fee_params: FeeParams,
-        gas_limit: u64,
-    ) -> TransactionRequest {
-        TransactionRequest::default()
-            .with_from(operator_address)
-            .with_max_fee_per_gas(fee_params.max_fee_per_gas)
-            .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
-            .with_gas_limit(gas_limit)
     }
 
     /// Estimates gas limits for a batch of L1 commands using `eth_simulateV1`.

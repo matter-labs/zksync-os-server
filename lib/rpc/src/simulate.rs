@@ -28,40 +28,21 @@ use zksync_os_storage_api::state_override_view::{
 use zksync_os_types::{ZkReceipt, ZkReceiptEnvelope, ZkTransaction, ZksyncOsEncode};
 
 impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
-    /// Implements `eth_simulateV1` using the same high-level model as reth: execute the requested
-    /// blocks linearly, carrying an overlay of simulated writes into subsequent blocks.
-    ///
-    /// # `validation=false` handling
-    ///
-    /// The spec mandates that with `validation=false`, the basefee is zeroed during execution
-    /// so that requests with missing or under-priced fees still run. Zeroing basefee, however,
-    /// drives the V31 bootloader's `get_gas_price` to zero, which sets `native_per_gas = 0`
-    /// and routes pubdata through the "unlimited native" branch — the reported `gas_used`
-    /// then under-counts the pubdata pre-charge, and a real submission against the true
-    /// basefee fails the bootloader's post-execution check.
-    ///
-    /// Instead, we keep the real basefee for execution and relax fee adequacy at the request
-    /// layer: `create_tx_from_request` is called with `for_estimate_gas = !validation`, so
-    /// `CallFees::ensure_fees` accepts requests whose `max_fee_per_gas` is below the basefee
-    /// when `validation=false`. The bootloader sees realistic prices, accounts for pubdata
-    /// correctly, and the returned `gas_used` is directly usable to size a future submission.
+    /// Implements `eth_simulateV1`: executes the requested blocks linearly, carrying an
+    /// overlay of simulated writes into subsequent blocks.
     ///
     /// # Spec limitations
     ///
-    /// The following features from the `eth_simulateV1` spec are not supported:
-    ///
-    /// - `traceTransfers=true`: rejected with an error. ZKsync OS has no transfer-tracing
-    ///   inspector equivalent, so synthetic ERC-20 transfer logs cannot be generated.
-    /// - `movePrecompileToAddress`: rejected with an error. The VM does not support remapping
-    ///   precompile addresses on a per-block basis.
-    /// - `blockOverrides.difficulty`: silently ignored. ZKsync OS has no `difficulty` field in
-    ///   its block context; use `blockOverrides.random` (prevrandao) instead.
-    /// - `blockOverrides.parentBeaconBlockRoot`: silently ignored. There is no corresponding
-    ///   field in `BlockContext`.
-    /// - `validation=false` nonce relaxation: partially unsupported. Nonce checks are not
-    ///   disabled. Transactions without an explicit nonce are auto-filled from state (the
-    ///   common case works), but an explicitly supplied stale nonce will be rejected by the
-    ///   VM.
+    /// - `traceTransfers=true`: rejected. ZKsync OS has no transfer-tracing inspector.
+    /// - `movePrecompileToAddress`: rejected. Precompile remapping is not supported.
+    /// - `blockOverrides.difficulty`: silently ignored. Use `blockOverrides.random`
+    ///   (prevrandao) instead.
+    /// - `blockOverrides.parentBeaconBlockRoot`: silently ignored.
+    /// - `validation=false` nonce relaxation: partial. Missing nonces are auto-filled from
+    ///   state, but an explicitly supplied stale nonce is still rejected by the VM.
+    /// - `validation=false` fee relaxation: under-priced requests are accepted, but the
+    ///   real basefee is preserved during execution so the bootloader's gas accounting
+    ///   matches a future real submission.
     pub fn simulate_v1_impl(
         &self,
         opts: SimulatePayload,
