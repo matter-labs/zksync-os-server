@@ -656,7 +656,11 @@ impl MultiNodeTesterBuilder {
             .map(|(i, (secret, locked_port))| {
                 let peers = peer_ids.clone();
                 let boot_nodes: Vec<zksync_os_network::TrustedPeer> =
-                    node_records.iter().copied().map(Into::into).collect();
+                    node_records
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(node_idx, record)| (node_idx != i).then_some((*record).into()))
+                        .collect();
                 let l1 = l1.clone();
                 async move {
                     let network_port = locked_port.port;

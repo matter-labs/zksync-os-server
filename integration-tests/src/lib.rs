@@ -111,6 +111,7 @@ const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 const PORT_ACQUISITION_TIMEOUT: Duration = Duration::from_secs(30);
 const PORT_ACQUISITION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const NODE_RPC_READINESS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
     BATCH_VERIFICATION_KEYS
@@ -713,14 +714,18 @@ impl Tester {
             .unwrap(),
         );
         let l2_provider = (|| async {
-            let l2_provider = ProviderBuilder::new()
-                .wallet(l2_wallet.clone())
-                .connect(&l2_rpc_ws_url)
-                .await?;
+            tokio::time::timeout(NODE_RPC_READINESS_ATTEMPT_TIMEOUT, async {
+                let l2_provider = ProviderBuilder::new()
+                    .wallet(l2_wallet.clone())
+                    .connect(&l2_rpc_ws_url)
+                    .await?;
 
-            // Wait for L2 node to get up and be able to respond.
-            l2_provider.get_chain_id().await?;
-            anyhow::Ok(l2_provider)
+                // Wait for L2 node to get up and be able to respond.
+                l2_provider.get_chain_id().await?;
+                anyhow::Ok(l2_provider)
+            })
+            .await
+            .context("timed out waiting for L2 node RPC readiness")?
         })
         .retry(
             ConstantBuilder::default()
@@ -739,14 +744,18 @@ impl Tester {
 
         let sl_provider = if let Some(gateway_rpc_url) = &gateway_rpc_url {
             let sl_provider = (|| async {
-                let sl_provider = ProviderBuilder::new()
-                    .wallet(l2_wallet.clone())
-                    .connect(gateway_rpc_url)
-                    .await?;
+                tokio::time::timeout(NODE_RPC_READINESS_ATTEMPT_TIMEOUT, async {
+                    let sl_provider = ProviderBuilder::new()
+                        .wallet(l2_wallet.clone())
+                        .connect(gateway_rpc_url)
+                        .await?;
 
-                // Wait for L2 node to get up and be able to respond.
-                sl_provider.get_chain_id().await?;
-                anyhow::Ok(sl_provider)
+                    // Wait for L2 node to get up and be able to respond.
+                    sl_provider.get_chain_id().await?;
+                    anyhow::Ok(sl_provider)
+                })
+                .await
+                .context("timed out waiting for settlement-layer RPC readiness")?
             })
             .retry(
                 ConstantBuilder::default()

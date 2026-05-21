@@ -24,6 +24,7 @@ const RAFT_PROTOCOL_VERSION: usize = 1;
 // Raft has two wire message kinds (request/response), so it needs 2 slots.
 const RAFT_PROTOCOL_MESSAGE_COUNT: u8 = 2;
 const RAFT_OUTBOUND_CHANNEL_CAPACITY: usize = 64;
+const RAFT_BOOTSTRAP_PEER_STABILITY: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 struct PendingRequest {
@@ -158,6 +159,7 @@ impl RaftRouter {
     ) -> Result<(), Vec<PeerId>> {
         let deadline = Instant::now() + timeout;
         let mut last_progress_log = Instant::now();
+        let mut all_connected_since = None;
         loop {
             let connected = self.connected_peers();
             let missing: Vec<_> = peers
@@ -167,12 +169,17 @@ impl RaftRouter {
                 .collect();
 
             if missing.is_empty() {
-                tracing::info!(connected = ?connected, "all required raft peers are connected");
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                tracing::warn!(missing = ?missing, connected = ?connected, "timed out waiting for raft peers");
-                return Err(missing);
+                let connected_since = all_connected_since.get_or_insert_with(Instant::now);
+                if connected_since.elapsed() >= RAFT_BOOTSTRAP_PEER_STABILITY {
+                    tracing::info!(connected = ?connected, "all required raft peers are connected");
+                    return Ok(());
+                }
+            } else {
+                all_connected_since = None;
+                if Instant::now() >= deadline {
+                    tracing::warn!(missing = ?missing, connected = ?connected, "timed out waiting for raft peers");
+                    return Err(missing);
+                }
             }
             if last_progress_log.elapsed() >= Duration::from_secs(2) {
                 tracing::info!(missing = ?missing, connected = ?connected, "still waiting for raft peers");

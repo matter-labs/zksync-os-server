@@ -421,6 +421,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     node_startup_state.assert_consistency();
+    if node_startup_state.repositories_persisted_block + 1 == starting_block
+        && node_startup_state.block_replay_storage_last_block < starting_block
+    {
+        // There is no local WAL replay to apply before the pipeline starts, and the repository
+        // DB already contains exactly the block immediately before `starting_block`. This is
+        // enough for RPC to serve genesis/current state while a fresh consensus replica waits
+        // for its first replicated block.
+        repositories.mark_db_ready_to_process_blocks();
+    }
 
     // MN sends `VerifyBatch` requests to the network and receives `PeerVerifyBatchResult`s back.
     let (verify_request_tx, verify_request_rx) = tokio::sync::mpsc::channel::<VerifyBatch>(16);
