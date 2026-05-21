@@ -190,14 +190,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .await
                 .expect("Cannot load remote config from Main Node")
         };
-    let fee_collector_address: &'static str = config
-        .sequencer_config
-        .fee_collector_address
-        .to_string()
-        .leak();
-    GENERAL_METRICS.fee_collector_address[&fee_collector_address].set(1);
-    GENERAL_METRICS.chain_id.set(chain_id);
-
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
     let l1_provider = build_node_provider(&config.l1_provider_config, ProviderKind::L1).await;
