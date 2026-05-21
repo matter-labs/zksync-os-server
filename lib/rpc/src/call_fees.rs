@@ -14,12 +14,18 @@ pub struct CallFees {
 
 impl CallFees {
     // todo(EIP-4844): handle blob fees
+    /// `relax_fee_validation` is set by callers (`eth_estimateGas`, `eth_simulateV1` with
+    /// `validation=false`) that need to accept requests whose fee fields would otherwise
+    /// fail adequacy checks against the block basefee. With the flag set, an under-priced
+    /// `max_fee_per_gas` is accepted instead of returning `FeeCapTooLow`; the effective
+    /// price is still derived from the real basefee so downstream gas accounting (e.g. the
+    /// bootloader's pubdata pre-charge) sees realistic numbers.
     pub fn ensure_fees(
         call_gas_price: Option<u128>,
         call_max_fee_per_gas: Option<u128>,
         call_max_priority_fee_per_gas: Option<u128>,
         block_base_fee: u128,
-        for_estimate_gas: bool,
+        relax_fee_validation: bool,
     ) -> Result<Self, CallFeesError> {
         match (
             call_gas_price,
@@ -27,7 +33,7 @@ impl CallFees {
             call_max_priority_fee_per_gas,
         ) {
             (gas_price, None, None) => {
-                let gas_price = match (for_estimate_gas, gas_price) {
+                let gas_price = match (relax_fee_validation, gas_price) {
                     (false, _) => {
                         // either legacy transaction or no fee fields are specified
                         // when no fields are specified, set gas price to zero
@@ -58,8 +64,13 @@ impl CallFees {
                     Some(max_fee_per_gas) => {
                         let max_priority_fee_per_gas = max_priority_fee_per_gas.unwrap_or_default();
 
-                        // only enforce the fee cap if provided input is not zero
-                        if !(max_fee_per_gas == 0 && max_priority_fee_per_gas == 0)
+                        // Only enforce the fee cap when the caller wants strict validation
+                        // and the request actually carried a non-zero fee. Estimate/simulate
+                        // paths bypass the cap so that under-priced requests still execute.
+                        let request_carries_fee =
+                            !(max_fee_per_gas == 0 && max_priority_fee_per_gas == 0);
+                        if !relax_fee_validation
+                            && request_carries_fee
                             && max_fee_per_gas < block_base_fee
                         {
                             return Err(CallFeesError::FeeCapTooLow);

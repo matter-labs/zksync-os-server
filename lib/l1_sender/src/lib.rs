@@ -74,6 +74,11 @@ const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 /// to reach 3 confirmations for such transactions
 const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
 const OPERATOR_METRICS_POLL_INTERVAL: Duration = Duration::from_secs(60);
+/// Gas limit used when `eth_simulateV1` is unavailable or fails to produce a usable
+/// estimate for a tx. Historically the L1 sender used this as a flat per-tx limit;
+/// it is generously sized for the bounded set of commit/prove/execute calls and
+/// clears the bootloader's pubdata pre-charge at production fee levels.
+const L1_GAS_LIMIT_FALLBACK: u64 = 15_000_000;
 
 #[derive(Debug, Clone, Copy)]
 struct FeeParams {
@@ -662,7 +667,9 @@ where
     /// state would mis-estimate gas — or revert outright — for any command after the first.
     ///
     /// Returns `2 * gas_used` per call to leave headroom for state drift between
-    /// simulation and actual inclusion.
+    /// simulation and actual inclusion. If `eth_simulateV1` is unavailable or fails
+    /// to produce a usable estimate, falls back to [`L1_GAS_LIMIT_FALLBACK`] so the
+    /// L1 sender keeps making progress.
     async fn estimate_gas_limits(
         &self,
         commands: &[Input],
@@ -729,32 +736,54 @@ where
             ..Default::default()
         };
 
-        let results = self
-            .provider
-            .simulate(&payload)
-            .pending()
-            .await
-            .context("eth_simulateV1 for L1 sender gas estimation")?;
-        let block = results
-            .into_iter()
-            .next()
-            .context("eth_simulateV1 returned no blocks")?;
-        anyhow::ensure!(
-            block.calls.len() == commands.len(),
-            "eth_simulateV1 returned {} call results for {} commands",
-            block.calls.len(),
-            commands.len(),
-        );
+        // Any failure to obtain a usable estimate degrades to the historical 15M per
+        // tx so the L1 sender keeps making progress. Per-call reverts inside an
+        // otherwise-successful response fall back per-tx (other calls keep their
+        // simulated estimate); whole-response failures fall back across the batch.
+        let block = match self.provider.simulate(&payload).pending().await {
+            Ok(results) => match results.into_iter().next() {
+                Some(block) if block.calls.len() == commands.len() => block,
+                Some(block) => {
+                    tracing::warn!(
+                        returned = block.calls.len(),
+                        expected = commands.len(),
+                        "eth_simulateV1 returned mismatched call count, falling back to {L1_GAS_LIMIT_FALLBACK} per tx",
+                    );
+                    return Ok(vec![L1_GAS_LIMIT_FALLBACK; commands.len()]);
+                }
+                None => {
+                    tracing::warn!(
+                        "eth_simulateV1 returned no blocks, falling back to {L1_GAS_LIMIT_FALLBACK} per tx",
+                    );
+                    return Ok(vec![L1_GAS_LIMIT_FALLBACK; commands.len()]);
+                }
+            },
+            Err(err) => {
+                tracing::warn!(
+                    %err,
+                    "eth_simulateV1 unavailable or errored, falling back to {L1_GAS_LIMIT_FALLBACK} per tx",
+                );
+                return Ok(vec![L1_GAS_LIMIT_FALLBACK; commands.len()]);
+            }
+        };
 
-        let mut gas_limits = Vec::with_capacity(block.calls.len());
-        for (i, call) in block.calls.iter().enumerate() {
-            anyhow::ensure!(
-                call.status,
-                "eth_simulateV1 call {i} reverted: {:?}",
-                call.return_data,
-            );
-            gas_limits.push(call.gas_used.saturating_mul(2));
-        }
+        let gas_limits = block
+            .calls
+            .iter()
+            .enumerate()
+            .map(|(i, call)| {
+                if call.status {
+                    call.gas_used.saturating_mul(2)
+                } else {
+                    tracing::warn!(
+                        tx_index = i,
+                        return_data = ?call.return_data,
+                        "eth_simulateV1 call reverted, falling back to {L1_GAS_LIMIT_FALLBACK}",
+                    );
+                    L1_GAS_LIMIT_FALLBACK
+                }
+            })
+            .collect();
         Ok(gas_limits)
     }
 
