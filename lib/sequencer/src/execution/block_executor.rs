@@ -16,7 +16,6 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{OverlayBuffer, ReadStateHistory, WriteState};
 use zksync_os_tx_validators::deployment_filter;
 use zksync_os_tx_validators::policy_client::AccessType;
-use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
 /// Executes blocks, while only updating local in-memory state (mempool, block context).
 /// Does not persist anything to disk.
@@ -29,9 +28,6 @@ where
     pub block_context_provider: BlockContextProvider<Subpool>,
     pub state: State,
     pub config: SequencerConfig,
-    /// Controls transaction acceptance state.
-    /// When max_blocks_to_produce limit is reached, sequencer sends NotAccepting to stop RPC from accepting new txs.
-    pub tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     /// TEMPORARY: `BlockExecutor` waits for `BlockApplier` to apply block `N`
     /// before starting block `N + 1`. This works around an `OverlayBuffer` bug
     /// that reproduces during rebuilds when the runtime truncates base state.
@@ -61,9 +57,6 @@ where
         output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        // Track how many Produce commands we've processed (for `sequencer_max_blocks_to_produce` config)
-        let mut produced_blocks_count = 0u64;
-
         // Only used for metrics/logs
         let mut last_processed_block_at: Option<Instant> = None;
         // `BlockExecutor` doesn't persist/update state after block execution.
@@ -85,19 +78,6 @@ where
             )
             .await?;
 
-            // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
-            if matches!(cmd, BlockCommand::Produce(_))
-                && let Some(limit) = self.config.max_blocks_to_produce
-            {
-                check_block_production_limit(
-                    limit,
-                    produced_blocks_count,
-                    &self.tx_acceptance_state_sender,
-                    &state_reporter,
-                )
-                .await;
-                produced_blocks_count += 1;
-            }
             state_reporter.enter_state(SequencerState::WaitingForTransaction);
 
             let prepared_command = self.block_context_provider.prepare_command(cmd).await?;
@@ -247,32 +227,6 @@ async fn wait_for_block_applier(
         "BlockExecutor resumed after BlockApplier caught up"
     );
     Ok(())
-}
-
-/// Checks if block production limit has been reached.
-/// If limit is reached, signals to stop accepting transactions and awaits indefinitely (never returns).
-/// Should only be called for Produce commands.
-async fn check_block_production_limit(
-    limit: u64,
-    already_produced_blocks_count: u64,
-    tx_acceptance_state_sender: &watch::Sender<TransactionAcceptanceState>,
-    state_reporter: &ComponentStateReporter,
-) {
-    if already_produced_blocks_count >= limit {
-        tracing::warn!(
-            already_produced_blocks_count,
-            limit,
-            "Reached max_blocks_to_produce limit, stopping transaction acceptance"
-        );
-
-        // Signal to RPC that we're no longer accepting transactions
-        let _ = tx_acceptance_state_sender.send(TransactionAcceptanceState::NotAccepting(vec![
-            NotAcceptingReason::BlockProductionDisabled,
-        ]));
-
-        state_reporter.enter_state(SequencerState::ConfiguredBlockLimitReached);
-        std::future::pending::<()>().await;
-    }
 }
 
 fn make_deployment_filter(

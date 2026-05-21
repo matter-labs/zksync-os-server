@@ -26,6 +26,9 @@ where
     /// Channel to send new canonized blocks to for the node to replay.
     /// They are sent to `NodeCommandSource` and then through the whole pipeline.
     pub canonized_blocks_for_execution: mpsc::UnboundedSender<ReplayRecord>,
+    /// Releases `ConsensusNodeCommandSource` to emit the next Produce command
+    /// after this component accepts/proposes the previous produced block.
+    pub produce_acks: mpsc::Sender<()>,
 }
 
 #[async_trait]
@@ -199,6 +202,11 @@ where
                                 .enter_state(BlockCanonizerState::ProposingToConsensus);
                             let proposed = replay_record.clone();
                             self.consensus.propose(proposed).await?;
+                            if matches!(cmd_type, BlockCommandType::Produce)
+                                && self.produce_acks.send(()).await.is_err()
+                            {
+                                tracing::info!("produce ack channel closed");
+                            }
                             produced_queue.push_back(BlockPayload {
                                 output: block_output,
                                 record: replay_record,

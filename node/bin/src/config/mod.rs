@@ -1770,7 +1770,6 @@ impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
             block_dump_path: c.sequencer_config.block_dump_path.clone(),
             block_gas_limit: c.sequencer_config.block_gas_limit,
             block_pubdata_limit_bytes: c.sequencer_config.block_pubdata_limit_bytes,
-            max_blocks_to_produce: c.sequencer_config.max_blocks_to_produce,
             interop_roots_per_tx: c.sequencer_config.interop_roots_per_tx,
             tx_validator: {
                 let df = &c.sequencer_config.tx_validator.deployment_filter;

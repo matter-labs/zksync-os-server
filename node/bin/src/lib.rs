@@ -1054,7 +1054,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             repositories.clone(),
             finality_storage.clone(),
             stop_receiver.clone(),
-            tx_acceptance_state_sender,
             chain_id,
             verify_batch_rx,
             outgoing_verify_results.clone(),
@@ -1168,8 +1167,10 @@ async fn run_main_node_pipeline(
     );
 
     let monitor = BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver);
+    let pipeline_gate = monitor.subscribe_gate();
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::unbounded_channel();
+    let (produce_ack_sender, produce_acks) = tokio::sync::mpsc::channel(1);
     let (applied_block_number_sender, applied_block_number_receiver) =
         watch::channel(starting_block - 1);
 
@@ -1183,18 +1184,22 @@ async fn run_main_node_pipeline(
                 .clone()
                 .map(Into::into),
             replays_to_execute,
+            produce_acks,
+            pipeline_gate,
+            max_blocks_to_produce: config.sequencer_config.max_blocks_to_produce,
+            tx_acceptance_state_sender,
             leadership,
         })
         .pipe(BlockExecutor {
             block_context_provider,
             state: state.clone(),
             config: config.into(),
-            tx_acceptance_state_sender,
             applied_block_number_receiver,
         })
         .pipe(BlockCanonizer {
             consensus: canonization_engine,
             canonized_blocks_for_execution: replays_to_execute_sender,
+            produce_acks: produce_ack_sender,
         })
         .pipe(BlockApplier {
             state: state.clone(),
@@ -1416,7 +1421,6 @@ async fn run_en_pipeline(
     repositories: impl WriteRepository + Clone,
     finality: impl ReadFinality + Clone,
     stop_receiver: watch::Receiver<bool>,
-    tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
@@ -1432,17 +1436,18 @@ async fn run_en_pipeline(
 
     let monitor =
         BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver.clone());
+    let pipeline_gate = monitor.subscribe_gate();
 
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
             replays_for_sequencer,
             up_to_block: config.sequencer_config.en_sync_up_to_block,
+            pipeline_gate,
         })
         .pipe(BlockExecutor {
             block_context_provider,
             state: state.clone(),
             config: config.into(),
-            tx_acceptance_state_sender,
             applied_block_number_receiver,
         })
         .pipe(BlockApplier {
