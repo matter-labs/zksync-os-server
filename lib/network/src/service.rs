@@ -200,6 +200,7 @@ impl NetworkService {
         };
         let fork_id = chain_spec.fork_id(&genesis);
         let boot_nodes = resolve_boot_nodes_with_retry(config.boot_nodes.clone()).await?;
+        let trusted_nodes = boot_nodes.clone();
         tracing::info!(?genesis, ?fork_id, "initializing p2p network service");
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
         let cfg_builder = RethNetworkConfig::builder(config.secret_key, runtime)
@@ -243,6 +244,10 @@ impl NetworkService {
             )
             .peer_config(
                 PeersConfig::default()
+                    // Reth boot nodes seed discovery, but discovery alone does not guarantee a
+                    // direct RLPx session to each configured consensus peer. Keep configured
+                    // peers in the trusted set so the peer manager actively reconnects to them.
+                    .with_trusted_nodes(trusted_nodes)
                     // Sets peer ban duration to 1 second, effectively disabling it
                     .with_ban_duration(Duration::from_secs(1))
                     // Keep backoff durations short so that consensus nodes reconnect quickly

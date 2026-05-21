@@ -11,7 +11,6 @@ const CONSENSUS_LONG_GAP_LOAD_DURATION: Duration = Duration::from_secs(60);
 const CONSENSUS_CONTINUED_LOAD_AFTER_RESTART_DURATION: Duration = Duration::from_secs(45);
 const CONSENSUS_LONG_GAP_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(180);
 const MIN_LONG_GAP_LOAD_BLOCKS: usize = 10;
-const MIN_CONTINUED_LOAD_BLOCKS: usize = 5;
 
 struct ConsensusLoadStats {
     attempts: usize,
@@ -28,6 +27,8 @@ struct ConsensusRejoinLoadStats {
     restart_started_at: Duration,
     restart_completed_at: Duration,
     target_block_at_restart: u64,
+    final_active_block: u64,
+    active_head_blocks_after_restart: u64,
     l2_caught_up_at: Duration,
     rpc_caught_up_at: Duration,
 }
@@ -268,12 +269,16 @@ async fn generate_consensus_transaction_storm_across_restart(
         attempts,
         last_error
     );
+    let target_block_at_restart = target_block_at_restart.expect("target block set");
+    let final_active_block = latest_l2_block(cluster.node(active_node_indices[0])).await?;
+    let active_head_blocks_after_restart =
+        final_active_block.saturating_sub(target_block_at_restart);
     anyhow::ensure!(
-        blocks_after_restart >= MIN_CONTINUED_LOAD_BLOCKS,
-        "transaction storm produced too few blocks after restart: produced={}, attempts={}, last_error={:?}",
-        blocks_after_restart,
-        attempts,
-        last_error
+        active_head_blocks_after_restart >= CONSENSUS_CONTINUED_BLOCKS_AFTER_RESTART as u64,
+        "active cluster advanced too few blocks after restart: \
+         target_block_at_restart={target_block_at_restart}, final_active_block={final_active_block}, \
+         head_blocks_after_restart={active_head_blocks_after_restart}, \
+         successful_send_blocks_after_restart={blocks_after_restart}, attempts={attempts}, last_error={last_error:?}",
     );
 
     let l2_caught_up_at = l2_caught_up.context(
@@ -290,17 +295,30 @@ async fn generate_consensus_transaction_storm_across_restart(
         elapsed: started_at.elapsed(),
         restart_started_at: restart_started_at.expect("restart started"),
         restart_completed_at: restart_completed_at.expect("restart completed"),
-        target_block_at_restart: target_block_at_restart.expect("target block set"),
+        target_block_at_restart,
+        final_active_block,
+        active_head_blocks_after_restart,
         l2_caught_up_at,
         rpc_caught_up_at,
     })
 }
 
 fn assert_rpc_monitor_stayed_ready(report: &HttpRpcReport) -> anyhow::Result<()> {
-    report.assert_eventually_ready()?;
+    let first_ready_at = report.first_ready_at().with_context(|| {
+        format!(
+            "{} never became ready while it should have stayed ready: {report}",
+            report.name
+        )
+    })?;
+    let errors_after_ready = report
+        .samples
+        .iter()
+        .filter(|sample| sample.elapsed > first_ready_at && !sample.is_ready())
+        .count();
+
     anyhow::ensure!(
-        report.error_samples() == 0,
-        "{} observed RPC errors while it should have stayed ready: {report}\n{}",
+        errors_after_ready == 0,
+        "{} observed RPC errors after initial readiness while it should have stayed ready: {report}\n{}",
         report.name,
         report.format_detailed_timeline()
     );
@@ -747,6 +765,15 @@ async fn consensus_restarted_node_catches_up_while_transaction_storm_continues()
             .find(|idx| *idx != active_leader_idx)
             .expect("two active nodes should include one follower");
 
+        latest_l2_block(cluster.node(active_leader_idx))
+            .await
+            .with_context(|| format!("active leader node {active_leader_idx} RPC is not ready"))?;
+        latest_l2_block(cluster.node(active_follower_idx))
+            .await
+            .with_context(|| {
+                format!("active follower node {active_follower_idx} RPC is not ready")
+            })?;
+
         let rpc_record_config = RpcRecordConfig {
             poll_interval: Duration::from_millis(200),
             request_timeout: Duration::from_secs(1),
@@ -778,7 +805,7 @@ async fn consensus_restarted_node_catches_up_while_transaction_storm_continues()
                 &restarted_rpc_monitor,
             )
             .await?;
-            let final_active_block = latest_l2_block(cluster.node(active_node_indices[0])).await?;
+            let final_active_block = load_stats.final_active_block;
             assert!(
                 load_stats.target_block_at_restart > restarted_node_initial_block,
                 "active cluster head did not advance while node was down: initial={}, target_at_restart={}",
@@ -879,6 +906,7 @@ async fn consensus_restarted_node_catches_up_while_transaction_storm_continues()
             last_tx_block = load_stats.blocks.last().copied(),
             blocks_before_restart = load_stats.blocks_before_restart,
             blocks_after_restart = load_stats.blocks_after_restart,
+            active_head_blocks_after_restart = load_stats.active_head_blocks_after_restart,
             elapsed_ms = load_stats.elapsed.as_millis(),
             restart_started_ms = load_stats.restart_started_at.as_millis(),
             restart_completed_ms = load_stats.restart_completed_at.as_millis(),

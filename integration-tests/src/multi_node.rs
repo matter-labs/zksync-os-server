@@ -21,6 +21,19 @@ const TEST_ELECTION_TIMEOUT_MAX: Duration = Duration::from_secs(4);
 const NODE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
 const NODE_START_TIMEOUT: Duration = Duration::from_secs(180);
 
+fn consensus_boot_nodes_for_node(
+    node_records: &[zksync_os_network::NodeRecord],
+    spawned_nodes: usize,
+    node_index: usize,
+) -> Vec<zksync_os_network::TrustedPeer> {
+    node_records
+        .iter()
+        .take(spawned_nodes)
+        .enumerate()
+        .filter_map(|(peer_index, record)| (peer_index != node_index).then_some((*record).into()))
+        .collect()
+}
+
 #[derive(Debug)]
 enum NodeSlot {
     Running(Box<Tester>),
@@ -655,12 +668,12 @@ impl MultiNodeTesterBuilder {
             .enumerate()
             .map(|(i, (secret, locked_port))| {
                 let peers = peer_ids.clone();
+                // Configure every other started consensus member as a network peer. The network
+                // service treats configured boot nodes as trusted peers, so this becomes a
+                // maintained full mesh instead of relying on discv5 discovery eventually finding
+                // the follower-follower connection after the current leader is stopped.
                 let boot_nodes: Vec<zksync_os_network::TrustedPeer> =
-                    node_records
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(node_idx, record)| (node_idx != i).then_some((*record).into()))
-                        .collect();
+                    consensus_boot_nodes_for_node(&node_records, num_nodes, i);
                 let l1 = l1.clone();
                 async move {
                     let network_port = locked_port.port;
