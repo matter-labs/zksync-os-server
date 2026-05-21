@@ -83,7 +83,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let mut previous_block_number = parent_block_number;
         let mut previous_timestamp = parent_timestamp;
 
-        for sim_block in block_state_calls {
+        for mut sim_block in block_state_calls {
             // Per the eth_simulateV1 spec, prevrandao defaults to zero for simulated blocks
             // unless explicitly overridden via `blockOverrides.random`.
             block_context.mix_hash = U256::ZERO;
@@ -100,18 +100,39 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             let simulation_view =
                 OverriddenStateView::new(base_state.clone(), Arc::clone(&overlays));
 
-            let state_overrides = match sim_block.state_overrides {
-                Some(state_overrides) => {
-                    if state_overrides
-                        .values()
-                        .any(|account| account.move_precompile_to.is_some())
-                    {
-                        return Err(EthCallError::SimulateMovePrecompileNotSupported);
+            let mut user_state_overrides = sim_block.state_overrides.unwrap_or_default();
+            if !validation {
+                // Two adjustments are needed for `validation=false` to actually run a tx
+                // through `run_block` end-to-end (the RPC-layer `ensure_fees` relaxation
+                // only suppresses the early `FeeCapTooLow` error):
+                //
+                // 1. Clamp each request's `max_fee_per_gas` / `gas_price` up to the real
+                //    basefee so the bootloader's adequacy check (`gas_price >= basefee`)
+                //    passes. With real basefee preserved during execution, this also keeps
+                //    pubdata accounting accurate (`native_per_gas` is non-zero).
+                // 2. Auto-bump balance for each call's `from` address so the bootloader's
+                //    `balance >= gas_limit * gas_price + value` check doesn't reject txs
+                //    from unfunded simulation senders.
+                //
+                // User-supplied overrides take precedence in both cases.
+                let basefee = block_context.eip1559_basefee.saturating_to::<u128>();
+                for call in &mut sim_block.calls {
+                    clamp_request_fees_to_basefee(call, basefee);
+                    let from = call.from.unwrap_or_default();
+                    let entry = user_state_overrides.entry(from).or_default();
+                    if entry.balance.is_none() {
+                        entry.balance = Some(U256::MAX);
                     }
-                    build_state_override_maps(&simulation_view, state_overrides)
                 }
-                None => OwnedOverrides::default(),
-            };
+            }
+            if user_state_overrides
+                .values()
+                .any(|account| account.move_precompile_to.is_some())
+            {
+                return Err(EthCallError::SimulateMovePrecompileNotSupported);
+            }
+            let state_overrides =
+                build_state_override_maps(&simulation_view, user_state_overrides);
             let overridden_view =
                 OverriddenStateView::new(simulation_view, state_overrides.clone());
             let txs = self.create_simulation_txs(
@@ -538,6 +559,26 @@ fn simulation_default_gas_limit(
     // Cap the per-call default at `per_call_gas_cap` to avoid handing a single call the entire
     // block's gas when the block limit is large and few calls specify gas explicitly.
     Ok(((block_gas_limit - total_specified_gas) / calls_without_gas).min(per_call_gas_cap))
+}
+
+/// Clamps the request's effective fee fields up to `basefee` so the tx passes the
+/// bootloader's adequacy check during simulation. Whichever fee shape the caller used
+/// (legacy `gas_price` or EIP-1559 `max_fee_per_gas`/`max_priority_fee_per_gas`) is
+/// preserved; only the magnitude is raised. If no fees were supplied at all, defaults
+/// to legacy `gas_price = basefee` to avoid promoting the request to EIP-1559 (which
+/// would require `max_priority_fee_per_gas` to also be present).
+fn clamp_request_fees_to_basefee(call: &mut TransactionRequest, basefee: u128) {
+    if let Some(gas_price) = call.gas_price {
+        call.gas_price = Some(gas_price.max(basefee));
+    } else if call.max_fee_per_gas.is_some() || call.max_priority_fee_per_gas.is_some() {
+        let max_fee = call.max_fee_per_gas.unwrap_or(0).max(basefee);
+        call.max_fee_per_gas = Some(max_fee);
+        if call.max_priority_fee_per_gas.is_none() {
+            call.max_priority_fee_per_gas = Some(0);
+        }
+    } else {
+        call.gas_price = Some(basefee);
+    }
 }
 
 struct SimulatedTx {

@@ -14,9 +14,12 @@ pub struct CallFees {
 
 impl CallFees {
     // todo(EIP-4844): handle blob fees
-    /// `relax_fee_validation` skips the `FeeCapTooLow` check so `eth_estimateGas` and
-    /// `eth_simulateV1` with `validation=false` accept under-priced requests. The effective
-    /// price is still derived from the real basefee.
+    /// `relax_fee_validation` skips the `FeeCapTooLow` check so under-priced requests are
+    /// accepted by `eth_estimateGas` and `eth_simulateV1` (with `validation=false`) instead
+    /// of being rejected. The resulting `gas_price` is the request's own value (or 0 when
+    /// no fees were supplied) — callers that need the bootloader to actually accept the tx
+    /// must ensure `gas_price >= basefee` themselves (e.g. by clamping the request's fees
+    /// upstream before calling `ensure_fees`).
     pub fn ensure_fees(
         call_gas_price: Option<u128>,
         call_max_fee_per_gas: Option<u128>,
@@ -38,10 +41,7 @@ impl CallFees {
                     }
                     // ignore base fee when tx's gas price is missing
                     (_, None | Some(0)) => 0,
-                    // only enforce the fee cap if provided input is not zero
-                    (_, Some(gas_price)) if gas_price < block_base_fee => {
-                        return Err(CallFeesError::FeeCapTooLow);
-                    }
+                    // Under relaxation, accept under-priced gas_price as-is.
                     (_, Some(gas_price)) => gas_price,
                 };
                 Ok(Self {
