@@ -331,7 +331,7 @@ mod tests {
 
     fn test_replay_record(block_number: u64) -> ReplayRecord {
         ReplayRecord {
-            block_context: zksync_os_interface::types::BlockContext {
+            block_context: zksync_os_storage_api::BlockContext {
                 block_number,
                 ..Default::default()
             },

@@ -608,7 +608,7 @@ mod tests {
         block_number: BlockNumber,
         previous_block_hash: BlockHash,
     ) -> ReplayRecord {
-        let mut block_context = zksync_os_interface::types::BlockContext {
+        let mut block_context = zksync_os_storage_api::BlockContext {
             block_number,
             ..Default::default()
         };
