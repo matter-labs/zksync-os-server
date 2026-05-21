@@ -1,5 +1,5 @@
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
-use alloy::network::{TransactionBuilder, TxSigner};
+use alloy::network::{NetworkTransactionBuilder, TransactionBuilder, TxSigner};
 use alloy::primitives::{Address, BlockHash, IntoLogData, TxHash, U256};
 use alloy::providers::Provider;
 use alloy::rpc::json_rpc::RpcRecv;

@@ -492,6 +492,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 effective_verification_policy(&batch_verification_policy_config, &l1_state);
             NetworkService::new(
                 config.network_config.clone().into(),
+                runtime.clone(),
                 ZksProtocolConfig::MainNode(MainNodeProtocolConfig {
                     accepted_verifier_signers,
                     verify_result_tx: verify_result_tx.clone(),
@@ -513,6 +514,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .collect();
             NetworkService::new(
                 config.network_config.clone().into(),
+                runtime.clone(),
                 ZksProtocolConfig::ExternalNode(ExternalNodeProtocolConfig {
                     starting_block: Arc::new(RwLock::new(starting_block)),
                     record_overrides,
@@ -937,22 +939,29 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
         tree_for_rpc,
     );
-    runtime.spawn_critical_task(
-        "l1 batch persist watcher",
-        L1PersistBatchWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            node_startup_state
-                .l1_state
-                .settlement_layer_intervals
-                .clone(),
-            persistent_batch_storage.clone(),
-            l1_block_updates.clone(),
-            gateway_block_updates.clone(),
-        )
-        .await
-        .expect("failed to start L1 batch persist watcher")
-        .run(),
-    );
+    runtime.spawn_critical_task("l1 batch persist watcher", {
+        let config = config.l1_watcher_config.clone();
+        let settlement_layer_intervals = node_startup_state
+            .l1_state
+            .settlement_layer_intervals
+            .clone();
+        let persistent_batch_storage = persistent_batch_storage.clone();
+        let l1_block_updates = l1_block_updates.clone();
+        let gateway_block_updates = gateway_block_updates.clone();
+        async move {
+            L1PersistBatchWatcher::create_watcher(
+                config.into(),
+                settlement_layer_intervals,
+                persistent_batch_storage,
+                l1_block_updates,
+                gateway_block_updates,
+            )
+            .await
+            .expect("failed to start L1 batch persist watcher")
+            .run()
+            .await
+        }
+    });
 
     // ========== Start Sequencer ===========
     let repositories_clone = repositories.clone();

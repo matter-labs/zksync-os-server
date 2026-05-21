@@ -9,13 +9,15 @@ use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_genesis::Genesis;
 use zksync_os_merkle_tree::{
-    MerkleTree, MerkleTreeColumnFamily, MerkleTreeVersion, RocksDBWrapper, TreeEntry,
+    MerkleTree, MerkleTreeColumnFamily, MerkleTreeVersion, Patched, RocksDBWrapper, TreeEntry,
 };
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
+use zksync_os_pipeline::{HasBlockRangeEnd, PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
 use zksync_os_sequencer::model::blocks::AppliedBlock;
 use zksync_os_storage_api::TreeBlock;
+
+const MAX_BLOCKS_PER_ITERATION: usize = 32;
 
 pub(crate) struct TreeManager {
     pub tree: MerkleTree<RocksDBWrapper>,
@@ -44,85 +46,116 @@ impl PipelineComponent for TreeManager {
         loop {
             state_reporter.enter_state(GenericComponentState::Idle);
 
-            let Some(AppliedBlock {
-                output: block_output,
-                record: replay_record,
-            }) = input.recv_and_record_picked(&state_reporter).await
-            else {
+            let mut blocks: Vec<AppliedBlock> = vec![];
+            let received = input.recv_many(&mut blocks, MAX_BLOCKS_PER_ITERATION).await;
+            if received == 0 {
                 tracing::info!("inbound channel closed");
                 return Ok(());
-            };
+            }
+            for block in &blocks {
+                state_reporter.record_picked(
+                    block.block_number(),
+                    block.block_timestamp(),
+                    block.batch_number(),
+                );
+            }
+
             state_reporter.enter_state(GenericComponentState::Active);
             let started_at = Instant::now();
-            let block_number = block_output.header.number;
 
-            if block_number <= last_processed_block {
+            let first_block_number = blocks[0].output.header.number;
+            if first_block_number <= last_processed_block {
                 let mut tree_clone = self.tree.clone();
                 tokio::task::spawn_blocking(move || {
-                    tree_clone.truncate_recent_versions(block_number)
+                    tree_clone.truncate_recent_versions(first_block_number)
                 })
                 .await??;
             }
+
+            let last_block_number = blocks.last().unwrap().output.header.number;
+            let block_count = blocks.len();
             tracing::debug!(
-                "Processing {} storage writes in tree for block {}",
-                block_output.storage_writes.len(),
-                block_number
+                "Processing {block_count} tree blocks {first_block_number}..{last_block_number}"
             );
 
-            // Convert StorageWrite to TreeEntry
-            let tree_entries = block_output
-                .storage_writes
-                .iter()
-                .map(|write| TreeEntry {
-                    key: write.key,
-                    value: write.value,
-                })
-                .collect::<Vec<_>>();
+            let db_clone = self.tree.db().clone();
+            let (blocks, outputs) = tokio::task::spawn_blocking(move || {
+                let patched = Patched::new(db_clone);
+                let mut patched_tree = MerkleTree::new(patched)?;
+                let mut outputs = Vec::with_capacity(blocks.len());
+                for block in &blocks {
+                    let entries: Vec<TreeEntry> = block
+                        .output
+                        .storage_writes
+                        .iter()
+                        .map(|write| TreeEntry {
+                            key: write.key,
+                            value: write.value,
+                        })
+                        .collect();
+                    outputs.push(patched_tree.extend(&entries)?);
+                }
+                // Single RocksDB write for all blocks.
+                patched_tree.flush()?;
+                Ok::<_, anyhow::Error>((blocks, outputs))
+            })
+            .await??;
 
-            let count = tree_entries.len();
-            let mut tree_clone = self.tree.clone();
-            let tree_batch_output =
-                tokio::task::spawn_blocking(move || tree_clone.extend(&tree_entries)).await??;
             last_processed_block = self
                 .tree
                 .latest_version()?
-                .expect("uninitialized tree after applying a block");
-            assert_eq!(last_processed_block, block_number);
+                .expect("uninitialized tree after applying blocks");
+            assert_eq!(last_processed_block, last_block_number);
 
-            tracing::debug!(
-                block_number = block_number,
-                next_free_slot = tree_batch_output.leaf_count,
-                "Processed {} entries in tree, output: {:?}",
-                count,
-                tree_batch_output
-            );
+            let elapsed = started_at.elapsed();
+            let per_block_time = elapsed.div(block_count as u32);
 
-            TREE_METRICS
-                .entry_time
-                .observe(started_at.elapsed().div(count.max(1) as u32));
-            TREE_METRICS.unique_leafs.set(tree_batch_output.leaf_count);
-            TREE_METRICS.block_time.observe(started_at.elapsed());
-
-            TREE_METRICS.processing_range.observe(count.max(1) as u64);
-            TREE_METRICS.block_number.set(block_number);
-            let tree_data = BlockMerkleTreeData {
-                block_start: MerkleTreeVersion {
-                    tree: self.tree.clone(),
-                    block: block_number - 1,
-                },
-                block_end: MerkleTreeVersion {
-                    tree: self.tree.clone(),
-                    block: block_number,
-                },
-            };
-            output.send_and_record(
-                TreeBlock {
+            // Emit per-block metrics and forward each block downstream.
+            for (block, tree_block_output) in blocks.into_iter().zip(outputs) {
+                let AppliedBlock {
                     output: block_output,
                     record: replay_record,
-                    tree: tree_data,
-                },
-                &state_reporter,
-            )?;
+                } = block;
+                let block_number = block_output.header.number;
+                let count = block_output.storage_writes.len();
+                tracing::debug!(
+                    "Processed {} storage writes in tree for block {}",
+                    count,
+                    block_number
+                );
+
+                TREE_METRICS
+                    .entry_time
+                    .observe(per_block_time.div(count.max(1) as u32));
+                TREE_METRICS.unique_leafs.set(tree_block_output.leaf_count);
+                TREE_METRICS.block_time.observe(per_block_time);
+                TREE_METRICS.processing_range.observe(count.max(1) as u64);
+                TREE_METRICS.block_number.set(block_number);
+                tracing::debug!(
+                    block_number,
+                    "Processed {count} entries in tree for block {block_number}, next_free_slot={}, output: {tree_block_output:?}",
+                    tree_block_output.leaf_count
+                );
+
+                let tree_block_data = BlockMerkleTreeData {
+                    block_start: MerkleTreeVersion {
+                        tree: self.tree.clone(),
+                        block: block_number - 1,
+                    },
+                    block_end: MerkleTreeVersion {
+                        tree: self.tree.clone(),
+                        block: block_number,
+                    },
+                };
+                output.send_and_record(
+                    TreeBlock {
+                        output: block_output,
+                        record: replay_record,
+                        tree: tree_block_data,
+                    },
+                    &state_reporter,
+                )?;
+            }
         }
     }
 }

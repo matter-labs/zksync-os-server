@@ -4,12 +4,13 @@ use crate::{
 };
 use alloy::primitives::{B256, FixedBytes};
 use zk_ee::utils::Bytes32;
-use zk_ee_dev::utils::Bytes32 as Bytes32Dev;
+use zk_ee_prev::utils::Bytes32 as Bytes32Prev;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
-use zk_os_basic_system_dev::system_implementation::flat_storage_model::FlatStorageLeaf as FlatStorageLeafDev;
+use zk_os_basic_system_prev::system_implementation::flat_storage_model::FlatStorageLeaf as FlatStorageLeafPrev;
 use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
-use zk_os_forward_system_dev::run::{
-    LeafProof as LeafProofDev, ReadStorage as ReadStorageDev, ReadStorageTree as ReadStorageTreeDev,
+use zk_os_forward_system_prev::run::{
+    LeafProof as LeafProofPrev, ReadStorage as ReadStoragePrev,
+    ReadStorageTree as ReadStorageTreePrev,
 };
 use zksync_os_merkle_tree_api::Leaf;
 
@@ -180,19 +181,19 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
     }
 }
 
-impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageDev for MerkleTreeVersion<DB, P> {
-    fn read(&mut self, key: Bytes32Dev) -> Option<Bytes32Dev> {
-        <Self as ReadStorageTreeDev>::tree_index(self, key).and_then(|index| {
+impl<DB: Database + 'static, P: TreeParams + 'static> ReadStoragePrev for MerkleTreeVersion<DB, P> {
+    fn read(&mut self, key: Bytes32Prev) -> Option<Bytes32Prev> {
+        <Self as ReadStorageTreePrev>::tree_index(self, key).and_then(|index| {
             self.traverse_to_leaf(index)
-                .map(|Leaf { value, .. }| fixed_bytes_to_bytes32_dev(value))
+                .map(|Leaf { value, .. }| fixed_bytes_to_bytes32_prev(value))
         })
     }
 }
 
-impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTreeDev
+impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTreePrev
     for MerkleTreeVersion<DB, P>
 {
-    fn tree_index(&mut self, key: Bytes32Dev) -> Option<u64> {
+    fn tree_index(&mut self, key: Bytes32Prev) -> Option<u64> {
         self.tree
             .db()
             .indices(self.block, &[FixedBytes::from_slice(key.as_u8_ref())])
@@ -203,8 +204,8 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTreeDev
             })
     }
 
-    fn merkle_proof(&mut self, tree_index: u64) -> LeafProofDev {
-        let mut sibling_hashes = Box::new([Bytes32Dev::zero(); 64]);
+    fn merkle_proof(&mut self, tree_index: u64) -> LeafProofPrev {
+        let mut sibling_hashes = Box::new([Bytes32Prev::zero(); 64]);
 
         let mut current_node = self
             .tree
@@ -272,9 +273,9 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTreeDev
             sibling_hashes[i] = self.tree.hasher.empty_subtree_hash(i as u8).0.into();
         }
 
-        LeafProofDev::new(
+        LeafProofPrev::new(
             tree_index,
-            FlatStorageLeafDev {
+            FlatStorageLeafPrev {
                 key: leaf.key.0.into(),
                 value: leaf.value.0.into(),
                 next: leaf.next_index,
@@ -283,7 +284,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTreeDev
         )
     }
 
-    fn prev_tree_index(&mut self, key: Bytes32Dev) -> u64 {
+    fn prev_tree_index(&mut self, key: Bytes32Prev) -> u64 {
         // TODO: callers only invoke this for keys that are absent (membership proofs for missing
         // keys). If the key already exists in the tree, a different code path is needed.
         let res = &self
@@ -306,7 +307,7 @@ pub fn fixed_bytes_to_bytes32(x: B256) -> Bytes32 {
     x.into()
 }
 
-pub fn fixed_bytes_to_bytes32_dev(x: B256) -> Bytes32Dev {
+pub fn fixed_bytes_to_bytes32_prev(x: B256) -> Bytes32Prev {
     let x: [u8; 32] = x.into();
     x.into()
 }

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.20.3](https://github.com/matter-labs/zksync-os-server/compare/v0.20.2...v0.20.3) (2026-05-18)
+
+
+### Features
+
+* **consensus:** Final consensus integration and integration tests ([#1225](https://github.com/matter-labs/zksync-os-server/issues/1225)) ([9068d93](https://github.com/matter-labs/zksync-os-server/commit/9068d9393fc201fc86038d24ff589860855e2587))
+* **l1-sender:** Refresh balance & nonce more often, refactor for simpler method signatures ([#1260](https://github.com/matter-labs/zksync-os-server/issues/1260)) ([e8cdf32](https://github.com/matter-labs/zksync-os-server/commit/e8cdf3293cc26c8caffc1310e9fa08870d8fbd2e))
+* **l1-watcher:** traverse historical GW intervals ([#1285](https://github.com/matter-labs/zksync-os-server/issues/1285)) ([213b433](https://github.com/matter-labs/zksync-os-server/commit/213b433dcc45a108e6af04e73c4578b17066775d))
+* **observability:** jemalloc metrics ([#1284](https://github.com/matter-labs/zksync-os-server/issues/1284)) ([c557017](https://github.com/matter-labs/zksync-os-server/commit/c5570177e13aa34764a8283d05cc4fd498c10176))
+* **observability:** semi-automatic export of config values as metrics  ([#1265](https://github.com/matter-labs/zksync-os-server/issues/1265)) ([09996da](https://github.com/matter-labs/zksync-os-server/commit/09996da6febbf60e10662c78e6c177365d6b99da))
+* **prividium:** integrate PolicyClient over admit + judge ([#1220](https://github.com/matter-labs/zksync-os-server/issues/1220)) ([b00454e](https://github.com/matter-labs/zksync-os-server/commit/b00454e35f6edde8bbb2332c3a56fcfb3fed5311))
+* **revm-checker:** adopt new zksync-os-revm version ([#1267](https://github.com/matter-labs/zksync-os-server/issues/1267)) ([2ddd01a](https://github.com/matter-labs/zksync-os-server/commit/2ddd01a12ba627d07850962c683fc472d7df9d26))
+* **rpc:** Implement eth_simulateV1 ([#1240](https://github.com/matter-labs/zksync-os-server/issues/1240)) ([630e1ce](https://github.com/matter-labs/zksync-os-server/commit/630e1cee177f61035745eb1743b8fe9bc5891b87))
+* separate gateway sender config ([#1277](https://github.com/matter-labs/zksync-os-server/issues/1277)) ([b6c70a9](https://github.com/matter-labs/zksync-os-server/commit/b6c70a9b571664de7c759dc90df1793c024c9aca))
+* update v31 state ([#1293](https://github.com/matter-labs/zksync-os-server/issues/1293)) ([bfd382b](https://github.com/matter-labs/zksync-os-server/commit/bfd382bbdf6f3726cba671c1e65c3075d331e49f))
+
+
+### Bug Fixes
+
+* **migration:** idle when finalized migration channel is closed ([#1290](https://github.com/matter-labs/zksync-os-server/issues/1290)) ([dac983f](https://github.com/matter-labs/zksync-os-server/commit/dac983f444cbdca71dcc1b809b33f0f97e92017b))
+* **raft:** rate-limit ensure_linearizable to silence log spam ([#1283](https://github.com/matter-labs/zksync-os-server/issues/1283)) ([945c19c](https://github.com/matter-labs/zksync-os-server/commit/945c19c8a315189433b96d04e92fa91b51baee7a))
+
 ## [0.20.2](https://github.com/matter-labs/zksync-os-server/compare/v0.20.1...v0.20.2) (2026-05-11)
 
 

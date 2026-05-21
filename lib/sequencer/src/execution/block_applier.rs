@@ -48,6 +48,7 @@ where
                 output: block_output,
                 record: executed_replay,
                 command_type: cmd_type,
+                failed_transactions,
             }) = input.recv_and_record_picked(&state_reporter).await
             else {
                 tracing::info!("inbound channel closed");
@@ -80,7 +81,11 @@ where
 
             state_reporter.enter_state(BlockApplierState::PopulatingRepos);
             self.repositories
-                .populate(block_output.clone(), executed_replay.transactions.clone())
+                .populate(
+                    block_output.clone(),
+                    executed_replay.transactions.clone(),
+                    failed_transactions,
+                )
                 .await?;
 
             self.applied_block_number_sender.send_replace(block_number);

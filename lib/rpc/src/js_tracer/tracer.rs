@@ -1008,7 +1008,7 @@ impl EvmTracer for JsTracer {
 
 pub fn trace_block<V: ViewState + 'static>(
     txs: Vec<ZkTransaction>,
-    block_context: zksync_os_interface::types::BlockContext,
+    block_context: zksync_os_storage_api::BlockContext,
     state_view: V,
     js_tracer_config: String,
 ) -> anyhow::Result<Vec<JsonValue>> {

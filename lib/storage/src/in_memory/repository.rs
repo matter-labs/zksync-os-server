@@ -101,9 +101,33 @@ impl RepositoryInMemory {
         }
         let (block_output, hash) = sealed_block_output.into_parts();
         let header = {
-            let mut h = block_output.header.unseal();
-            h.logs_bloom = block_bloom;
-            h
+            let mut legacy_header = block_output.header.unseal();
+            legacy_header.logs_bloom = block_bloom;
+            alloy::consensus::Header {
+                parent_hash: legacy_header.parent_hash,
+                ommers_hash: legacy_header.ommers_hash,
+                beneficiary: legacy_header.beneficiary,
+                state_root: legacy_header.state_root,
+                transactions_root: legacy_header.transactions_root,
+                receipts_root: legacy_header.receipts_root,
+                logs_bloom: legacy_header.logs_bloom,
+                difficulty: legacy_header.difficulty,
+                number: legacy_header.number,
+                gas_limit: legacy_header.gas_limit,
+                gas_used: legacy_header.gas_used,
+                timestamp: legacy_header.timestamp,
+                extra_data: legacy_header.extra_data,
+                mix_hash: legacy_header.mix_hash,
+                nonce: legacy_header.nonce,
+                base_fee_per_gas: legacy_header.base_fee_per_gas,
+                withdrawals_root: legacy_header.withdrawals_root,
+                blob_gas_used: legacy_header.blob_gas_used,
+                excess_blob_gas: legacy_header.excess_blob_gas,
+                parent_beacon_block_root: legacy_header.parent_beacon_block_root,
+                requests_hash: legacy_header.requests_hash,
+                block_access_list_hash: None,
+                slot_number: None,
+            }
         };
         let block = Arc::new(Sealed::new_unchecked(
             alloy::consensus::Block {

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig};
+use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig, TokioConfig};
 use smart_config::{ConfigRepository, ConfigSources, Environment};
 use std::sync::mpsc;
 use std::{path::Path, path::PathBuf, str::FromStr, time::Duration};
@@ -100,9 +100,11 @@ pub async fn main() {
         .install_default()
         .expect("failed to install rustls ring crypto provider");
 
-    let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
-        .build()
-        .expect("failed to build runtime");
+    let runtime = RuntimeBuilder::new(
+        RuntimeConfig::default().with_tokio(TokioConfig::existing_handle(Handle::current())),
+    )
+    .build()
+    .expect("failed to build runtime");
 
     let opt = Cli::parse();
 

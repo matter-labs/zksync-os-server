@@ -222,10 +222,10 @@ fn compute_prover_input(
             panic!("computing prover input for batch with prover version v1-v5 is not supported");
         }
         ProvingVersion::V6 => {
-            use zk_ee::{
+            use zk_ee_prev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
-            use zk_os_forward_system::run::{
+            use zk_os_forward_system_prev::run::{
                 StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
             };
 
@@ -247,7 +247,8 @@ fn compute_prover_input(
                 .expect("Failed to convert DA commitment scheme");
             generate_proof_input_from_bytes(
                 bin_bytes,
-                BlockMetadataFromOracle::from_interface(replay_record.block_context),
+                // todo: not ideal but will be gone in v0.4.0 with new PIG anyway
+                BlockMetadataFromOracle::from_interface(replay_record.block_context.to_interface()),
                 ProofData {
                     state_root_view: initial_storage_commitment,
                     last_block_timestamp: replay_record.previous_block_timestamp,
@@ -260,10 +261,10 @@ fn compute_prover_input(
             .expect("proof gen failed")
         }
         ProvingVersion::V7 => {
-            use zk_ee_dev::{
+            use zk_ee::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
-            use zk_os_forward_system_dev::run::{
+            use zk_os_forward_system::run::{
                 StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
             };
 
@@ -285,7 +286,8 @@ fn compute_prover_input(
                 .expect("Failed to convert DA commitment scheme");
             generate_proof_input_from_bytes(
                 bin_bytes,
-                BlockMetadataFromOracle::from_interface(replay_record.block_context),
+                // todo: not ideal but will be gone in v0.4.0 with new PIG anyway
+                BlockMetadataFromOracle::from_interface(replay_record.block_context.to_interface()),
                 ProofData {
                     state_root_view: initial_storage_commitment,
                     last_block_timestamp: replay_record.previous_block_timestamp,

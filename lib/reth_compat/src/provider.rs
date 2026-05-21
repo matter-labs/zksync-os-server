@@ -7,7 +7,7 @@ use alloy::primitives::{
 };
 use reth_chainspec::{Chain, ChainInfo, ChainSpec, ChainSpecBuilder, ChainSpecProvider};
 use reth_db_models::StoredBlockBodyIndices;
-use reth_primitives::{Block as EthBlock, EthPrimitives, Receipt, TransactionSigned};
+use reth_ethereum_primitives::{Block as EthBlock, EthPrimitives, Receipt, TransactionSigned};
 use reth_primitives_traits::{Account, Bytecode, RecoveredBlock, SealedHeader};
 use reth_revm::db::BundleState;
 use reth_storage_api::errors::any::AnyError;
@@ -21,8 +21,8 @@ use reth_storage_api::{
 };
 use reth_trie_common::updates::TrieUpdates;
 use reth_trie_common::{
-    AccountProof, HashedPostState, HashedStorage, MultiProof, MultiProofTargets, StorageMultiProof,
-    StorageProof, TrieInput,
+    AccountProof, ExecutionWitnessMode, HashedPostState, HashedStorage, MultiProof,
+    MultiProofTargets, StorageMultiProof, StorageProof, TrieInput,
 };
 use std::fmt::Debug;
 use std::ops::{RangeBounds, RangeInclusive};
@@ -259,7 +259,12 @@ impl<State: ReadStateHistory> StateProofProvider for ZkProvider<State> {
         todo!()
     }
 
-    fn witness(&self, _input: TrieInput, _target: HashedPostState) -> ProviderResult<Vec<Bytes>> {
+    fn witness(
+        &self,
+        _input: TrieInput,
+        _target: HashedPostState,
+        _mode: ExecutionWitnessMode,
+    ) -> ProviderResult<Vec<Bytes>> {
         todo!()
     }
 }
@@ -275,14 +280,6 @@ impl<State: ReadStateHistory> StateProvider for ZkProvider<State> {
         &self,
         _account: Address,
         _storage_key: StorageKey,
-    ) -> ProviderResult<Option<StorageValue>> {
-        todo!()
-    }
-
-    fn storage_by_hashed_key(
-        &self,
-        _address: Address,
-        _hashed_storage_key: StorageKey,
     ) -> ProviderResult<Option<StorageValue>> {
         todo!()
     }

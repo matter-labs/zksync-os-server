@@ -12,10 +12,12 @@ use vise::EncodeLabelValue;
 use zk_ee::memory::stack_trait::Stack;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
-use zksync_os_interface::types::{BlockContext, BlockOutput};
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_observability::ComponentStateReporter;
-use zksync_os_storage_api::{MeteredViewState, OverriddenStateView, ReplayRecord, ViewState};
+use zksync_os_storage_api::{
+    BlockContext, MeteredViewState, OverriddenStateView, ReplayRecord, ViewState,
+};
 use zksync_os_types::{SystemTxType, ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.

@@ -1,7 +1,7 @@
 use alloy::eips::eip2930::AccessList;
 use alloy::network::{
-    BuildResult, Network, NetworkWallet, TransactionBuilder, TransactionBuilderError,
-    UnbuiltTransactionError,
+    BuildResult, Ethereum, Network, NetworkTransactionBuilder, NetworkWallet, TransactionBuilder,
+    TransactionBuilderError, UnbuiltTransactionError,
 };
 use alloy::primitives::{Address, Bytes, ChainId, TxKind, U256};
 use alloy::providers::fillers::{
@@ -63,151 +63,180 @@ impl From<<Zksync as Network>::UnsignedTx> for ZkTransactionRequest {
     }
 }
 
-impl TransactionBuilder<Zksync> for ZkTransactionRequest {
+impl From<<Zksync as Network>::TransactionResponse> for ZkTransactionRequest {
+    fn from(value: <Zksync as Network>::TransactionResponse) -> Self {
+        Self(value.into())
+    }
+}
+
+impl TransactionBuilder for ZkTransactionRequest {
     fn chain_id(&self) -> Option<ChainId> {
-        TransactionBuilder::chain_id(&self.0)
+        <TransactionRequest as TransactionBuilder>::chain_id(&self.0)
     }
 
     fn set_chain_id(&mut self, chain_id: ChainId) {
-        TransactionBuilder::set_chain_id(&mut self.0, chain_id)
+        <TransactionRequest as TransactionBuilder>::set_chain_id(&mut self.0, chain_id)
     }
 
     fn nonce(&self) -> Option<u64> {
-        TransactionBuilder::nonce(&self.0)
+        <TransactionRequest as TransactionBuilder>::nonce(&self.0)
     }
 
     fn set_nonce(&mut self, nonce: u64) {
-        TransactionBuilder::set_nonce(&mut self.0, nonce)
+        <TransactionRequest as TransactionBuilder>::set_nonce(&mut self.0, nonce)
     }
 
     fn take_nonce(&mut self) -> Option<u64> {
-        TransactionBuilder::take_nonce(&mut self.0)
+        <TransactionRequest as TransactionBuilder>::take_nonce(&mut self.0)
     }
 
     fn input(&self) -> Option<&Bytes> {
-        TransactionBuilder::input(&self.0)
+        <TransactionRequest as TransactionBuilder>::input(&self.0)
     }
 
     fn set_input<T: Into<Bytes>>(&mut self, input: T) {
-        TransactionBuilder::set_input(&mut self.0, input)
+        <TransactionRequest as TransactionBuilder>::set_input(&mut self.0, input)
     }
 
     fn from(&self) -> Option<Address> {
-        TransactionBuilder::from(&self.0)
+        <TransactionRequest as TransactionBuilder>::from(&self.0)
     }
 
     fn set_from(&mut self, from: Address) {
-        TransactionBuilder::set_from(&mut self.0, from)
+        <TransactionRequest as TransactionBuilder>::set_from(&mut self.0, from)
     }
 
     fn kind(&self) -> Option<TxKind> {
-        TransactionBuilder::kind(&self.0)
+        <TransactionRequest as TransactionBuilder>::kind(&self.0)
     }
 
     fn clear_kind(&mut self) {
-        TransactionBuilder::clear_kind(&mut self.0)
+        <TransactionRequest as TransactionBuilder>::clear_kind(&mut self.0)
     }
 
     fn set_kind(&mut self, kind: TxKind) {
-        TransactionBuilder::set_kind(&mut self.0, kind)
+        <TransactionRequest as TransactionBuilder>::set_kind(&mut self.0, kind)
     }
 
     fn value(&self) -> Option<U256> {
-        TransactionBuilder::value(&self.0)
+        <TransactionRequest as TransactionBuilder>::value(&self.0)
     }
 
     fn set_value(&mut self, value: U256) {
-        TransactionBuilder::set_value(&mut self.0, value)
+        <TransactionRequest as TransactionBuilder>::set_value(&mut self.0, value)
     }
 
     fn gas_price(&self) -> Option<u128> {
-        TransactionBuilder::gas_price(&self.0)
+        <TransactionRequest as TransactionBuilder>::gas_price(&self.0)
     }
 
     fn set_gas_price(&mut self, gas_price: u128) {
-        TransactionBuilder::set_gas_price(&mut self.0, gas_price)
+        <TransactionRequest as TransactionBuilder>::set_gas_price(&mut self.0, gas_price)
     }
 
     fn max_fee_per_gas(&self) -> Option<u128> {
-        TransactionBuilder::max_fee_per_gas(&self.0)
+        <TransactionRequest as TransactionBuilder>::max_fee_per_gas(&self.0)
     }
 
     fn set_max_fee_per_gas(&mut self, max_fee_per_gas: u128) {
-        TransactionBuilder::set_max_fee_per_gas(&mut self.0, max_fee_per_gas)
+        <TransactionRequest as TransactionBuilder>::set_max_fee_per_gas(
+            &mut self.0,
+            max_fee_per_gas,
+        )
     }
 
     fn max_priority_fee_per_gas(&self) -> Option<u128> {
-        TransactionBuilder::max_priority_fee_per_gas(&self.0)
+        <TransactionRequest as TransactionBuilder>::max_priority_fee_per_gas(&self.0)
     }
 
     fn set_max_priority_fee_per_gas(&mut self, max_priority_fee_per_gas: u128) {
-        TransactionBuilder::set_max_priority_fee_per_gas(&mut self.0, max_priority_fee_per_gas)
+        <TransactionRequest as TransactionBuilder>::set_max_priority_fee_per_gas(
+            &mut self.0,
+            max_priority_fee_per_gas,
+        )
     }
 
     fn gas_limit(&self) -> Option<u64> {
-        TransactionBuilder::gas_limit(&self.0)
+        <TransactionRequest as TransactionBuilder>::gas_limit(&self.0)
     }
 
     fn set_gas_limit(&mut self, gas_limit: u64) {
-        TransactionBuilder::set_gas_limit(&mut self.0, gas_limit)
+        <TransactionRequest as TransactionBuilder>::set_gas_limit(&mut self.0, gas_limit)
     }
 
     fn access_list(&self) -> Option<&AccessList> {
-        TransactionBuilder::access_list(&self.0)
+        <TransactionRequest as TransactionBuilder>::access_list(&self.0)
     }
 
     fn set_access_list(&mut self, access_list: AccessList) {
-        TransactionBuilder::set_access_list(&mut self.0, access_list)
+        <TransactionRequest as TransactionBuilder>::set_access_list(&mut self.0, access_list)
     }
+}
 
+impl NetworkTransactionBuilder<Zksync> for ZkTransactionRequest {
     fn complete_type(&self, ty: <Zksync as Network>::TxType) -> Result<(), Vec<&'static str>> {
         match ty {
             ZkTxType::L1 | ZkTxType::Upgrade | ZkTxType::System => {
                 unimplemented!()
             }
-            ZkTxType::L2(ty) => TransactionBuilder::complete_type(&self.0, ty.into()),
+            ZkTxType::L2(ty) => {
+                <TransactionRequest as NetworkTransactionBuilder<Ethereum>>::complete_type(
+                    &self.0,
+                    ty.into(),
+                )
+            }
         }
     }
 
     fn can_submit(&self) -> bool {
-        TransactionBuilder::can_submit(&self.0)
+        <TransactionRequest as NetworkTransactionBuilder<Ethereum>>::can_submit(&self.0)
     }
 
     fn can_build(&self) -> bool {
-        TransactionBuilder::can_build(&self.0)
+        <TransactionRequest as NetworkTransactionBuilder<Ethereum>>::can_build(&self.0)
     }
 
     fn output_tx_type(&self) -> <Zksync as Network>::TxType {
-        ZkTxType::L2(TransactionBuilder::output_tx_type(&self.0).into())
+        ZkTxType::L2(
+            <TransactionRequest as NetworkTransactionBuilder<Ethereum>>::output_tx_type(&self.0)
+                .into(),
+        )
     }
 
     fn output_tx_type_checked(&self) -> Option<<Zksync as Network>::TxType> {
         Some(ZkTxType::L2(
-            TransactionBuilder::output_tx_type_checked(&self.0)?.into(),
+            <TransactionRequest as NetworkTransactionBuilder<Ethereum>>::output_tx_type_checked(
+                &self.0,
+            )?
+            .into(),
         ))
     }
 
     fn prep_for_submission(&mut self) {
-        TransactionBuilder::prep_for_submission(&mut self.0)
+        <TransactionRequest as NetworkTransactionBuilder<Ethereum>>::prep_for_submission(
+            &mut self.0,
+        )
     }
 
     fn build_unsigned(self) -> BuildResult<<Zksync as Network>::UnsignedTx, Zksync> {
-        TransactionBuilder::build_unsigned(self.0).map_err(|e| UnbuiltTransactionError {
-            request: Self(e.request),
-            error: match e.error {
-                TransactionBuilderError::InvalidTransactionRequest(tx_type, keys) => {
-                    TransactionBuilderError::InvalidTransactionRequest(
-                        ZkTxType::L2(tx_type.into()),
-                        keys,
-                    )
-                }
-                TransactionBuilderError::UnsupportedSignatureType => {
-                    TransactionBuilderError::UnsupportedSignatureType
-                }
-                TransactionBuilderError::Signer(e) => TransactionBuilderError::Signer(e),
-                TransactionBuilderError::Custom(e) => TransactionBuilderError::Custom(e),
+        <TransactionRequest as NetworkTransactionBuilder<Ethereum>>::build_unsigned(self.0).map_err(
+            |e| UnbuiltTransactionError {
+                request: Self(e.request),
+                error: match e.error {
+                    TransactionBuilderError::InvalidTransactionRequest(tx_type, keys) => {
+                        TransactionBuilderError::InvalidTransactionRequest(
+                            ZkTxType::L2(tx_type.into()),
+                            keys,
+                        )
+                    }
+                    TransactionBuilderError::UnsupportedSignatureType => {
+                        TransactionBuilderError::UnsupportedSignatureType
+                    }
+                    TransactionBuilderError::Signer(e) => TransactionBuilderError::Signer(e),
+                    TransactionBuilderError::Custom(e) => TransactionBuilderError::Custom(e),
+                },
             },
-        })
+        )
     }
 
     async fn build<W: NetworkWallet<Zksync>>(

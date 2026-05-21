@@ -326,20 +326,6 @@ where
     }
 }
 
-#[cfg(feature = "reth")]
-impl<T> reth_primitives_traits::SignedTransaction for L2EnvelopeInner<T>
-where
-    T: RlpEcdsaEncodableTx + SignableTransaction<Signature> + Unpin,
-    Self: Clone
-        + PartialEq
-        + Eq
-        + alloy::rlp::Decodable
-        + alloy::eips::Decodable2718
-        + reth_primitives_traits::MaybeSerde
-        + reth_primitives_traits::InMemorySize,
-{
-}
-
 #[allow(clippy::derivable_impls)]
 impl Default for TxType {
     fn default() -> Self {

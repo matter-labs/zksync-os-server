@@ -1,8 +1,8 @@
-use alloy::primitives::{Address, B256};
+use alloy::primitives::{Address, B256, U256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
 use zksync_os_batch_types::BlockMerkleTreeData;
-use zksync_os_interface::types::{BlockContext, BlockOutput};
+use zksync_os_interface::types::{BlockHashes, BlockOutput};
 use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_types::{
     BlockStartCursors, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction,
@@ -138,5 +138,51 @@ impl HasBlockRangeEnd for ReplayRecord {
     }
     fn block_timestamp(&self) -> Option<u64> {
         Some(self.block_context.timestamp)
+    }
+}
+
+/// Be careful when changing this struct as making non-backwards-compatible changes will make old
+/// storage non-loadable.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct BlockContext {
+    // Chain id is temporarily also added here (so that it can be easily passed from the oracle)
+    // long term, we have to decide whether we want to keep it here, or add a separate oracle
+    // type that would return some 'chain' specific metadata (as this class is supposed to hold block metadata only).
+    pub chain_id: u64,
+    pub block_number: u64,
+    pub block_hashes: BlockHashes,
+    pub timestamp: u64,
+    pub eip1559_basefee: U256,
+    pub pubdata_price: U256,
+    pub native_price: U256,
+    pub coinbase: Address,
+    pub gas_limit: u64,
+    pub pubdata_limit: u64,
+    /// Source of randomness, currently holds the value of prevRandao.
+    pub mix_hash: U256,
+    /// Version of the ZKsync OS and its config to be used for this block.
+    pub execution_version: u32,
+    pub blob_fee: U256,
+}
+
+impl BlockContext {
+    // todo: this will not be needed in the future once zksync-os-interface accepts a trait instead
+    //       of concrete BlockContext struct
+    pub fn to_interface(self) -> zksync_os_interface::types::BlockContext {
+        zksync_os_interface::types::BlockContext {
+            chain_id: self.chain_id,
+            block_number: self.block_number,
+            block_hashes: self.block_hashes,
+            timestamp: self.timestamp,
+            eip1559_basefee: self.eip1559_basefee,
+            pubdata_price: self.pubdata_price,
+            native_price: self.native_price,
+            coinbase: self.coinbase,
+            gas_limit: self.gas_limit,
+            pubdata_limit: self.pubdata_limit,
+            mix_hash: self.mix_hash,
+            execution_version: self.execution_version,
+            blob_fee: self.blob_fee,
+        }
     }
 }

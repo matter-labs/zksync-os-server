@@ -2,18 +2,18 @@
 //! When adding new ZKsync OS execution version, make sure it is handled in `run_block` and `simulate_tx` methods.
 //! Also, update the `LATEST_EXECUTION_VERSION` constant accordingly.
 
-use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV5Running;
+use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV6;
 use zk_os_forward_system_0_0_28::run::RunBlockForward as RunBlockForwardV3;
 use zk_os_forward_system_0_1_2::run::RunBlockForward as RunBlockForwardV4;
 use zk_os_forward_system_0_2_8::run::RunBlockForward as RunBlockForwardV5Simulation;
-use zk_os_forward_system_dev::run::RunBlockForward as RunBlockForwardV6;
+use zk_os_forward_system_prev::run::RunBlockForward as RunBlockForwardV5Running;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::traits::{
     EncodedTx, PreimageSource, ReadStorage, RunBlock, SimulateTx, TxResultCallback, TxSource,
 };
-use zksync_os_interface::types::BlockContext;
 use zksync_os_interface::types::{BlockOutput, TxOutput};
+use zksync_os_storage_api::BlockContext;
 
 mod adapter;
 pub mod apps;
@@ -41,6 +41,7 @@ pub fn run_block<
         .execution_version
         .try_into()
         .expect("Unsupported ZKsync OS execution version");
+    let block_context = block_context.to_interface();
     match execution_version {
         ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
             let object = RunBlockForwardV3 {};
@@ -128,6 +129,7 @@ pub fn simulate_tx<
         .execution_version
         .try_into()
         .expect("Unsupported ZKsync OS execution version");
+    let block_context = block_context.to_interface();
     match execution_version {
         ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
             let object = RunBlockForwardV3 {};

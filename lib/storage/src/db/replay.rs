@@ -5,11 +5,10 @@ use std::time::Duration;
 use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
 use zksync_os_genesis::Genesis;
-use zksync_os_interface::types::BlockContext;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
-use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
+use zksync_os_storage_api::{BlockContext, ReadReplay, ReplayRecord, WriteReplay};
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
 /// A write-ahead log storing [`ReplayRecord`]s.
