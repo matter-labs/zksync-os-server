@@ -131,8 +131,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             {
                 return Err(EthCallError::SimulateMovePrecompileNotSupported);
             }
-            let state_overrides =
-                build_state_override_maps(&simulation_view, user_state_overrides);
+            let state_overrides = build_state_override_maps(&simulation_view, user_state_overrides);
             let overridden_view =
                 OverriddenStateView::new(simulation_view, state_overrides.clone());
             let txs = self.create_simulation_txs(
