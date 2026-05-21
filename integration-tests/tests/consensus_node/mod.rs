@@ -27,6 +27,17 @@ fn consensus_test_keys(n: usize) -> Vec<zksync_os_network::SecretKey> {
         .collect()
 }
 
+async fn raft_node_id(cluster: &MultiNodeTester, index: usize) -> anyhow::Result<String> {
+    cluster
+        .node(index)
+        .status()
+        .await?
+        .consensus
+        .raft
+        .map(|raft| raft.node_id)
+        .ok_or_else(|| anyhow::anyhow!("node {index} did not expose raft status"))
+}
+
 async fn latest_l2_block(node: &Tester) -> anyhow::Result<u64> {
     tokio::time::timeout(
         L2_RPC_REQUEST_TIMEOUT,
@@ -355,6 +366,40 @@ async fn consensus_cluster_forms_with_three_nodes_and_replicates_blocks() -> any
 }
 
 #[test_log::test(tokio::test)]
+async fn consensus_cluster_rotates_leader_after_failure() -> anyhow::Result<()> {
+    let mut cluster = MultiNodeTester::builder()
+        .with_consensus_secret_keys(consensus_test_keys(3))
+        .build()
+        .await?;
+    let result = async {
+        let initial_leader_idx = cluster
+            .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+        let initial_leader_node_id = raft_node_id(&cluster, initial_leader_idx).await?;
+
+        // Warm up follower replication before taking the leader down so the surviving
+        // nodes have already exchanged append entries with the elected leader.
+        send_transfer_and_wait_for_active_replication(&mut cluster, initial_leader_idx).await?;
+
+        cluster.suspend_node(initial_leader_idx).await?;
+
+        let new_leader_idx = cluster
+            .wait_for_active_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+        let new_leader_id = raft_node_id(&cluster, new_leader_idx).await?;
+
+        assert_ne!(initial_leader_node_id, new_leader_id);
+
+        send_transfer_and_wait_for_active_replication(&mut cluster, new_leader_idx).await?;
+
+        Ok(())
+    }
+    .await;
+    let shutdown_result = cluster.shutdown_all().await;
+    result.and(shutdown_result)
+}
+
+#[test_log::test(tokio::test)]
 async fn consensus_cluster_stops_making_progress_without_quorum() -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::builder()
         .with_consensus_secret_keys(consensus_test_keys(3))
@@ -380,6 +425,49 @@ async fn consensus_cluster_stops_making_progress_without_quorum() -> anyhow::Res
         cluster.suspend_node(follower_indices[1]).await?;
 
         assert_no_transaction_progress_without_quorum(&cluster, survivor_idx).await?;
+
+        Ok(())
+    }
+    .await;
+    let shutdown_result = cluster.shutdown_all().await;
+    result.and(shutdown_result)
+}
+
+#[test_log::test(tokio::test)]
+async fn consensus_original_leader_rejoins_and_cluster_remains_stable() -> anyhow::Result<()> {
+    let mut cluster = MultiNodeTester::builder()
+        .with_consensus_secret_keys(consensus_test_keys(3))
+        .build()
+        .await?;
+    let result = async {
+        let initial_leader_idx = cluster
+            .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+
+        send_transfer_and_wait_for_active_replication(&mut cluster, initial_leader_idx).await?;
+
+        cluster.suspend_node(initial_leader_idx).await?;
+
+        let new_leader_idx = cluster
+            .wait_for_active_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+
+        // Advance the cluster while the original leader is absent so it has entries to catch up.
+        let target_block =
+            send_transfer_and_wait_for_active_replication(&mut cluster, new_leader_idx).await?;
+
+        // Restart the original leader. It must rejoin without disrupting the running cluster:
+        // exactly one leader must remain, all three nodes must agree, and state must converge.
+        cluster.start_node(initial_leader_idx).await?;
+        let final_leader_idx = cluster
+            .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+        cluster
+            .wait_for_active_l2_block(target_block, REPLICATION_TIMEOUT)
+            .await?;
+
+        // Verify the cluster continues to make progress after the rejoin.
+        send_transfer_and_wait_for_active_replication(&mut cluster, final_leader_idx).await?;
 
         Ok(())
     }
@@ -439,6 +527,45 @@ async fn consensus_cluster_recovers_after_quorum_loss() -> anyhow::Result<()> {
 }
 
 #[test_log::test(tokio::test)]
+async fn consensus_cluster_fully_restarts_and_recovers() -> anyhow::Result<()> {
+    let mut cluster = MultiNodeTester::builder()
+        .with_consensus_secret_keys(consensus_test_keys(3))
+        .build()
+        .await?;
+    let result = async {
+        let leader_idx = cluster
+            .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+        let last_block =
+            send_transfer_and_wait_for_active_replication(&mut cluster, leader_idx).await?;
+
+        // Suspend all nodes: state is durably on disk before any restarts.
+        for idx in 0..cluster.len() {
+            cluster.suspend_node(idx).await?;
+        }
+        // Restart all nodes: they recover from disk, re-elect a leader, and resume.
+        for idx in 0..cluster.len() {
+            cluster.start_node(idx).await?;
+        }
+
+        let new_leader_idx = cluster
+            .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+        cluster
+            .wait_for_active_l2_block(last_block, REPLICATION_TIMEOUT)
+            .await?;
+
+        // Verify the cluster continues to make progress after the full restart.
+        send_transfer_and_wait_for_active_replication(&mut cluster, new_leader_idx).await?;
+
+        Ok(())
+    }
+    .await;
+    let shutdown_result = cluster.shutdown_all().await;
+    result.and(shutdown_result)
+}
+
+#[test_log::test(tokio::test)]
 async fn consensus_late_node_joins_and_catches_up() -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::builder()
         .with_consensus_secret_keys(consensus_test_keys(3))
@@ -472,6 +599,44 @@ async fn consensus_late_node_joins_and_catches_up() -> anyhow::Result<()> {
         cluster
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
+
+        Ok(())
+    }
+    .await;
+    let shutdown_result = cluster.shutdown_all().await;
+    result.and(shutdown_result)
+}
+
+#[test_log::test(tokio::test)]
+async fn consensus_follower_restarts_and_catches_up() -> anyhow::Result<()> {
+    let mut cluster = MultiNodeTester::builder()
+        .with_consensus_secret_keys(consensus_test_keys(3))
+        .build()
+        .await?;
+    let result = async {
+        let leader_idx = cluster
+            .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+        let follower_idx = (0..cluster.len())
+            .find(|idx| *idx != leader_idx)
+            .expect("3-node cluster must have a follower");
+
+        cluster.suspend_node(follower_idx).await?;
+        let active_leader_idx = cluster
+            .wait_for_active_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+
+        send_transfer_and_wait_for_active_replication(&mut cluster, active_leader_idx).await?;
+        let target_block =
+            send_transfer_and_wait_for_active_replication(&mut cluster, active_leader_idx).await?;
+
+        cluster.start_node(follower_idx).await?;
+        wait_for_l2_block(
+            cluster.node(follower_idx),
+            target_block,
+            REPLICATION_TIMEOUT,
+        )
+        .await?;
 
         Ok(())
     }
