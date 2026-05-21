@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zksync_os_interface::traits::ReadStorage;
-use zksync_os_interface::types::{BlockContext, BlockOutput};
+use zksync_os_interface::types::BlockOutput;
+use zksync_os_storage_api::BlockContext;
 use zksync_os_types::ZkTransaction;
 
 /// [`ReadStorage`] wrapper that tracks read storage slots.

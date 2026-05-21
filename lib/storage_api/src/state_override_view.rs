@@ -34,6 +34,11 @@ impl OwnedOverrides {
     pub fn new(storage: HashMap<B256, B256>, preimages: HashMap<B256, Vec<u8>>) -> Self {
         Self { storage, preimages }
     }
+
+    pub fn extend(&mut self, changes: Self) {
+        self.storage.extend(changes.storage);
+        self.preimages.extend(changes.preimages);
+    }
 }
 
 impl OverrideProvider for OwnedOverrides {
@@ -100,7 +105,7 @@ impl<V: ViewState, O: OverrideProvider> PreimageSource for OverriddenStateView<V
 }
 
 /// Converts RPC `StateOverride` into an `OwnedOverrides` provider.
-fn build_state_override_maps<V: ViewState>(
+pub fn build_state_override_maps<V: ViewState>(
     inner: &V,
     state_overrides: StateOverride,
 ) -> OwnedOverrides {

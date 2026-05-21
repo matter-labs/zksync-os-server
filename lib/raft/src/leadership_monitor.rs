@@ -10,9 +10,12 @@ use tokio::time::{MissedTickBehavior, interval, timeout};
 use zksync_os_consensus_types::{RaftNode, RaftTypeConfig};
 
 /// How often we re-probe `ensure_linearizable` while holding the Leader state but waiting
-/// for confirmation. Decoupled from openraft's metrics channel — that fires many times per
-/// second during elections, and probing on every change produced one log line per metrics
-/// tick during a stuck-leader window.
+/// for confirmation. We still wake on every OpenRaft metrics change (to keep the status
+/// watch and the role-loss reaction responsive), but the probe call itself is rate-limited
+/// to one per `PROBE_INTERVAL` — without this, a metrics-churn storm against unreachable
+/// voters produces one openraft-side ERROR (`timeout while confirming leadership for read
+/// request`) per unreachable voter per metrics tick. The `claims_leader: false → true` edge
+/// bypasses the rate limit so a fresh election confirms without paying the full interval.
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Per-probe budget for the linearizability round-trip.
@@ -69,13 +72,16 @@ pub fn spawn_leadership_monitor(
         let mut leader_confirmed = false;
         let mut prev_role = ConsensusRole::Replica;
         let mut streak: Option<FailureStreak> = None;
+        let mut last_probe_at: Option<Instant> = None;
         let mut probe_timer = interval(PROBE_INTERVAL);
         probe_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         loop {
-            // React to either an openraft metrics change or the periodic probe tick. Using
-            // an interval here decouples probe rate from openraft's metrics churn, which
-            // can fire many times per second during elections.
+            // Wake on either an OpenRaft metrics change or the periodic probe tick. Both
+            // are needed: metrics changes drive the status watch and the role-loss
+            // reaction; the probe tick ensures we periodically re-attempt confirmation
+            // even if metrics go quiet. The `ensure_linearizable` call below is separately
+            // rate-limited by `last_probe_at` — see `PROBE_INTERVAL`.
             tokio::select! {
                 biased;
                 changed = metrics_rx.changed() => {
@@ -104,10 +110,15 @@ pub fn spawn_leadership_monitor(
             let claims_leader = matches!(metrics.state, ServerState::Leader);
             if !claims_leader {
                 // Once we stop claiming leader, any in-progress streak is moot; the role
-                // change itself is logged below.
+                // change itself is logged below. Clearing `last_probe_at` ensures the next
+                // false→true edge probes immediately rather than waiting out an interval.
                 streak = None;
                 leader_confirmed = false;
-            } else if !leader_confirmed {
+                last_probe_at = None;
+            } else if !leader_confirmed
+                && last_probe_at.is_none_or(|t| t.elapsed() >= PROBE_INTERVAL)
+            {
+                last_probe_at = Some(Instant::now());
                 match timeout(PROBE_TIMEOUT, raft.ensure_linearizable()).await {
                     Ok(Ok(_)) => {
                         if let Some(s) = streak.take() {

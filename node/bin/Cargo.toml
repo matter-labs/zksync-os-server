@@ -15,7 +15,11 @@ path = "src/main.rs"
 
 [features]
 default = ["jemalloc"]
-jemalloc = ["dep:tikv-jemallocator"]
+jemalloc = [
+    "dep:tikv-jemallocator",
+    "zksync_os_observability/jemalloc",
+    "tikv-jemallocator/stats",
+]
 
 [dependencies]
 zksync_os_l1_sender.workspace = true
@@ -56,14 +60,14 @@ zksync_os_tx_validators.workspace = true
 zksync_os_config_validation_macros.workspace = true
 zksync_os_backpressure.workspace = true
 
+zk_ee_prev.workspace = true
+zk_os_basic_system_prev.workspace = true
+zk_os_forward_system_prev.workspace = true
+
 zk_ee.workspace = true
+zk_os_basic_system.workspace = true
 zk_os_forward_system.workspace = true
 
-zk_ee_dev.workspace = true
-zk_os_basic_system_dev.workspace = true
-zk_os_forward_system_dev.workspace = true
-
-zk_os_basic_system.workspace = true
 zksync_os_interface.workspace = true
 execution_utils.workspace = true
 full_statement_verifier.workspace = true
@@ -113,6 +117,7 @@ sentry.workspace = true
 tempfile.workspace = true
 flate2.workspace = true
 tar.workspace = true
+url.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = { workspace = true, optional = true }

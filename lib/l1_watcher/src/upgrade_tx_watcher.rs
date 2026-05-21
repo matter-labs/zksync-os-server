@@ -11,8 +11,10 @@ use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use blake2::{Blake2s256, Digest};
 use zksync_os_contract_interface::IBytecodeSupplier::EVMBytecodePublished;
-use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
-use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
+use zksync_os_contract_interface::IChainTypeManager::{
+    NewProtocolVersion, NewUpgradeCutData, ProposedUpgrade,
+};
+use zksync_os_contract_interface::ServerNotifier::UpgradeTimestampUpdated;
 use zksync_os_contract_interface::is_method_missing;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
@@ -30,7 +32,7 @@ const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 
 /// Watches L1 and the settlement layer for protocol upgrade scheduling and payload data.
 ///
-/// This component listens for `UpdateUpgradeTimestamp` events on L1, fetches the matching upgrade
+/// This component listens for `UpgradeTimestampUpdated` events on L1, fetches the matching upgrade
 /// cut data and force-deploy preimages from the appropriate contracts, waits until the scheduled
 /// timestamp, and then inserts an `UpgradeInfo` item into `UpgradeSubpool`.
 ///
@@ -77,8 +79,8 @@ impl L1UpgradeTxWatcher {
             "initializing upgrade transaction watcher"
         );
 
-        let admin_l1 = zk_chain_l1.get_admin().await?;
-        tracing::info!(admin_l1 = ?admin_l1, "resolved chain admin");
+        let server_notifier_l1 = zk_chain_l1.get_server_notifier_address().await?;
+        tracing::info!(server_notifier_l1 = ?server_notifier_l1, "resolved server notifier");
 
         let ctm_l1 = zk_chain_l1.get_chain_type_manager().await?;
         tracing::info!(ctm_l1 = ?ctm_l1, "resolved L1 chain type manager");
@@ -120,7 +122,7 @@ impl L1UpgradeTxWatcher {
         L1Watcher::new(
             config,
             zk_chain_l1.provider().clone(),
-            admin_l1.into(),
+            server_notifier_l1.into(),
             last_l1_block,
             None,
             zk_chain_l1.provider().get_chain_id().await?,
@@ -132,15 +134,27 @@ impl L1UpgradeTxWatcher {
     async fn fetch_upgrade_info(&self, request: &L1UpgradeRequest) -> anyhow::Result<UpgradeInfo> {
         let L1UpgradeRequest {
             timestamp,
-            protocol_version,
-            raw_protocol_version,
+            old_protocol_version,
+            raw_old_protocol_version,
         } = request;
 
-        let upgrade_cut_data_log = self.find_upgrade_cut_log(*raw_protocol_version).await?;
+        let upgrade_cut_data_log = self.find_upgrade_cut_log(*raw_old_protocol_version).await?;
         let raw_diamond_cut: Log<NewUpgradeCutData> = upgrade_cut_data_log.log_decode()?;
         let diamond_cut_data = raw_diamond_cut.inner.data.diamondCutData;
         let mut proposed_upgrade =
             ProposedUpgrade::abi_decode(&diamond_cut_data.initCalldata[4..]).unwrap(); // TODO: we're in fact parsing `upgrade(..)` signature here
+
+        let protocol_version = ProtocolSemanticVersion::try_from(proposed_upgrade.newProtocolVersion)
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "invalid upgrade target protocol version {:?} decoded from CTM cut for old protocol version {old_protocol_version}: {err}",
+                    proposed_upgrade.newProtocolVersion
+                )
+            })?;
+        anyhow::ensure!(
+            protocol_version > old_protocol_version.clone(),
+            "upgrade from protocol version {old_protocol_version} points to non-newer version {protocol_version}"
+        );
 
         let patch_only = protocol_version.minor == self.current_protocol_version.minor;
         let (l2_upgrade_tx, force_preimages) = if patch_only {
@@ -213,7 +227,7 @@ impl L1UpgradeTxWatcher {
             tx: l2_upgrade_tx,
             metadata: UpgradeMetadata {
                 timestamp: *timestamp,
-                protocol_version: protocol_version.clone(),
+                protocol_version,
                 force_preimages,
             },
         };
@@ -258,12 +272,23 @@ impl L1UpgradeTxWatcher {
     /// Pre-V31 fallback: scan `UPGRADE_DATA_LOOKBEHIND_BLOCKS` worth of `NewUpgradeCutData`
     /// events backward on the SL CTM. Pre-V31 chains do not have Gateway migrations, so the
     /// cut always lives on the SL CTM (which equals the L1 CTM in that era).
-    async fn legacy_backward_scan(&self, raw_protocol_version: U256) -> anyhow::Result<Log> {
-        let mut current_block = self.provider_sl.get_block_number().await?;
+    ///
+    /// Pre-V31 CTMs emit `NewUpgradeCutData` indexed by the new (target) version rather than
+    /// the old one. We first resolve old→new via the `NewProtocolVersion` event (emitted in the
+    /// same tx as `NewUpgradeCutData`), then filter by that new version.
+    async fn legacy_backward_scan(&self, raw_old_protocol_version: U256) -> anyhow::Result<Log> {
+        let current_block = self.provider_sl.get_block_number().await?;
         let start_block = current_block
             .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS)
             .max(1u64);
 
+        // Resolve the new (target) version from the NewProtocolVersion event.
+        let new_protocol_version = self
+            .find_new_protocol_version(raw_old_protocol_version, start_block, current_block)
+            .await?;
+
+        // Now scan for NewUpgradeCutData indexed by that new version.
+        let mut current_block = current_block;
         let mut upgrade_cut_data_logs = Vec::new();
         while current_block >= start_block && upgrade_cut_data_logs.is_empty() {
             let from_block = current_block
@@ -275,22 +300,64 @@ impl L1UpgradeTxWatcher {
                 .to_block(current_block)
                 .address(self.ctm_sl)
                 .event_signature(NewUpgradeCutData::SIGNATURE_HASH)
-                .topic1(raw_protocol_version);
+                .topic1(new_protocol_version);
             upgrade_cut_data_logs = self.provider_sl.get_logs(&filter).await?;
             current_block = from_block.saturating_sub(1);
         }
 
         if upgrade_cut_data_logs.is_empty() {
-            anyhow::bail!("no upgrade cut found for raw protocol version {raw_protocol_version}");
+            anyhow::bail!(
+                "no upgrade cut found for raw protocol version {raw_old_protocol_version}"
+            );
         }
         if upgrade_cut_data_logs.len() > 1 {
             tracing::warn!(
-                %raw_protocol_version,
+                %raw_old_protocol_version,
                 "multiple upgrade cuts found; picking the most recent one"
             );
         }
         // `last()` because each scan batch returns logs in ascending order.
         Ok(upgrade_cut_data_logs.pop().unwrap())
+    }
+
+    /// Scans for `NewProtocolVersion(oldVersion, newVersion)` to resolve the target version for
+    /// a pre-V31 upgrade.
+    async fn find_new_protocol_version(
+        &self,
+        raw_old_protocol_version: U256,
+        start_block: u64,
+        end_block: u64,
+    ) -> anyhow::Result<U256> {
+        let mut current_block = end_block;
+        let mut logs = Vec::new();
+        while current_block >= start_block && logs.is_empty() {
+            let from_block = current_block
+                .saturating_sub(self.max_blocks_to_process - 1)
+                .max(start_block);
+
+            let filter = Filter::new()
+                .from_block(from_block)
+                .to_block(current_block)
+                .address(self.ctm_sl)
+                .event_signature(NewProtocolVersion::SIGNATURE_HASH)
+                .topic1(raw_old_protocol_version);
+            logs = self.provider_sl.get_logs(&filter).await?;
+            current_block = from_block.saturating_sub(1);
+        }
+
+        if logs.len() > 1 {
+            tracing::warn!(
+                %raw_old_protocol_version,
+                "multiple NewProtocolVersion events found; picking the most recent one"
+            );
+        }
+        let log = logs.pop().ok_or_else(|| {
+            anyhow::anyhow!(
+                "no NewProtocolVersion event found for old protocol version {raw_old_protocol_version}"
+            )
+        })?;
+        let event: NewProtocolVersion = log.log_decode()?.inner.data;
+        Ok(event.newProtocolVersion)
     }
 
     async fn wait_until_timestamp(&self, target_timestamp: u64) {
@@ -542,8 +609,12 @@ impl L1UpgradeTxWatcher {
 impl ProcessL1Event for L1UpgradeTxWatcher {
     const NAME: &'static str = "upgrade_txs";
 
-    type SolEvent = UpdateUpgradeTimestamp;
+    type SolEvent = UpgradeTimestampUpdated;
     type WatchedEvent = L1UpgradeRequest;
+
+    fn topic1_filter(&self) -> Option<B256> {
+        Some(B256::from(U256::from(self.l2_chain_id)))
+    }
 
     async fn process_event(
         &mut self,
@@ -551,35 +622,43 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
         request: L1UpgradeRequest,
         _log: Log,
     ) -> Result<(), L1WatcherError> {
-        if request.protocol_version <= self.current_protocol_version {
+        if request.old_protocol_version < self.current_protocol_version {
             tracing::info!(
-                ?request.protocol_version,
+                ?request.old_protocol_version,
                 ?self.current_protocol_version,
-                "ignoring upgrade timestamp for older or equal protocol version"
+                "ignoring upgrade timestamp for older protocol version"
             );
             return Ok(());
         }
 
-        // In localhost environment, we may want to test upgrades to non-live versions, but
-        // we don't want to allow them anywhere else.
-        if !request.protocol_version.is_live() {
-            tracing::warn!(
-                ?request.protocol_version,
-                "received a protocol version that is not marked as live"
-            );
-            // Only allow non-live versions in localhost environment.
-            if self.provider_l1.get_chain_id().await? != ANVIL_L1_CHAIN_ID {
-                panic!(
-                    "Received an upgrade to a non-live protocol version: {:?}",
-                    request.protocol_version
-                );
-            }
+        if request.old_protocol_version > self.current_protocol_version {
+            return Err(L1WatcherError::Batch(anyhow::anyhow!(
+                "received upgrade event for old protocol version {}, but current protocol version is {}; missing prerequisite upgrade",
+                request.old_protocol_version,
+                self.current_protocol_version
+            )));
         }
 
         let upgrade_info = self
             .fetch_upgrade_info(&request)
             .await
             .map_err(L1WatcherError::Batch)?;
+
+        // In localhost environment, we may want to test upgrades to non-live versions, but
+        // we don't want to allow them anywhere else.
+        if !upgrade_info.protocol_version().is_live() {
+            tracing::warn!(
+                target_protocol_version = ?upgrade_info.protocol_version(),
+                "received a protocol version that is not marked as live"
+            );
+            // Only allow non-live versions in localhost environment.
+            if self.provider_l1.get_chain_id().await? != ANVIL_L1_CHAIN_ID {
+                panic!(
+                    "Received an upgrade to a non-live protocol version: {:?}",
+                    upgrade_info.protocol_version()
+                );
+            }
+        }
 
         tracing::info!(
             protocol_version = ?upgrade_info.protocol_version(),
@@ -605,27 +684,27 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
 }
 
 /// Request for the server to upgrade at a certain timestamp.
-/// Parsed from `UpdateUpgradeTimestamp` L1 event.
+/// Parsed from `UpgradeTimestampUpdated` L1 event.
 #[derive(Debug, Clone)]
 pub struct L1UpgradeRequest {
-    raw_protocol_version: U256,
-    protocol_version: ProtocolSemanticVersion,
+    raw_old_protocol_version: U256,
+    old_protocol_version: ProtocolSemanticVersion,
     /// Timestamp in seconds since UNIX_EPOCH
     timestamp: u64,
 }
 
-impl TryFrom<UpdateUpgradeTimestamp> for L1UpgradeRequest {
+impl TryFrom<UpgradeTimestampUpdated> for L1UpgradeRequest {
     type Error = UpgradeTxWatcherError;
 
-    fn try_from(event: UpdateUpgradeTimestamp) -> Result<Self, Self::Error> {
-        let protocol_version = ProtocolSemanticVersion::try_from(event.protocolVersion)?;
+    fn try_from(event: UpgradeTimestampUpdated) -> Result<Self, Self::Error> {
+        let old_protocol_version = ProtocolSemanticVersion::try_from(event.protocolVersion)?;
 
         let timestamp_u64 = u64::try_from(event.upgradeTimestamp)
             .map_err(|_| UpgradeTxWatcherError::TimestampExceedsU64(event.upgradeTimestamp))?;
 
         Ok(Self {
-            raw_protocol_version: event.protocolVersion,
-            protocol_version,
+            raw_old_protocol_version: event.protocolVersion,
+            old_protocol_version,
             timestamp: timestamp_u64,
         })
     }
@@ -668,7 +747,7 @@ async fn fetch_upgrade_cut_log_at(
         .event_signature(NewUpgradeCutData::SIGNATURE_HASH)
         .topic1(raw_protocol_version);
     let logs = provider.get_logs(&filter).await?;
-    logs.into_iter().next().ok_or_else(|| {
+    logs.into_iter().last().ok_or_else(|| {
         anyhow::anyhow!(
             "upgradeCutDataBlock({raw_protocol_version}) returned {block} on CTM {ctm_address} \
              but no NewUpgradeCutData event was found at that block"

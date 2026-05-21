@@ -108,17 +108,13 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
 
         let state_view = self.read_state.state_view_at(request.last_block_number)?;
         let multichain_root = read_multichain_root(state_view);
+        let (_, last_replay_record, _) = blocks.last().unwrap();
 
         let (batch_info, _) = ExtendedCommitBatchInfo::build(
             blocks
                 .iter()
                 .map(|(block_output, replay_record, tree)| {
-                    (
-                        *block_output,
-                        &replay_record.block_context,
-                        replay_record.transactions.as_slice(),
-                        tree,
-                    )
+                    (*block_output, replay_record.transactions.as_slice(), tree)
                 })
                 .collect(),
             self.chain_id,
@@ -127,6 +123,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             self.l1_state.sl_chain_id,
             multichain_root,
             &blocks.first().unwrap().1.protocol_version,
+            &last_replay_record.block_context.block_hashes,
         );
 
         let expected_commit_data = normalized_commit_data(

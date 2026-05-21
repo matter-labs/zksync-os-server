@@ -10,13 +10,15 @@ use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_genesis::Genesis;
 use zksync_os_merkle_tree::{
-    MerkleTree, MerkleTreeColumnFamily, RocksDBWrapper, TreeBatchOutput, TreeEntry,
+    MerkleTree, MerkleTreeColumnFamily, Patched, RocksDBWrapper, TreeBatchOutput, TreeEntry,
 };
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
+use zksync_os_pipeline::{HasBlockRangeEnd, PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
 use zksync_os_sequencer::model::blocks::AppliedBlock;
 use zksync_os_storage_api::TreeBlock;
+
+const MAX_BLOCKS_PER_ITERATION: usize = 32;
 
 pub(crate) struct TreeManager {
     pub tree: MerkleTree<RocksDBWrapper>,
@@ -45,113 +47,130 @@ impl PipelineComponent for TreeManager {
         loop {
             state_reporter.enter_state(GenericComponentState::Idle);
 
-            let Some(AppliedBlock {
-                output: block_output,
-                record: replay_record,
-            }) = input.recv_and_record_picked(&state_reporter).await
-            else {
+            let mut blocks = vec![];
+            let received = input.recv_many(&mut blocks, MAX_BLOCKS_PER_ITERATION).await;
+            if received == 0 {
                 tracing::info!("inbound channel closed");
                 return Ok(());
-            };
-            let (block_output, read_keys) = block_output.into_parts();
-            state_reporter.enter_state(GenericComponentState::Active);
-            let started_at = Instant::now();
-            let block_number = block_output.header.number;
+            }
+            for block in &blocks {
+                state_reporter.record_picked(
+                    block.block_number(),
+                    block.block_timestamp(),
+                    block.batch_number(),
+                );
+            }
 
-            if block_number <= last_processed_block {
+            state_reporter.enter_state(GenericComponentState::Active);
+
+            let first_block_number = blocks[0].block_number();
+            if first_block_number <= last_processed_block {
                 let mut tree_clone = self.tree.clone();
                 tokio::task::spawn_blocking(move || {
-                    tree_clone.truncate_recent_versions(block_number)
+                    tree_clone.truncate_recent_versions(first_block_number)
                 })
                 .await??;
             }
+
+            let last_block_number = blocks.last().unwrap().block_number();
+            let block_count = blocks.len();
             tracing::debug!(
-                "Processing {} storage writes in tree for block {}",
-                block_output.storage_writes.len(),
-                block_number
+                "Processing {block_count} tree blocks {first_block_number}..={last_block_number}"
             );
 
-            // Convert storage writes to `TreeEntry`s
-            let (tree_entries, written_keys): (Vec<_>, Vec<_>) = block_output
-                .storage_writes
-                .iter()
-                .map(|write| {
-                    let entry = TreeEntry {
-                        key: write.key,
-                        value: write.value,
-                    };
-                    (entry, write.key)
-                })
-                .unzip();
-            let read_keys: Vec<_> = read_keys.into_iter().collect();
-            let read_keys_for_tree = read_keys.clone();
+            let db_clone = self.tree.db().clone();
+            let tree_blocks = tokio::task::spawn_blocking(move || {
+                let patched = Patched::new(db_clone);
+                let mut patched_tree = MerkleTree::new(patched)?;
+                let mut tree_blocks = Vec::with_capacity(blocks.len());
 
-            let mut tree_clone = self.tree.clone();
-            let (tree_input, (tree_output, update_proof)) = tokio::task::spawn_blocking(move || {
-                let (root_hash, leaf_count) = tree_clone
-                    .root_info(block_number - 1)?
-                    .with_context(|| {
-                        format!("Merkle tree missing previous block version for block {block_number}")
-                    })?;
-                let input = TreeBatchOutput { root_hash, leaf_count };
-                let output = tree_clone.extend_with_proof(&tree_entries, &read_keys_for_tree)?;
-                anyhow::Ok((input, output))
+                for block in blocks {
+                    let started_at = Instant::now();
+                    let (block_output, read_keys) = block.output.into_parts();
+                    let (tree_entries, written_keys): (Vec<_>, Vec<_>) = block_output
+                        .storage_writes
+                        .iter()
+                        .map(|write| {
+                            let entry = TreeEntry {
+                                key: write.key,
+                                value: write.value,
+                            };
+                            (entry, write.key)
+                        })
+                        .unzip();
+                    let read_keys: Vec<_> = read_keys.into_iter().collect();
+                    let block_number = block_output.header.number;
+                    let write_count = written_keys.len();
+                    let read_count = read_keys.len();
+
+                    let (root_hash, leaf_count) = patched_tree
+                        .root_info(block_number - 1)?
+                        .with_context(|| {
+                            format!("Merkle tree missing previous block version for block {block_number}")
+                        })?;
+                    let tree_input = TreeBatchOutput { root_hash, leaf_count };
+                    let (tree_output, update_proof) =
+                        patched_tree.extend_with_proof(&tree_entries, &read_keys)?;
+
+                    tracing::info!(
+                        block_number = block_number,
+                        written_keys.len = written_keys.len(),
+                        read_keys.len = read_keys.len(),
+                        proof.sorted_leaves.len = update_proof.sorted_leaves.len(),
+                        proof.hashes.len = update_proof.hashes.len(),
+                        input = ?tree_input,
+                        output = ?tree_output,
+                        "Processed tree update"
+                    );
+
+                    let block_time = started_at.elapsed();
+                    TREE_METRICS
+                        .entry_time
+                        .observe(block_time.div(write_count.max(1) as u32));
+                    TREE_METRICS.block_time.observe(block_time);
+                    TREE_METRICS.unique_leafs.set(tree_output.leaf_count);
+                    TREE_METRICS.processing_range.observe(write_count);
+                    TREE_METRICS.block_number.set(block_number);
+                    TREE_METRICS.processing_read_range.observe(read_count);
+                    TREE_METRICS
+                        .update_proof_sorted_leaves
+                        .observe(update_proof.sorted_leaves.len());
+                    TREE_METRICS
+                        .update_proof_hashes
+                        .observe(update_proof.hashes.len());
+                    TREE_METRICS.block_number.set(block_number);
+
+                    let tree_data = BlockMerkleTreeData {
+                        input: tree_input,
+                        output: tree_output,
+                        proof: update_proof,
+                        read_keys,
+                        written_keys,
+                    };
+                    tree_blocks.push(TreeBlock {
+                        output: block_output,
+                        record: block.record,
+                        tree: tree_data,
+                    });
+                }
+
+                // Single RocksDB write for all blocks.
+                patched_tree.flush()?;
+                // FIXME: another metric for flush latency
+                anyhow::Ok(tree_blocks)
             })
             .await??;
+
             last_processed_block = self
                 .tree
                 .latest_version()?
-                .expect("uninitialized tree after applying a block");
-            assert_eq!(last_processed_block, block_number);
+                .expect("uninitialized tree after applying blocks");
+            assert_eq!(last_processed_block, last_block_number);
 
-            tracing::info!(
-                block_number = block_number,
-                written_keys.len = written_keys.len(),
-                read_keys.len = read_keys.len(),
-                proof.sorted_leaves.len = update_proof.sorted_leaves.len(),
-                proof.hashes.len = update_proof.hashes.len(),
-                input = ?tree_input,
-                output = ?tree_output,
-                "Processed tree update"
-            );
-
-            let write_count = written_keys.len();
-            let read_count = read_keys.len();
-            TREE_METRICS
-                .entry_time
-                .observe(started_at.elapsed().div(write_count.max(1) as u32));
-            TREE_METRICS.entry_time_with_reads.observe(
-                started_at
-                    .elapsed()
-                    .div((write_count + read_count).max(1) as u32),
-            );
-            TREE_METRICS.unique_leafs.set(tree_output.leaf_count);
-            TREE_METRICS.block_time.observe(started_at.elapsed());
-            TREE_METRICS.processing_range.observe(write_count);
-            TREE_METRICS.processing_read_range.observe(read_count);
-            TREE_METRICS
-                .update_proof_sorted_leaves
-                .observe(update_proof.sorted_leaves.len());
-            TREE_METRICS
-                .update_proof_hashes
-                .observe(update_proof.hashes.len());
-            TREE_METRICS.block_number.set(block_number);
-
-            let tree_data = BlockMerkleTreeData {
-                input: tree_input,
-                output: tree_output,
-                proof: update_proof,
-                read_keys,
-                written_keys,
-            };
-            output.send_and_record(
-                TreeBlock {
-                    output: block_output,
-                    record: replay_record,
-                    tree: tree_data,
-                },
-                &state_reporter,
-            )?;
+            // Forward each block downstream.
+            for tree_block in tree_blocks {
+                output.send_and_record(tree_block, &state_reporter)?;
+            }
         }
     }
 }
@@ -210,7 +229,7 @@ pub struct TreeMetrics {
     /// Merkle tree update latency per read / written entry.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub entry_time_with_reads: Histogram<Duration>,
-
+    /// Latency to process a single block in the tree. Does not include flushing block contents to disk.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub block_time: Histogram<Duration>,
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]

@@ -7,11 +7,15 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
+use zksync_os_interface::error::InvalidTransaction;
 
 #[derive(Debug, Clone)]
 pub struct BlockNotification {
     pub block: Arc<RepositoryBlock>,
     pub transactions: HashMap<TxHash, Arc<StoredTxData>>,
+    /// Txs the VM rejected during block building. Not part of the canonical block.
+    /// Surfaced so RPC subscribers can report a reason instead of timing out.
+    pub failed_transactions: Arc<HashMap<TxHash, InvalidTransaction>>,
 }
 
 /// A type that allows to register block subscriptions.

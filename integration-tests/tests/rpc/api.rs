@@ -1,5 +1,5 @@
 use alloy::eips::Encodable2718;
-use alloy::network::{ReceiptResponse, TransactionBuilder, TxSigner};
+use alloy::network::{NetworkTransactionBuilder, ReceiptResponse, TxSigner};
 use alloy::primitives::{Address, B256, TxHash, U128, U256, address};
 use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log, TransactionRequest};

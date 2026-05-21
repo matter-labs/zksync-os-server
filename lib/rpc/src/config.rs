@@ -10,6 +10,11 @@ pub struct RpcConfig {
     /// Gas limit of transactions executed via eth_call
     pub eth_call_gas: usize,
 
+    /// Maximum block gas limit accepted for an `eth_simulateV1` block override. Applies only
+    /// when the caller explicitly overrides `blockOverrides.gasLimit`; unset overrides fall
+    /// back to the executing block's own gas limit.
+    pub eth_simulate_block_gas_limit: u64,
+
     /// Number of concurrent API connections (passed to jsonrpsee, default value there is 128)
     pub max_connections: u32,
 

@@ -1,7 +1,8 @@
 use crate::model::blocks::PreparedBlockCommand;
 use alloy::primitives::B256;
 use std::fmt;
-use zksync_os_interface::types::{BlockContext, BlockOutput};
+use zksync_os_interface::types::BlockOutput;
+use zksync_os_storage_api::BlockContext;
 
 struct BlockContextDbg<'a>(&'a BlockContext);
 impl<'a> fmt::Debug for BlockContextDbg<'a> {

@@ -8,6 +8,7 @@ use tokio::sync::watch;
 
 mod eth_call_handler;
 pub use eth_call_handler::EthCallHandler;
+mod eth_fill_transaction_handler;
 mod eth_filter;
 mod eth_impl;
 mod eth_pubsub_impl;
@@ -15,6 +16,7 @@ mod metrics;
 mod ots_impl;
 mod result;
 mod rpc_storage;
+mod simulate;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
 pub mod js_tracer;
@@ -51,7 +53,6 @@ use reth_rpc_eth_types::EthSubscriptionIdProvider;
 use reth_tasks::Runtime;
 use tower_http::cors::{Any, CorsLayer};
 use zksync_os_genesis::GenesisInputSource;
-use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
@@ -63,6 +64,8 @@ use zksync_os_rpc_api::txpool::TxpoolApiServer;
 use zksync_os_rpc_api::unstable::UnstableApiServer;
 use zksync_os_rpc_api::web3::Web3ApiServer;
 use zksync_os_rpc_api::zks::ZksApiServer;
+use zksync_os_storage_api::BlockContext;
+use zksync_os_tx_validators::policy_client::PolicyClient;
 use zksync_os_types::TransactionAcceptanceState;
 
 #[allow(clippy::too_many_arguments)]
@@ -78,6 +81,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     tx_forwarder: Option<DynProvider>,
     gateway_provider: Option<DynProvider>,
+    policy_client: Option<PolicyClient>,
     runtime: &Runtime,
     wait_for_db: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
@@ -89,7 +93,8 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         config.clone(),
         storage.clone(),
         chain_id,
-        last_constructed_block_context,
+        last_constructed_block_context.clone(),
+        policy_client.clone(),
     );
     rpc.merge(
         EthNamespace::new(
@@ -100,6 +105,8 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             chain_id,
             acceptance_state,
             tx_forwarder,
+            policy_client,
+            last_constructed_block_context,
         )
         .into_rpc(),
     )?;

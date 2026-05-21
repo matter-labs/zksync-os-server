@@ -110,6 +110,7 @@ where
                         output: block_output,
                         record: produced_replay,
                         command_type: cmd_type,
+                        failed_transactions,
                     }) = produced_queue.pop_front()
                     {
                         tracing::info!(
@@ -133,6 +134,7 @@ where
                                     output: block_output,
                                     record: produced_replay,
                                     command_type: cmd_type,
+                                    failed_transactions,
                                 },
                                 &state_reporter,
                             )?;
@@ -154,6 +156,7 @@ where
                         output: block_output,
                         record: replay_record,
                         command_type: cmd_type,
+                        failed_transactions,
                     }) = maybe_executed
                     else {
                         tracing::info!("inbound channel closed");
@@ -179,6 +182,7 @@ where
                                     output: block_output,
                                     record: replay_record,
                                     command_type: cmd_type,
+                                    failed_transactions,
                                 },
                                 &state_reporter,
                             )?;
@@ -199,6 +203,7 @@ where
                                 output: block_output,
                                 record: replay_record,
                                 command_type: cmd_type,
+                                failed_transactions,
                             });
                         }
                     }

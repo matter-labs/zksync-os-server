@@ -70,6 +70,7 @@ use zksync_os_interface::types::BlockHashes;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
+use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
@@ -231,25 +232,36 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .await
         .expect("failed to fetch L1 state")
     };
+    let settles_on_gateway = l1_state.settles_on_gateway();
     let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
         l1_provider.clone()
     } else {
         gateway_provider.clone().unwrap()
     };
-    tracing::info!(?l1_state, "L1 state");
+    tracing::info!(?l1_state, settles_on_gateway, "L1 state");
     l1_state.report_metrics();
     if node_role.is_main() {
         check_batch_verification_mismatch(
             &config.batch_verification_config,
             &l1_state.batch_verification,
         );
+        check_required_operator_keys(&config, settles_on_gateway);
     }
 
-    if node_role.is_main() {
-        let pubdata_mode = config
-            .l1_sender_config
-            .pubdata_mode
-            .expect("l1_sender_pubdata_mode must be set on the Main Node");
+    // Effective pubdata mode used by all block-producing components: read from config only when
+    // the chain settles on L1. When settling on Gateway, it is derived from the gateway's DA
+    // input mode: Rollup gateway -> RelayedL2Calldata, Validium gateway -> Validium.
+    let effective_pubdata_mode: Option<PubdataMode> = if node_role.is_main() {
+        Some(effective_main_node_pubdata_mode(
+            &config,
+            settles_on_gateway,
+            l1_state.da_input_mode,
+        ))
+    } else {
+        // External nodes do not produce blocks; pubdata mode is irrelevant for them.
+        None
+    };
+    if let (Some(pubdata_mode), true) = (effective_pubdata_mode, node_role.is_main()) {
         match (pubdata_mode, l1_state.da_input_mode) {
             (
                 PubdataMode::Calldata | PubdataMode::Blobs | PubdataMode::RelayedL2Calldata,
@@ -258,19 +270,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             | (PubdataMode::Validium, BatchDaInputMode::Rollup) => {
                 panic!(
                     "Pubdata mode doesn't correspond to pricing mode from the l1. \
-                    L1 mode: {:?}, configured pubdata mode: {:?}",
+                    L1 mode: {:?}, effective pubdata mode: {:?}",
                     l1_state.da_input_mode, pubdata_mode
                 );
             }
             _ => {}
-        };
-        if let (PubdataMode::Blobs | PubdataMode::Calldata, true) =
-            (pubdata_mode, config.gateway_provider_config.is_some())
-        {
-            panic!(
-                "Pubdata mode {:?} cannot be used when settling on Gateway",
-                pubdata_mode
-            );
         }
     }
 
@@ -466,6 +470,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 effective_verification_policy(&batch_verification_policy_config, &l1_state);
             NetworkService::new(
                 config.network_config.clone().into(),
+                runtime.clone(),
                 ZksProtocolConfig::MainNode(MainNodeProtocolConfig {
                     accepted_verifier_signers,
                     verify_result_tx: verify_result_tx.clone(),
@@ -487,6 +492,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .collect();
             NetworkService::new(
                 config.network_config.clone().into(),
+                runtime.clone(),
                 ZksProtocolConfig::ExternalNode(ExternalNodeProtocolConfig {
                     starting_block: Arc::new(RwLock::new(starting_block)),
                     record_overrides,
@@ -616,6 +622,22 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
+    if config
+        .sequencer_config
+        .tx_validator
+        .policy_service
+        .url
+        .is_some()
+    {
+        let exec_version = ExecutionVersion::try_from(current_protocol_version)
+            .expect("Cannot determine execution version");
+        assert!(
+            exec_version >= ExecutionVersion::V6,
+            "Policy service requires execution version V6 or later (protocol >= v31.0), \
+             but current protocol version {current_protocol_version} uses {exec_version:?}"
+        );
+    }
+
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
     let interop_fee_subpool = InteropFeeSubpool::new(next_cursors.interop_fee_number);
@@ -697,20 +719,20 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .run(),
         );
 
-        if config.gateway_provider_config.is_some() {
-            runtime.spawn_critical_task(
-                "interop roots watcher",
-                InteropWatcher::create_watcher(
-                    node_startup_state.l1_state.bridgehub_sl.clone(),
-                    config.l1_watcher_config.clone().into(),
-                    next_cursors.interop_root_id,
-                    interop_roots_subpool.clone(),
-                    node_startup_state.l1_state.l1_chain_id,
-                )
-                .await
-                .expect("failed to start L1 interop roots watcher")
-                .run(),
-            );
+        if let Some(interop_watcher) = InteropWatcher::create_watcher(
+            node_startup_state
+                .l1_state
+                .settlement_layer_intervals
+                .clone(),
+            config.l1_watcher_config.clone().into(),
+            chain_id,
+            next_cursors.interop_root_id,
+            interop_roots_subpool.clone(),
+        )
+        .await
+        .expect("failed to start L1 interop roots watcher")
+        {
+            runtime.spawn_critical_task("interop roots watcher", interop_watcher.run());
         }
     }
 
@@ -764,10 +786,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // Channel for Batcher->GasAdjuster communication. Batcher send sidecar to gas adjuster to estimate blob fill ratio.
     let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::channel(10);
     if node_role.is_main() {
-        let pubdata_mode = config
-            .l1_sender_config
-            .pubdata_mode
-            .expect("l1_sender_pubdata_mode must be set on the Main Node");
+        let pubdata_mode =
+            effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node");
         let gas_adjuster_config = gas_adjuster_config(
             config.gas_adjuster_config.clone(),
             pubdata_mode,
@@ -825,7 +845,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         pubdata_price_receiver,
         blob_fill_ratio_receiver,
         token_price_receiver,
-        config.l1_sender_config.pubdata_mode,
+        effective_pubdata_mode,
     );
 
     let pool = Pool::new(
@@ -899,6 +919,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .clone(),
             persistent_batch_storage.clone(),
         )
+        .await
         .expect("failed to start L1 batch persist watcher")
         .run(),
     );
@@ -948,7 +969,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     if node_role.is_main()
-        && config.gateway_provider_config.is_some()
+        && settles_on_gateway
         && current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
     {
         let eth_call_handler = EthCallHandler::new(
@@ -956,6 +977,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             rpc_storage.clone(),
             chain_id,
             last_constructed_block_ctx_receiver.clone(),
+            // Interop fee updater runs inside the node and is not a user-facing
+            // RPC surface, so the admit boundary doesn't apply.
+            None,
         );
         let interop_fee_updater = InteropFeeUpdater::new(
             eth_call_handler,
@@ -1007,6 +1031,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             verify_result_rx,
             last_finalized_migration_receiver,
             migration_triggered_sender,
+            settles_on_gateway,
+            effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
         )
         .await
     } else {
@@ -1067,6 +1093,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .wait_for_db_ready_to_process_blocks()
             .await;
     };
+    let rpc_policy_client = config
+        .sequencer_config
+        .tx_validator
+        .policy_service
+        .build_client(zksync_os_tx_validators::policy_client::Component::Rpc);
     zksync_os_rpc::spawn(
         config.rpc_config.into(),
         chain_id,
@@ -1079,6 +1110,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_constructed_block_ctx_receiver,
         main_node_provider,
         gateway_provider.map(|p| p.erased()),
+        rpc_policy_client,
         runtime,
         wait_for_db,
     )
@@ -1117,11 +1149,9 @@ async fn run_main_node_pipeline(
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
     last_finalized_migration: watch::Receiver<u64>,
     migration_triggered: watch::Sender<Option<u64>>,
+    settles_on_gateway: bool,
+    pubdata_mode: PubdataMode,
 ) -> watch::Receiver<TransactionAcceptanceState> {
-    let pubdata_mode = config
-        .l1_sender_config
-        .pubdata_mode
-        .expect("l1_sender_pubdata_mode must be set on the Main Node");
     let priority_tree_db_path = config
         .general_config
         .rocks_db_path
@@ -1249,6 +1279,28 @@ async fn run_main_node_pipeline(
         );
     }
 
+    // Pick the L1Sender config based on whether the chain is currently settling on Gateway:
+    // when it is, gateway_sender operator keys (funded on Gateway) and gateway_sender fee caps are used;
+    // otherwise the L1-targeted l1_sender config is used.
+    let commit_sender_config: zksync_os_l1_sender::config::L1SenderConfig<CommitCommand> =
+        if settles_on_gateway {
+            config.gateway_sender_config.clone().into()
+        } else {
+            config.l1_sender_config.clone().into()
+        };
+    let prove_sender_config: zksync_os_l1_sender::config::L1SenderConfig<ProofCommand> =
+        if settles_on_gateway {
+            config.gateway_sender_config.clone().into()
+        } else {
+            config.l1_sender_config.clone().into()
+        };
+    let execute_sender_config: zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> =
+        if settles_on_gateway {
+            config.gateway_sender_config.clone().into()
+        } else {
+            config.l1_sender_config.clone().into()
+        };
+
     let pipeline = pipeline
         .pipe(ProverInputGenerator {
             enable_logging: config.prover_input_generator_config.logging_enabled,
@@ -1300,9 +1352,9 @@ async fn run_main_node_pipeline(
         })
         .pipe(L1Sender::<_, _, CommitCommand> {
             provider: sl_provider.clone(),
-            config: config.l1_sender_config.clone().into(),
+            config: commit_sender_config,
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: config.gateway_provider_config.is_some(),
+            gateway: settles_on_gateway,
             commit_submitted_tx: Some(commit_submitted_tx),
             sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })
@@ -1312,9 +1364,9 @@ async fn run_main_node_pipeline(
         ))
         .pipe(L1Sender::<_, _, ProofCommand> {
             provider: sl_provider.clone(),
-            config: config.l1_sender_config.clone().into(),
+            config: prove_sender_config,
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: config.gateway_provider_config.is_some(),
+            gateway: settles_on_gateway,
             commit_submitted_tx: None,
             sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })
@@ -1329,9 +1381,9 @@ async fn run_main_node_pipeline(
         )
         .pipe(L1Sender {
             provider: sl_provider,
-            config: config.l1_sender_config.clone().into(),
+            config: execute_sender_config,
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: config.gateway_provider_config.is_some(),
+            gateway: settles_on_gateway,
             commit_submitted_tx: None,
             sl_block_number: node_state_on_startup.l1_state.sl_block_number,
         })
@@ -1521,6 +1573,75 @@ fn check_batch_verification_mismatch(
         return true;
     }
     false
+}
+
+/// Returns the pubdata mode used by all block-producing components on the Main Node, taking
+/// settlement-layer discovery into account: when the chain settles on Gateway, the mode is
+/// derived from the gateway's DA input mode (`Rollup` → [`PubdataMode::RelayedL2Calldata`],
+/// `Validium` → [`PubdataMode::Validium`]); when it settles on L1, the configured
+/// `l1_sender.pubdata_mode` is used (and its presence is enforced here).
+fn effective_main_node_pubdata_mode(
+    config: &Config,
+    settles_on_gateway: bool,
+    da_input_mode: BatchDaInputMode,
+) -> PubdataMode {
+    if settles_on_gateway {
+        match da_input_mode {
+            BatchDaInputMode::Rollup => PubdataMode::RelayedL2Calldata,
+            BatchDaInputMode::Validium => PubdataMode::Validium,
+        }
+    } else {
+        config
+            .l1_sender_config
+            .pubdata_mode
+            .expect("`l1_sender.pubdata_mode` is required on the Main Node when settling on L1")
+    }
+}
+
+/// Validates that the operator keys required for the L1Sender pipeline are present in config,
+/// based on the settlement layer discovered at startup. When settling on L1, `l1_sender.operator_*_sk`
+/// are required; when settling on Gateway, `gateway_sender.operator_*_sk` are required. Reports all
+/// missing keys at once via panic so the operator can fix them in a single restart.
+fn check_required_operator_keys(config: &Config, settles_on_gateway: bool) {
+    let (section, missing): (&str, Vec<&str>) = if settles_on_gateway {
+        let gw = &config.gateway_sender_config;
+        let mut missing = vec![];
+        if gw.operator_commit_sk.is_none() {
+            missing.push("operator_commit_sk");
+        }
+        if gw.operator_prove_sk.is_none() {
+            missing.push("operator_prove_sk");
+        }
+        if gw.operator_execute_sk.is_none() {
+            missing.push("operator_execute_sk");
+        }
+        ("gateway_sender", missing)
+    } else {
+        let l1 = &config.l1_sender_config;
+        let mut missing = vec![];
+        if l1.operator_commit_sk.is_none() {
+            missing.push("operator_commit_sk");
+        }
+        if l1.operator_prove_sk.is_none() {
+            missing.push("operator_prove_sk");
+        }
+        if l1.operator_execute_sk.is_none() {
+            missing.push("operator_execute_sk");
+        }
+        ("l1_sender", missing)
+    };
+    if !missing.is_empty() {
+        let target = if settles_on_gateway { "Gateway" } else { "L1" };
+        let formatted = missing
+            .iter()
+            .map(|k| format!("`{section}.{k}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        panic!(
+            "missing operator keys required for settling on {target}: {formatted}. \
+             Set them in the `{section}` config section."
+        );
+    }
 }
 
 async fn commit_proof_execute_block_numbers(

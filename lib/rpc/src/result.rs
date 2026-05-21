@@ -8,6 +8,7 @@ use crate::debug_impl::DebugError;
 use crate::eth_call_handler::EthCallError;
 use crate::eth_filter::EthFilterError;
 use crate::eth_impl::EthError;
+use crate::rpc_storage::RpcStorageError;
 use crate::tx_handler::{EthSendRawTransactionError, EthSendRawTransactionSyncError};
 use crate::unstable_impl::UnstableError;
 use crate::zks_impl::ZksError;
@@ -49,6 +50,9 @@ impl<Ok> ToRpcResult<Ok, EthError> for Result<Ok, EthError> {
             EthError::BlockNotFound(_)
             | EthError::NonceMaxValue
             | EthError::InvalidRewardPercentiles => invalid_params_rpc_err(err.to_string()),
+            EthError::RpcStorage(RpcStorageError::BlockNotFound(_)) => {
+                invalid_params_rpc_err(err.to_string())
+            }
             EthError::RpcStorage(_) | EthError::Repository(_) | EthError::State(_) => {
                 internal_rpc_err(err.to_string())
             }
@@ -86,6 +90,12 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionError> for Result<Ok, EthSendRawTr
             EthSendRawTransactionError::ForwardError(ref rpc_err) => {
                 forward_error_to_rpc_err(rpc_err, &err)
             }
+            EthSendRawTransactionError::PolicyDenied => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
+            ),
+            EthSendRawTransactionError::JudgeSimFailed(_) => internal_rpc_err(err.to_string()),
         })
     }
 }
@@ -112,6 +122,32 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
                 revert.to_string(),
                 revert.output.as_ref().map(|out| out.as_ref()),
             ),
+            EthCallError::SimulateInvalidParams(_)
+            | EthCallError::SimulateInvalidBlockOverride(_) => {
+                invalid_params_rpc_err(err.to_string())
+            }
+            // Error codes -380xx follow the reth implementation of the eth_simulateV1 spec.
+            EthCallError::SimulateBlockNumberInvalid { .. } => {
+                rpc_error_with_code(-38020, err.to_string())
+            }
+            EthCallError::SimulateBlockTimestampInvalid { .. } => {
+                rpc_error_with_code(-38021, err.to_string())
+            }
+            EthCallError::SimulateBlockGasLimitExceeded => {
+                rpc_error_with_code(-38015, err.to_string())
+            }
+            EthCallError::SimulateMovePrecompileNotSupported => {
+                invalid_params_rpc_err(err.to_string())
+            }
+            EthCallError::PolicyDenied => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
+            ),
+            EthCallError::CallFees(_) => invalid_params_rpc_err(err.to_string()),
+            EthCallError::Storage(RpcStorageError::BlockNotFound(_)) => {
+                invalid_params_rpc_err(err.to_string())
+            }
             err => internal_rpc_err(err.to_string()),
         })
     }
@@ -132,6 +168,11 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionSyncError>
                 // Code 4 is used as per EIP-7966 (see https://eips.ethereum.org/EIPS/eip-7966)
                 rpc_error_with_code(4, err.to_string())
             }
+            err @ EthSendRawTransactionSyncError::RejectedDuringExecution(_) => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
+            ),
         })
     }
 }

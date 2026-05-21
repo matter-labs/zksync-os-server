@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::broadcast;
 use zksync_os_genesis::Genesis;
+use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
 use zksync_os_storage_api::{
@@ -214,6 +215,7 @@ impl WriteRepository for RepositoryManager {
         &self,
         block_output: BlockOutput,
         transactions: Vec<ZkTransaction>,
+        failed_transactions: Vec<(TxHash, InvalidTransaction)>,
     ) -> RepositoryResult<()> {
         if !self.db_ready_to_process_blocks.load(Ordering::Relaxed) {
             if block_output.header.number > 0 {
@@ -241,6 +243,7 @@ impl WriteRepository for RepositoryManager {
         let notification = BlockNotification {
             block,
             transactions,
+            failed_transactions: Arc::new(failed_transactions.into_iter().collect()),
         };
         // Ignore error if there are no subscribed receivers
         let _ = self.block_sender.send(notification);
