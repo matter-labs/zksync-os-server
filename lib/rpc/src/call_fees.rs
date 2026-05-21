@@ -14,12 +14,9 @@ pub struct CallFees {
 
 impl CallFees {
     // todo(EIP-4844): handle blob fees
-    /// `relax_fee_validation` is set by callers (`eth_estimateGas`, `eth_simulateV1` with
-    /// `validation=false`) that need to accept requests whose fee fields would otherwise
-    /// fail adequacy checks against the block basefee. With the flag set, an under-priced
-    /// `max_fee_per_gas` is accepted instead of returning `FeeCapTooLow`; the effective
-    /// price is still derived from the real basefee so downstream gas accounting (e.g. the
-    /// bootloader's pubdata pre-charge) sees realistic numbers.
+    /// `relax_fee_validation` skips the `FeeCapTooLow` check so `eth_estimateGas` and
+    /// `eth_simulateV1` with `validation=false` accept under-priced requests. The effective
+    /// price is still derived from the real basefee.
     pub fn ensure_fees(
         call_gas_price: Option<u128>,
         call_max_fee_per_gas: Option<u128>,
@@ -64,9 +61,8 @@ impl CallFees {
                     Some(max_fee_per_gas) => {
                         let max_priority_fee_per_gas = max_priority_fee_per_gas.unwrap_or_default();
 
-                        // Only enforce the fee cap when the caller wants strict validation
-                        // and the request actually carried a non-zero fee. Estimate/simulate
-                        // paths bypass the cap so that under-priced requests still execute.
+                        // Enforce the fee cap only under strict validation and when the
+                        // request actually carried a non-zero fee.
                         let request_carries_fee =
                             !(max_fee_per_gas == 0 && max_priority_fee_per_gas == 0);
                         if !relax_fee_validation

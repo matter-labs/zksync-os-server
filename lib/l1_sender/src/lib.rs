@@ -74,10 +74,8 @@ const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 /// to reach 3 confirmations for such transactions
 const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
 const OPERATOR_METRICS_POLL_INTERVAL: Duration = Duration::from_secs(60);
-/// Gas limit used when `eth_simulateV1` is unavailable or fails to produce a usable
-/// estimate for a tx. Historically the L1 sender used this as a flat per-tx limit;
-/// it is generously sized for the bounded set of commit/prove/execute calls and
-/// clears the bootloader's pubdata pre-charge at production fee levels.
+/// Per-tx gas limit used when `eth_simulateV1` cannot produce a usable estimate.
+/// Sized to cover the bounded set of commit/prove/execute calls.
 const L1_GAS_LIMIT_FALLBACK: u64 = 15_000_000;
 
 #[derive(Debug, Clone, Copy)]
@@ -207,9 +205,6 @@ where
             tracing::info!(command_name, range, "sending L1 transactions");
             L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
 
-            // Simulate the whole batch of commands together so that gas estimation accounts
-            // for state changes between successive transactions sharing the same sender and
-            // target contract. Each per-tx gas limit is set to 2x the simulated value.
             let operator_address = self.operator_address().await?;
             let sim_fee_params = self
                 .resolve_fee_params(fee_config, force_transaction_resubmission)
@@ -649,40 +644,31 @@ where
         Ok(apply_fee_caps(configured_params, estimated))
     }
 
-    /// Estimates gas limits for a batch of L1 commands using `eth_simulateV1`.
-    ///
-    /// All calls are placed in a single simulated block so that state changes from earlier
-    /// commands (e.g., updates to the bridge contract by an earlier commit) are visible to
-    /// later commands. Estimating each command independently against the current chain
-    /// state would mis-estimate gas — or revert outright — for any command after the first.
-    ///
-    /// Returns `2 * gas_used` per call to leave headroom for state drift between
-    /// simulation and actual inclusion. If `eth_simulateV1` is unavailable or fails
-    /// to produce a usable estimate, falls back to [`L1_GAS_LIMIT_FALLBACK`] so the
-    /// L1 sender keeps making progress.
+    /// Estimates gas limits for a batch of L1 commands via `eth_simulateV1`, returning
+    /// `2 * gas_used` per call. Calls share a single simulated block so state writes from
+    /// earlier commands are visible to later ones. Falls back to [`L1_GAS_LIMIT_FALLBACK`]
+    /// per tx on any simulate failure.
     async fn estimate_gas_limits(
         &self,
         commands: &[Input],
         operator_address: Address,
         fee_params: FeeParams,
     ) -> anyhow::Result<Vec<u64>> {
-        // Anvil parses each simulate call into a typed transaction before executing it, and
-        // EIP-4844 parsing requires `nonce` and `gas_limit` to be present. We fetch the
-        // operator's pending nonce once and assign sequential values to each call.
+        // Sequential nonces from the operator's pending count — anvil's EIP-4844 parsing
+        // requires `nonce` and `gas_limit` even with `validation=false`.
         let starting_nonce = self
             .provider
             .get_transaction_count(operator_address)
             .pending()
             .await
             .context("get pending nonce for L1 sender gas estimation")?;
-        // Cap gas at a generous upper bound; the simulation reports the actual `gas_used`.
+        // Per-call cap. The simulation reports the actual `gas_used`.
         const SIM_GAS_LIMIT: u64 = 30_000_000;
 
         let mut sim_block = SimBlock::default();
         for (i, cmd) in commands.iter().enumerate() {
-            // Fee fields are required by some L1 providers (e.g., anvil) when parsing the
-            // transaction request, even though `eth_simulateV1` does not run validation by
-            // default. We mirror the fee params we plan to use for the real submission.
+            // Mirror submission fees so providers (e.g. anvil) that parse the request as a
+            // typed tx accept it.
             let mut req = TransactionRequest::default()
                 .with_from(operator_address)
                 .with_to(self.to_address)
@@ -691,24 +677,18 @@ where
                 .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
                 .with_nonce(starting_nonce + i as u64)
                 .with_gas_limit(SIM_GAS_LIMIT);
-            // Include blob versioned hashes so the BLOBHASH opcode (used by the commit
-            // contract to verify blob commitments) sees the same values it will see on L1.
-            // The KZG sidecar (blobs/commitments/proofs) is not needed: anvil ignores it
-            // during simulation, and real L1 nodes only need the hashes for execution.
             if let Some(sidecar) = cmd.blob_sidecar() {
                 req.blob_versioned_hashes = Some(sidecar.versioned_hashes().collect());
                 req.max_fee_per_blob_gas = Some(fee_params.max_fee_per_blob_gas);
-                // Anvil's `transaction_request_to_typed` requires an explicit `type=3` to
-                // route a blob-tagged request through the EIP-4844 arm — otherwise it
-                // falls through to the catch-all and returns -32602 missing required fields.
+                // Anvil routes blob requests through the EIP-4844 arm only when
+                // `type=3` is set explicitly; otherwise it returns -32602.
                 req.transaction_type = Some(3);
             }
             sim_block = sim_block.call(req);
         }
 
-        // Some L1 providers (e.g., anvil) check the sender's balance even when
-        // `validation` is false, which would fail with realistic max-fee-per-gas values.
-        // Override the operator's balance to a large value so the simulation runs.
+        // Some L1 providers check sender balance even with `validation=false`; override
+        // to bypass.
         sim_block.state_overrides = Some(
             StateOverridesBuilder::default()
                 .append(
@@ -726,10 +706,8 @@ where
             ..Default::default()
         };
 
-        // Any failure to obtain a usable estimate degrades to the historical 15M per
-        // tx so the L1 sender keeps making progress. Per-call reverts inside an
-        // otherwise-successful response fall back per-tx (other calls keep their
-        // simulated estimate); whole-response failures fall back across the batch.
+        // Top-level failures fall back across the batch; per-call reverts fall back only
+        // for that tx.
         let block = match self.provider.simulate(&payload).pending().await {
             Ok(results) => match results.into_iter().next() {
                 Some(block) if block.calls.len() == commands.len() => block,
