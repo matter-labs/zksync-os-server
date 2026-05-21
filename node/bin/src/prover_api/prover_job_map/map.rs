@@ -512,6 +512,7 @@ mod tests {
             blob_sidecar: None,
             first_block_number: batch_number,
             last_block_number: batch_number,
+            last_block_hash: None,
             pubdata_mode: PubdataMode::Calldata,
             tx_count: 10,
             computational_native_used: None,

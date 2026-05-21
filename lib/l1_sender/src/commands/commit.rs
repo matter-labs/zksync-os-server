@@ -12,7 +12,7 @@ use zksync_os_contract_interface::{IExecutor, IMultisigCommitter};
 
 #[derive(Debug)]
 pub struct CommitCommand {
-    pub(super) input: SignedBatchEnvelope<FriProof>,
+    pub input: SignedBatchEnvelope<FriProof>,
     pub(super) signatures: Option<BatchSignatureSet>,
 }
 

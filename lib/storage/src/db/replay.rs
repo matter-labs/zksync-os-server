@@ -95,13 +95,13 @@ impl BlockReplayStorage {
     /// Key under `Latest` CF for tracking the highest block number.
     const LATEST_KEY: &'static [u8] = b"latest_block";
 
-    pub async fn new(db_path: &Path, genesis: &Genesis) -> Self {
+    pub async fn new(db_path: &Path, genesis: &Genesis) -> (Self, Option<Sealed<ReplayRecord>>) {
         let db = RocksDB::<BlockReplayColumnFamily>::new(db_path)
             .expect("Failed to open BlockReplayStorage")
             .with_sync_writes();
 
         let this = Self { db };
-        if this.latest_record_checked().is_none() {
+        let inserted_genesis = if this.latest_record_checked().is_none() {
             let genesis_tx = genesis.genesis_upgrade_tx().await;
             let genesis_context = &genesis.state().await.context;
             let genesis_hash = genesis.state().await.header.hash();
@@ -118,9 +118,24 @@ impl BlockReplayStorage {
                 force_preimages: genesis_tx.force_deploy_preimages.clone(),
                 starting_cursors: BlockStartCursors::default(),
             };
-            this.write_replay_unchecked(Sealed::new_unchecked(genesis_record, genesis_hash), true);
-        }
-        this
+            let sealed_genesis_record = Sealed::new_unchecked(genesis_record, genesis_hash);
+            this.write_replay_unchecked(sealed_genesis_record.clone(), true);
+            Some(sealed_genesis_record)
+        } else {
+            None
+        };
+        (this, inserted_genesis)
+    }
+
+    /// Opens replay storage without inserting genesis.
+    ///
+    /// This is intended for recovery tooling that rebuilds the DB from archived replay records and
+    /// writes the recovered chain from genesis upward.
+    pub fn new_without_genesis(db_path: &Path) -> Self {
+        let db = RocksDB::<BlockReplayColumnFamily>::new(db_path)
+            .expect("Failed to open BlockReplayStorage")
+            .with_sync_writes();
+        Self { db }
     }
 
     fn write_replay_unchecked(&self, sealed_record: Sealed<ReplayRecord>, is_canonical: bool) {
@@ -476,18 +491,33 @@ impl ReadReplay for BlockReplayStorage {
 }
 
 impl WriteReplay for BlockReplayStorage {
-    fn write(&self, sealed_record: Sealed<ReplayRecord>, override_allowed: bool) -> bool {
+    async fn write(
+        &self,
+        sealed_record: Sealed<ReplayRecord>,
+        override_allowed: bool,
+    ) -> anyhow::Result<bool> {
         let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
         let block_record = sealed_record.as_ref();
         let block_context = &sealed_record.block_context;
-        let current_latest_record = self.latest_record();
+        let current_latest_record = self.latest_record_checked();
+        let Some(current_latest_record) = current_latest_record else {
+            assert_eq!(
+                block_context.block_number, 0,
+                "tried to append first replay record with non-zero block number: {}",
+                block_context.block_number
+            );
+            self.write_replay_unchecked(sealed_record, true);
+            latency_observer.observe();
+            return Ok(true);
+        };
+
         if block_context.block_number <= current_latest_record && !override_allowed {
             // todo: consider asserting that the passed `ReplayRecord` matches the one currently stored
             tracing::debug!(
                 block_number = block_context.block_number,
                 "not appending block: already exists in block replay storage",
             );
-            return false;
+            return Ok(false);
         } else if block_context.block_number > current_latest_record + 1 {
             panic!(
                 "tried to append non-sequential replay record: {} > {}",
@@ -517,7 +547,7 @@ impl WriteReplay for BlockReplayStorage {
 
         self.write_replay_unchecked(sealed_record, true);
         latency_observer.observe();
-        true
+        Ok(true)
     }
 }
 
