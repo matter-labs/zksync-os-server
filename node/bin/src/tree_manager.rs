@@ -1,11 +1,9 @@
 use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use async_trait::async_trait;
-use std::ops::Div;
 use std::path::Path;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_genesis::Genesis;
@@ -62,6 +60,7 @@ impl PipelineComponent for TreeManager {
             }
 
             state_reporter.enter_state(GenericComponentState::Active);
+            let range_time = TREE_METRICS.range_time.start();
 
             let first_block_number = blocks[0].block_number();
             if first_block_number <= last_processed_block {
@@ -82,84 +81,45 @@ impl PipelineComponent for TreeManager {
             let tree_blocks = tokio::task::spawn_blocking(move || {
                 let patched = Patched::new(db_clone);
                 let mut patched_tree = MerkleTree::new(patched)?;
-                let mut tree_blocks = Vec::with_capacity(blocks.len());
-
-                for block in blocks {
-                    let started_at = Instant::now();
-                    let (block_output, read_keys) = block.output.into_parts();
-                    let (tree_entries, written_keys): (Vec<_>, Vec<_>) = block_output
-                        .storage_writes
-                        .iter()
-                        .map(|write| {
-                            let entry = TreeEntry {
-                                key: write.key,
-                                value: write.value,
-                            };
-                            (entry, write.key)
-                        })
-                        .unzip();
-                    let read_keys: Vec<_> = read_keys.into_iter().collect();
-                    let block_number = block_output.header.number;
-                    let write_count = written_keys.len();
-                    let read_count = read_keys.len();
-
-                    let (root_hash, leaf_count) = patched_tree
-                        .root_info(block_number - 1)?
-                        .with_context(|| {
-                            format!("Merkle tree missing previous block version for block {block_number}")
-                        })?;
-                    let tree_input = TreeBatchOutput { root_hash, leaf_count };
-                    let (tree_output, update_proof) =
-                        patched_tree.extend_with_proof(&tree_entries, &read_keys)?;
-
-                    tracing::info!(
-                        block_number = block_number,
-                        written_keys.len = written_keys.len(),
-                        read_keys.len = read_keys.len(),
-                        proof.sorted_leaves.len = update_proof.sorted_leaves.len(),
-                        proof.hashes.len = update_proof.hashes.len(),
-                        input = ?tree_input,
-                        output = ?tree_output,
-                        "Processed tree update"
-                    );
-
-                    let block_time = started_at.elapsed();
-                    TREE_METRICS
-                        .entry_time
-                        .observe(block_time.div(write_count.max(1) as u32));
-                    TREE_METRICS.block_time.observe(block_time);
-                    TREE_METRICS.unique_leafs.set(tree_output.leaf_count);
-                    TREE_METRICS.processing_range.observe(write_count);
-                    TREE_METRICS.block_number.set(block_number);
-                    TREE_METRICS.processing_read_range.observe(read_count);
-                    TREE_METRICS
-                        .update_proof_sorted_leaves
-                        .observe(update_proof.sorted_leaves.len());
-                    TREE_METRICS
-                        .update_proof_hashes
-                        .observe(update_proof.hashes.len());
-                    TREE_METRICS.block_number.set(block_number);
-
-                    let tree_data = BlockMerkleTreeData {
-                        input: tree_input,
-                        output: tree_output,
-                        proof: update_proof,
-                        read_keys,
-                        written_keys,
-                    };
-                    tree_blocks.push(TreeBlock {
-                        output: block_output,
-                        record: block.record,
-                        tree: tree_data,
-                    });
-                }
+                let tree_blocks = blocks
+                    .into_iter()
+                    .map(|block| Self::update_tree(&mut patched_tree, block))
+                    .collect::<anyhow::Result<Vec<_>>>()?;
 
                 // Single RocksDB write for all blocks.
+                let flush_time = TREE_METRICS.flush_time.start();
                 patched_tree.flush()?;
-                // FIXME: another metric for flush latency
+                let flush_time = flush_time.observe();
+                tracing::debug!(?flush_time, "flushed Merkle tree updates to disk");
+
                 anyhow::Ok(tree_blocks)
             })
             .await??;
+
+            let range_time = range_time.observe();
+            tracing::debug!(
+                ?range_time,
+                "processed tree blocks {first_block_number}..={last_block_number}"
+            );
+
+            // Report amortized metrics. We intentionally don't deduplicate read / written keys *across* blocks.
+            TREE_METRICS
+                .amortized_block_time
+                .observe(range_time / block_count as u32);
+            let total_writes = tree_blocks
+                .iter()
+                .map(|block| block.tree.written_keys.len())
+                .sum::<usize>();
+            let total_reads = tree_blocks
+                .iter()
+                .map(|block| block.tree.read_keys.len())
+                .sum::<usize>();
+            TREE_METRICS
+                .amortized_entry_time
+                .observe(range_time / total_writes.max(1) as u32);
+            TREE_METRICS
+                .amortized_entry_time_with_reads
+                .observe(range_time / (total_reads + total_writes).max(1) as u32);
 
             last_processed_block = self
                 .tree
@@ -215,6 +175,86 @@ impl TreeManager {
         tracing::info!("Loaded tree with last processed block at {:?}", version);
         tree
     }
+
+    /// Updates a tree with data from a single executed block.
+    ///
+    /// This method uses blocking I/O.
+    fn update_tree(
+        patched_tree: &mut MerkleTree<Patched<RocksDBWrapper>>,
+        block: AppliedBlock,
+    ) -> anyhow::Result<TreeBlock> {
+        let block_time = TREE_METRICS.block_time.start();
+        let (block_output, read_keys) = block.output.into_parts();
+        let (tree_entries, written_keys): (Vec<_>, Vec<_>) = block_output
+            .storage_writes
+            .iter()
+            .map(|write| {
+                let entry = TreeEntry {
+                    key: write.key,
+                    value: write.value,
+                };
+                (entry, write.key)
+            })
+            .unzip();
+        let read_keys: Vec<_> = read_keys.into_iter().collect();
+        let block_number = block_output.header.number;
+        let write_count = written_keys.len();
+        let read_count = read_keys.len();
+
+        let (root_hash, leaf_count) =
+            patched_tree.root_info(block_number - 1)?.with_context(|| {
+                format!("Merkle tree missing previous block version for block {block_number}")
+            })?;
+        let tree_input = TreeBatchOutput {
+            root_hash,
+            leaf_count,
+        };
+        let (tree_output, update_proof) =
+            patched_tree.extend_with_proof(&tree_entries, &read_keys)?;
+
+        tracing::debug!(
+            block_number = block_number,
+            written_keys.len = written_keys.len(),
+            read_keys.len = read_keys.len(),
+            proof.sorted_leaves.len = update_proof.sorted_leaves.len(),
+            proof.hashes.len = update_proof.hashes.len(),
+            input = ?tree_input,
+            output = ?tree_output,
+            "Processed tree update"
+        );
+
+        let block_time = block_time.observe();
+        TREE_METRICS
+            .entry_time
+            .observe(block_time / (write_count.max(1) as u32));
+        TREE_METRICS
+            .entry_time_with_reads
+            .observe(block_time / ((write_count + read_count).max(1) as u32));
+        TREE_METRICS.unique_leafs.set(tree_output.leaf_count);
+        TREE_METRICS.processing_range.observe(write_count);
+        TREE_METRICS.block_number.set(block_number);
+        TREE_METRICS.processing_read_range.observe(read_count);
+        TREE_METRICS
+            .update_proof_sorted_leaves
+            .observe(update_proof.sorted_leaves.len());
+        TREE_METRICS
+            .update_proof_hashes
+            .observe(update_proof.hashes.len());
+        TREE_METRICS.block_number.set(block_number);
+
+        let tree_data = BlockMerkleTreeData {
+            input: tree_input,
+            output: tree_output,
+            proof: update_proof,
+            read_keys,
+            written_keys,
+        };
+        Ok(TreeBlock {
+            output: block_output,
+            record: block.record,
+            tree: tree_data,
+        })
+    }
 }
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
@@ -223,17 +263,31 @@ const BLOCK_RANGE_SIZE: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "tree")]
 pub struct TreeMetrics {
-    /// Merkle tree update latency per written entry.
+    /// Merkle tree update latency per written entry. Does not include flushing block contents to disk.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub entry_time: Histogram<Duration>,
-    /// Merkle tree update latency per read / written entry.
+    /// Merkle tree update latency per written entry. May be amortized across multiple blocks. Includes flushing to disk.
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub amortized_entry_time: Histogram<Duration>,
+    /// Merkle tree update latency per read / written entry. Does not include flushing block contents to disk.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub entry_time_with_reads: Histogram<Duration>,
+    /// Merkle tree update latency per read / written entry. May be amortized across multiple blocks. Includes flushing to disk.
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub amortized_entry_time_with_reads: Histogram<Duration>,
     /// Latency to process a single block in the tree. Does not include flushing block contents to disk.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub block_time: Histogram<Duration>,
+    /// Latency to process a single block in the tree. May be amortized across multiple blocks. Includes flushing to disk.
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub amortized_block_time: Histogram<Duration>,
+    /// Latency to process a range of blocks in the tree (including flushing).
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub range_time: Histogram<Duration>,
+    /// Latency to flush tree updates to disk.
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub flush_time: Histogram<Duration>,
+    /// Number of unique leaves in the Merkle tree.
     pub unique_leafs: Gauge<u64>,
     /// Number of distinct tree entries written per block.
     #[metrics(buckets = BLOCK_RANGE_SIZE)]
