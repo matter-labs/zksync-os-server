@@ -894,6 +894,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.fee_collector_address,
         last_constructed_block_ctx_sender,
         fee_provider,
+        node_role.is_external(),
     );
 
     // ========== Start L1 Persist Batch Watcher ===========
