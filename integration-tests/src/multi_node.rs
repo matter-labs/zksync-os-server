@@ -30,7 +30,7 @@ fn consensus_boot_nodes_for_node(
         .iter()
         .take(spawned_nodes)
         .enumerate()
-        .filter_map(|(peer_index, record)| (peer_index != node_index).then_some((*record).into()))
+        .filter_map(|(peer_index, record)| (peer_index > node_index).then_some((*record).into()))
         .collect()
 }
 
@@ -668,10 +668,10 @@ impl MultiNodeTesterBuilder {
             .enumerate()
             .map(|(i, (secret, locked_port))| {
                 let peers = peer_ids.clone();
-                // Trust every consensus peer so that a restarted voter actively reconnects to the
-                // current leader instead of relying on that leader to redial it. OpenRaft sends RPCs
-                // directly to every voter, so a ring-shaped peer graph can leave the leader unable
-                // to replicate to a rejoined node.
+                // Configure a deterministic directed full mesh: every consensus pair gets exactly
+                // one maintained RLPx route, from the lower-index node to the higher-index node.
+                // This avoids simultaneous crossed dials that can be dropped as duplicates under
+                // stress while still preserving an OpenRaft RPC path between every voter pair.
                 let boot_nodes: Vec<zksync_os_network::TrustedPeer> =
                     consensus_boot_nodes_for_node(&node_records, num_nodes, i);
                 let l1 = l1.clone();
