@@ -3,7 +3,7 @@ use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::rpc::types::TransactionReceipt;
 use anyhow::Context;
-use vise::{Buckets, EncodeLabelValue, Gauge, Histogram, LabeledFamily, Metrics};
+use vise::{Buckets, Counter, EncodeLabelValue, Gauge, Histogram, LabeledFamily, Metrics};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "percentile", rename_all = "snake_case")]
@@ -97,6 +97,10 @@ pub struct L1SenderMetrics {
     /// Buckets cover 0.5s → ~17 minutes in doubling steps, spanning normal (15-30s) to heavily congested (10min+).
     #[metrics(labels = ["command"], buckets = Buckets::exponential(0.5..=1024.0, 2.0))]
     pub tx_inclusion_latency_seconds: LabeledFamily<&'static str, Histogram<f64>>,
+
+    /// Number of L1 transactions that were replaced after no receipt was observed before timeout.
+    #[metrics(labels = ["command"])]
+    pub tx_resubmissions: LabeledFamily<&'static str, Counter>,
 }
 
 impl L1SenderMetrics {
