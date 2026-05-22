@@ -8,6 +8,7 @@ mod command_source;
 pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
+mod local_batch_state;
 mod migration_gate;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
@@ -673,23 +674,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         watch::channel::<Option<u64>>(None);
 
     if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
-        runtime.spawn_critical_task(
-            "gateway migration watcher",
-            GatewayMigrationWatcher::create_watcher(
-                node_startup_state.l1_state.diamond_proxy_l1.clone(),
-                node_startup_state.l1_state.bridgehub_l1.clone(),
-                chain_id,
-                node_startup_state.l1_state.l1_chain_id,
-                config.general_config.gateway_chain_id,
-                next_cursors.migration_number,
-                config.l1_watcher_config.clone().into(),
-                sl_chain_id_subpool.clone(),
-            )
-            .await
-            .expect("failed to start gateway migration watcher")
-            .run(),
-        );
-
         // Initializes `last_finalized_migration` from the SL's `migrationNumber(chainId)` and,
         // if the current SL interval migration has not yet finalized, spawns a watcher to track
         // future `MigrationFinalized` events. When the migration is already finalized at startup
@@ -722,37 +706,75 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .run(),
         );
 
-        if let Some(interop_watcher) = InteropWatcher::create_watcher(
-            node_startup_state
-                .l1_state
-                .settlement_layer_intervals
-                .clone(),
-            config.l1_watcher_config.clone().into(),
-            chain_id,
-            next_cursors.interop_root_id,
-            interop_roots_subpool.clone(),
-        )
-        .await
-        .expect("failed to start L1 interop roots watcher")
-        {
-            runtime.spawn_critical_task("interop roots watcher", interop_watcher.run());
+        if node_role.is_main() {
+            runtime.spawn_critical_task(
+                "gateway migration watcher",
+                GatewayMigrationWatcher::create_watcher(
+                    node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                    node_startup_state.l1_state.bridgehub_l1.clone(),
+                    chain_id,
+                    node_startup_state.l1_state.l1_chain_id,
+                    config.general_config.gateway_chain_id,
+                    next_cursors.migration_number,
+                    config.l1_watcher_config.clone().into(),
+                    sl_chain_id_subpool.clone(),
+                )
+                .await
+                .expect("failed to start gateway migration watcher")
+                .run(),
+            );
+
+            if let Some(interop_watcher) = InteropWatcher::create_watcher(
+                node_startup_state
+                    .l1_state
+                    .settlement_layer_intervals
+                    .clone(),
+                config.l1_watcher_config.clone().into(),
+                chain_id,
+                next_cursors.interop_root_id,
+                interop_roots_subpool.clone(),
+            )
+            .await
+            .expect("failed to start L1 interop roots watcher")
+            {
+                runtime.spawn_critical_task("interop roots watcher", interop_watcher.run());
+            }
         }
     }
 
     let l1_subpool = L1Subpool::new(10);
-    runtime.spawn_critical_task(
-        "gateway migration watcher",
-        L1TxWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            l1_subpool.clone(),
-            next_cursors.l1_priority_id,
-        )
-        .await
-        .expect("failed to start L1 transaction watcher")
-        .run(),
-    );
+    if node_role.is_main() {
+        runtime.spawn_critical_task(
+            "l1 priority tx watcher",
+            L1TxWatcher::create_watcher(
+                config.l1_watcher_config.clone().into(),
+                node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                l1_subpool.clone(),
+                next_cursors.l1_priority_id,
+            )
+            .await
+            .expect("failed to start L1 transaction watcher")
+            .run(),
+        );
+
+        runtime.spawn_critical_task(
+            "l1 upgrade transaction watcher",
+            L1UpgradeTxWatcher::create_watcher(
+                config.l1_watcher_config.clone().into(),
+                chain_id,
+                node_startup_state.l1_state.bridgehub_l1.clone(),
+                node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                bytecode_supplier_address,
+                current_protocol_version.clone(),
+                upgrade_subpool.clone(),
+            )
+            .await
+            .expect("failed to start L1 upgrade transaction watcher")
+            .run(),
+        );
+    }
 
     // Transaction acceptance state - tracks whether we're accepting new transactions
     // Main nodes: accepts, but may switch to reject when `sequencer_max_blocks_to_produce` blocks are produced
@@ -879,25 +901,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.fee_collector_address,
         last_constructed_block_ctx_sender,
         fee_provider,
-    );
-
-    // ========== Start L1 Upgrade Watcher ===========
-
-    runtime.spawn_critical_task(
-        "l1 upgrade transaction watcher",
-        L1UpgradeTxWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            chain_id,
-            node_startup_state.l1_state.bridgehub_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            bytecode_supplier_address,
-            current_protocol_version.clone(),
-            upgrade_subpool,
-        )
-        .await
-        .expect("failed to start L1 upgrade transaction watcher")
-        .run(),
+        node_role.is_external(),
     );
 
     // ========== Start L1 Persist Batch Watcher ===========
@@ -910,8 +914,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         finality_storage.clone(),
         persistent_batch_storage.clone(),
         state.clone(),
-        tree_for_rpc,
+        tree_for_rpc.clone(),
     );
+    let local_batch_state = Arc::new(local_batch_state::LocalBatchState::new(
+        tree_for_rpc,
+        repositories.clone(),
+        block_replay_storage.clone(),
+    ));
     runtime.spawn_critical_task(
         "l1 batch persist watcher",
         L1PersistBatchWatcher::create_watcher(
@@ -921,6 +930,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .settlement_layer_intervals
                 .clone(),
             persistent_batch_storage.clone(),
+            local_batch_state,
         )
         .await
         .expect("failed to start L1 batch persist watcher")

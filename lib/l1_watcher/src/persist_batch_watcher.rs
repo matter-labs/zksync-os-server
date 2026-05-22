@@ -1,16 +1,24 @@
 use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
 use crate::{L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
+use alloy::primitives::B256;
 use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
 use std::collections::HashMap;
+use std::sync::Arc;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
+
+/// Source of locally-computed batch `state_commitment` for L1 cross-checking.
+pub trait BatchStateCommitmentSource: Send + Sync + 'static {
+    /// `Ok(None)` if storage hasn't caught up to `last_block_number` yet.
+    fn batch_state_commitment(&self, last_block_number: u64) -> anyhow::Result<Option<B256>>;
+}
 
 /// Watches finalized commit and execute events together and persists only irreversibly executed
 /// batches.
@@ -30,6 +38,7 @@ pub struct L1PersistBatchWatcher<BatchStorage> {
     committed_batches: HashMap<u64, DiscoveredCommittedBatch>,
     last_processed_commit_batch: u64,
     last_persisted_batch_on_start: u64,
+    local_state: Arc<dyn BatchStateCommitmentSource>,
 }
 
 impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
@@ -45,6 +54,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         config: L1WatcherConfig,
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
+        local_state: Arc<dyn BatchStateCommitmentSource>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(
@@ -132,6 +142,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             committed_batches: HashMap::new(),
             last_processed_commit_batch: last_persisted_batch,
             last_persisted_batch_on_start: last_persisted_batch,
+            local_state,
         };
 
         SlAwareL1Watcher::new(config, segments, Box::new(this))
@@ -256,7 +267,40 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                 let batch_number = execute.batchNumber.to::<u64>();
                 if batch_number > self.last_persisted_batch_on_start {
                     let batch_hash = execute.batchHash;
-                    if let Some(committed_batch) = self.committed_batches.remove(&batch_number) {
+                    if let Some(committed_batch) = self.committed_batches.get(&batch_number) {
+                        // Panic on state divergence; skip the check if storage hasn't
+                        // caught up (we'll retry on the next event).
+                        // TODO: also check `event.commitment` once we can compute the
+                        // batch's public-input hash locally (blocked on pubdata).
+                        let last_block = *committed_batch.block_range.end();
+                        match self.local_state.batch_state_commitment(last_block) {
+                            Ok(Some(local)) => {
+                                if local != batch_hash {
+                                    panic!(
+                                        "L1 execute event for batch #{batch_number} diverges from local state_commitment (local: {local:?}, event: {batch_hash:?})",
+                                    );
+                                }
+                            }
+                            Ok(None) => {
+                                tracing::warn!(
+                                    batch_number,
+                                    last_block,
+                                    "local state_commitment not yet available; skipping execute-side consistency check"
+                                );
+                            }
+                            Err(err) => {
+                                tracing::error!(
+                                    batch_number,
+                                    last_block,
+                                    ?err,
+                                    "failed to compute local state_commitment; skipping execute-side consistency check"
+                                );
+                            }
+                        }
+                        let committed_batch = self
+                            .committed_batches
+                            .remove(&batch_number)
+                            .expect("entry was just observed via get");
                         tracing::debug!(
                             batch_number,
                             ?batch_hash,

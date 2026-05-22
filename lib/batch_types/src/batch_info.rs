@@ -113,28 +113,18 @@ impl ExtendedCommitBatchInfo {
             }
         }
 
-        let last_256_block_hashes_blake = {
-            let mut blocks_hasher = Blake2s256::new();
-            for block_hash in &last_256_block_hashes.0[1..] {
-                blocks_hasher.update(block_hash.to_be_bytes::<32>());
-            }
-            blocks_hasher.update(last_block_output.header.hash());
-
-            blocks_hasher.finalize()
-        };
-
         /* ---------- operator DA input ---------- */
         let da_fields = calculate_da_fields(&total_pubdata, pubdata_mode);
 
         /* ---------- new state commitment ---------- */
-        // FIXME: extract to a type common batch types?
-        let mut hasher = Blake2s256::new();
-        hasher.update(last_block_tree.root_hash.as_slice());
-        hasher.update(last_block_tree.leaf_count.to_be_bytes());
-        hasher.update(last_block_output.header.number.to_be_bytes());
-        hasher.update(last_256_block_hashes_blake);
-        hasher.update(last_block_output.header.timestamp.to_be_bytes());
-        let new_state_commitment = B256::from_slice(&hasher.finalize());
+        let new_state_commitment = compute_state_commitment(
+            last_block_tree.root_hash,
+            last_block_tree.leaf_count,
+            last_block_output.header.number,
+            last_block_output.header.timestamp,
+            last_block_output.header.hash(),
+            last_256_block_hashes,
+        );
 
         /* ---------- root hash of l2->l1 logs ---------- */
         let l2_l1_local_root = MiniMerkleTree::new(
@@ -251,6 +241,35 @@ impl DerefMut for ExtendedCommitBatchInfo {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.commit_info
     }
+}
+
+/// Computes a batch's `state_commitment`. `last_256_block_hashes` is the
+/// `BlockHashes` context the last block was executed with; its oldest entry
+/// is dropped and the last block's own hash is appended before hashing.
+pub fn compute_state_commitment(
+    tree_root_hash: B256,
+    leaf_count: u64,
+    last_block_number: u64,
+    last_block_timestamp: u64,
+    last_block_hash: B256,
+    last_256_block_hashes: &BlockHashes,
+) -> B256 {
+    let last_256_block_hashes_blake = {
+        let mut blocks_hasher = Blake2s256::new();
+        for block_hash in &last_256_block_hashes.0[1..] {
+            blocks_hasher.update(block_hash.to_be_bytes::<32>());
+        }
+        blocks_hasher.update(last_block_hash);
+        blocks_hasher.finalize()
+    };
+
+    let mut hasher = Blake2s256::new();
+    hasher.update(tree_root_hash.as_slice());
+    hasher.update(leaf_count.to_be_bytes());
+    hasher.update(last_block_number.to_be_bytes());
+    hasher.update(last_256_block_hashes_blake);
+    hasher.update(last_block_timestamp.to_be_bytes());
+    B256::from_slice(&hasher.finalize())
 }
 
 struct DAFields {
