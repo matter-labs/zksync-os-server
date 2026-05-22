@@ -553,7 +553,7 @@ async fn consensus_cluster_fully_restarts_and_recovers() -> anyhow::Result<()> {
             cluster.suspend_node(idx).await?;
         }
         // Restart all nodes: they recover from disk, re-elect a leader, and resume.
-        for idx in 0..cluster.len() {
+        for idx in (0..cluster.len()).rev() {
             cluster.start_node(idx).await?;
         }
 
