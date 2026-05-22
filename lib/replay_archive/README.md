@@ -60,7 +60,6 @@ Current archive implementations:
 - `FileSystemReplayArchiveStorage`: append-only object storage on local disk.
 - `FileSystemReplayArchiver`: filesystem archiver that stores plaintext JSON replay records.
 - `S3ReplayArchiveStorage`: append-only object storage in S3 or an S3-compatible service.
-- `S3ReplayArchiver`: S3 archiver that stores plaintext JSON replay records.
 - `AgeEncryptedReplayArchiver`: wrapper that JSON-encodes replay records and encrypts them with
   age X25519 before storing them in any `ReplayArchiveStorage`.
 

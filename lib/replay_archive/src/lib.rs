@@ -35,7 +35,6 @@ pub use recovery::{
 pub use replay_record::ReplayRecordArchiver;
 pub use s3::{
     S3ReplayArchiveAuthMode, S3ReplayArchiveConfig, S3ReplayArchiveReader, S3ReplayArchiveStorage,
-    S3ReplayArchiver,
 };
 pub use write_replay::ReplayArchivingWriteReplay;
 

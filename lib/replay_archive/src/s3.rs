@@ -1,6 +1,6 @@
 use crate::{
     ReplayArchiveKey, ReplayArchiveObject, ReplayArchiveObjectStream, ReplayArchiveSession,
-    ReplayArchiveStorage, ReplayArchiveStorageReader, ReplayArchiver, ReplayRecordArchiver,
+    ReplayArchiveStorage, ReplayArchiveStorageReader,
 };
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
@@ -168,51 +168,6 @@ impl ReplayArchiveStorage for S3ReplayArchiveStorage {
             .contents()
             .iter()
             .any(|object| object.key() == Some(key.as_str())))
-    }
-}
-
-/// S3 replay archiver that stores plaintext JSON replay records.
-#[derive(Debug, Clone)]
-pub struct S3ReplayArchiver {
-    inner: ReplayRecordArchiver<S3ReplayArchiveStorage>,
-}
-
-impl S3ReplayArchiver {
-    pub fn new(storage: S3ReplayArchiveStorage) -> Self {
-        Self {
-            inner: ReplayRecordArchiver::new(storage),
-        }
-    }
-
-    pub async fn init(
-        config: S3ReplayArchiveConfig,
-        session: ReplayArchiveSession,
-    ) -> anyhow::Result<Self> {
-        let storage = S3ReplayArchiveStorage::init(config, session).await?;
-        Ok(Self::new(storage))
-    }
-}
-
-#[async_trait]
-impl ReplayArchiver for S3ReplayArchiver {
-    async fn append_replay_record(
-        &self,
-        block_hash: BlockHash,
-        replay_record: zksync_os_storage_api::ReplayRecord,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .append_replay_record(block_hash, replay_record)
-            .await
-    }
-
-    async fn contains_replay_record(
-        &self,
-        block_number: BlockNumber,
-        block_hash: BlockHash,
-    ) -> anyhow::Result<bool> {
-        self.inner
-            .contains_replay_record(block_number, block_hash)
-            .await
     }
 }
 
