@@ -57,14 +57,14 @@ where
         replay_record: &ReplayRecord,
         report: &CompareReport,
     ) -> anyhow::Result<()> {
+        // Temporary, to test alerts
+        if replay_record.block_context.block_number == 409400 {
+            PUSH_METRICS.revm_divergences_detected.inc();
+        }
+
         report.log_tracing(20);
         if report.is_empty() {
             return Ok(());
-        }
-
-        // Temporary, to test alerts
-        if replay_record.block_context.block_number == 409160 {
-            PUSH_METRICS.revm_divergences_detected.inc();
         }
 
         let message = format!(
