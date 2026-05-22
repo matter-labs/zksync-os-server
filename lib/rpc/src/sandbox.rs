@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, B256, Bytes, U256};
+use alloy::primitives::{Address, B256, Bytes, U256, address};
 use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, CallLogFrame};
 use alloy::sol_types::{ContractError, GenericRevertReason};
 use zksync_os_evm_errors::EvmError;
@@ -17,6 +17,14 @@ use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 pub const STACK_SIZE: usize = 1024;
 /// zksync-os ergs per gas.
 pub const ERGS_PER_GAS: u64 = 256;
+
+pub(crate) const ASSET_TRACKER_ADDRESS: Address =
+    address!("0x000000000000000000000000000000000001000f");
+pub(crate) const ASSET_TRACKER_ROOT_SELECTOR: [u8; 4] = [0x03, 0x11, 0x7c, 0x8c];
+
+pub(crate) fn is_asset_tracker_root_call(to: Option<Address>, input: &[u8]) -> bool {
+    to == Some(ASSET_TRACKER_ADDRESS) && input.starts_with(&ASSET_TRACKER_ROOT_SELECTOR)
+}
 
 /// Error message used when the VM terminates a transaction due to resource exhaustion
 /// (out of native resources or pubdata limit exceeded).
@@ -283,6 +291,24 @@ impl CallTracer {
             },
         }
     }
+
+    fn without_asset_tracker_root_frames(roots: Vec<CallFrame>) -> Vec<CallFrame> {
+        if roots.len() <= 1 {
+            return roots;
+        }
+
+        let mut kept = Vec::with_capacity(roots.len());
+        let mut ignored = Vec::new();
+        for root in roots {
+            if is_asset_tracker_root_call(root.to, root.input.as_ref()) {
+                ignored.push(root);
+            } else {
+                kept.push(root);
+            }
+        }
+
+        if kept.is_empty() { ignored } else { kept }
+    }
 }
 
 impl AnyTracer for CallTracer {
@@ -440,7 +466,8 @@ impl EvmTracer for CallTracer {
         // Sanity check
         assert!(self.create_operation_requested.is_none());
 
-        let roots = std::mem::take(&mut self.finished_calls);
+        let roots =
+            Self::without_asset_tracker_root_frames(std::mem::take(&mut self.finished_calls));
         match roots.len() {
             0 => {
                 // We can have some edge cases when tx fails before any call frame is created.
@@ -943,6 +970,27 @@ mod tests {
         assert_eq!(wrapper.calls.len(), 2);
         assert_eq!(wrapper.calls[0].to, Some(Address::from([0x11; 20])));
         assert_eq!(wrapper.calls[1].to, Some(Address::from([0x22; 20])));
+        assert!(tracer.finished_calls.is_empty());
+        assert_eq!(tracer.top_level_execution_succeeded, vec![true]);
+    }
+
+    #[test]
+    fn finish_tx_ignores_asset_tracker_root_frames_when_actual_root_exists() {
+        let mut tracer = CallTracer::default();
+        let mut actual_root = make_empty_call_frame();
+        actual_root.to = Some(Address::from([0x11; 20]));
+        let mut asset_tracker_root = make_empty_call_frame();
+        asset_tracker_root.to = Some(ASSET_TRACKER_ADDRESS);
+        asset_tracker_root.input = Bytes::copy_from_slice(&ASSET_TRACKER_ROOT_SELECTOR);
+
+        tracer.begin_tx(&[]);
+        tracer.finished_calls.push(actual_root);
+        tracer.finished_calls.push(asset_tracker_root);
+        tracer.finish_tx();
+
+        assert_eq!(tracer.transactions.len(), 1);
+        assert_eq!(tracer.transactions[0].to, Some(Address::from([0x11; 20])));
+        assert!(tracer.transactions[0].calls.is_empty());
         assert!(tracer.finished_calls.is_empty());
         assert_eq!(tracer.top_level_execution_succeeded, vec![true]);
     }

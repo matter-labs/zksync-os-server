@@ -7,7 +7,9 @@ use crate::js_tracer::{
     },
     utils::{extract_js_source_and_config, gas_used_from_resources, wrap_js_invocation},
 };
-use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
+use crate::sandbox::{
+    ERGS_PER_GAS, fmt_error_msg, is_asset_tracker_root_call, maybe_revert_reason,
+};
 use alloy::hex::ToHexExt;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use boa_engine::{Context as BoaContext, Source};
@@ -59,6 +61,24 @@ fn multi_root_context(
         output: last_root.output.clone(),
         error: first_error,
     }
+}
+
+fn without_asset_tracker_root_contexts(roots: Vec<TxContext>) -> Vec<TxContext> {
+    if roots.len() <= 1 {
+        return roots;
+    }
+
+    let mut kept = Vec::with_capacity(roots.len());
+    let mut ignored = Vec::new();
+    for root in roots {
+        if is_asset_tracker_root_call(Some(root.to), root.input.as_ref()) {
+            ignored.push(root);
+        } else {
+            kept.push(root);
+        }
+    }
+
+    if kept.is_empty() { ignored } else { kept }
 }
 
 /// JS tracer implementation
@@ -919,7 +939,8 @@ impl EvmTracer for JsTracer {
             return;
         }
 
-        let roots = std::mem::take(&mut self.finished_root_frames);
+        let roots =
+            without_asset_tracker_root_contexts(std::mem::take(&mut self.finished_root_frames));
         let ctx = match self.tx_result_context(roots) {
             Ok(ctx) => ctx,
             Err(err) => {
@@ -1094,6 +1115,7 @@ pub fn trace_block<V: ViewState + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox::{ASSET_TRACKER_ADDRESS, ASSET_TRACKER_ROOT_SELECTOR};
 
     fn tx_context(to: Address, gas: u64, gas_used: u64) -> TxContext {
         TxContext {
@@ -1123,5 +1145,36 @@ mod tests {
         assert_eq!(ctx.gas_used, Some(U256::from(10)));
         assert_eq!(ctx.output, Some(Bytes::from(vec![0xcd])));
         assert_eq!(ctx.error, None);
+    }
+
+    #[test]
+    fn tx_result_context_ignores_asset_tracker_roots_when_actual_root_exists() {
+        let tracer = JsTracer {
+            ctx: BoaContext::default(),
+            tracer_config: JsonValue::Null,
+            storage_overlay: OverlayState::<(Address, B256), B256>::new(),
+            code_overlay: OverlayState::<Address, Option<Vec<u8>>>::new(),
+            balance_overlay: OverlayState::<Address, BalanceDelta>::new(),
+            selfdestruct_overlay: OverlayState::<Address, SelfdestructEntry>::new(),
+            current_depth: 0,
+            results: vec![],
+            pending_step: None,
+            pending_create_type: None,
+            frame_stack: vec![],
+            finished_root_frames: vec![],
+            input_transactions: vec![],
+            tx_failed: false,
+            error: None,
+        };
+        let actual = tx_context(Address::from([0x11; 20]), 10, 3);
+        let mut asset_tracker = tx_context(ASSET_TRACKER_ADDRESS, 20, 7);
+        asset_tracker.input = Bytes::copy_from_slice(&ASSET_TRACKER_ROOT_SELECTOR);
+
+        let roots = without_asset_tracker_root_contexts(vec![actual, asset_tracker]);
+        let ctx = tracer.tx_result_context(roots).unwrap();
+
+        assert_eq!(ctx.to, Address::from([0x11; 20]));
+        assert_eq!(ctx.gas, U256::from(10));
+        assert_eq!(ctx.gas_used, Some(U256::from(3)));
     }
 }
