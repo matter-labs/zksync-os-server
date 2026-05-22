@@ -926,7 +926,7 @@ pub struct PolicyServiceConfig {
     pub auth_token: Option<SecretString>,
 }
 
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct RpcConfig {
     /// JSON-RPC address to listen on.
