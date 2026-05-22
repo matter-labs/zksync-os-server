@@ -72,11 +72,11 @@ alloy = { version = "2.0.1", default-features = false, features = [
 alloy-rlp = { version = "0.3.13" }
 anyhow = "1"
 async-trait = "0.1"
-aws-config = { version = "1.8.6", default-features = false, features = [
+aws-config = { version = "1.8.17", default-features = false, features = [
     "behavior-version-latest",
 ] }
-aws-runtime = { version = "1.5.10" }
-aws-sdk-s3 = { version = "1.106.0", default-features = false, features = [
+aws-runtime = { version = "1.7.4" }
+aws-sdk-s3 = { version = "1.133.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
     "default-https-client",
