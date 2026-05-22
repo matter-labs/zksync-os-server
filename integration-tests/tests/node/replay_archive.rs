@@ -64,6 +64,9 @@ async fn encrypted_replay_archive_recovers_node_storage_end_to_end(
     let archive_root = match &tester.config().replay_archive_config {
         ReplayArchiveConfig::FileSystem { root_path, .. } => root_path.clone(),
         ReplayArchiveConfig::Noop => unreachable!("test enables replay archive"),
+        ReplayArchiveConfig::S3WithCredentialFile { .. } => {
+            unreachable!("test enables filesystem replay archive")
+        }
     };
     let rocks_db_path = tester.config().general_config.rocks_db_path.clone();
     let stopped = tester.stop().await?;

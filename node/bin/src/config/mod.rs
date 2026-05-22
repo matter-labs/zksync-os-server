@@ -1410,6 +1410,18 @@ pub enum ReplayArchiveConfig {
         #[config(nest, default)]
         encryption: ReplayArchiveEncryptionConfig,
     },
+    S3WithCredentialFile {
+        /// Name or URL of the bucket.
+        bucket_base_url: String,
+        /// Path to the credentials file.
+        s3_credential_file_path: PathBuf,
+        /// Allows overriding AWS S3 API endpoint, e.g. to use another S3-compatible store provider.
+        endpoint: Option<String>,
+        /// Allows specifying bucket region (inferred from the env by default).
+        region: Option<String>,
+        #[config(nest, default)]
+        encryption: ReplayArchiveEncryptionConfig,
+    },
 }
 
 /// Replay archive encryption applied before data is written to cold storage.
@@ -1433,6 +1445,24 @@ impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig
                 encryption,
             } => zksync_os_replay_archive::ReplayArchiveConfig::FileSystem {
                 root_path,
+                encryption: encryption.into(),
+            },
+            ReplayArchiveConfig::S3WithCredentialFile {
+                bucket_base_url,
+                s3_credential_file_path,
+                endpoint,
+                region,
+                encryption,
+            } => zksync_os_replay_archive::ReplayArchiveConfig::S3 {
+                config: zksync_os_replay_archive::S3ReplayArchiveConfig {
+                    bucket_base_url,
+                    auth_mode:
+                        zksync_os_replay_archive::S3ReplayArchiveAuthMode::AuthenticatedWithCredentialFile(
+                            s3_credential_file_path,
+                        ),
+                    endpoint,
+                    region,
+                },
                 encryption: encryption.into(),
             },
         }
@@ -2207,6 +2237,45 @@ mod tests {
                 assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
             ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
+            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
+                panic!("expected file system replay archive config")
+            }
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_s3_backend() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "S3WithCredentialFile"),
+            ("REPLAY_ARCHIVE_BUCKET_BASE_URL", "replay-archive"),
+            (
+                "REPLAY_ARCHIVE_S3_CREDENTIAL_FILE_PATH",
+                "/path/to/credentials.json",
+            ),
+            ("REPLAY_ARCHIVE_ENDPOINT", "http://localhost:9000"),
+            ("REPLAY_ARCHIVE_REGION", "us-east-2"),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::S3WithCredentialFile {
+                bucket_base_url,
+                s3_credential_file_path,
+                endpoint,
+                region,
+                encryption,
+            } => {
+                assert_eq!(bucket_base_url, "replay-archive");
+                assert_eq!(
+                    s3_credential_file_path,
+                    PathBuf::from("/path/to/credentials.json")
+                );
+                assert_eq!(endpoint.as_deref(), Some("http://localhost:9000"));
+                assert_eq!(region.as_deref(), Some("us-east-2"));
+                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
+            }
+            ReplayArchiveConfig::Noop | ReplayArchiveConfig::FileSystem { .. } => {
+                panic!("expected S3 replay archive config")
+            }
         }
     }
 
@@ -2229,6 +2298,9 @@ mod tests {
                 }
             },
             ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
+            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
+                panic!("expected file system replay archive config")
+            }
         }
     }
 

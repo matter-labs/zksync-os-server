@@ -21,6 +21,9 @@ age.workspace = true
 alloy = { workspace = true, default-features = false }
 anyhow.workspace = true
 async-trait.workspace = true
+aws-config.workspace = true
+aws-runtime.workspace = true
+aws-sdk-s3.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 futures.workspace = true
 reth-tasks.workspace = true
