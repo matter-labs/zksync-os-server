@@ -1,7 +1,7 @@
 pub use self::cli::ConfigArgs;
 pub(crate) use self::metrics::report_static_config_metrics;
 use self::util::{SecretKeyDeserializer, SignerConfigDeserializer};
-use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
+use crate::default_protocol_version::DEFAULT_ROCKS_DB_PATH;
 use alloy::primitives::{Address, Bytes, U128};
 use num::{BigInt, BigUint, rational::Ratio};
 use reth_net_nat::net_if::resolve_net_if_ip;
@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
+use zksync_os_command_source::RebuildOptions;
 use zksync_os_config_validation_macros::ConfigValidate;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;

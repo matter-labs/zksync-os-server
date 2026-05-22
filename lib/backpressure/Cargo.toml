@@ -13,6 +13,7 @@ categories.workspace = true
 zksync_os_observability = { path = "../observability" }
 zksync_os_pipeline      = { path = "../pipeline" }
 zksync_os_types         = { path = "../types" }
+anyhow                  = { workspace = true }
 reth-tasks              = { workspace = true }
 tokio                   = { workspace = true, features = ["time", "sync", "macros", "rt"] }
 tokio-stream            = { workspace = true }

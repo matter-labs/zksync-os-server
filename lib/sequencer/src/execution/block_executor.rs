@@ -3,7 +3,7 @@ use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::execute_block_in_vm::execute_block_in_vm;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::save_dump;
-use crate::model::blocks::{BlockCommand, BlockCommandType, BlockPayload};
+use crate::model::blocks::{BlockCommand, BlockCommandType, BlockPayload, CommandAck};
 use anyhow::Context;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -28,6 +28,8 @@ where
     pub block_context_provider: BlockContextProvider<Subpool>,
     pub state: State,
     pub config: SequencerConfig,
+    /// Acknowledges commands after execution and successful downstream handoff.
+    pub command_acks: mpsc::Sender<CommandAck>,
     /// TEMPORARY: `BlockExecutor` waits for `BlockApplier` to apply block `N`
     /// before starting block `N + 1`. This works around an `OverlayBuffer` bug
     /// that reproduces during rebuilds when the runtime truncates base state.
@@ -191,6 +193,14 @@ where
                 },
                 &state_reporter,
             )?;
+            if self
+                .command_acks
+                .send(CommandAck::Executed(cmd_type))
+                .await
+                .is_err()
+            {
+                tracing::info!("command ack channel closed");
+            }
         }
     }
 }

@@ -1,12 +1,14 @@
+use crate::{CommandWindow, DEFAULT_COMMAND_WINDOW_CAPACITY, ReplayCommandForwarder};
 use async_trait::async_trait;
 use std::collections::HashSet;
 use tokio::sync::{mpsc, watch};
-use zksync_os_backpressure::PipelineAdmissionReceiver;
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_raft::{ConsensusRole, LeadershipSignal};
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
-use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand, RebuildCommand};
+use zksync_os_sequencer::model::blocks::{
+    BlockCommand, BlockCommandType, CommandAck, ProduceCommand, RebuildCommand,
+};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
@@ -23,11 +25,11 @@ pub struct ConsensusNodeCommandSource<Replay> {
     pub rebuild_options: Option<RebuildOptions>,
     /// Inbound channel of canonized blocks. Populated by `BlockCanonizer` with blocks that are canonized
     pub replays_to_execute: mpsc::UnboundedReceiver<ReplayRecord>,
-    /// Acknowledges that the previously emitted Produce command crossed the
-    /// downstream lifecycle boundary and the source may emit another one.
-    pub produce_acks: mpsc::Receiver<()>,
-    /// Internal pipeline admission gate driven by backpressure monitoring.
-    pub pipeline_gate: PipelineAdmissionReceiver,
+    /// Acknowledges that the previously emitted command crossed its downstream
+    /// lifecycle boundary and the source may emit another one.
+    pub command_acks: mpsc::Receiver<CommandAck>,
+    /// Shared Replay forwarding and admission helper.
+    pub replay_forwarder: ReplayCommandForwarder,
     /// Optional operational cap on newly produced blocks. Replays bypass this.
     pub max_blocks_to_produce: Option<u64>,
     /// Signals RPC admission when the configured production limit is reached.
@@ -43,14 +45,6 @@ pub struct RebuildOptions {
     pub reset_timestamps: bool,
 }
 
-/// External node command source.
-#[derive(Debug)]
-pub struct ExternalNodeCommandSource {
-    pub up_to_block: Option<u64>,
-    pub replays_for_sequencer: mpsc::Receiver<ReplayRecord>,
-    pub pipeline_gate: PipelineAdmissionReceiver,
-}
-
 #[async_trait]
 impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay> {
     type Input = ();
@@ -58,8 +52,6 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 
     const COMPONENT_ID: zksync_os_pipeline::ComponentId =
         zksync_os_pipeline::ComponentId::ConsensusNodeCommandSource;
-    // Keep the transport buffer small so BlockExecutor remains the near-term pacer.
-    const OUTPUT_CHANNEL_CAPACITY: usize = 1;
 
     async fn run(
         mut self,
@@ -113,8 +105,6 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 }
 
 impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
-    const MAX_REPLAYS_TO_DRAIN_PER_LOOP: usize = 32;
-
     /// This method kicks in after all local canonized Replayed Records (WAL) are replayed.
     /// Produces `Produce` commands only when the node is the leader.
     async fn run_loop(
@@ -124,29 +114,13 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
     ) -> anyhow::Result<()> {
         let mut leadership = self.leadership.clone();
         let mut role = leadership.current_role();
-        let mut produce_in_flight = false;
+        let mut command_window = CommandWindow::new(DEFAULT_COMMAND_WINDOW_CAPACITY);
         let mut produced_blocks_count = 0u64;
         let mut production_limit_reported = false;
         tracing::info!(?role, "Consensus role initialized");
 
         loop {
-            let gate_open = self.pipeline_gate.is_open();
-            for _ in 0..Self::MAX_REPLAYS_TO_DRAIN_PER_LOOP {
-                if !gate_open {
-                    break;
-                }
-                match self.replays_to_execute.try_recv() {
-                    Ok(record) => {
-                        Self::forward_replay(record, &output, &state_reporter).await?;
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => break,
-                    Err(mpsc::error::TryRecvError::Disconnected) => {
-                        tracing::info!("inbound channel closed");
-                        return Ok(());
-                    }
-                }
-            }
-
+            let gate_open = self.replay_forwarder.is_open();
             let production_limit_reached = self
                 .max_blocks_to_produce
                 .is_some_and(|limit| produced_blocks_count >= limit);
@@ -165,10 +139,13 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
             }
 
             let can_produce = role == ConsensusRole::Leader
-                && !produce_in_flight
+                && command_window.can_send(BlockCommandType::Produce)
                 && gate_open
                 && !production_limit_reached;
+            let can_replay = gate_open && command_window.can_send(BlockCommandType::Replay);
 
+            // Priority is intentional: handle role changes and downstream acks first,
+            // then canonized replays, and emit fresh Produce only as the lowest-priority work.
             tokio::select! {
                 biased;
 
@@ -182,27 +159,30 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                         role = new_role;
                     }
                 }
-                maybe_ack = self.produce_acks.recv(), if produce_in_flight => {
-                    if maybe_ack.is_none() {
-                        tracing::info!("Produce ack channel closed, stopping source");
+                maybe_ack = self.command_acks.recv(), if command_window.has_pending() => {
+                    let Some(ack) = maybe_ack else {
+                        tracing::info!("Command ack channel closed, stopping source");
                         break;
-                    }
-                    produce_in_flight = false;
+                    };
+                    command_window.acknowledge(ack)?;
                 }
-                maybe_record = self.replays_to_execute.recv(), if gate_open => {
+                maybe_record = self.replays_to_execute.recv(), if can_replay => {
                     let Some(record) = maybe_record else {
                         tracing::info!("inbound channel closed");
                         return Ok(());
                     };
-                    Self::forward_replay(record, &output, &state_reporter).await?;
+                    self.forward_replay(record, &output, &state_reporter).await?;
+                    command_window.push(BlockCommandType::Replay);
                 }
-                _ = self.pipeline_gate.wait_until_open(), if !gate_open => {}
+                res = self.replay_forwarder.wait_until_open(), if !gate_open => {
+                    res?;
+                }
                 send_res = output.send(BlockCommand::Produce(ProduceCommand)), if can_produce => {
                     if send_res.is_err() {
                         tracing::info!("Command output channel closed, stopping source");
                         break;
                     }
-                    produce_in_flight = true;
+                    command_window.push(BlockCommandType::Produce);
                     produced_blocks_count += 1;
                     // Advance watermark to the last sealed block so diff stays near 0.
                     let latest = self.block_replay_storage.latest_record();
@@ -227,36 +207,32 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
             latest >= end,
             "Requested range end {end} exceeds latest record {latest}"
         );
+        let mut command_window = CommandWindow::new(DEFAULT_COMMAND_WINDOW_CAPACITY);
         for block_num in start..=end {
-            self.pipeline_gate.wait_until_open().await;
+            self.wait_for_command_capacity(&mut command_window, BlockCommandType::Replay)
+                .await?;
+            self.replay_forwarder.wait_until_open().await?;
             let record = self
                 .block_replay_storage
                 .get_replay_record(block_num)
                 .ok_or_else(|| anyhow::anyhow!("missing replay record for block {block_num}"))?;
-            output
-                .send(BlockCommand::Replay(Box::new(record)))
-                .await
-                .map_err(|_| anyhow::anyhow!("command output channel closed"))?;
+            let _ = self.replay_forwarder.forward(record, output).await?;
+            command_window.push(BlockCommandType::Replay);
         }
+        self.drain_command_window(&mut command_window).await?;
         Ok(())
     }
 
     async fn forward_replay(
+        &self,
         record: ReplayRecord,
         output: &mpsc::Sender<BlockCommand>,
         state_reporter: &ComponentStateReporter,
     ) -> anyhow::Result<()> {
         let block_number = record.block_context.block_number;
-        let timestamp = record.block_context.timestamp;
         tracing::info!(block_number, "Received canonized block from consensus",);
-        if output
-            .send(BlockCommand::Replay(Box::new(record)))
-            .await
-            .is_err()
-        {
-            anyhow::bail!("command output channel closed");
-        }
-        state_reporter.record_processed(block_number, Some(timestamp), None);
+        let forwarded = self.replay_forwarder.forward(record, output).await?;
+        state_reporter.record_processed(forwarded.block_number, Some(forwarded.timestamp), None);
         Ok(())
     }
 
@@ -269,7 +245,10 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
         tracing::warn!(
             "Starting block rebuilds! {rebuild_options:?}, last_block_in_wal: {last_block_in_wal}"
         );
+        let mut command_window = CommandWindow::new(DEFAULT_COMMAND_WINDOW_CAPACITY);
         for block_number in rebuild_options.from_block..=last_block_in_wal {
+            self.wait_for_command_capacity(&mut command_window, BlockCommandType::Rebuild)
+                .await?;
             let replay_record = self
                 .block_replay_storage
                 .get_replay_record(block_number)
@@ -287,73 +266,47 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                 make_empty,
                 reset_timestamp: rebuild_options.reset_timestamps,
             }));
-            self.pipeline_gate.wait_until_open().await;
+            self.replay_forwarder.wait_until_open().await?;
             if output.send(command).await.is_err() {
                 tracing::info!("Command output channel closed, stopping source");
                 break;
             }
+            command_window.push(BlockCommandType::Rebuild);
+        }
+        self.drain_command_window(&mut command_window).await?;
+        Ok(())
+    }
+
+    async fn wait_for_command_capacity(
+        &mut self,
+        command_window: &mut CommandWindow,
+        command_type: BlockCommandType,
+    ) -> anyhow::Result<()> {
+        while !command_window.can_send(command_type) {
+            self.wait_for_command_ack(command_window).await?;
         }
         Ok(())
     }
-}
 
-#[async_trait]
-impl PipelineComponent for ExternalNodeCommandSource {
-    type Input = ();
-    type Output = BlockCommand;
-
-    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
-        zksync_os_pipeline::ComponentId::ExternalNodeCommandSource;
-    const OUTPUT_CHANNEL_CAPACITY: usize = 5;
-
-    async fn run(
-        mut self,
-        _input: PeekableReceiver<()>,
-        output: mpsc::Sender<BlockCommand>,
-        state_reporter: ComponentStateReporter,
+    async fn drain_command_window(
+        &mut self,
+        command_window: &mut CommandWindow,
     ) -> anyhow::Result<()> {
-        loop {
-            self.pipeline_gate.wait_until_open().await;
-            let Some(record) = self.replays_for_sequencer.recv().await else {
-                break;
-            };
-            let block_number = record.block_context.block_number;
-            let timestamp = record.block_context.timestamp;
-            let txs = record.transactions.len();
-            let force_preimages = record.force_preimages.len();
-            let force_preimage_bytes = record
-                .force_preimages
-                .iter()
-                .map(|(_, value)| value.len())
-                .sum::<usize>();
-            let protocol_version = record.protocol_version.to_string();
-            let starting_l1_priority_id = record.starting_cursors.l1_priority_id;
-            let command = BlockCommand::Replay(Box::new(record));
-            tracing::info!(
-                "Received replay block command from main node: block_number: {block_number}, \
-                 txs: {txs}, force_preimages: {force_preimages}, \
-                 force_preimage_bytes: {force_preimage_bytes}, protocol_version: {protocol_version}, \
-                 starting_l1_priority_id: {starting_l1_priority_id}"
-            );
-            tracing::debug!(?command, "Received replay block command from main node");
-
-            if let Some(up_to_block) = self.up_to_block
-                && block_number > up_to_block
-            {
-                tracing::info!(
-                    up_to_block,
-                    "Reached up_to_block, halting external command source"
-                );
-                futures::future::pending::<()>().await;
-            }
-
-            if output.send(command).await.is_err() {
-                tracing::info!("Command output channel closed, stopping source");
-                break;
-            }
-            state_reporter.record_processed(block_number, Some(timestamp), None);
+        while command_window.has_pending() {
+            self.wait_for_command_ack(command_window).await?;
         }
-
         Ok(())
+    }
+
+    async fn wait_for_command_ack(
+        &mut self,
+        command_window: &mut CommandWindow,
+    ) -> anyhow::Result<()> {
+        let ack = self
+            .command_acks
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("command ack channel closed"))?;
+        command_window.acknowledge(ack)
     }
 }

@@ -26,11 +26,25 @@ pub enum BlockCommand {
 }
 
 /// Type of the block command.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockCommandType {
     Replay,
     Produce,
     Rebuild,
+}
+
+/// Downstream lifecycle acknowledgements for commands emitted by command sources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandAck {
+    Executed(BlockCommandType),
+}
+
+impl CommandAck {
+    pub fn command_type(self) -> BlockCommandType {
+        match self {
+            CommandAck::Executed(command_type) => command_type,
+        }
+    }
 }
 
 /// Message flowing from `BlockExecutor` → `BlockCanonizer` → `BlockApplier`.

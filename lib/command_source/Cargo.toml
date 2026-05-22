@@ -1,0 +1,30 @@
+[package]
+name = "zksync_os_command_source"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_backpressure.workspace = true
+zksync_os_observability.workspace = true
+zksync_os_pipeline.workspace = true
+zksync_os_raft.workspace = true
+zksync_os_sequencer.workspace = true
+zksync_os_storage_api.workspace = true
+zksync_os_types.workspace = true
+
+anyhow.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+alloy = { workspace = true, default-features = false }
+semver.workspace = true
+zksync_os_interface.workspace = true

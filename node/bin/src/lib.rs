@@ -4,7 +4,6 @@
 mod acceptance;
 mod batch_sink;
 pub mod batcher;
-mod command_source;
 pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
@@ -21,7 +20,6 @@ pub mod util;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
-use crate::command_source::{ConsensusNodeCommandSource, ExternalNodeCommandSource};
 use crate::config::{
     Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
     report_static_config_metrics,
@@ -61,6 +59,10 @@ use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{
     BatchVerificationConfig as BatchVerificationPolicyConfig, BatchVerificationPipelineStep,
     BatchVerificationResponder, effective_verification_policy,
+};
+use zksync_os_command_source::{
+    ConsensusNodeCommandSource, DEFAULT_COMMAND_WINDOW_CAPACITY, ExternalNodeCommandSource,
+    ReplayCommandForwarder,
 };
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_contract_interface::models::BatchDaInputMode;
@@ -1170,7 +1172,8 @@ async fn run_main_node_pipeline(
     let pipeline_gate = monitor.subscribe_gate();
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::unbounded_channel();
-    let (produce_ack_sender, produce_acks) = tokio::sync::mpsc::channel(1);
+    let (command_ack_sender, command_acks) =
+        tokio::sync::mpsc::channel(DEFAULT_COMMAND_WINDOW_CAPACITY);
     let (applied_block_number_sender, applied_block_number_receiver) =
         watch::channel(starting_block - 1);
 
@@ -1184,8 +1187,8 @@ async fn run_main_node_pipeline(
                 .clone()
                 .map(Into::into),
             replays_to_execute,
-            produce_acks,
-            pipeline_gate,
+            command_acks,
+            replay_forwarder: ReplayCommandForwarder::new(pipeline_gate),
             max_blocks_to_produce: config.sequencer_config.max_blocks_to_produce,
             tx_acceptance_state_sender,
             leadership,
@@ -1194,12 +1197,12 @@ async fn run_main_node_pipeline(
             block_context_provider,
             state: state.clone(),
             config: config.into(),
+            command_acks: command_ack_sender,
             applied_block_number_receiver,
         })
         .pipe(BlockCanonizer {
             consensus: canonization_engine,
             canonized_blocks_for_execution: replays_to_execute_sender,
-            produce_acks: produce_ack_sender,
         })
         .pipe(BlockApplier {
             state: state.clone(),
@@ -1437,17 +1440,21 @@ async fn run_en_pipeline(
     let monitor =
         BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver.clone());
     let pipeline_gate = monitor.subscribe_gate();
+    let (command_ack_sender, command_acks) =
+        tokio::sync::mpsc::channel(DEFAULT_COMMAND_WINDOW_CAPACITY);
 
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
             replays_for_sequencer,
             up_to_block: config.sequencer_config.en_sync_up_to_block,
-            pipeline_gate,
+            command_acks,
+            replay_forwarder: ReplayCommandForwarder::new(pipeline_gate),
         })
         .pipe(BlockExecutor {
             block_context_provider,
             state: state.clone(),
             config: config.into(),
+            command_acks: command_ack_sender,
             applied_block_number_receiver,
         })
         .pipe(BlockApplier {

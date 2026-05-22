@@ -14518,6 +14518,7 @@ dependencies = [
 name = "zksync_os_backpressure"
 version = "0.20.3"
 dependencies = [
+ "anyhow",
  "futures",
  "reth-tasks",
  "tokio",
@@ -14596,6 +14597,27 @@ name = "zksync_os_batcher_metrics"
 version = "0.20.3"
 dependencies = [
  "vise",
+]
+
+[[package]]
+name = "zksync_os_command_source"
+version = "0.20.3"
+dependencies = [
+ "alloy 2.0.4",
+ "anyhow",
+ "async-trait",
+ "futures",
+ "semver 1.0.26",
+ "tokio",
+ "tracing",
+ "zksync_os_backpressure",
+ "zksync_os_interface",
+ "zksync_os_observability",
+ "zksync_os_pipeline",
+ "zksync_os_raft",
+ "zksync_os_sequencer",
+ "zksync_os_storage_api",
+ "zksync_os_types",
 ]
 
 [[package]]
@@ -15373,6 +15395,7 @@ dependencies = [
  "zksync_os_batch_types",
  "zksync_os_batch_verification",
  "zksync_os_batcher_metrics",
+ "zksync_os_command_source",
  "zksync_os_config_validation_macros",
  "zksync_os_contract_interface",
  "zksync_os_external_price_api",

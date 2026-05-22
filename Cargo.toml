@@ -2,6 +2,7 @@
 members = [
     "lib/contract_interface",
     "lib/consensus_types",
+    "lib/command_source",
     "lib/crypto",
     "lib/genesis",
     "lib/l1_sender",
@@ -275,6 +276,7 @@ revm = { version = "=38.0.0", features = ["optional_balance_check"] }
 # "Local" dependencies
 zksync_os_contract_interface = { version = "=0.20.3", path = "lib/contract_interface" }
 zksync_os_consensus_types = { version = "=0.20.3", path = "lib/consensus_types" }
+zksync_os_command_source = { version = "=0.20.3", path = "lib/command_source" }
 zksync_os_crypto = { version = "=0.20.3", path = "lib/crypto" }
 zksync_os_l1_sender = { version = "=0.20.3", path = "lib/l1_sender" }
 zksync_os_l1_watcher = { version = "=0.20.3", path = "lib/l1_watcher" }
