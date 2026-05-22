@@ -5,6 +5,7 @@ use futures::stream::BoxStream;
 use pin_project::pin_project;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::future::Future;
 use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -159,8 +160,7 @@ impl<T: ReadReplay> ReadReplayExt for T {}
 
 /// A write-capable counterpart of [`ReadReplay`] that allows to write new records to the storage.
 ///
-/// This trait is meant to be solely-owned by sequencer and to write replay records synchronously one
-/// by one. Thus, thread-safety is optional.
+/// This trait is meant to be solely-owned by sequencer and to write replay records one by one.
 ///
 /// Implementation MUST guarantee that [`write`](Self::write) is the only way to mutate state
 /// inside storage. Trait's consumer MAY depend on state being immutable while they do not call `write`.
@@ -177,5 +177,9 @@ pub trait WriteReplay: ReadReplay {
     ///   all [`ReadReplay`] methods should reflect its existence appropriately
     /// * MUST be atomic and always leave storage in a valid state (that satisfies all requirements
     ///   here and in [`ReadReplay`]) regardless of the method's outcome (including panic)
-    fn write(&self, record: Sealed<ReplayRecord>, override_allowed: bool) -> bool;
+    fn write(
+        &self,
+        record: Sealed<ReplayRecord>,
+        override_allowed: bool,
+    ) -> impl Future<Output = anyhow::Result<bool>> + Send;
 }

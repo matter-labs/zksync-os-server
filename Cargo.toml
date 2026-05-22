@@ -11,6 +11,7 @@ members = [
     "lib/merkle_tree_api",
     "lib/mini_merkle_tree",
     "lib/priority_tree",
+    "lib/replay_archive",
     "lib/rocksdb",
     "lib/rpc",
     "lib/rpc_api",
@@ -240,6 +241,7 @@ test-casing = "0.2.0-beta.1"
 quote = "1"
 syn = "2"
 proc-macro2 = "1"
+age = "0.11.2"
 
 tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"
@@ -284,6 +286,7 @@ zksync_os_merkle_tree = { version = "=0.20.3", path = "lib/merkle_tree" }
 zksync_os_config_validation_macros = { version = "=0.20.3", path = "node/config-validation-macros" }
 zksync_os_merkle_tree_api = { version = "=0.20.3", path = "lib/merkle_tree_api" }
 zksync_os_priority_tree = { version = "=0.20.3", path = "lib/priority_tree" }
+zksync_os_replay_archive = { version = "=0.20.3", path = "lib/replay_archive" }
 zksync_os_observability = { version = "=0.20.3", path = "lib/observability" }
 zksync_os_rocksdb = { version = "=0.20.3", path = "lib/rocksdb" }
 zksync_os_rpc = { version = "=0.20.3", path = "lib/rpc" }

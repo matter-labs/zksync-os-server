@@ -57,6 +57,7 @@ where
             let block_output = block_output_with_reads.as_ref();
 
             let block_number = executed_replay.block_context.block_number;
+            let block_hash = block_output.header.hash();
             let override_allowed = match cmd_type {
                 BlockCommandType::Rebuild => true,
                 _ if self.config.node_role.is_external() => true,
@@ -65,10 +66,17 @@ where
 
             state_reporter.enter_state(BlockApplierState::AddingToStorage);
             tracing::info!(block_number, "Persisting block {block_number}");
-            self.replay.write(
-                Sealed::new_unchecked(executed_replay.clone(), block_output.header.hash()),
-                override_allowed,
-            );
+            if let Err(err) = self
+                .replay
+                .write(
+                    Sealed::new_unchecked(executed_replay.clone(), block_hash),
+                    override_allowed,
+                )
+                .await
+            {
+                tracing::info!("Failed to write replay record: {err}, shutting down");
+                return Ok(());
+            }
 
             self.state.add_block_result(
                 block_number,
