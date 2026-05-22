@@ -26,25 +26,11 @@ fn consensus_boot_nodes_for_node(
     spawned_nodes: usize,
     node_index: usize,
 ) -> Vec<zksync_os_network::TrustedPeer> {
-    if spawned_nodes <= 1 {
-        return Vec::new();
-    }
-
-    let half = spawned_nodes / 2;
     node_records
         .iter()
         .take(spawned_nodes)
         .enumerate()
-        .filter_map(|(peer_index, record)| {
-            if peer_index == node_index {
-                return None;
-            }
-
-            let clockwise_steps = (peer_index + spawned_nodes - node_index) % spawned_nodes;
-            let should_dial = clockwise_steps < half
-                || (clockwise_steps == half && (spawned_nodes % 2 == 1 || node_index < peer_index));
-            should_dial.then_some((*record).into())
-        })
+        .filter_map(|(peer_index, record)| (peer_index != node_index).then_some((*record).into()))
         .collect()
 }
 
@@ -682,10 +668,10 @@ impl MultiNodeTesterBuilder {
             .enumerate()
             .map(|(i, (secret, locked_port))| {
                 let peers = peer_ids.clone();
-                // Configure a deterministic directed mesh: every consensus pair gets exactly one
-                // direct RLPx route, and 3-node tests give each node an outbound peer. This avoids
-                // simultaneous crossed dials that can be dropped as duplicates under stress while
-                // still letting a restarted node actively reconnect to the cluster.
+                // Trust every consensus peer so that a restarted voter actively reconnects to the
+                // current leader instead of relying on that leader to redial it. OpenRaft sends RPCs
+                // directly to every voter, so a ring-shaped peer graph can leave the leader unable
+                // to replicate to a rejoined node.
                 let boot_nodes: Vec<zksync_os_network::TrustedPeer> =
                     consensus_boot_nodes_for_node(&node_records, num_nodes, i);
                 let l1 = l1.clone();

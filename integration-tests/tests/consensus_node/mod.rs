@@ -459,15 +459,24 @@ async fn consensus_original_leader_rejoins_and_cluster_remains_stable() -> anyho
         // Restart the original leader. It must rejoin without disrupting the running cluster:
         // exactly one leader must remain, all three nodes must agree, and state must converge.
         cluster.start_node(initial_leader_idx).await?;
-        let final_leader_idx = cluster
+        cluster
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
         cluster
             .wait_for_active_l2_block(target_block, REPLICATION_TIMEOUT)
             .await?;
 
-        // Verify the cluster continues to make progress after the rejoin.
-        send_transfer_and_wait_for_active_replication(&mut cluster, final_leader_idx).await?;
+        // Verify the cluster continues to make progress after the rejoin. Re-check the current
+        // leader inside the retry loop because leadership can still settle immediately after the
+        // restarted node catches up.
+        let all_node_indices = (0..cluster.len()).collect::<Vec<_>>();
+        let progress_block = send_transfer_and_wait_for_l2_blocks_eventually(
+            &mut cluster,
+            &all_node_indices,
+            CONSENSUS_PROGRESS_TIMEOUT,
+        )
+        .await?;
+        wait_for_l1_finalization_if_batcher_active(&cluster, progress_block).await?;
 
         Ok(())
     }
