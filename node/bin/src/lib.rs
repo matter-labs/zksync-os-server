@@ -8,6 +8,7 @@ mod command_source;
 pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
+mod local_batch_state;
 mod migration_gate;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
@@ -914,8 +915,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         finality_storage.clone(),
         persistent_batch_storage.clone(),
         state.clone(),
-        tree_for_rpc,
+        tree_for_rpc.clone(),
     );
+    let local_batch_state = Arc::new(local_batch_state::LocalBatchState::new(
+        tree_for_rpc,
+        repositories.clone(),
+        block_replay_storage.clone(),
+    ));
     runtime.spawn_critical_task(
         "l1 batch persist watcher",
         L1PersistBatchWatcher::create_watcher(
@@ -925,6 +931,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .settlement_layer_intervals
                 .clone(),
             persistent_batch_storage.clone(),
+            local_batch_state,
         )
         .await
         .expect("failed to start L1 batch persist watcher")
