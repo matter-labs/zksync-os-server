@@ -24,6 +24,43 @@ use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
 const MAX_JS_TRACER_PAYLOAD_BYTES: usize = 512 * 1024;
 
+fn multi_root_context(
+    input_transactions: &[ZkTransaction],
+    result_index: usize,
+    roots: Vec<TxContext>,
+) -> TxContext {
+    debug_assert!(roots.len() > 1);
+
+    let tx = input_transactions.get(result_index);
+    let first_root = roots.first().expect("multi-root trace is non-empty");
+    let last_root = roots.last().expect("multi-root trace is non-empty");
+    let first_error = roots.iter().find_map(|ctx| ctx.error.clone());
+
+    TxContext {
+        typ: if tx.is_some_and(|tx| tx.to().is_none()) {
+            "CREATE".to_string()
+        } else {
+            "CALL".to_string()
+        },
+        from: tx.map_or(first_root.from, ZkTransaction::signer),
+        to: tx.and_then(ZkTransaction::to).unwrap_or(first_root.to),
+        input: tx.map_or_else(|| first_root.input.clone(), |tx| tx.input().clone()),
+        gas: tx.map_or_else(
+            || roots.iter().map(|ctx| ctx.gas).sum(),
+            |tx| U256::from(tx.gas_limit()),
+        ),
+        value: tx.map_or(first_root.value, ZkTransaction::value),
+        gas_used: Some(
+            roots
+                .iter()
+                .map(|ctx| ctx.gas_used.unwrap_or_default())
+                .sum(),
+        ),
+        output: last_root.output.clone(),
+        error: first_error,
+    }
+}
+
 /// JS tracer implementation
 /// Holds a Boa JS runtime and calls user-provided JS tracer methods when the hooks of zksync-os
 /// EVM tracer interface are invoked.
@@ -68,7 +105,8 @@ pub struct JsTracer {
     pending_create_type: Option<CreateType>,
 
     frame_stack: Vec<FrameState>,
-    last_finished_frame: Option<TxContext>,
+    finished_root_frames: Vec<TxContext>,
+    input_transactions: Vec<ZkTransaction>,
     tx_failed: bool,
 
     error: Option<anyhow::Error>,
@@ -76,6 +114,14 @@ pub struct JsTracer {
 
 impl JsTracer {
     pub fn new(state_view: impl ViewState + 'static, js_cfg: String) -> anyhow::Result<Self> {
+        Self::new_with_transactions(state_view, js_cfg, vec![])
+    }
+
+    pub fn new_with_transactions(
+        state_view: impl ViewState + 'static,
+        js_cfg: String,
+        input_transactions: Vec<ZkTransaction>,
+    ) -> anyhow::Result<Self> {
         if js_cfg.len() > MAX_JS_TRACER_PAYLOAD_BYTES {
             return Err(anyhow::anyhow!(format!(
                 "JS tracer payload exceeds limit of {} bytes",
@@ -114,7 +160,8 @@ impl JsTracer {
             pending_create_type: None,
             error: None,
             frame_stack: Vec::new(),
-            last_finished_frame: None,
+            finished_root_frames: Vec::new(),
+            input_transactions,
             tx_failed: false,
         })
     }
@@ -465,6 +512,18 @@ impl JsTracer {
         self.error.take()
     }
 
+    fn tx_result_context(&self, roots: Vec<TxContext>) -> anyhow::Result<TxContext> {
+        match roots.len() {
+            0 => anyhow::bail!("No finished frame found at transaction end"),
+            1 => Ok(roots.into_iter().next().expect("one root frame")),
+            _ => Ok(multi_root_context(
+                &self.input_transactions,
+                self.results.len(),
+                roots,
+            )),
+        }
+    }
+
     /// `call_result` is called at the end of the transaction to get the final result from the tracer.
     fn call_result(&mut self, ctx: &TxContext) -> anyhow::Result<JsonValue> {
         let ctx = serde_json::json!({
@@ -718,11 +777,12 @@ impl EvmTracer for JsTracer {
                 self.revert_overlays_to_checkpoint(frame_state.checkpoint);
             }
 
-            if self.frame_stack.is_empty() && frame_failed {
-                self.tx_failed = true;
+            if self.frame_stack.is_empty() {
+                if frame_failed {
+                    self.tx_failed = true;
+                }
+                self.finished_root_frames.push(frame_state.ctx);
             }
-
-            self.last_finished_frame = Some(frame_state.ctx);
         } else {
             tracing::error!("Execution frame completed but no frame context found");
         }
@@ -841,7 +901,7 @@ impl EvmTracer for JsTracer {
         self.current_depth = 0;
         self.pending_step = None;
         self.pending_create_type = None;
-        self.last_finished_frame = None;
+        self.finished_root_frames.clear();
         self.frame_stack.clear();
         self.clear_overlay_journals();
 
@@ -855,23 +915,20 @@ impl EvmTracer for JsTracer {
             self.clear_overlay_journals();
             self.frame_stack.clear();
             self.tx_failed = false;
-            self.last_finished_frame = None;
+            self.finished_root_frames.clear();
             return;
         }
 
-        let ctx = match self.last_finished_frame.clone() {
-            Some(frame) => frame,
-            None => {
+        let roots = std::mem::take(&mut self.finished_root_frames);
+        let ctx = match self.tx_result_context(roots) {
+            Ok(ctx) => ctx,
+            Err(err) => {
                 tracing::error!("No finished frame found at transaction end");
-                self.record_error(
-                    TracerMethod::Result,
-                    anyhow::anyhow!("No finished frame found at transaction end"),
-                );
+                self.record_error(TracerMethod::Result, err);
                 self.rollback_overlays();
                 self.clear_overlay_journals();
                 self.frame_stack.clear();
                 self.tx_failed = false;
-                self.last_finished_frame = None;
 
                 return;
             }
@@ -898,7 +955,6 @@ impl EvmTracer for JsTracer {
         self.clear_overlay_journals();
         self.frame_stack.clear();
         self.tx_failed = false;
-        self.last_finished_frame = None;
     }
 
     fn before_evm_interpreter_execution_step(
@@ -1012,7 +1068,8 @@ pub fn trace_block<V: ViewState + 'static>(
     state_view: V,
     js_tracer_config: String,
 ) -> anyhow::Result<Vec<JsonValue>> {
-    let mut tracer = JsTracer::new(state_view.clone(), js_tracer_config)?;
+    let mut tracer =
+        JsTracer::new_with_transactions(state_view.clone(), js_tracer_config, txs.clone())?;
 
     let tx_source = zksync_os_interface::traits::TxListSource {
         transactions: txs.into_iter().map(|tx| tx.encode()).collect(),
@@ -1032,4 +1089,39 @@ pub fn trace_block<V: ViewState + 'static>(
     }
 
     Ok(tracer.results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tx_context(to: Address, gas: u64, gas_used: u64) -> TxContext {
+        TxContext {
+            typ: "CALL".to_string(),
+            from: Address::from([0x10; 20]),
+            to,
+            input: Bytes::from(vec![0xab]),
+            gas: U256::from(gas),
+            value: U256::ZERO,
+            gas_used: Some(U256::from(gas_used)),
+            output: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn multi_root_context_preserves_all_root_accounting_for_result() {
+        let first = tx_context(Address::from([0x11; 20]), 10, 3);
+        let mut second = tx_context(Address::from([0x22; 20]), 20, 7);
+        second.output = Some(Bytes::from(vec![0xcd]));
+
+        let ctx = multi_root_context(&[], 0, vec![first, second]);
+
+        assert_eq!(ctx.typ, "CALL");
+        assert_eq!(ctx.to, Address::from([0x11; 20]));
+        assert_eq!(ctx.gas, U256::from(30));
+        assert_eq!(ctx.gas_used, Some(U256::from(10)));
+        assert_eq!(ctx.output, Some(Bytes::from(vec![0xcd])));
+        assert_eq!(ctx.error, None);
+    }
 }

@@ -224,6 +224,65 @@ impl CallTracer {
             create_operation_requested: None,
         }
     }
+
+    fn failed_before_execution_frame(&self) -> Option<CallFrame> {
+        let tx = self.input_transactions.get(self.transactions.len())?;
+
+        Some(CallFrame {
+            from: tx.signer(),
+            gas: U256::from(tx.gas_limit()),
+            gas_used: U256::from(tx.gas_limit()),
+            to: tx.to(),
+            input: tx.input().clone(),
+            output: None,
+            error: Some("transaction failed before execution".to_string()),
+            revert_reason: None,
+            calls: vec![],
+            logs: vec![],
+            value: Some(tx.value()), // Can't have STATICCALL here
+            typ: if tx.to().is_some() {
+                "CALL".to_string()
+            } else {
+                "CREATE".to_string()
+            },
+        })
+    }
+
+    fn multi_root_frame(&self, roots: Vec<CallFrame>) -> CallFrame {
+        debug_assert!(roots.len() > 1);
+
+        let tx = self.input_transactions.get(self.transactions.len());
+        let first_root = roots.first().expect("multi-root trace is non-empty");
+        let last_root = roots.last().expect("multi-root trace is non-empty");
+        let first_error = roots
+            .iter()
+            .find_map(|call| call.error.as_ref().map(ToOwned::to_owned));
+        let first_revert_reason = roots
+            .iter()
+            .find_map(|call| call.revert_reason.as_ref().map(ToOwned::to_owned));
+
+        CallFrame {
+            from: tx.map_or(first_root.from, ZkTransaction::signer),
+            gas: tx.map_or_else(
+                || roots.iter().map(|call| call.gas).sum(),
+                |tx| U256::from(tx.gas_limit()),
+            ),
+            gas_used: roots.iter().map(|call| call.gas_used).sum(),
+            to: tx.map_or(first_root.to, ZkTransaction::to),
+            input: tx.map_or_else(|| first_root.input.clone(), |tx| tx.input().clone()),
+            output: last_root.output.clone(),
+            error: first_error,
+            revert_reason: first_revert_reason,
+            calls: roots,
+            logs: vec![],
+            value: tx.map(|tx| tx.value()),
+            typ: if tx.is_some_and(|tx| tx.to().is_none()) {
+                "CREATE".to_string()
+            } else {
+                "CALL".to_string()
+            },
+        }
+    }
 }
 
 impl AnyTracer for CallTracer {
@@ -348,7 +407,7 @@ impl EvmTracer for CallTracer {
             }
 
             if is_top_level_frame {
-                self.current_tx_top_level_execution_succeeded = top_level_execution_succeeded;
+                self.current_tx_top_level_execution_succeeded &= top_level_execution_succeeded;
             }
             if let Some(parent_call) = self.unfinished_calls.last_mut() {
                 parent_call.calls.push(finished_call);
@@ -367,7 +426,8 @@ impl EvmTracer for CallTracer {
 
     fn begin_tx(&mut self, _calldata: &[u8]) {
         self.current_call_depth = 0;
-        self.current_tx_top_level_execution_succeeded = false;
+        self.current_tx_top_level_execution_succeeded = true;
+        self.finished_calls.clear();
 
         // Sanity check
         assert!(self.create_operation_requested.is_none());
@@ -380,34 +440,25 @@ impl EvmTracer for CallTracer {
         // Sanity check
         assert!(self.create_operation_requested.is_none());
 
-        if let Some(top_level_call) = self.finished_calls.pop() {
-            self.transactions.push(top_level_call);
-            self.top_level_execution_succeeded
-                .push(self.current_tx_top_level_execution_succeeded);
-        } else {
-            // We can have some edge cases when tx fails before any call frame is created
-            // In this case currently we populate minimal call frame info from the input tx data
-            let empty_tx = self.input_transactions.get(self.transactions.len());
-            if let Some(tx) = empty_tx {
-                self.transactions.push(CallFrame {
-                    from: tx.signer(),
-                    gas: U256::from(tx.gas_limit()),
-                    gas_used: U256::from(tx.gas_limit()),
-                    to: tx.to(),
-                    input: tx.input().clone(),
-                    output: None,
-                    error: Some("transaction failed before execution".to_string()),
-                    revert_reason: None,
-                    calls: vec![],
-                    logs: vec![],
-                    value: Some(tx.value()), // Can't have STATICCALL here
-                    typ: if tx.to().is_some() {
-                        "CALL".to_string()
-                    } else {
-                        "CREATE".to_string()
-                    },
-                });
-                self.top_level_execution_succeeded.push(false);
+        let roots = std::mem::take(&mut self.finished_calls);
+        match roots.len() {
+            0 => {
+                // We can have some edge cases when tx fails before any call frame is created.
+                // In this case currently we populate minimal call frame info from the input tx data.
+                if let Some(frame) = self.failed_before_execution_frame() {
+                    self.transactions.push(frame);
+                    self.top_level_execution_succeeded.push(false);
+                }
+            }
+            1 => {
+                self.transactions.push(roots.into_iter().next().unwrap());
+                self.top_level_execution_succeeded
+                    .push(self.current_tx_top_level_execution_succeeded);
+            }
+            _ => {
+                self.transactions.push(self.multi_root_frame(roots));
+                self.top_level_execution_succeeded
+                    .push(self.current_tx_top_level_execution_succeeded);
             }
         }
     }
@@ -871,6 +922,29 @@ mod tests {
             tracer.create_operation_requested,
             Some(CreateType::Create2)
         ));
+    }
+
+    #[test]
+    fn finish_tx_preserves_multiple_root_frames_under_wrapper() {
+        let mut tracer = CallTracer::default();
+        let mut first_root = make_empty_call_frame();
+        first_root.to = Some(Address::from([0x11; 20]));
+        let mut second_root = make_empty_call_frame();
+        second_root.to = Some(Address::from([0x22; 20]));
+
+        tracer.begin_tx(&[]);
+        tracer.finished_calls.push(first_root);
+        tracer.finished_calls.push(second_root);
+        tracer.finish_tx();
+
+        assert_eq!(tracer.transactions.len(), 1);
+        let wrapper = &tracer.transactions[0];
+        assert_eq!(wrapper.typ, "CALL");
+        assert_eq!(wrapper.calls.len(), 2);
+        assert_eq!(wrapper.calls[0].to, Some(Address::from([0x11; 20])));
+        assert_eq!(wrapper.calls[1].to, Some(Address::from([0x22; 20])));
+        assert!(tracer.finished_calls.is_empty());
+        assert_eq!(tracer.top_level_execution_succeeded, vec![true]);
     }
 
     #[test]
