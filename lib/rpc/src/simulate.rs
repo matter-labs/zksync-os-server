@@ -102,19 +102,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
             let mut user_state_overrides = sim_block.state_overrides.unwrap_or_default();
             if !validation {
-                // Two adjustments are needed for `validation=false` to actually run a tx
-                // through `run_block` end-to-end (the RPC-layer `ensure_fees` relaxation
-                // only suppresses the early `FeeCapTooLow` error):
-                //
-                // 1. Clamp each request's `max_fee_per_gas` / `gas_price` up to the real
-                //    basefee so the bootloader's adequacy check (`gas_price >= basefee`)
-                //    passes. With real basefee preserved during execution, this also keeps
-                //    pubdata accounting accurate (`native_per_gas` is non-zero).
-                // 2. Auto-bump balance for each call's `from` address so the bootloader's
-                //    `balance >= gas_limit * gas_price + value` check doesn't reject txs
-                //    from unfunded simulation senders.
-                //
-                // User-supplied overrides take precedence in both cases.
+                // RPC-layer `ensure_fees` only suppresses the early `FeeCapTooLow`; the
+                // bootloader still enforces `gas_price >= basefee` and
+                // `balance >= gas_limit * gas_price + value`. Clamp fees up to basefee and
+                // bump unfunded senders to `U256::MAX`. User-supplied overrides win.
                 let basefee = block_context.eip1559_basefee.saturating_to::<u128>();
                 for call in &mut sim_block.calls {
                     clamp_request_fees_to_basefee(call, basefee);
@@ -560,18 +551,14 @@ fn simulation_default_gas_limit(
     Ok(((block_gas_limit - total_specified_gas) / calls_without_gas).min(per_call_gas_cap))
 }
 
-/// Clamps the request's effective fee fields up to `basefee` so the tx passes the
-/// bootloader's adequacy check during simulation. Whichever fee shape the caller used
-/// (legacy `gas_price` or EIP-1559 `max_fee_per_gas`/`max_priority_fee_per_gas`) is
-/// preserved; only the magnitude is raised. If no fees were supplied at all, defaults
-/// to legacy `gas_price = basefee` to avoid promoting the request to EIP-1559 (which
-/// would require `max_priority_fee_per_gas` to also be present).
+/// Raises the request's fees up to `basefee` so it passes the bootloader's adequacy
+/// check, preserving whichever fee shape the caller used. When no fees are supplied,
+/// defaults to legacy `gas_price` to avoid promoting the request to EIP-1559.
 fn clamp_request_fees_to_basefee(call: &mut TransactionRequest, basefee: u128) {
     if let Some(gas_price) = call.gas_price {
         call.gas_price = Some(gas_price.max(basefee));
     } else if call.max_fee_per_gas.is_some() || call.max_priority_fee_per_gas.is_some() {
-        let max_fee = call.max_fee_per_gas.unwrap_or(0).max(basefee);
-        call.max_fee_per_gas = Some(max_fee);
+        call.max_fee_per_gas = Some(call.max_fee_per_gas.unwrap_or(0).max(basefee));
         if call.max_priority_fee_per_gas.is_none() {
             call.max_priority_fee_per_gas = Some(0);
         }
