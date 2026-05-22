@@ -4169,7 +4169,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d162beedaa69905488a8da94f5ac3edb4dd4788b732fadb7bd120b2625c1976"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -11798,8 +11798,9 @@ dependencies = [
 
 [[package]]
 name = "smart-config"
-version = "0.4.0-pre.2"
-source = "git+https://github.com/matter-labs/smart-config#a0f6e2283a44293ca6a33ac042cc825f2a166d7b"
+version = "0.4.0-pre.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "577867735f5417dfcce4c94dee45c8d5e94047a7e728816d2b20322e15c5de61"
 dependencies = [
  "alloy 1.7.3",
  "anyhow",
@@ -11816,8 +11817,9 @@ dependencies = [
 
 [[package]]
 name = "smart-config-commands"
-version = "0.4.0-pre.2"
-source = "git+https://github.com/matter-labs/smart-config#a0f6e2283a44293ca6a33ac042cc825f2a166d7b"
+version = "0.4.0-pre.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cd5efe69c80e9f079b41af31fbff3d4466c04e211c62f5d62bf0417e93a7698"
 dependencies = [
  "anstream 1.0.0",
  "anstyle",
@@ -11829,8 +11831,9 @@ dependencies = [
 
 [[package]]
 name = "smart-config-derive"
-version = "0.4.0-pre.2"
-source = "git+https://github.com/matter-labs/smart-config#a0f6e2283a44293ca6a33ac042cc825f2a166d7b"
+version = "0.4.0-pre.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab6afb95867f82dda0bfb6a11000ec9fe297c76c37a2f74cd2c825a261f85a63"
 dependencies = [
  "proc-macro2",
  "quote",
