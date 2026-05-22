@@ -62,6 +62,11 @@ where
             return Ok(());
         }
 
+        // Temporary, to test alerts
+        if replay_record.block_context.block_number == 409160 {
+            PUSH_METRICS.revm_divergences_detected.inc();
+        }
+
         let message = format!(
             "REVM consistency check failed for block number {}, block hash {}",
             replay_record.block_context.block_number,
