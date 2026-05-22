@@ -26,11 +26,25 @@ fn consensus_boot_nodes_for_node(
     spawned_nodes: usize,
     node_index: usize,
 ) -> Vec<zksync_os_network::TrustedPeer> {
+    if spawned_nodes <= 1 {
+        return Vec::new();
+    }
+
+    let half = spawned_nodes / 2;
     node_records
         .iter()
         .take(spawned_nodes)
         .enumerate()
-        .filter_map(|(peer_index, record)| (peer_index != node_index).then_some((*record).into()))
+        .filter_map(|(peer_index, record)| {
+            if peer_index == node_index {
+                return None;
+            }
+
+            let clockwise_steps = (peer_index + spawned_nodes - node_index) % spawned_nodes;
+            let should_dial = clockwise_steps < half
+                || (clockwise_steps == half && (spawned_nodes % 2 == 1 || node_index < peer_index));
+            should_dial.then_some((*record).into())
+        })
         .collect()
 }
 
@@ -668,10 +682,10 @@ impl MultiNodeTesterBuilder {
             .enumerate()
             .map(|(i, (secret, locked_port))| {
                 let peers = peer_ids.clone();
-                // Configure every other started consensus member as a network peer. The network
-                // service treats configured boot nodes as trusted peers, so this becomes a
-                // maintained full mesh instead of relying on discv5 discovery eventually finding
-                // the follower-follower connection after the current leader is stopped.
+                // Configure a deterministic directed mesh: every consensus pair gets exactly one
+                // direct RLPx route, and 3-node tests give each node an outbound peer. This avoids
+                // simultaneous crossed dials that can be dropped as duplicates under stress while
+                // still letting a restarted node actively reconnect to the cluster.
                 let boot_nodes: Vec<zksync_os_network::TrustedPeer> =
                     consensus_boot_nodes_for_node(&node_records, num_nodes, i);
                 let l1 = l1.clone();
