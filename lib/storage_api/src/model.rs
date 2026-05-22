@@ -117,6 +117,7 @@ pub struct FinalityStatus {
 }
 
 /// Message flowing from `TreeManager` → `ProverInputGenerator` / `BatchVerificationResponder`.
+#[derive(Clone)]
 pub struct TreeBlock {
     pub output: BlockOutput,
     pub record: ReplayRecord,

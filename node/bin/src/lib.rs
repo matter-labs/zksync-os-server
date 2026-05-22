@@ -8,6 +8,7 @@ mod command_source;
 pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
+mod local_batch_state;
 mod migration_gate;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
@@ -16,6 +17,7 @@ mod prover_block;
 mod prover_input_generator;
 mod provider;
 mod state_initializer;
+mod tree_block_cache;
 pub mod tree_manager;
 pub mod util;
 
@@ -914,8 +916,20 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         finality_storage.clone(),
         persistent_batch_storage.clone(),
         state.clone(),
-        tree_for_rpc,
+        tree_for_rpc.clone(),
     );
+    // Shared cache of `TreeBlock`s flowing through the pipeline. Populated by
+    // `TreeBlockCacher` (a no-op forwarder sitting downstream of `TreeManager`)
+    // and read by `LocalBatchState` to compute both `state_commitment` and
+    // `commitment` locally for the L1 cross-check on `BlockExecution`.
+    let tree_block_cache = tree_block_cache::TreeBlockCache::default();
+    let (local_batch_state, tree_block_cache_evictor) =
+        local_batch_state::local_batch_state_handles(
+            tree_block_cache.clone(),
+            state.clone(),
+            chain_id,
+            node_startup_state.l1_state.sl_chain_id,
+        );
     runtime.spawn_critical_task(
         "l1 batch persist watcher",
         L1PersistBatchWatcher::create_watcher(
@@ -925,6 +939,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .settlement_layer_intervals
                 .clone(),
             persistent_batch_storage.clone(),
+            local_batch_state,
+            tree_block_cache_evictor,
         )
         .await
         .expect("failed to start L1 batch persist watcher")
@@ -1056,6 +1072,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             settles_on_gateway,
             effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
             replay_archiver,
+            tree_block_cache.clone(),
         )
         .await
     } else {
@@ -1077,6 +1094,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             verify_batch_rx,
             outgoing_verify_results.clone(),
+            tree_block_cache.clone(),
         )
         .await
     };
@@ -1175,6 +1193,7 @@ async fn run_main_node_pipeline(
     settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
     replay_archiver: Option<impl ReplayArchiver>,
+    tree_block_cache: tree_block_cache::TreeBlockCache,
 ) -> watch::Receiver<TransactionAcceptanceState> {
     let priority_tree_db_path = config
         .general_config
@@ -1237,7 +1256,10 @@ async fn run_main_node_pipeline(
                     )
                 }),
         )
-        .pipe(TreeManager { tree: tree.clone() });
+        .pipe(TreeManager { tree: tree.clone() })
+        .pipe(tree_block_cache::TreeBlockCacher {
+            cache: tree_block_cache.clone(),
+        });
 
     if !config.batcher_config.enabled {
         tracing::warn!(
@@ -1443,6 +1465,7 @@ async fn run_en_pipeline(
     chain_id: u64,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
+    tree_block_cache: tree_block_cache::TreeBlockCache,
 ) -> watch::Receiver<TransactionAcceptanceState> {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
@@ -1490,6 +1513,9 @@ async fn run_en_pipeline(
                 }),
         )
         .pipe(TreeManager { tree: tree.clone() })
+        .pipe(tree_block_cache::TreeBlockCacher {
+            cache: tree_block_cache.clone(),
+        })
         .pipe_if(
             config.batch_verification_config.client_enabled,
             BatchVerificationResponder::new(
