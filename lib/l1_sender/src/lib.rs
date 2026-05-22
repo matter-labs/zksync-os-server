@@ -91,6 +91,7 @@ struct PendingTx<Input> {
     submitted_at: Instant,
     last_submitted_at: Instant,
     resubmitted: bool,
+    drop_reported: bool,
 }
 
 /// Process responsible for sending transactions to L1.
@@ -172,6 +173,7 @@ where
                         submitted_at,
                         last_submitted_at: submitted_at,
                         resubmitted: false,
+                        drop_reported: false,
                     }
                 })
                 .collect();
@@ -267,6 +269,7 @@ where
                         submitted_at: submitted_tx.submitted_at,
                         last_submitted_at: submitted_tx.submitted_at,
                         resubmitted: force_transaction_resubmission,
+                        drop_reported: false,
                     })
                 })
                 // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
@@ -429,6 +432,7 @@ where
         pending_tx.tx_hashes.push(replacement_tx.tx_hash);
         pending_tx.last_submitted_at = replacement_tx.submitted_at;
         pending_tx.resubmitted = true;
+        pending_tx.drop_reported = false;
         L1_SENDER_METRICS.tx_resubmissions[&command_name].inc();
         tracing::warn!(
             command_name,
@@ -496,14 +500,58 @@ where
                 if latest_block >= confirmed_at {
                     return Ok(receipt.clone());
                 }
-            } else if !pending_tx.resubmitted
-                && !timeout.is_zero()
-                && pending_tx.submitted_at.elapsed() >= timeout
-            {
-                self.resubmit_l1_transaction(pending_tx).await?;
-                next_warning_at = Some(timeout);
-                tokio::time::sleep(poll_interval).await;
-                continue;
+            } else {
+                let mut tx_known = false;
+                for &candidate_tx_hash in pending_tx.tx_hashes.iter().rev() {
+                    match provider.get_transaction_by_hash(candidate_tx_hash).await {
+                        Ok(Some(_)) => {
+                            tx_known = true;
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            tracing::warn!(
+                                "Failed to fetch L1 transaction while checking whether it was \
+                             dropped from the mempool for tx {candidate_tx_hash}: {err}",
+                            );
+                            return Err(err.into());
+                        }
+                    }
+                }
+
+                if tx_known {
+                    pending_tx.drop_reported = false;
+                    if !pending_tx.resubmitted
+                        && !timeout.is_zero()
+                        && pending_tx.submitted_at.elapsed() >= timeout
+                    {
+                        self.resubmit_l1_transaction(pending_tx).await?;
+                        next_warning_at = Some(timeout);
+                        tokio::time::sleep(poll_interval).await;
+                        continue;
+                    }
+                } else if !pending_tx.resubmitted {
+                    tracing::warn!(
+                        command_name = Input::COMPONENT_ID.as_str(),
+                        nonce = pending_tx.nonce,
+                        tx_hashes = ?pending_tx.tx_hashes,
+                        "L1 transaction is no longer known by the provider and has no receipt; \
+                         treating it as dropped from the mempool",
+                    );
+                    self.resubmit_l1_transaction(pending_tx).await?;
+                    next_warning_at = Some(timeout);
+                    tokio::time::sleep(poll_interval).await;
+                    continue;
+                } else if !pending_tx.drop_reported {
+                    pending_tx.drop_reported = true;
+                    tracing::warn!(
+                        command_name = Input::COMPONENT_ID.as_str(),
+                        nonce = pending_tx.nonce,
+                        tx_hashes = ?pending_tx.tx_hashes,
+                        "Resubmitted L1 transaction is no longer known by the provider and has \
+                         no receipt; not resubmitting again",
+                    );
+                }
             }
 
             let elapsed = pending_tx.last_submitted_at.elapsed();
