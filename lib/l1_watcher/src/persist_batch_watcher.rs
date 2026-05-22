@@ -1,16 +1,45 @@
 use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
 use crate::{L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
+use alloy::primitives::B256;
 use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
 use std::collections::HashMap;
+use std::ops::RangeInclusive;
+use std::sync::Arc;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
+use zksync_os_types::PubdataMode;
+
+/// Source of locally-computed batch commitments for L1 cross-checking.
+///
+/// Returns `(state_commitment, commitment)` where:
+/// - `state_commitment` corresponds to `BlockExecution.batchHash`,
+/// - `commitment` corresponds to `BlockExecution.commitment` (the batch's
+///   public-input hash).
+///
+/// Returns `Ok(None)` if any block in `block_range` is not yet available
+/// locally (e.g., the pipeline cache hasn't caught up after restart). The
+/// watcher treats that as a transient miss and skips the check.
+pub trait BatchCommitmentSource: Send + Sync + 'static {
+    fn batch_commitments(
+        &self,
+        block_range: RangeInclusive<u64>,
+        pubdata_mode: PubdataMode,
+    ) -> anyhow::Result<Option<(B256, B256)>>;
+}
+
+/// Eviction hook handed to the watcher so it can drop cached blocks once a
+/// batch is fully persisted. Kept separate from `BatchCommitmentSource` so the
+/// read interface stays read-only.
+pub trait BatchCacheEvictor: Send + Sync + 'static {
+    fn evict_through(&self, last_persisted_block: u64);
+}
 
 /// Watches finalized commit and execute events together and persists only irreversibly executed
 /// batches.
@@ -27,9 +56,20 @@ use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 ///   proof-related requests;
 pub struct L1PersistBatchWatcher<BatchStorage> {
     batch_storage: BatchStorage,
-    committed_batches: HashMap<u64, DiscoveredCommittedBatch>,
+    /// `PubdataMode` is kept alongside the discovered batch (derived from L1
+    /// calldata at `process_commit` time) so the execute-side consistency
+    /// check can reconstruct `commitment`. It's stripped before persisting,
+    /// since `PersistedBatch` only stores `DiscoveredCommittedBatch`.
+    committed_batches: HashMap<u64, PendingCommit>,
     last_processed_commit_batch: u64,
     last_persisted_batch_on_start: u64,
+    local_state: Arc<dyn BatchCommitmentSource>,
+    cache_evictor: Arc<dyn BatchCacheEvictor>,
+}
+
+struct PendingCommit {
+    batch: DiscoveredCommittedBatch,
+    pubdata_mode: PubdataMode,
 }
 
 impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
@@ -45,6 +85,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         config: L1WatcherConfig,
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
+        local_state: Arc<dyn BatchCommitmentSource>,
+        cache_evictor: Arc<dyn BatchCacheEvictor>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(
@@ -132,6 +174,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             committed_batches: HashMap::new(),
             last_processed_commit_batch: last_persisted_batch,
             last_persisted_batch_on_start: last_persisted_batch,
+            local_state,
+            cache_evictor,
         };
 
         SlAwareL1Watcher::new(config, segments, Box::new(this))
@@ -142,16 +186,23 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         provider: &DynProvider,
         report: ReportCommittedBatchRangeZKsyncOS,
         log: Log,
-    ) -> Result<DiscoveredCommittedBatch, L1WatcherError> {
+    ) -> Result<PendingCommit, L1WatcherError> {
         let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
         let zk_chain = ZkChain::new(log.address(), provider.clone());
-        let batch_info = util::fetch_committed_batch_data(&zk_chain, tx_hash)
-            .await?
-            .into_stored();
+        let extended = util::fetch_committed_batch_data(&zk_chain, tx_hash).await?;
+        // L1's Committer.sol enforces `daCommitmentScheme == s.l2DACommitmentScheme`
+        // on every commit, so reading the scheme from the commit calldata is
+        // equivalent to reading from chain config — but doesn't require any
+        // config plumbing on EN.
+        let pubdata_mode = pubdata_mode_from_scheme(extended.commit_info.l2_da_commitment_scheme)?;
+        let batch_info = extended.into_stored();
 
-        Ok(DiscoveredCommittedBatch {
-            batch_info,
-            block_range: report.firstBlockNumber..=report.lastBlockNumber,
+        Ok(PendingCommit {
+            batch: DiscoveredCommittedBatch {
+                batch_info,
+                block_range: report.firstBlockNumber..=report.lastBlockNumber,
+            },
+            pubdata_mode,
         })
     }
 
@@ -174,11 +225,11 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 batch_number,
                 "discovered already processed batch, validating"
             );
-            let committed_batch = self.parse_committed_batch(provider, report, log).await?;
-            if stored_batch.committed_batch != committed_batch {
+            let pending = self.parse_committed_batch(provider, report, log).await?;
+            if stored_batch.committed_batch != pending.batch {
                 tracing::error!(
                     ?stored_batch,
-                    ?committed_batch,
+                    committed_batch = ?pending.batch,
                     batch_number,
                     "discovered batch does not match stored batch"
                 );
@@ -215,9 +266,9 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 );
             }
             tracing::debug!(batch_number, "discovered committed batch");
-            let committed_batch = self.parse_committed_batch(provider, report, log).await?;
+            let pending = self.parse_committed_batch(provider, report, log).await?;
 
-            self.committed_batches.insert(batch_number, committed_batch);
+            self.committed_batches.insert(batch_number, pending);
             self.last_processed_commit_batch = batch_number;
         }
         Ok(())
@@ -256,18 +307,63 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                 let batch_number = execute.batchNumber.to::<u64>();
                 if batch_number > self.last_persisted_batch_on_start {
                     let batch_hash = execute.batchHash;
-                    if let Some(committed_batch) = self.committed_batches.remove(&batch_number) {
+                    let event_commitment = execute.commitment;
+                    if let Some(pending) = self.committed_batches.get(&batch_number) {
+                        // Panic on state divergence; skip both checks if the
+                        // pipeline cache hasn't caught up (we'll retry on the
+                        // next event).
+                        let block_range = pending.batch.block_range.clone();
+                        let last_block = *block_range.end();
+                        let pubdata_mode = pending.pubdata_mode;
+                        match self
+                            .local_state
+                            .batch_commitments(block_range, pubdata_mode)
+                        {
+                            Ok(Some((local_state_commitment, local_commitment))) => {
+                                if local_state_commitment != batch_hash {
+                                    panic!(
+                                        "L1 execute event for batch #{batch_number} diverges from local state_commitment (local: {local_state_commitment:?}, event: {batch_hash:?})",
+                                    );
+                                }
+                                if local_commitment != event_commitment {
+                                    panic!(
+                                        "L1 execute event for batch #{batch_number} diverges from local commitment (local: {local_commitment:?}, event: {event_commitment:?})",
+                                    );
+                                }
+                            }
+                            Ok(None) => {
+                                tracing::warn!(
+                                    batch_number,
+                                    last_block,
+                                    "local batch commitments not yet available; skipping execute-side consistency check"
+                                );
+                            }
+                            Err(err) => {
+                                tracing::error!(
+                                    batch_number,
+                                    last_block,
+                                    ?err,
+                                    "failed to compute local batch commitments; skipping execute-side consistency check"
+                                );
+                            }
+                        }
+                        let pending = self
+                            .committed_batches
+                            .remove(&batch_number)
+                            .expect("entry was just observed via get");
                         tracing::debug!(
                             batch_number,
                             ?batch_hash,
                             "discovered executed batch, persisting"
                         );
                         self.batch_storage.write(PersistedBatch {
-                            committed_batch,
+                            committed_batch: pending.batch,
                             execute_sl_block_number: Some(
                                 log.block_number.expect("Missing block number in log"),
                             ),
                         });
+                        // Release cached blocks for the persisted batch.
+                        self.cache_evictor.evict_through(last_block);
                     } else if self.last_processed_commit_batch == self.last_persisted_batch_on_start
                     {
                         // No `ReportCommittedBatchRangeZKsyncOS` event was processed yet, it is very likely that the batch is legacy
@@ -287,5 +383,30 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
             }
         }
         Ok(())
+    }
+}
+
+/// Picks a canonical `PubdataMode` for the given on-chain `DACommitmentScheme`.
+///
+/// `Calldata` and `RelayedL2Calldata` both serialize to
+/// `BlobsAndPubdataKeccak256`, but `ExtendedCommitBatchInfo::build` produces
+/// the same `commitment` for both, so picking either is fine for the
+/// commitment cross-check. We pick `Calldata` arbitrarily.
+fn pubdata_mode_from_scheme(
+    scheme: zksync_os_contract_interface::models::DACommitmentScheme,
+) -> Result<PubdataMode, L1WatcherError> {
+    use zksync_os_contract_interface::models::DACommitmentScheme;
+    match scheme {
+        DACommitmentScheme::BlobsZKsyncOS => Ok(PubdataMode::Blobs),
+        DACommitmentScheme::BlobsAndPubdataKeccak256 => Ok(PubdataMode::Calldata),
+        DACommitmentScheme::EmptyNoDA => Ok(PubdataMode::Validium),
+        // These schemes aren't produced by ZKsync OS chains today. Bail rather
+        // than guessing so a future migration that flips on one of them is
+        // caught immediately.
+        DACommitmentScheme::None | DACommitmentScheme::PubdataKeccak256 => {
+            Err(L1WatcherError::Other(anyhow::anyhow!(
+                "unsupported DACommitmentScheme for ZKsync OS: {scheme:?}"
+            )))
+        }
     }
 }
