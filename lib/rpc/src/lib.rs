@@ -25,6 +25,8 @@ mod monitoring_middleware;
 mod net_impl;
 mod rate_limit_middleware;
 mod sandbox;
+mod tx_forwarder;
+pub use tx_forwarder::{TxForwardEndpoint, TxForwarder};
 mod tx_handler;
 mod txpool_impl;
 mod types;
@@ -81,7 +83,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     genesis_input_source: Arc<dyn GenesisInputSource>,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
-    tx_forwarder: Option<DynProvider>,
+    tx_forwarder: Option<TxForwarder>,
     gateway_provider: Option<DynProvider>,
     policy_client: Option<PolicyClient>,
     runtime: &Runtime,
