@@ -15770,6 +15770,7 @@ dependencies = [
  "zksync_os_metadata",
  "zksync_os_mini_merkle_tree",
  "zksync_os_multivm",
+ "zksync_os_raft",
  "zksync_os_rpc_api",
  "zksync_os_storage",
  "zksync_os_storage_api",

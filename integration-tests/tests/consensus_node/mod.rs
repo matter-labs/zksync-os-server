@@ -216,14 +216,14 @@ async fn assert_no_transaction_progress_without_quorum(
     Ok(())
 }
 
-/// Sends a transfer to `leader_index`, waits for all running nodes to expose the resulting
+/// Sends a transfer to `submit_index`, waits for all running nodes to expose the resulting
 /// L2 block, then waits for L1 finalization if the batcher node is active.
 /// Returns the L2 block number that included the transfer.
 async fn send_transfer_and_wait_for_active_replication(
     cluster: &mut MultiNodeTester,
-    leader_index: usize,
+    submit_index: usize,
 ) -> anyhow::Result<u64> {
-    let receipt = send_transfer(cluster, leader_index).await?;
+    let receipt = send_transfer(cluster, submit_index).await?;
     let block_number = receipt
         .block_number
         .context("transfer receipt did not include a block number")?;
@@ -358,6 +358,30 @@ async fn consensus_cluster_forms_with_three_nodes_and_replicates_blocks() -> any
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
         send_transfer_and_wait_for_active_replication(&mut cluster, leader_index).await?;
+        Ok(())
+    }
+    .await;
+    let shutdown_result = cluster.shutdown_all().await;
+    result.and(shutdown_result)
+}
+
+#[test_log::test(tokio::test)]
+async fn consensus_cluster_accepts_transactions_from_any_node() -> anyhow::Result<()> {
+    let mut cluster = MultiNodeTester::builder()
+        .with_consensus_secret_keys(consensus_test_keys(3))
+        .build()
+        .await?;
+    let result = async {
+        cluster
+            .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+
+        for node_index in 0..cluster.len() {
+            send_transfer_and_wait_for_active_replication(&mut cluster, node_index)
+                .await
+                .with_context(|| format!("transaction submitted to node {node_index} failed"))?;
+        }
+
         Ok(())
     }
     .await;

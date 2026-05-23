@@ -11,7 +11,7 @@ use zksync_os_status_server::StatusResponse;
 const RESPAWN_GRACE: Duration = Duration::from_secs(10);
 
 use crate::{
-    AnvilL1, ChainLayout, Config, LockedPort, NodeRole, PROTOCOL_VERSION, StoppedTester, Tester,
+    AnvilL1, ChainLayout, Config, NodeRole, PROTOCOL_VERSION, Ports, StoppedTester, Tester,
     provider::ZksyncTestingProvider, test_config::disable_prover_input_generation,
 };
 
@@ -634,18 +634,18 @@ impl MultiNodeTesterBuilder {
             "batcher_node_index must be in 0..{num_nodes}"
         );
 
-        let mut locked_ports = Vec::with_capacity(membership_nodes);
+        let mut node_ports = Vec::with_capacity(membership_nodes);
         for _ in 0..membership_nodes {
-            locked_ports.push(LockedPort::acquire_unused().await?);
+            node_ports.push(Ports::acquire_unused().await?);
         }
 
         let node_records = self
             .consensus_secret_keys
             .iter()
-            .zip(locked_ports.iter())
+            .zip(node_ports.iter())
             .map(|(secret, port)| {
                 zksync_os_network::NodeRecord::from_secret_key(
-                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port.port),
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port.network.port),
                     secret,
                 )
             })
@@ -653,6 +653,11 @@ impl MultiNodeTesterBuilder {
         let peer_ids = node_records
             .iter()
             .map(|record| record.id)
+            .collect::<Vec<_>>();
+        let tx_forwarding_rpc_urls = node_records
+            .iter()
+            .zip(node_ports.iter())
+            .map(|(record, ports)| format!("{}@127.0.0.1:{}", record.id, ports.l2_rpc.port))
             .collect::<Vec<_>>();
 
         let l1 = AnvilL1::start(ChainLayout::Default {
@@ -664,19 +669,20 @@ impl MultiNodeTesterBuilder {
             .consensus_secret_keys
             .into_iter()
             .take(num_nodes)
-            .zip(locked_ports.into_iter())
+            .zip(node_ports.into_iter())
             .enumerate()
-            .map(|(i, (secret, locked_port))| {
+            .map(|(i, (secret, ports))| {
                 let peers = peer_ids.clone();
                 // Configure a deterministic directed full mesh: every consensus pair gets exactly
                 // one maintained RLPx route, from the lower-index node to the higher-index node.
                 // This avoids simultaneous crossed dials that can be dropped as duplicates under
                 // stress while still preserving an OpenRaft RPC path between every voter pair.
+                let tx_forwarding_rpc_urls = tx_forwarding_rpc_urls.clone();
                 let boot_nodes: Vec<zksync_os_network::TrustedPeer> =
                     consensus_boot_nodes_for_node(&node_records, num_nodes, i);
                 let l1 = l1.clone();
                 async move {
-                    let network_port = locked_port.port;
+                    let network_port = ports.network.port;
                     // Production configs set this on every consensus node. The first node to
                     // initialize the cluster wins; the rest safely observe that it is initialized.
                     let bootstrap = true;
@@ -688,7 +694,7 @@ impl MultiNodeTesterBuilder {
                     .id;
                     tracing::info!("starting node... (node_index={i}, node_id={expected_node_id}, network_port={network_port}, bootstrap={bootstrap}, batcher_enabled={batcher_enabled})");
 
-                    let node = Tester::launch_node_with_network_port(
+                    let node = Tester::launch_node_with_ports(
                         l1,
                         false,
                         Some(move |config: &mut Config| {
@@ -707,6 +713,8 @@ impl MultiNodeTesterBuilder {
                             config.consensus_config.enabled = true;
                             config.consensus_config.bootstrap = bootstrap;
                             config.consensus_config.peer_ids = peers.clone();
+                            config.consensus_config.tx_forwarding_rpc_urls =
+                                tx_forwarding_rpc_urls.clone();
                             // Keep elections reasonably fast while leaving enough room for
                             // batcher-enabled nodes to finish in-flight block work before a
                             // transient election can displace the current leader.
@@ -719,7 +727,7 @@ impl MultiNodeTesterBuilder {
                         ChainLayout::Default {
                             protocol_version: PROTOCOL_VERSION,
                         },
-                        locked_port,
+                        ports,
                         false,
                     )
                     .await?;
