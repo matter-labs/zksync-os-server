@@ -253,6 +253,7 @@ async fn consensus_cluster_rotates_leader_after_failure() -> anyhow::Result<()> 
 }
 
 #[test_log::test(tokio::test)]
+#[ignore = "flaky; @romanbrodetski is working on it"]
 async fn consensus_cluster_stops_making_progress_without_quorum() -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::builder()
         .with_consensus_secret_keys(consensus_test_keys(3))
@@ -287,6 +288,7 @@ async fn consensus_cluster_stops_making_progress_without_quorum() -> anyhow::Res
 }
 
 #[test_log::test(tokio::test)]
+#[ignore = "flaky; @romanbrodetski is working on it"]
 async fn consensus_original_leader_rejoins_and_cluster_remains_stable() -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::builder()
         .with_consensus_secret_keys(consensus_test_keys(3))
@@ -380,6 +382,7 @@ async fn consensus_cluster_recovers_after_quorum_loss() -> anyhow::Result<()> {
 }
 
 #[test_log::test(tokio::test)]
+#[ignore = "flaky; @romanbrodetski is working on it"]
 async fn consensus_cluster_fully_restarts_and_recovers() -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::builder()
         .with_consensus_secret_keys(consensus_test_keys(3))

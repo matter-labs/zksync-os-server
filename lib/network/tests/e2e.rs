@@ -11,7 +11,6 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use test_casing::test_casing;
 use tokio::sync::{broadcast, mpsc};
-use zksync_os_interface::types::BlockContext;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_network::protocol::{
     ExternalNodeProtocolConfig, ExternalNodeVerifierConfig, HandlerSharedState,
@@ -22,6 +21,7 @@ use zksync_os_network::version::{
     ZksProtocolVersionSpec, ZksVersion,
 };
 use zksync_os_network::{PeerVerifyBatchResult, VerifyBatchOutcome, VerifyBatchResult};
+use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::{BlockStartCursors, NodeRole, ProtocolSemanticVersion};
 

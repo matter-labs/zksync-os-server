@@ -193,6 +193,8 @@ pub enum TxRejectionReason {
     /// Local simulation needed to capture a judge trace failed for an
     /// internal reason (storage error, etc.) and the tx was rejected.
     JudgeSimFailed,
+    /// Transaction was admitted to the mempool but rejected by the VM during block building.
+    RejectedDuringExecution,
 }
 
 /// Single task monitor covering all RPC request futures.

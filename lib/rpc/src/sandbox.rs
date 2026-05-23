@@ -8,9 +8,9 @@ use zksync_os_interface::tracing::{
     EvmResources, EvmTracer, NopTracer, NopValidator,
 };
 use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
-use zksync_os_interface::types::{BlockContext, ExecutionResult, TxOutput};
+use zksync_os_interface::types::{ExecutionResult, TxOutput};
 use zksync_os_multivm::{run_block, simulate_tx};
-use zksync_os_storage_api::ViewState;
+use zksync_os_storage_api::{BlockContext, ViewState};
 use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
 /// EVM max stack size.

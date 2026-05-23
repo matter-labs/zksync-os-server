@@ -28,7 +28,9 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
 ) -> anyhow::Result<BatchForSigning<ProverInput>> {
     let block_number_from = blocks.first().unwrap().1.block_context.block_number;
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
+    let last_block_hash = blocks.last().unwrap().0.header.hash();
     let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
+    let (_, last_replay_record, _, _) = blocks.last().unwrap();
 
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
@@ -36,12 +38,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         blocks
             .iter()
             .map(|(block_output, replay_record, tree, _)| {
-                (
-                    block_output,
-                    &replay_record.block_context,
-                    replay_record.transactions.as_slice(),
-                    tree,
-                )
+                (block_output, replay_record.transactions.as_slice(), tree)
             })
             .collect(),
         chain_id,
@@ -50,6 +47,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         sl_chain_id,
         multichain_root,
         &protocol_version,
+        &last_replay_record.block_context.block_hashes,
     );
 
     let mut logs = Vec::new();
@@ -115,6 +113,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             blob_sidecar,
             first_block_number: block_number_from,
             last_block_number: block_number_to,
+            last_block_hash: Some(last_block_hash),
             pubdata_mode,
             tx_count: blocks
                 .iter()
@@ -149,7 +148,7 @@ fn compute_batch_prover_input(
     pubdata_mode: PubdataMode,
 ) -> anyhow::Result<ProverInput> {
     use zk_os_forward_system::run::generate_batch_proof_input;
-    use zk_os_forward_system_dev::run::generate_batch_proof_input as generate_batch_proof_input_dev;
+    use zk_os_forward_system_prev::run::generate_batch_proof_input as generate_batch_proof_input_prev;
 
     if blocks
         .iter()
@@ -168,7 +167,7 @@ fn compute_batch_prover_input(
         }
         ProvingVersion::V6 => {
             // TODO: in the long-term we should generate proof input per batch
-            ProverInput::Real(generate_batch_proof_input(
+            ProverInput::Real(generate_batch_proof_input_prev(
                 blocks
                     .iter()
                     .map(|(_, _, _, prover_input)| prover_input.unwrap_real())
@@ -184,7 +183,7 @@ fn compute_batch_prover_input(
         }
         ProvingVersion::V7 => {
             // TODO: in the long-term we should generate proof input per batch
-            ProverInput::Real(generate_batch_proof_input_dev(
+            ProverInput::Real(generate_batch_proof_input(
                 blocks
                     .iter()
                     .map(|(_, _, _, prover_input)| prover_input.unwrap_real())

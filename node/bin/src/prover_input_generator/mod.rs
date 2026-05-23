@@ -1,3 +1,5 @@
+use self::tree_adapter::TreeOutputAdapter;
+use self::tree_adapter::VersionedMerkleTree;
 use crate::prover_block::ProverBlock;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -8,14 +10,17 @@ use std::collections::VecDeque;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
+use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_batch_types::batcher_model::ProverInput;
 use zksync_os_contract_interface::models::DACommitmentScheme;
 use zksync_os_interface::traits::TxListSource;
-use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
+use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, TreeBlock};
 use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
+
+mod tree_adapter;
 
 /// This component generates prover input from batch replay data.
 ///
@@ -28,6 +33,7 @@ pub struct ProverInputGenerator<ReadState> {
     pub read_state: ReadState,
     pub pubdata_mode: PubdataMode,
     pub runtime: Runtime,
+    pub merkle_tree: MerkleTree<RocksDBWrapper>,
     /// When true, skip all computation and emit `ProverInput::Fake` for every block.
     pub disabled: bool,
 }
@@ -44,7 +50,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 
     /// Works on multiple blocks in parallel, up to [Self::maximum_in_flight_blocks].
     /// Each computation runs on the blocking pool and is tracked as a graceful task so
-    /// the RocksDB tree lock held by [BlockMerkleTreeData] is always released before
+    /// the RocksDB tree lock held by [`VersionedMerkleTree`] is always released before
     /// [graceful_shutdown_with_timeout] returns.
     async fn run(
         self,
@@ -72,7 +78,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                         output: block_output,
                         record: replay_record,
                         prover_input: ProverInput::Fake,
-                        tree,
+                        tree_output: tree.output,
                     },
                     &state_reporter,
                 )?;
@@ -136,7 +142,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<ReadState> {
     /// Submits one block's prover-input computation to the blocking CPU pool and returns
     /// a receiver for the result. The computation is tracked as a graceful task so its
-    /// [BlockMerkleTreeData] (holding the tree RocksDB lock) is guaranteed to be dropped
+    /// [`VersionedMerkleTree`] (holding the tree RocksDB lock) is guaranteed to be dropped
     /// before [graceful_shutdown_with_timeout] returns.
     fn spawn_computation(&self, input: TreeBlock) -> oneshot::Receiver<ProverBlock> {
         let TreeBlock {
@@ -158,11 +164,15 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             block_number,
             replay_record.transactions.len(),
         );
+        let versioned_tree = VersionedMerkleTree::new(self.merkle_tree.clone(), block_number - 1);
+
         let mut handle = tokio::task::spawn_blocking(move || {
+            let tree_output = tree.output;
             let prover_input = ProverInput::Real(compute_prover_input(
                 &replay_record,
                 read_state,
-                tree.block_start.clone(),
+                tree,
+                versioned_tree,
                 da_commitment_scheme,
                 enable_logging,
             ));
@@ -170,7 +180,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
                 output: block_output,
                 record: replay_record,
                 prover_input,
-                tree,
+                tree_output,
             }
         });
         self.runtime.spawn_critical_with_graceful_shutdown_signal(
@@ -196,13 +206,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
 fn compute_prover_input(
     replay_record: &ReplayRecord,
     state_handle: impl ReadStateHistory,
-    tree_view: MerkleTreeVersion<RocksDBWrapper>,
+    tree_view: BlockMerkleTreeData,
+    versioned_tree: VersionedMerkleTree,
     da_commitment_scheme: DACommitmentScheme,
     enable_logging: bool,
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
     let state_view = state_handle.state_view_at(block_number - 1).unwrap();
-    let (root_hash, leaf_count) = tree_view.root_info().unwrap();
     let transactions = replay_record
         .transactions
         .iter()
@@ -222,16 +232,16 @@ fn compute_prover_input(
             panic!("computing prover input for batch with prover version v1-v5 is not supported");
         }
         ProvingVersion::V6 => {
-            use zk_ee::{
+            use zk_ee_prev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
-            use zk_os_forward_system::run::{
+            use zk_os_forward_system_prev::run::{
                 StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
             };
 
             let initial_storage_commitment = StorageCommitment {
-                root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
-                next_free_slot: leaf_count,
+                root: tree_view.input.root_hash.0.into(),
+                next_free_slot: tree_view.input.leaf_count,
             };
 
             let list_source = TxListSource { transactions };
@@ -247,29 +257,30 @@ fn compute_prover_input(
                 .expect("Failed to convert DA commitment scheme");
             generate_proof_input_from_bytes(
                 bin_bytes,
-                BlockMetadataFromOracle::from_interface(replay_record.block_context),
+                // todo: not ideal but will be gone in v0.4.0 with new PIG anyway
+                BlockMetadataFromOracle::from_interface(replay_record.block_context.to_interface()),
                 ProofData {
                     state_root_view: initial_storage_commitment,
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                tree_view,
+                TreeOutputAdapter::new(tree_view).with_fallback(versioned_tree),
                 state_view,
                 list_source,
             )
             .expect("proof gen failed")
         }
         ProvingVersion::V7 => {
-            use zk_ee_dev::{
+            use zk_ee::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
-            use zk_os_forward_system_dev::run::{
+            use zk_os_forward_system::run::{
                 StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
             };
 
             let initial_storage_commitment = StorageCommitment {
-                root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
-                next_free_slot: leaf_count,
+                root: tree_view.input.root_hash.0.into(),
+                next_free_slot: tree_view.input.leaf_count,
             };
 
             let list_source = TxListSource { transactions };
@@ -285,13 +296,14 @@ fn compute_prover_input(
                 .expect("Failed to convert DA commitment scheme");
             generate_proof_input_from_bytes(
                 bin_bytes,
-                BlockMetadataFromOracle::from_interface(replay_record.block_context),
+                // todo: not ideal but will be gone in v0.4.0 with new PIG anyway
+                BlockMetadataFromOracle::from_interface(replay_record.block_context.to_interface()),
                 ProofData {
                     state_root_view: initial_storage_commitment,
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                tree_view,
+                TreeOutputAdapter::new(tree_view).with_fallback(versioned_tree),
                 state_view,
                 list_source,
             )
@@ -309,14 +321,25 @@ fn compute_prover_input(
     prover_input
 }
 
+const LEN_BUCKETS: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
+
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "prover_input_generator")]
-pub struct ProverInputGeneratorMetrics {
+struct ProverInputGeneratorMetrics {
     #[metrics(unit = Unit::Seconds, labels = ["stage"], buckets = LATENCIES_FAST)]
-    pub prover_input_generation: LabeledFamily<&'static str, Histogram<Duration>>,
+    prover_input_generation: LabeledFamily<&'static str, Histogram<Duration>>,
+    /// Number of unexpected existing storage slots queried per block. Positive values are abnormal.
+    #[metrics(buckets = LEN_BUCKETS)]
+    unexpected_queried_keys: Histogram<usize>,
+    /// Number of unexpected missing storage slots queried per block. Positive values are abnormal.
+    #[metrics(buckets = LEN_BUCKETS)]
+    unexpected_queried_missing_keys: Histogram<usize>,
+    /// Number of unexpected Merkle proofs queried per block. Positive values are abnormal.
+    #[metrics(buckets = LEN_BUCKETS)]
+    unexpected_queried_proofs: Histogram<usize>,
 }
 
 #[vise::register]
-pub(crate) static PROVER_INPUT_GENERATOR_METRICS: vise::Global<ProverInputGeneratorMetrics> =
+static PROVER_INPUT_GENERATOR_METRICS: vise::Global<ProverInputGeneratorMetrics> =
     vise::Global::new();

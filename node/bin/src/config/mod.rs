@@ -11,10 +11,13 @@ use smart_config::metadata::{SizeUnit, TimeUnit};
 use smart_config::value::SecretString;
 use smart_config::{
     ByteSize, ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig,
-    ErrorWithOrigin, EtherAmount, ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
+    ErrorWithOrigin, EtherAmount, ParseErrors, Serde,
+    de::{Delimited, Entries},
+    metadata::EtherUnit,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
+use std::num::NonZeroU32;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_config_validation_macros::ConfigValidate;
@@ -74,6 +77,7 @@ pub struct Config {
     pub observability_config: ObservabilityConfig,
     pub gas_adjuster_config: GasAdjusterConfig,
     pub batch_verification_config: BatchVerificationConfig,
+    pub replay_archive_config: ReplayArchiveConfig,
     pub base_token_price_updater_config: BaseTokenPriceUpdaterConfig,
     pub interop_fee_updater_config: InteropFeeUpdaterConfig,
     /// Only required on the Main Node, where the base token price updater runs.
@@ -247,6 +251,9 @@ impl Config {
         schema
             .insert(&BatchVerificationConfig::DESCRIPTION, "batch_verification")
             .expect("Failed to insert batch verification config");
+        schema
+            .insert(&ReplayArchiveConfig::DESCRIPTION, "replay_archive")
+            .expect("Failed to insert replay archive config");
         schema
             .insert(
                 &BaseTokenPriceUpdaterConfig::DESCRIPTION,
@@ -984,6 +991,18 @@ pub struct RpcConfig {
     /// because pubdata price increases or native price decreases in-between estimation and sequencing.
     #[config(default_t = 2.0)]
     pub estimate_gas_pubdata_price_factor: f64,
+
+    /// Per-method rate limits: map from RPC method name to max requests per second (across all
+    /// callers).  Use `"*"` for a global limit applied before per-method limits.  Methods absent
+    /// from the map are unrestricted.
+    ///
+    /// Accepts a JSON object or a comma-separated `method=rps` string, e.g.
+    /// `*=500,eth_call=100,debug_traceTransaction=5`.
+    #[config(default, with = Entries::WELL_KNOWN.delimited(",", "="), validate(
+        rate_limits_within_global,
+        "each per-method limit must not exceed the global `*` limit"
+    ))]
+    pub rate_limits: HashMap<String, NonZeroU32>,
 }
 
 /// L1 sender configuration. The signing key fields are only required on the Main Node;
@@ -1092,6 +1111,16 @@ pub struct ForceTransactionResubmissionConfig {
     /// Multiplier applied to `max_fee_per_blob_gas` when force transaction resubmission is enabled.
     #[config(default_t = 2.0, validate(is_positive_f64, "must be positive"))]
     pub max_fee_per_blob_gas_replacement_multiplier: f64,
+}
+
+fn rate_limits_within_global(limits: &HashMap<String, NonZeroU32>) -> bool {
+    let Some(&global) = limits.get("*") else {
+        return true;
+    };
+    limits
+        .iter()
+        .filter(|(k, _)| k.as_str() != "*")
+        .all(|(_, &v)| v <= global)
 }
 
 fn is_positive_f64(&val: &f64) -> bool {
@@ -1367,6 +1396,62 @@ pub struct ProofStorageConfig {
     /// old entries are removed to keep usage capped
     #[config(default_t = 1 * SizeUnit::GiB)]
     pub failed_capacity: ByteSize,
+}
+
+/// Replay archive backend used for cold-storage copies of replay records.
+#[derive(Debug, Clone, DescribeConfig, DeserializeConfig)]
+#[config(tag = "type", derive(Default))]
+pub enum ReplayArchiveConfig {
+    #[config(default)]
+    Noop,
+    FileSystem {
+        /// Root directory for replay archive sessions.
+        root_path: PathBuf,
+        #[config(nest, default)]
+        encryption: ReplayArchiveEncryptionConfig,
+    },
+}
+
+/// Replay archive encryption applied before data is written to cold storage.
+#[derive(Debug, Clone, DescribeConfig, DeserializeConfig)]
+#[config(tag = "type", derive(Default))]
+pub enum ReplayArchiveEncryptionConfig {
+    #[config(default)]
+    Noop,
+    AgeX25519 {
+        /// age X25519 recipient public key. The node only needs this public key.
+        recipient: String,
+    },
+}
+
+impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig {
+    fn from(config: ReplayArchiveConfig) -> Self {
+        match config {
+            ReplayArchiveConfig::Noop => zksync_os_replay_archive::ReplayArchiveConfig::Noop,
+            ReplayArchiveConfig::FileSystem {
+                root_path,
+                encryption,
+            } => zksync_os_replay_archive::ReplayArchiveConfig::FileSystem {
+                root_path,
+                encryption: encryption.into(),
+            },
+        }
+    }
+}
+
+impl From<ReplayArchiveEncryptionConfig>
+    for zksync_os_replay_archive::ReplayArchiveEncryptionConfig
+{
+    fn from(config: ReplayArchiveEncryptionConfig) -> Self {
+        match config {
+            ReplayArchiveEncryptionConfig::Noop => {
+                zksync_os_replay_archive::ReplayArchiveEncryptionConfig::Noop
+            }
+            ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
+                zksync_os_replay_archive::ReplayArchiveEncryptionConfig::AgeX25519 { recipient }
+            }
+        }
+    }
 }
 
 /// Set of options related to the observability stack,
@@ -1702,6 +1787,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
             gas_price_scale_factor: c.gas_price_scale_factor,
             estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
+            rate_limits: c.rate_limits.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -2087,6 +2173,65 @@ mod tests {
         repo.single::<NetworkConfig>().unwrap().parse().unwrap()
     }
 
+    fn parse_replay_archive_config<const N: usize>(
+        env_vars: [(&str, &str); N],
+    ) -> ReplayArchiveConfig {
+        let schema = ConfigSchema::new(&ReplayArchiveConfig::DESCRIPTION, "replay_archive");
+        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
+        repo.single::<ReplayArchiveConfig>()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    #[test]
+    fn replay_archive_config_defaults_to_noop() {
+        let config = parse_replay_archive_config([]);
+
+        assert!(matches!(config, ReplayArchiveConfig::Noop));
+    }
+
+    #[test]
+    fn replay_archive_config_parses_filesystem_backend() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "FileSystem"),
+            ("REPLAY_ARCHIVE_ROOT_PATH", "/tmp/replay-archive"),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::FileSystem {
+                root_path,
+                encryption,
+            } => {
+                assert_eq!(root_path, PathBuf::from("/tmp/replay-archive"));
+                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
+            }
+            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_age_x25519_encryption() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "FileSystem"),
+            ("REPLAY_ARCHIVE_ROOT_PATH", "/tmp/replay-archive"),
+            ("REPLAY_ARCHIVE_ENCRYPTION_TYPE", "AgeX25519"),
+            ("REPLAY_ARCHIVE_ENCRYPTION_RECIPIENT", "age1recipient"),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::FileSystem { encryption, .. } => match encryption {
+                ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
+                    assert_eq!(recipient, "age1recipient");
+                }
+                ReplayArchiveEncryptionConfig::Noop => {
+                    panic!("expected age X25519 replay archive encryption")
+                }
+            },
+            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
+        }
+    }
+
     #[test]
     fn network_interface_is_a_separate_field_and_overrides_address() {
         let config = parse_network_config([
@@ -2176,6 +2321,7 @@ mod tests {
             observability_config: ObservabilityConfig::default(),
             gas_adjuster_config: GasAdjusterConfig::default(),
             batch_verification_config: BatchVerificationConfig::default(),
+            replay_archive_config: ReplayArchiveConfig::default(),
             base_token_price_updater_config: BaseTokenPriceUpdaterConfig::default(),
             interop_fee_updater_config: InteropFeeUpdaterConfig::default(),
             external_price_api_client_config: Some(ExternalPriceApiClientConfig::Forced {

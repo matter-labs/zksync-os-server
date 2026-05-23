@@ -117,13 +117,15 @@ where
         loop {
             state_reporter.enter_state(GenericComponentState::Idle);
             let Some(AppliedBlock {
-                output: block_output,
+                output: block,
                 record: replay_record,
             }) = input.recv_and_record_picked(&state_reporter).await
             else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
+            let block_output = block.as_ref();
+
             let raw_exec_ver = replay_record.block_context.execution_version;
             let zk_spec = match ExecutionVersion::try_from(raw_exec_ver)
                 .ok()
@@ -249,7 +251,7 @@ where
                             &block_output.storage_writes,
                             &block_output.account_diffs,
                         )?;
-                        self.handle_report(&block_output, &replay_record, &compare_report)?;
+                        self.handle_report(block_output, &replay_record, &compare_report)?;
                     }
                     Err(err) => {
                         // Tx conversion failed (e.g. malformed envelope) — skip
@@ -265,8 +267,8 @@ where
 
             output.send_and_record(
                 AppliedBlock {
-                    output: block_output.clone(),
-                    record: replay_record.clone(),
+                    output: block,
+                    record: replay_record,
                 },
                 &state_reporter,
             )?;

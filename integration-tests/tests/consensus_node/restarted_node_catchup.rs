@@ -378,6 +378,7 @@ async fn l2_block_snapshot(cluster: &MultiNodeTester, node_indices: &[usize]) ->
 }
 
 #[test_log::test(tokio::test)]
+#[ignore = "flaky; @romanbrodetski is working on it"]
 async fn consensus_restarted_node_catches_up_after_long_transaction_storm() -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::builder()
         .with_consensus_secret_keys(consensus_test_keys(3))

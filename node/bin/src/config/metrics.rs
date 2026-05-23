@@ -57,6 +57,7 @@ pub(crate) fn report_static_config_metrics(config: &Config) {
     );
     report_flat_config_metrics(&config.fee_config, "fee");
     report_flat_config_metrics(&config.backpressure_config, "backpressure");
+    report_flat_config_metrics(&config.replay_archive_config, "replay_archive");
 }
 
 fn report_flat_config_metrics<C: DescribeConfig>(config: &C, prefix: &str) {

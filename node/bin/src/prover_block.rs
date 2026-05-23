@@ -1,6 +1,6 @@
-use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_batch_types::batcher_model::ProverInput;
 use zksync_os_interface::types::BlockOutput;
+use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_storage_api::ReplayRecord;
 
@@ -9,7 +9,7 @@ pub struct ProverBlock {
     pub output: BlockOutput,
     pub record: ReplayRecord,
     pub prover_input: ProverInput,
-    pub tree: BlockMerkleTreeData,
+    pub tree_output: TreeBatchOutput,
 }
 
 impl HasBlockRangeEnd for ProverBlock {

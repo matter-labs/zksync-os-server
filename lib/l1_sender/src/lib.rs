@@ -212,8 +212,11 @@ where
                     )
                     .await?;
                     let operator_address = self.operator_address().await?;
-                    let mut tx_request = self
-                        .tx_request_with_gas_fields(operator_address, fee_params)
+                    let mut tx_request = TransactionRequest::default()
+                        .with_from(operator_address)
+                        .with_max_fee_per_gas(fee_params.max_fee_per_gas)
+                        .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
+                        .with_gas_limit(15000000)
                         .with_to(self.to_address)
                         .with_input(cmd.solidity_call(self.gateway, &operator_address));
 
@@ -594,6 +597,7 @@ where
             }
         }
     }
+
     async fn resolve_fee_params(
         &self,
         fee_config: L1SenderFeeConfig,
@@ -604,61 +608,17 @@ where
         }
 
         let configured_params = fee_config.configured_fee_params();
-        let eip1559_est = self.provider.estimate_eip1559_fees().await?;
-        L1_SENDER_METRICS.report_l1_eip_1559_estimation(eip1559_est)?;
+        let estimated = self.provider.estimate_eip1559_fees().await?;
+        L1_SENDER_METRICS.report_l1_eip_1559_estimation(estimated)?;
         self.report_custom_priority_fee_metrics().await?;
 
         tracing::debug!(
-            max_priority_fee_per_gas_gwei = ?format_units(eip1559_est.max_priority_fee_per_gas, "gwei"),
-            max_fee_per_gas_gwei = ?format_units(eip1559_est.max_fee_per_gas, "gwei"),
+            max_priority_fee_per_gas_gwei = ?format_units(estimated.max_priority_fee_per_gas, "gwei"),
+            max_fee_per_gas_gwei = ?format_units(estimated.max_fee_per_gas, "gwei"),
             "estimated priority and max fees"
         );
 
-        let max_fee_per_gas = if eip1559_est.max_fee_per_gas > configured_params.max_fee_per_gas {
-            tracing::warn!(
-                "L1 sender's configured maxFeePerGas ({}) \
-             is lower than the one estimated from network  ({}), \
-             using the configured base fee value ({}) - this may result in inclusion delay.",
-                configured_params.max_fee_per_gas,
-                eip1559_est.max_fee_per_gas,
-                configured_params.max_fee_per_gas,
-            );
-            configured_params.max_fee_per_gas
-        } else {
-            eip1559_est.max_fee_per_gas
-        };
-        let max_priority_fee_per_gas =
-            if eip1559_est.max_priority_fee_per_gas > configured_params.max_priority_fee_per_gas {
-                tracing::warn!(
-                    "L1 sender's configured max_priority_fee_per_gas ({}) \
-             is lower than the one estimated from network  ({}), \
-             using the configured priority fee value ({}) - this may result in inclusion delay.",
-                    configured_params.max_priority_fee_per_gas,
-                    eip1559_est.max_priority_fee_per_gas,
-                    configured_params.max_priority_fee_per_gas,
-                );
-                configured_params.max_priority_fee_per_gas
-            } else {
-                eip1559_est.max_priority_fee_per_gas
-            };
-
-        Ok(FeeParams {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            max_fee_per_blob_gas: configured_params.max_fee_per_blob_gas,
-        })
-    }
-
-    fn tx_request_with_gas_fields(
-        &self,
-        operator_address: Address,
-        fee_params: FeeParams,
-    ) -> TransactionRequest {
-        TransactionRequest::default()
-            .with_from(operator_address)
-            .with_max_fee_per_gas(fee_params.max_fee_per_gas)
-            .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
-            .with_gas_limit(15000000)
+        Ok(apply_fee_caps(configured_params, estimated))
     }
 
     async fn report_custom_priority_fee_metrics(&self) -> anyhow::Result<()> {
@@ -795,6 +755,46 @@ where
     }
 }
 
+/// Combines operator-configured fee caps with the network's EIP-1559 estimate.
+///
+/// `max_fee_per_gas` and `max_fee_per_blob_gas` are taken verbatim from
+/// `configured` — they are static caps set by the operator and never adjusted
+/// up from network estimates. Only `max_priority_fee_per_gas` follows the
+/// estimate, capped from above by the configured value.
+fn apply_fee_caps(configured: FeeParams, estimated: Eip1559Estimation) -> FeeParams {
+    if estimated.max_fee_per_gas > configured.max_fee_per_gas {
+        tracing::warn!(
+            "L1 sender's configured maxFeePerGas ({}) \
+             is lower than the one estimated from network  ({}), \
+             using the configured base fee value ({}) - this may result in inclusion delay.",
+            configured.max_fee_per_gas,
+            estimated.max_fee_per_gas,
+            configured.max_fee_per_gas,
+        );
+    }
+
+    let max_priority_fee_per_gas =
+        if estimated.max_priority_fee_per_gas > configured.max_priority_fee_per_gas {
+            tracing::warn!(
+                "L1 sender's configured max_priority_fee_per_gas ({}) \
+             is lower than the one estimated from network  ({}), \
+             using the configured priority fee value ({}) - this may result in inclusion delay.",
+                configured.max_priority_fee_per_gas,
+                estimated.max_priority_fee_per_gas,
+                configured.max_priority_fee_per_gas,
+            );
+            configured.max_priority_fee_per_gas
+        } else {
+            estimated.max_priority_fee_per_gas
+        };
+
+    FeeParams {
+        max_fee_per_gas: configured.max_fee_per_gas,
+        max_priority_fee_per_gas,
+        max_fee_per_blob_gas: configured.max_fee_per_blob_gas,
+    }
+}
+
 impl L1SenderFeeConfig {
     fn configured_fee_params(self) -> FeeParams {
         FeeParams {
@@ -815,6 +815,61 @@ impl L1SenderFeeConfig {
             max_fee_per_blob_gas: ((self.max_fee_per_blob_gas_wei as f64)
                 * self.max_fee_per_blob_gas_replacement_multiplier)
                 .ceil() as u128,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `max_fee_per_gas` and `max_fee_per_blob_gas` are static caps set by
+    /// the operator — they must equal the configured values regardless of
+    /// what the network estimate reports. Only `max_priority_fee_per_gas` is
+    /// allowed to track the estimate (capped from above).
+    #[test]
+    fn apply_fee_caps_keeps_max_fee_and_blob_fee_static() {
+        let configured = FeeParams {
+            max_fee_per_gas: 100_000_000_000,
+            max_priority_fee_per_gas: 2_000_000_000,
+            max_fee_per_blob_gas: 50_000_000_000,
+        };
+
+        // Estimates spanning far below, equal to, and far above the configured
+        // caps — the static fields must stay pinned to the configured values
+        // in every case.
+        let cases = [
+            Eip1559Estimation {
+                max_fee_per_gas: 1,
+                max_priority_fee_per_gas: 1,
+            },
+            Eip1559Estimation {
+                max_fee_per_gas: configured.max_fee_per_gas,
+                max_priority_fee_per_gas: configured.max_priority_fee_per_gas,
+            },
+            Eip1559Estimation {
+                max_fee_per_gas: configured.max_fee_per_gas * 10,
+                max_priority_fee_per_gas: configured.max_priority_fee_per_gas * 10,
+            },
+        ];
+
+        for est in cases {
+            let capped = apply_fee_caps(configured, est);
+            assert_eq!(
+                capped.max_fee_per_gas, configured.max_fee_per_gas,
+                "max_fee_per_gas must equal configured cap (estimate: {est:?})",
+            );
+            assert_eq!(
+                capped.max_fee_per_blob_gas, configured.max_fee_per_blob_gas,
+                "max_fee_per_blob_gas must equal configured cap (estimate: {est:?})",
+            );
+            assert!(
+                capped.max_priority_fee_per_gas <= configured.max_priority_fee_per_gas,
+                "max_priority_fee_per_gas must never exceed configured cap \
+                 (got {}, cap {}, estimate: {est:?})",
+                capped.max_priority_fee_per_gas,
+                configured.max_priority_fee_per_gas,
+            );
         }
     }
 }
