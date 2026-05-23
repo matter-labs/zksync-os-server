@@ -108,6 +108,15 @@ impl RepositoryManager {
             tracing::debug!("waiting for `db_ready_to_process_blocks`");
         }
     }
+
+    pub fn mark_db_ready_to_process_blocks(&self) {
+        if !self
+            .db_ready_to_process_blocks
+            .swap(true, Ordering::Relaxed)
+        {
+            tracing::info!("Repo DB is ready to process blocks");
+        }
+    }
 }
 
 impl LogIndex for RepositoryManager {
@@ -222,9 +231,7 @@ impl WriteRepository for RepositoryManager {
                 self.db.rollback(block_output.header.number - 1)?;
             }
 
-            self.db_ready_to_process_blocks
-                .store(true, Ordering::Relaxed);
-            tracing::info!("Repo DB is ready to process blocks");
+            self.mark_db_ready_to_process_blocks();
         }
 
         let should_be_persisted_up_to = self

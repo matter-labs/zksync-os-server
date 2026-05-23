@@ -17,6 +17,7 @@ mod prover_input_generator;
 mod provider;
 mod state_initializer;
 pub mod tree_manager;
+mod tx_forwarder;
 pub mod util;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
@@ -41,11 +42,12 @@ use crate::prover_input_generator::ProverInputGenerator;
 use crate::provider::{ProviderKind, build_node_provider};
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
+use crate::tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::network::{Ethereum, EthereumWallet};
 use alloy::primitives::BlockNumber;
 use alloy::providers::fillers::{FillProvider, TxFiller};
-use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
+use alloy::providers::{Provider, WalletProvider};
 use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
@@ -421,6 +423,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     node_startup_state.assert_consistency();
+    if node_startup_state.repositories_persisted_block + 1 == starting_block
+        && node_startup_state.block_replay_storage_last_block < starting_block
+    {
+        // There is no local WAL replay to apply before the pipeline starts, and the repository
+        // DB already contains exactly the block immediately before `starting_block`. This is
+        // enough for RPC to serve genesis/current state while a fresh consensus replica waits
+        // for its first replicated block.
+        repositories.mark_db_ready_to_process_blocks();
+    }
 
     // MN sends `VerifyBatch` requests to the network and receives `PeerVerifyBatchResult`s back.
     let (verify_request_tx, verify_request_rx) = tokio::sync::mpsc::channel::<VerifyBatch>(16);
@@ -767,14 +778,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let _ = stop_sender_for_shutdown.send(true);
     });
 
-    let main_node_provider = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
-        Some(
-            ProviderBuilder::new()
-                .connect(url)
-                .await
-                .expect("could not connect to main node RPC")
-                .erased(),
-        )
+    let tx_forwarder = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
+        Some(build_static_tx_forwarder(url).await)
+    } else if config.consensus_config.enabled {
+        let status_rx = raft_status_rx
+            .clone()
+            .expect("consensus status receiver must be present when consensus is enabled");
+        Some(build_consensus_tx_forwarder(&config, status_rx).await)
     } else {
         None
     };
@@ -1127,7 +1137,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         genesis_input_source,
         combined_acceptance_rx,
         last_constructed_block_ctx_receiver,
-        main_node_provider,
+        tx_forwarder,
         gateway_provider.map(|p| p.erased()),
         rpc_policy_client,
         runtime,

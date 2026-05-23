@@ -1,4 +1,6 @@
+use anyhow::Context as _;
 use futures::future::try_join_all;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tokio::time::Instant;
@@ -9,13 +11,28 @@ use zksync_os_status_server::StatusResponse;
 const RESPAWN_GRACE: Duration = Duration::from_secs(10);
 
 use crate::{
-    AnvilL1, ChainLayout, Config, LockedPort, NodeRole, PROTOCOL_VERSION, StoppedTester, Tester,
-    provider::ZksyncTestingProvider,
+    AnvilL1, ChainLayout, Config, NodeRole, PROTOCOL_VERSION, Ports, StoppedTester, Tester,
+    provider::ZksyncTestingProvider, test_config::disable_prover_input_generation,
 };
 
 const TEST_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 const TEST_ELECTION_TIMEOUT_MIN: Duration = Duration::from_secs(2);
 const TEST_ELECTION_TIMEOUT_MAX: Duration = Duration::from_secs(4);
+const NODE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
+const NODE_START_TIMEOUT: Duration = Duration::from_secs(180);
+
+fn consensus_boot_nodes_for_node(
+    node_records: &[zksync_os_network::NodeRecord],
+    spawned_nodes: usize,
+    node_index: usize,
+) -> Vec<zksync_os_network::TrustedPeer> {
+    node_records
+        .iter()
+        .take(spawned_nodes)
+        .enumerate()
+        .filter_map(|(peer_index, record)| (peer_index > node_index).then_some((*record).into()))
+        .collect()
+}
 
 #[derive(Debug)]
 enum NodeSlot {
@@ -30,6 +47,18 @@ impl NodeSlot {
             Self::Suspended(_) => None,
         }
     }
+}
+
+async fn with_node_lifecycle_timeout<T>(
+    operation: &'static str,
+    index: usize,
+    timeout: Duration,
+    future: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<T> {
+    tokio::time::timeout(timeout, future)
+        .await
+        .with_context(|| format!("timed out {operation} node {index} after {timeout:?}"))?
+        .with_context(|| format!("failed {operation} node {index}"))
 }
 
 /// Represents the consensus state of a Raft cluster based on node status responses
@@ -301,10 +330,26 @@ impl MultiNodeTester {
 
     /// Shuts down all active nodes and drops suspended ones.
     pub async fn shutdown_all(self) -> anyhow::Result<()> {
-        for node in self.nodes {
+        for (index, node) in self.nodes.into_iter().enumerate() {
             match node {
-                NodeSlot::Running(node) => node.shutdown().await?,
-                NodeSlot::Suspended(node) => node.shutdown().await?,
+                NodeSlot::Running(node) => {
+                    with_node_lifecycle_timeout(
+                        "shutting down",
+                        index,
+                        NODE_STOP_TIMEOUT,
+                        node.shutdown(),
+                    )
+                    .await?
+                }
+                NodeSlot::Suspended(node) => {
+                    with_node_lifecycle_timeout(
+                        "shutting down",
+                        index,
+                        NODE_STOP_TIMEOUT,
+                        node.shutdown(),
+                    )
+                    .await?
+                }
             }
         }
         Ok(())
@@ -314,8 +359,24 @@ impl MultiNodeTester {
     pub async fn shutdown_node(&mut self, index: usize) -> anyhow::Result<()> {
         tracing::info!("shutting down node {index}...");
         match self.nodes.remove(index) {
-            NodeSlot::Running(node) => node.shutdown().await,
-            NodeSlot::Suspended(node) => node.shutdown().await,
+            NodeSlot::Running(node) => {
+                with_node_lifecycle_timeout(
+                    "shutting down",
+                    index,
+                    NODE_STOP_TIMEOUT,
+                    node.shutdown(),
+                )
+                .await
+            }
+            NodeSlot::Suspended(node) => {
+                with_node_lifecycle_timeout(
+                    "shutting down",
+                    index,
+                    NODE_STOP_TIMEOUT,
+                    node.shutdown(),
+                )
+                .await
+            }
         }
     }
 
@@ -325,7 +386,10 @@ impl MultiNodeTester {
         tracing::info!("suspending node {index}...");
         let tester = self.nodes.remove(index);
         let stopped = match tester {
-            NodeSlot::Running(tester) => tester.stop().await?,
+            NodeSlot::Running(tester) => {
+                with_node_lifecycle_timeout("suspending", index, NODE_STOP_TIMEOUT, tester.stop())
+                    .await?
+            }
             NodeSlot::Suspended(_) => panic!("node {index} is already suspended"),
         };
         self.nodes
@@ -338,7 +402,10 @@ impl MultiNodeTester {
         tracing::info!("starting suspended node {index}...");
         let suspended = self.nodes.remove(index);
         let started = match suspended {
-            NodeSlot::Suspended(tester) => tester.start().await?,
+            NodeSlot::Suspended(tester) => {
+                with_node_lifecycle_timeout("starting", index, NODE_START_TIMEOUT, tester.start())
+                    .await?
+            }
             NodeSlot::Running(_) => panic!("node {index} is not suspended"),
         };
         self.nodes
@@ -367,10 +434,24 @@ impl MultiNodeTester {
             tracing::warn!("node {idx} crashed (critical task panicked); respawning...");
             let running = self.nodes.remove(idx);
             let stopped = match running {
-                NodeSlot::Running(tester) => tester.stop().await?,
+                NodeSlot::Running(tester) => {
+                    with_node_lifecycle_timeout(
+                        "stopping crashed",
+                        idx,
+                        NODE_STOP_TIMEOUT,
+                        tester.stop(),
+                    )
+                    .await?
+                }
                 NodeSlot::Suspended(_) => unreachable!("filtered to running above"),
             };
-            let restarted = stopped.start().await?;
+            let restarted = with_node_lifecycle_timeout(
+                "restarting crashed",
+                idx,
+                NODE_START_TIMEOUT,
+                stopped.start(),
+            )
+            .await?;
             self.nodes
                 .insert(idx, NodeSlot::Running(Box::new(restarted)));
         }
@@ -385,7 +466,15 @@ impl MultiNodeTester {
         tracing::info!("starting suspended node {index} with config overrides...");
         let suspended = self.nodes.remove(index);
         let started = match suspended {
-            NodeSlot::Suspended(tester) => tester.start_with_overrides(config_overrides).await?,
+            NodeSlot::Suspended(tester) => {
+                with_node_lifecycle_timeout(
+                    "starting with overrides",
+                    index,
+                    NODE_START_TIMEOUT,
+                    tester.start_with_overrides(config_overrides),
+                )
+                .await?
+            }
             NodeSlot::Running(_) => panic!("node {index} is not suspended"),
         };
         self.nodes
@@ -453,13 +542,17 @@ impl MultiNodeTester {
             );
         }
 
-        let mut deadline = Instant::now() + timeout;
+        let wait_started_at = Instant::now();
+        let mut deadline = wait_started_at + timeout;
+        let hard_deadline = wait_started_at + timeout + RESPAWN_GRACE * 3;
         let mut last_summary = String::new();
 
         while Instant::now() < deadline {
             let respawned = self.respawn_crashed_running_nodes().await?;
             if respawned > 0 {
-                deadline = deadline.max(Instant::now() + RESPAWN_GRACE);
+                deadline = deadline
+                    .max(Instant::now() + RESPAWN_GRACE)
+                    .min(hard_deadline);
             }
             let cluster_state =
                 ClusterState::collect_indices(&self.nodes, node_indices.iter().copied()).await;
@@ -477,11 +570,6 @@ impl MultiNodeTester {
                 tracing::info!(
                     "raft cluster formed (node_indices={node_indices:?}): leader_index={leader_index}"
                 );
-                for &index in node_indices {
-                    if let Some(node) = self.nodes.get(index).and_then(NodeSlot::running) {
-                        node.wait_for_initial_deposit().await?;
-                    }
-                }
                 return Ok(leader_index);
             }
 
@@ -546,18 +634,18 @@ impl MultiNodeTesterBuilder {
             "batcher_node_index must be in 0..{num_nodes}"
         );
 
-        let mut locked_ports = Vec::with_capacity(membership_nodes);
+        let mut node_ports = Vec::with_capacity(membership_nodes);
         for _ in 0..membership_nodes {
-            locked_ports.push(LockedPort::acquire_unused().await?);
+            node_ports.push(Ports::acquire_unused().await?);
         }
 
         let node_records = self
             .consensus_secret_keys
             .iter()
-            .zip(locked_ports.iter())
+            .zip(node_ports.iter())
             .map(|(secret, port)| {
                 zksync_os_network::NodeRecord::from_secret_key(
-                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port.port),
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port.network.port),
                     secret,
                 )
             })
@@ -565,6 +653,11 @@ impl MultiNodeTesterBuilder {
         let peer_ids = node_records
             .iter()
             .map(|record| record.id)
+            .collect::<Vec<_>>();
+        let tx_forwarding_rpc_urls = node_records
+            .iter()
+            .zip(node_ports.iter())
+            .map(|(record, ports)| format!("{}@127.0.0.1:{}", record.id, ports.l2_rpc.port))
             .collect::<Vec<_>>();
 
         let l1 = AnvilL1::start(ChainLayout::Default {
@@ -576,15 +669,20 @@ impl MultiNodeTesterBuilder {
             .consensus_secret_keys
             .into_iter()
             .take(num_nodes)
-            .zip(locked_ports.into_iter())
+            .zip(node_ports.into_iter())
             .enumerate()
-            .map(|(i, (secret, locked_port))| {
+            .map(|(i, (secret, ports))| {
                 let peers = peer_ids.clone();
+                // Configure a deterministic directed full mesh: every consensus pair gets exactly
+                // one maintained RLPx route, from the lower-index node to the higher-index node.
+                // This avoids simultaneous crossed dials that can be dropped as duplicates under
+                // stress while still preserving an OpenRaft RPC path between every voter pair.
+                let tx_forwarding_rpc_urls = tx_forwarding_rpc_urls.clone();
                 let boot_nodes: Vec<zksync_os_network::TrustedPeer> =
-                    node_records.iter().copied().map(Into::into).collect();
+                    consensus_boot_nodes_for_node(&node_records, num_nodes, i);
                 let l1 = l1.clone();
                 async move {
-                    let network_port = locked_port.port;
+                    let network_port = ports.network.port;
                     // Production configs set this on every consensus node. The first node to
                     // initialize the cluster wins; the rest safely observe that it is initialized.
                     let bootstrap = true;
@@ -596,13 +694,17 @@ impl MultiNodeTesterBuilder {
                     .id;
                     tracing::info!("starting node... (node_index={i}, node_id={expected_node_id}, network_port={network_port}, bootstrap={bootstrap}, batcher_enabled={batcher_enabled})");
 
-                    let node = Tester::launch_node_with_network_port(
+                    let node = Tester::launch_node_with_ports(
                         l1,
                         false,
                         Some(move |config: &mut Config| {
                             config.general_config.node_role = NodeRole::MainNode;
                             config.general_config.main_node_rpc_url = None;
                             config.batcher_config.enabled = batcher_enabled;
+                            // Consensus integration tests exercise Raft/network recovery, not
+                            // prover input generation. Keeping PIG enabled creates CPU-bound
+                            // background work that makes election timing flaky under suite stress.
+                            disable_prover_input_generation(config);
                             config.network_config.enabled = true;
                             config.network_config.secret_key = Some(secret);
                             config.network_config.address = Ipv4Addr::LOCALHOST;
@@ -611,6 +713,8 @@ impl MultiNodeTesterBuilder {
                             config.consensus_config.enabled = true;
                             config.consensus_config.bootstrap = bootstrap;
                             config.consensus_config.peer_ids = peers.clone();
+                            config.consensus_config.tx_forwarding_rpc_urls =
+                                tx_forwarding_rpc_urls.clone();
                             // Keep elections reasonably fast while leaving enough room for
                             // batcher-enabled nodes to finish in-flight block work before a
                             // transient election can displace the current leader.
@@ -623,7 +727,7 @@ impl MultiNodeTesterBuilder {
                         ChainLayout::Default {
                             protocol_version: PROTOCOL_VERSION,
                         },
-                        locked_port,
+                        ports,
                         false,
                     )
                     .await?;

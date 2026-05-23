@@ -673,6 +673,10 @@ pub struct ConsensusConfig {
         "must not be empty when `consensus.enabled=true`"
     ))]
     pub peer_ids: Vec<PeerId>,
+    /// TEMPORARY WORKAROUND - forward txs via RPC until network-based propagation is added.
+    /// Entries use `<peer_id>@<host>:<rpc_port>`; every peer must have a record.
+    #[config(default, with = Serde![*])]
+    pub tx_forwarding_rpc_urls: Vec<String>,
     /// WARNING: Assumes all configured consensus nodes are already caught up to the same
     /// canonical L2 state. Bootstrap does not catch up stale nodes before admitting them
     /// to the cluster.

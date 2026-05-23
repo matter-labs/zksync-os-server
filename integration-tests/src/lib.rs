@@ -110,6 +110,8 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 const PORT_ACQUISITION_TIMEOUT: Duration = Duration::from_secs(30);
 const PORT_ACQUISITION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const NODE_RPC_READINESS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
     BATCH_VERIFICATION_KEYS
@@ -326,11 +328,11 @@ pub struct SupportingNode {
 }
 
 #[derive(Debug)]
-struct Ports {
-    l2_rpc: LockedPort,
-    prover_api: LockedPort,
-    network: LockedPort,
-    status: LockedPort,
+pub(crate) struct Ports {
+    pub(crate) l2_rpc: LockedPort,
+    pub(crate) prover_api: LockedPort,
+    pub(crate) network: LockedPort,
+    pub(crate) status: LockedPort,
 }
 
 impl Tester {
@@ -448,13 +450,26 @@ impl Tester {
     }
 
     pub async fn status(&self) -> anyhow::Result<StatusResponse> {
-        let response = reqwest::get(format!("{}/status", self.status_server_url))
-            .await?
-            .error_for_status()?;
-        Ok(response.json::<StatusResponse>().await?)
+        let url = format!("{}/status", self.status_server_url);
+        tokio::time::timeout(STATUS_REQUEST_TIMEOUT, async {
+            let response = reqwest::get(&url).await?.error_for_status()?;
+            response
+                .json::<StatusResponse>()
+                .await
+                .context("failed to decode node status response")
+        })
+        .await
+        .with_context(|| format!("timed out fetching node status from {url}"))?
+        .with_context(|| format!("failed fetching node status from {url}"))
     }
 
     pub async fn wait_for_initial_deposit(&self) -> anyhow::Result<()> {
+        let beneficiary = self.l2_wallet.default_signer().address();
+        let balance = self.l2_provider.get_balance(beneficiary).await?;
+        if balance > U256::ZERO {
+            return Ok(());
+        }
+
         tokio::time::timeout(
             Duration::from_secs(60),
             self.l2_zk_provider.wait_for_block(2),
@@ -575,15 +590,14 @@ impl Tester {
         Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, Some(ports)).await
     }
 
-    pub(crate) async fn launch_node_with_network_port(
+    pub(crate) async fn launch_node_with_ports(
         l1: AnvilL1,
         enable_prover: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
         chain_layout: ChainLayout<'static>,
-        network: LockedPort,
+        ports: Ports,
         wait_for_initial_deposit: bool,
     ) -> anyhow::Result<Self> {
-        let ports = Ports::acquire_unused_with_network(network).await?;
         let tempdir = Arc::new(tempfile::tempdir()?);
         let mut config = build_node_config(&l1, chain_layout, false).await?;
         if enable_prover {
@@ -699,14 +713,18 @@ impl Tester {
             .unwrap(),
         );
         let l2_provider = (|| async {
-            let l2_provider = ProviderBuilder::new()
-                .wallet(l2_wallet.clone())
-                .connect(&l2_rpc_ws_url)
-                .await?;
+            tokio::time::timeout(NODE_RPC_READINESS_ATTEMPT_TIMEOUT, async {
+                let l2_provider = ProviderBuilder::new()
+                    .wallet(l2_wallet.clone())
+                    .connect(&l2_rpc_ws_url)
+                    .await?;
 
-            // Wait for L2 node to get up and be able to respond.
-            l2_provider.get_chain_id().await?;
-            anyhow::Ok(l2_provider)
+                // Wait for L2 node to get up and be able to respond.
+                l2_provider.get_chain_id().await?;
+                anyhow::Ok(l2_provider)
+            })
+            .await
+            .context("timed out waiting for L2 node RPC readiness")?
         })
         .retry(
             ConstantBuilder::default()
@@ -725,14 +743,18 @@ impl Tester {
 
         let sl_provider = if let Some(gateway_rpc_url) = &gateway_rpc_url {
             let sl_provider = (|| async {
-                let sl_provider = ProviderBuilder::new()
-                    .wallet(l2_wallet.clone())
-                    .connect(gateway_rpc_url)
-                    .await?;
+                tokio::time::timeout(NODE_RPC_READINESS_ATTEMPT_TIMEOUT, async {
+                    let sl_provider = ProviderBuilder::new()
+                        .wallet(l2_wallet.clone())
+                        .connect(gateway_rpc_url)
+                        .await?;
 
-                // Wait for L2 node to get up and be able to respond.
-                sl_provider.get_chain_id().await?;
-                anyhow::Ok(sl_provider)
+                    // Wait for L2 node to get up and be able to respond.
+                    sl_provider.get_chain_id().await?;
+                    anyhow::Ok(sl_provider)
+                })
+                .await
+                .context("timed out waiting for settlement-layer RPC readiness")?
             })
             .retry(
                 ConstantBuilder::default()
@@ -890,20 +912,11 @@ impl Drop for SupportingNode {
 }
 
 impl Ports {
-    async fn acquire_unused() -> anyhow::Result<Self> {
+    pub(crate) async fn acquire_unused() -> anyhow::Result<Self> {
         Ok(Self {
             l2_rpc: LockedPort::acquire_unused().await?,
             prover_api: LockedPort::acquire_unused().await?,
             network: LockedPort::acquire_unused().await?,
-            status: LockedPort::acquire_unused().await?,
-        })
-    }
-
-    async fn acquire_unused_with_network(network: LockedPort) -> anyhow::Result<Self> {
-        Ok(Self {
-            l2_rpc: LockedPort::acquire_unused().await?,
-            prover_api: LockedPort::acquire_unused().await?,
-            network,
             status: LockedPort::acquire_unused().await?,
         })
     }
