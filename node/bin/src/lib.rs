@@ -234,7 +234,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
     let settles_on_gateway = l1_state.settles_on_gateway();
     let l1_block_updates = block_updates::run(
-        l1_state.diamond_proxy_l1.provider().clone(),
+        l1_provider.clone().erased(),
         runtime,
         "l1 block updates",
         config.l1_watcher_config.poll_interval,
