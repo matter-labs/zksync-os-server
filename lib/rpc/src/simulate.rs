@@ -680,7 +680,7 @@ impl SimulatedTx {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zksync_os_interface::types::BlockHashes;
+    use zksync_os_storage_api::BlockHashes;
 
     #[test]
     fn simulate_block_overrides_reject_non_increasing_sequences() {

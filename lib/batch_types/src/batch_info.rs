@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::ops;
 use std::ops::{Deref, DerefMut};
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
+use zksync_os_merkle_tree_api::TreeBatchOutput;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_types::block_output::BlockOutput;
 use zksync_os_types::{
@@ -31,11 +32,7 @@ pub struct ExtendedCommitBatchInfo {
 impl ExtendedCommitBatchInfo {
     #[allow(clippy::too_many_arguments)]
     pub fn build(
-        blocks: Vec<(
-            &BlockOutput,
-            &[ZkTransaction],
-            &zksync_os_merkle_tree::TreeBatchOutput,
-        )>,
+        blocks: Vec<(&BlockOutput, &[ZkTransaction], &TreeBatchOutput)>,
         chain_id: u64,
         batch_number: u64,
         pubdata_mode: PubdataMode,

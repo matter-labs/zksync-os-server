@@ -35,6 +35,7 @@ pub struct BatchMetadata {
     pub blob_sidecar: Option<BlobTransactionSidecar>,
     pub first_block_number: u64,
     pub last_block_number: u64,
+    pub last_block_hash: Option<B256>,
     #[serde(default = "default_pubdata_mode")]
     pub pubdata_mode: PubdataMode,
     // note: can equal to zero

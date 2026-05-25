@@ -86,7 +86,7 @@ use zksync_os_mempool::subpools::l1::L1Subpool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
-use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
+use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_network::RecordOverride;
 use zksync_os_network::VerifyBatch;
@@ -101,6 +101,9 @@ use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, init_consensus,
     loopback_consensus,
+};
+use zksync_os_replay_archive::{
+    ReplayArchiveGateComponent, ReplayArchiver, ReplayArchivingWriteReplay, init_replay_archive,
 };
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
@@ -287,7 +290,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!("Initializing BlockReplayStorage");
 
-    let block_replay_storage = BlockReplayStorage::new(
+    let (block_replay_storage, inserted_genesis_replay_record) = BlockReplayStorage::new(
         &config
             .general_config
             .rocks_db_path
@@ -311,14 +314,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     )
     .await;
 
-    let tree_at_genesis = MerkleTreeVersion {
-        tree: tree_db,
-        block: 0,
-    };
-    let (genesis_root_hash, genesis_root_leaves) = tree_at_genesis
-        .root_info()
-        .expect("Failed to get genesis root info");
-    let tree_db = tree_at_genesis.tree;
+    let (genesis_root_hash, genesis_root_leaves) = tree_db
+        .root_info(0)
+        .expect("Failed to get genesis root info")
+        .expect("tree is not initialized");
     let tree_for_rpc = Arc::new(tree_db.clone());
 
     let committed_batch_provider = CommittedBatchProvider::new(
@@ -1009,12 +1008,27 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
+    let replay_archive =
+        init_replay_archive(config.replay_archive_config.clone().into(), runtime).await;
+    if let (Some((replay_archive_sender, _)), Some(inserted_genesis_replay_record)) =
+        (&replay_archive, inserted_genesis_replay_record)
+    {
+        let (genesis_replay_record, genesis_hash) = inserted_genesis_replay_record.split();
+        replay_archive_sender
+            .send((genesis_hash, genesis_replay_record))
+            .await
+            .expect("replay archive component stopped before accepting genesis replay record");
+    }
+    let (replay_archive_sender, replay_archiver) = replay_archive.unzip();
+    let archiving_block_replay_storage =
+        ReplayArchivingWriteReplay::new(block_replay_storage, replay_archive_sender);
+
     let backpressure_acceptance_rx = if node_role.is_main() {
         run_main_node_pipeline(
             &config,
             sl_provider.clone(),
             node_startup_state,
-            block_replay_storage.clone(),
+            archiving_block_replay_storage,
             runtime,
             state.clone(),
             starting_block,
@@ -1036,6 +1050,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             migration_triggered_sender,
             settles_on_gateway,
             effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
+            replay_archiver,
         )
         .await
     } else {
@@ -1044,7 +1059,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             replays_for_sequencer,
             committed_batch_provider.clone(),
             node_startup_state,
-            block_replay_storage.clone(),
+            archiving_block_replay_storage,
             runtime,
             starting_block,
             block_context_provider,
@@ -1154,6 +1169,7 @@ async fn run_main_node_pipeline(
     migration_triggered: watch::Sender<Option<u64>>,
     settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
+    replay_archiver: Option<impl ReplayArchiver>,
 ) -> watch::Receiver<TransactionAcceptanceState> {
     let priority_tree_db_path = config
         .general_config
@@ -1312,6 +1328,7 @@ async fn run_main_node_pipeline(
                 .maximum_in_flight_blocks,
             read_state: state.clone(),
             pubdata_mode,
+            merkle_tree: tree,
             runtime: runtime.clone(),
             disabled: !config.prover_input_generator_config.enable_input_generation,
         })
@@ -1352,6 +1369,9 @@ async fn run_main_node_pipeline(
             last_finalized_migration,
             migration_triggered,
         })
+        .pipe_opt(replay_archiver.map(|replay_archiver| {
+            ReplayArchiveGateComponent::new(replay_archiver, block_replay_storage.clone())
+        }))
         .pipe(L1Sender::<_, _, CommitCommand> {
             provider: sl_provider.clone(),
             config: commit_sender_config,

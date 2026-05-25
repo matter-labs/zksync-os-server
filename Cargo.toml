@@ -11,6 +11,7 @@ members = [
     "lib/merkle_tree_api",
     "lib/mini_merkle_tree",
     "lib/priority_tree",
+    "lib/replay_archive",
     "lib/rocksdb",
     "lib/rpc",
     "lib/rpc_api",
@@ -75,7 +76,7 @@ serde = { version = "1", features = ["derive"] }
 serde_with = "3.14.0"
 serde_json = "1"
 sentry = "0.43.0"
-regex = "1.11.3"
+regex = "1.12.3"
 roaring = "0.11.3"
 
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
@@ -168,8 +169,8 @@ futures = "0.3"
 vise = "0.3.0"
 vise-exporter = "0.3.0"
 bincode = { version = "2.0.1", features = ["serde"] }
-smart-config = { version = "0.4.0-pre.2" }
-smart-config-commands = { version = "0.4.0-pre.2" }
+smart-config = { version = "0.4.0-pre.3" }
+smart-config-commands = { version = "0.4.0-pre.3" }
 thiserror = "2.0.12"
 tikv-jemallocator = { version = "0.6.1", features = [
     "override_allocator_on_supported_platforms",
@@ -197,6 +198,7 @@ criterion = "0.7.0"
 sha2 = "0.10.9"
 tower = "0.5.2"
 tower-http = "0.6.6"
+governor = "0.6"
 hyper = "1.6.0"
 semver = { version = "1", features = ["serde"] }
 num_cpus = "1.17.0"
@@ -240,6 +242,7 @@ test-casing = "0.2.0-beta.1"
 quote = "1"
 syn = "2"
 proc-macro2 = "1"
+age = "0.11.2"
 
 tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"
@@ -284,6 +287,7 @@ zksync_os_merkle_tree = { version = "=0.20.3", path = "lib/merkle_tree" }
 zksync_os_config_validation_macros = { version = "=0.20.3", path = "node/config-validation-macros" }
 zksync_os_merkle_tree_api = { version = "=0.20.3", path = "lib/merkle_tree_api" }
 zksync_os_priority_tree = { version = "=0.20.3", path = "lib/priority_tree" }
+zksync_os_replay_archive = { version = "=0.20.3", path = "lib/replay_archive" }
 zksync_os_observability = { version = "=0.20.3", path = "lib/observability" }
 zksync_os_rocksdb = { version = "=0.20.3", path = "lib/rocksdb" }
 zksync_os_rpc = { version = "=0.20.3", path = "lib/rpc" }

@@ -51,6 +51,7 @@ zksync_os_base_token_adjuster.workspace = true
 zksync_os_external_price_api.workspace = true
 zksync_os_operator_signer.workspace = true
 zksync_os_reth_compat.workspace = true
+zksync_os_replay_archive.workspace = true
 zksync_os_state.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_merkle_tree.workspace = true
@@ -61,9 +62,11 @@ zksync_os_config_validation_macros.workspace = true
 zksync_os_backpressure.workspace = true
 
 zk_ee_prev.workspace = true
+zk_os_basic_system_prev.workspace = true
 zk_os_forward_system_prev.workspace = true
 
 zk_ee.workspace = true
+zk_os_basic_system.workspace = true
 zk_os_forward_system.workspace = true
 
 zksync_os_interface.workspace = true

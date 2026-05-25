@@ -180,7 +180,11 @@ where
             state_reporter.enter_state(SequencerState::UpdatingMempool);
 
             self.block_context_provider
-                .on_canonical_state_change(&block_output, &replay_record, strict_subpool_cleanup)
+                .on_canonical_state_change(
+                    block_output.as_ref(),
+                    &replay_record,
+                    strict_subpool_cleanup,
+                )
                 .await;
             let purged_txs_hashes = purged_txs.iter().map(|(hash, _)| *hash).collect();
             self.block_context_provider
@@ -188,8 +192,8 @@ where
 
             state_overlay_buffer.add_block(
                 block_number,
-                block_output.storage_writes.clone(),
-                block_output.published_preimages.clone(),
+                block_output.as_ref().storage_writes.clone(),
+                block_output.as_ref().published_preimages.clone(),
             )?;
 
             tracing::info!(
@@ -204,8 +208,8 @@ where
 
             output.send_and_record(
                 BlockPayload {
-                    output: block_output.clone(),
-                    record: replay_record.clone(),
+                    output: block_output,
+                    record: replay_record,
                     command_type: cmd_type,
                     failed_transactions: purged_txs,
                 },
