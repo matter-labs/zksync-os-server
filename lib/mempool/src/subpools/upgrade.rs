@@ -252,22 +252,20 @@ mod tests {
 
     #[tokio::test]
     async fn historical_upgrade_replay_does_not_wait_for_watcher() {
+        let unreliable_version = version(30, 1);
         let subpool = UpgradeSubpool::new(ProtocolSemanticVersion::legacy_genesis_version());
         let tx = upgrade_tx(1);
 
         tokio::time::timeout(
             Duration::from_millis(50),
-            subpool.on_canonical_state_change(
-                &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS,
-                vec![&tx],
-            ),
+            subpool.on_canonical_state_change(&unreliable_version, vec![&tx]),
         )
         .await
         .expect("historical upgrade replay should not wait for watcher data");
 
         assert_eq!(
             subpool.inner.read().await.current_protocol_version,
-            ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS
+            unreliable_version
         );
     }
 
@@ -277,21 +275,16 @@ mod tests {
         let old_tx = upgrade_tx(1);
         let new_tx = upgrade_tx(2);
         let new_version = version(31, 0);
+        let unreliable_version = version(30, 1);
         subpool
-            .insert(upgrade_info(
-                ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS,
-                Some(old_tx),
-            ))
+            .insert(upgrade_info(unreliable_version.clone(), Some(old_tx)))
             .await;
         subpool
             .insert(upgrade_info(new_version.clone(), Some(new_tx.clone())))
             .await;
 
         subpool
-            .on_canonical_state_change(
-                &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS,
-                Vec::new(),
-            )
+            .on_canonical_state_change(&unreliable_version, Vec::new())
             .await;
 
         let mut stream = subpool.upgrade_info_stream().await;
