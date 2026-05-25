@@ -1,4 +1,4 @@
-use crate::config::{Config, RebuildBlocksConfig};
+use crate::config::Config;
 use alloy::network::{Ethereum, EthereumWallet};
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, WalletProvider};
@@ -10,16 +10,20 @@ use zksync_os_l1_watcher::util;
 use zksync_os_storage::db::ExecutedBatchStorage;
 use zksync_os_storage_api::{PersistedBatch, ReadBatch};
 
-pub async fn apply_l1_revert_block_rebuild_config(
-    config: &mut Config,
+/// Derives the `from_block` value for `sequencer.block_rebuild` based on `sequencer.l1_revert`.
+///
+/// Must be called **before** the revert transaction lands on L1, because the L1 fallback path
+/// relies on `totalBatchesCommitted` still being >= the reverted batch at the current L1 head.
+pub async fn derive_block_rebuild_from_block(
+    config: &Config,
     l1_state: &L1State,
     persistent_batch_storage: &ExecutedBatchStorage,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<u64> {
     let l1_revert = config
         .sequencer_config
         .l1_revert
         .as_ref()
-        .expect("l1_revert must be configured before applying block rebuild config");
+        .expect("l1_revert must be configured before deriving block rebuild from_block");
 
     let reverted_batch = l1_revert
         .last_l1_batch_to_keep
@@ -79,36 +83,7 @@ pub async fn apply_l1_revert_block_rebuild_config(
         }
     };
 
-    if let Some(block_rebuild) = config.sequencer_config.block_rebuild.as_ref() {
-        anyhow::ensure!(
-            block_rebuild.from_block == derived_from_block,
-            "`sequencer.block_rebuild.from_block` ({}) must match auto-derived value ({}) \
-             from `sequencer.l1_revert.last_l1_batch_to_keep={}`",
-            block_rebuild.from_block,
-            derived_from_block,
-            l1_revert.last_l1_batch_to_keep
-        );
-    } else {
-        config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
-            from_block: derived_from_block,
-            blocks_to_empty: vec![],
-            reset_timestamps: false,
-        });
-        tracing::info!(
-            from_block = derived_from_block,
-            reverted_batch,
-            "auto-configured `sequencer.block_rebuild` from `sequencer.l1_revert`"
-        );
-    }
-
-    anyhow::ensure!(
-        l1_revert.last_l1_batch_to_keep <= l1_state.last_committed_batch,
-        "`sequencer.l1_revert.last_l1_batch_to_keep` ({}) must be <= current last committed batch ({})",
-        l1_revert.last_l1_batch_to_keep,
-        l1_state.last_committed_batch
-    );
-
-    Ok(())
+    Ok(derived_from_block)
 }
 
 pub async fn perform_l1_revert<

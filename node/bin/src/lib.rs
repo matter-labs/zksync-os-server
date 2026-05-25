@@ -25,12 +25,12 @@ use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ConsensusNodeCommandSource, ExternalNodeCommandSource};
 use crate::config::{
-    Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
-    report_static_config_metrics,
+    Config, ProverApiConfig, RebuildBlocksConfig, base_token_price_updater_config,
+    gas_adjuster_config, report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
 use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
-use crate::l1_revert::{apply_l1_revert_block_rebuild_config, perform_l1_revert};
+use crate::l1_revert::{derive_block_rebuild_from_block, perform_l1_revert};
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -234,13 +234,32 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 last_l1_batch_to_keep = l1_revert_config.last_l1_batch_to_keep,
                 "L1 revert config detected, starting startup revert sequence"
             );
-            // Derive (or validate) `block_rebuild.from_block` before the revert while the
-            // to-be-reverted batch is still committed on L1. The L1 fallback relies on
-            // `totalBatchesCommitted` being >= reverted_batch at the current L1 head, which
-            // is no longer true after the revert tx lands.
-            apply_l1_revert_block_rebuild_config(&mut config, &l1_state, &persistent_batch_storage)
-                .await
-                .expect("invalid L1 revert / block rebuild configuration");
+
+            assert!(
+                l1_revert_config.last_l1_batch_to_keep <= l1_state.last_committed_batch,
+                "`sequencer.l1_revert.last_l1_batch_to_keep` ({}) must be <= current last \
+                 committed batch ({})",
+                l1_revert_config.last_l1_batch_to_keep,
+                l1_state.last_committed_batch
+            );
+
+            // Derive `block_rebuild.from_block` before the revert while the to-be-reverted
+            // batch is still committed on L1. The L1 fallback relies on `totalBatchesCommitted`
+            // being >= reverted_batch at the current L1 head, which is no longer true after
+            // the revert tx lands.
+            let from_block =
+                derive_block_rebuild_from_block(&config, &l1_state, &persistent_batch_storage)
+                    .await
+                    .expect("failed to derive block_rebuild.from_block for L1 revert");
+
+            if let Some(block_rebuild) = config.sequencer_config.block_rebuild.as_ref() {
+                assert_eq!(
+                    block_rebuild.from_block, from_block,
+                    "`sequencer.block_rebuild.from_block` ({}) must match auto-derived value \
+                     ({}) from `sequencer.l1_revert.last_l1_batch_to_keep={}`",
+                    block_rebuild.from_block, from_block, l1_revert_config.last_l1_batch_to_keep
+                );
+            }
 
             perform_l1_revert(
                 &config,
@@ -251,6 +270,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             )
             .await
             .expect("failed to perform startup L1 revert");
+
+            if config.sequencer_config.block_rebuild.is_none() {
+                config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
+                    from_block,
+                    blocks_to_empty: vec![],
+                    reset_timestamps: false,
+                });
+                tracing::info!(
+                    from_block,
+                    "auto-configured `sequencer.block_rebuild` from `sequencer.l1_revert`"
+                );
+            }
 
             // Re-read state after revert so all further startup checks use updated L1 frontier.
             l1_state = fetch_l1_state(
