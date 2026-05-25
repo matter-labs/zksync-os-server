@@ -36,64 +36,43 @@ pub async fn init_replay_archive(
     config: ReplayArchiveConfig,
     runtime: &Runtime,
 ) -> Option<InitializedReplayArchive> {
-    match config {
-        ReplayArchiveConfig::Noop => None,
+    if let ReplayArchiveConfig::Noop = &config {
+        return None;
+    }
+
+    let node_id = std::env::var("POD_NAME").unwrap_or_else(|_| "node".to_owned());
+    let session = ReplayArchiveSession::new(current_timestamp_millis(), node_id)
+        .expect("failed to create replay archive session");
+
+    let archive = match &config {
+        ReplayArchiveConfig::Noop => unreachable!("already checked for Noop option"),
         ReplayArchiveConfig::FileSystem {
             root_path,
             encryption,
         } => {
-            let node_id = std::env::var("POD_NAME").unwrap_or_else(|_| "node".to_owned());
-            let session = ReplayArchiveSession::new(current_timestamp_millis(), node_id)
-                .expect("failed to create replay archive session");
-
             let storage = FileSystemReplayArchiveStorage::init(root_path.clone(), session.clone())
                 .await
                 .with_context(|| format!("failed to create replay archive session {session}"))
                 .expect("failed to initialize replay archive");
-            let archive = archive_for_storage(storage, &encryption);
-            let (sender, component) = ReplayArchiveComponent::new(archive.clone());
-            runtime.spawn_critical_task("replay archive", async move {
-                component
-                    .run()
-                    .await
-                    .expect("replay archive component failed");
-            });
-            tracing::info!(
-                archive_root = %root_path.display(),
-                %session,
-                encryption = ?encryption,
-                "Replay archive enabled"
-            );
-            Some((sender, archive))
+            archive_for_storage(storage, encryption)
         }
         ReplayArchiveConfig::S3 { config, encryption } => {
-            let node_id = std::env::var("POD_NAME").unwrap_or_else(|_| "node".to_owned());
-            let session = ReplayArchiveSession::new(current_timestamp_millis(), node_id)
-                .expect("failed to create replay archive session");
-
             let storage = S3ReplayArchiveStorage::init(config.clone(), session.clone())
                 .await
                 .with_context(|| format!("failed to create replay archive S3 session {session}"))
                 .expect("failed to initialize S3 replay archive");
-            let archive = archive_for_storage(storage, &encryption);
-            let (sender, component) = ReplayArchiveComponent::new(archive.clone());
-            runtime.spawn_critical_task("replay archive", async move {
-                component
-                    .run()
-                    .await
-                    .expect("replay archive component failed");
-            });
-            tracing::info!(
-                bucket_base_url = %config.bucket_base_url,
-                endpoint = ?config.endpoint,
-                region = ?config.region,
-                %session,
-                encryption = ?encryption,
-                "S3 replay archive enabled"
-            );
-            Some((sender, archive))
+            archive_for_storage(storage, encryption)
         }
-    }
+    };
+    let (sender, component) = ReplayArchiveComponent::new(archive.clone());
+    runtime.spawn_critical_task("replay archive", async move {
+        component
+            .run()
+            .await
+            .expect("replay archive component failed");
+    });
+    tracing::info!("Replay archive enabled, session: {session}");
+    Some((sender, archive))
 }
 
 fn archive_for_storage<Storage>(

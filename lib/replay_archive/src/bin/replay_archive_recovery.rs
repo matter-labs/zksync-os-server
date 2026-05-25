@@ -96,11 +96,10 @@ async fn main() -> anyhow::Result<()> {
                 let auth_mode = if let Some(path) = s3_credential_file_path {
                     S3ReplayArchiveAuthMode::AuthenticatedWithCredentialFile(path)
                 } else {
-                    if !s3_anonymous {
-                        anyhow::bail!(
-                            "--s3-credential-file-path is required unless --s3-anonymous is set"
-                        );
-                    }
+                    anyhow::ensure!(
+                        s3_anonymous,
+                        "--s3-credential-file-path is required unless --s3-anonymous is set"
+                    );
                     S3ReplayArchiveAuthMode::Anonymous
                 };
                 let reader = S3ReplayArchiveReader::new(S3ReplayArchiveConfig {

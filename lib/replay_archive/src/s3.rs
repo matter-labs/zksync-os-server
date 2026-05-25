@@ -9,7 +9,7 @@ use aws_config::{BehaviorVersion, ConfigLoader, Region, meta::region::RegionProv
 use aws_runtime::env_config::file::{EnvConfigFileKind, EnvConfigFiles};
 use aws_sdk_s3::{Client, primitives::ByteStream};
 use futures::StreamExt as _;
-use std::{path::PathBuf, str::FromStr as _};
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -312,12 +312,9 @@ fn parse_s3_archive_key(object_key: &str) -> anyhow::Result<Option<ReplayArchive
     let block_number = parts[1].parse::<BlockNumber>().with_context(|| {
         format!("failed to parse replay archive S3 block number in {object_key}")
     })?;
-    let block_hash = {
-        let block_hash = parts[2].strip_prefix("0x").unwrap_or(parts[2]);
-        BlockHash::from_str(block_hash).with_context(|| {
-            format!("failed to parse replay archive S3 block hash in {object_key}")
-        })?
-    };
+    let block_hash = parts[2]
+        .parse::<BlockHash>()
+        .with_context(|| format!("failed to parse replay archive S3 block hash in {object_key}"))?;
 
     Ok(Some(ReplayArchiveKey::new(
         session,
