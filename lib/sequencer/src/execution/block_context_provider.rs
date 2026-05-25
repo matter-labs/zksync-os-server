@@ -7,14 +7,13 @@ use anyhow::Context as _;
 use futures::StreamExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, time::Instant};
-use zksync_os_interface::types::{BlockHashes, BlockOutput};
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool};
-use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::ReplayRecord;
+use zksync_os_storage_api::{BlockContext, BlockHashes};
 use zksync_os_types::{
-    BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, SystemTxEnvelope, SystemTxType,
-    ZkEnvelope, ZkTransaction,
+    BlockOutput, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, SystemTxEnvelope,
+    SystemTxType, ZkEnvelope, ZkTransaction,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.

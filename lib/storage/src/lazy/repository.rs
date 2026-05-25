@@ -12,13 +12,12 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
 use zksync_os_storage_api::{
     LogIndex, ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
     WriteRepository,
 };
-use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
+use zksync_os_types::{BlockOutput, ZkReceiptEnvelope, ZkTransaction};
 
 /// Size of the broadcast channel used to notify about new blocks.
 const BLOCK_NOTIFICATION_CHANNEL_SIZE: usize = 256;

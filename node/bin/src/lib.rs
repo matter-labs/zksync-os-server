@@ -9,6 +9,7 @@ pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
 mod l1_revert;
+mod init_tx_forwarder;
 mod migration_gate;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
@@ -29,6 +30,7 @@ use crate::config::{
 };
 use crate::en_remote_config::load_remote_config;
 use crate::l1_revert::{apply_l1_revert_block_rebuild_config, perform_l1_revert};
+use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -47,7 +49,7 @@ use alloy::consensus::BlobTransactionSidecar;
 use alloy::network::{Ethereum, EthereumWallet};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::fillers::{FillProvider, TxFiller};
-use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
+use alloy::providers::{DynProvider, Provider, WalletProvider};
 use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
@@ -68,7 +70,6 @@ use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
-use zksync_os_interface::types::BlockHashes;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
@@ -121,8 +122,8 @@ use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
-    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord,
-    WriteReplay, WriteRepository, WriteState,
+    BlockHashes, FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
+    ReplayRecord, WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
     BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, PubdataMode,
@@ -196,13 +197,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .await
                 .expect("Cannot load remote config from Main Node")
         };
-    let fee_collector_address: &'static str = config
-        .sequencer_config
-        .fee_collector_address
-        .to_string()
-        .leak();
-    GENERAL_METRICS.fee_collector_address[&fee_collector_address].set(1);
-    GENERAL_METRICS.chain_id.set(chain_id);
 
     let persistent_batch_storage =
         ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
@@ -796,14 +790,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let _ = stop_sender_for_shutdown.send(true);
     });
 
-    let main_node_provider = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
-        Some(
-            ProviderBuilder::new()
-                .connect(url)
-                .await
-                .expect("could not connect to main node RPC")
-                .erased(),
-        )
+    let tx_forwarder = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
+        Some(build_static_tx_forwarder(url).await)
+    } else if config.consensus_config.enabled {
+        let status_rx = raft_status_rx
+            .clone()
+            .expect("consensus status receiver must be present when consensus is enabled");
+        Some(build_consensus_tx_forwarder(&config, status_rx).await)
     } else {
         None
     };
@@ -1154,7 +1147,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         genesis_input_source,
         combined_acceptance_rx,
         last_constructed_block_ctx_receiver,
-        main_node_provider,
+        tx_forwarder,
         gateway_provider.map(|p| p.erased()),
         rpc_policy_client,
         runtime,
