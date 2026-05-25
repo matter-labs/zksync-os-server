@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_interface::traits::AnyBlockContext;
 use zksync_os_pipeline::HasBlockRangeEnd;
-use zksync_os_types::block_output::BlockOutput;
 use zksync_os_types::{
-    BlockStartCursors, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction,
+    BlockOutput, BlockStartCursors, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope,
+    ZkTransaction,
 };
 
 #[derive(Debug, Clone, RlpEncodable, RlpDecodable)]

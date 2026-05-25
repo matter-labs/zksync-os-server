@@ -19,8 +19,7 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_revm::{DefaultZk, ZkBuilder, ZkContext, ZkSpecId};
 use zksync_os_sequencer::model::blocks::AppliedBlock;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, ViewState};
-use zksync_os_types::block_output::BlockOutput;
-use zksync_os_types::{ExecutionVersion, SYSTEM_CONTEXT_ADDRESS};
+use zksync_os_types::{BlockOutput, ExecutionVersion, SYSTEM_CONTEXT_ADDRESS};
 
 const BLOB_BASE_FEE_UPDATE_FRACTION: u128 = alloy::eips::eip4844::BLOB_GASPRICE_UPDATE_FRACTION;
 const MIN_BASE_FEE_PER_BLOB_GAS: u128 = alloy::eips::eip4844::BLOB_TX_MIN_BLOB_GASPRICE;

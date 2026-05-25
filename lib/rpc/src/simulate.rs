@@ -25,8 +25,7 @@ use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::state_override_view::{
     OverriddenStateView, OwnedOverrides, build_state_override_maps,
 };
-use zksync_os_types::block_output::BlockOutput;
-use zksync_os_types::{ZkReceipt, ZkReceiptEnvelope, ZkTransaction, ZksyncOsEncode};
+use zksync_os_types::{BlockOutput, ZkReceipt, ZkReceiptEnvelope, ZkTransaction, ZksyncOsEncode};
 
 impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     /// Implements `eth_simulateV1` using the same high-level model as reth: execute the requested

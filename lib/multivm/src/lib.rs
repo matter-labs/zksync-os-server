@@ -20,9 +20,7 @@ mod adapter;
 pub mod apps;
 
 pub use adapter::AbiTxSource;
-use zksync_os_types::ExecutionVersion;
-use zksync_os_types::block_output::BlockOutput;
-
+use zksync_os_types::{BlockOutput, ExecutionVersion};
 macro_rules! into_block_output {
     ($o:expr) => {
         BlockOutput {

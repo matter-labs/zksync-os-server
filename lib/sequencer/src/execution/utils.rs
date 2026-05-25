@@ -9,8 +9,7 @@ use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zksync_os_interface::traits::ReadStorage;
 use zksync_os_storage_api::BlockContext;
-use zksync_os_types::ZkTransaction;
-use zksync_os_types::block_output::BlockOutput;
+use zksync_os_types::{BlockOutput, ZkTransaction};
 
 /// [`ReadStorage`] wrapper that tracks read storage slots.
 #[derive(Debug)]

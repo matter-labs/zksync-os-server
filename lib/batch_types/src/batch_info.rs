@@ -8,9 +8,9 @@ use std::ops::{Deref, DerefMut};
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_merkle_tree_api::TreeBatchOutput;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
-use zksync_os_types::block_output::BlockOutput;
 use zksync_os_types::{
-    L2_TO_L1_TREE_SIZE, L2ToL1Log, ProtocolSemanticVersion, PubdataMode, ZkEnvelope, ZkTransaction,
+    BlockOutput, L2_TO_L1_TREE_SIZE, L2ToL1Log, ProtocolSemanticVersion, PubdataMode, ZkEnvelope,
+    ZkTransaction,
 };
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;

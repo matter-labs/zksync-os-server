@@ -17,8 +17,7 @@ use zksync_os_storage_api::{
     LogIndex, ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
     WriteRepository,
 };
-use zksync_os_types::block_output::BlockOutput;
-use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
+use zksync_os_types::{BlockOutput, ZkReceiptEnvelope, ZkTransaction};
 
 /// Size of the broadcast channel used to notify about new blocks.
 const BLOCK_NOTIFICATION_CHANNEL_SIZE: usize = 256;

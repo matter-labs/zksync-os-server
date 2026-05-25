@@ -2,7 +2,7 @@ use zksync_os_batch_types::batcher_model::ProverInput;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::block_output::BlockOutput;
+use zksync_os_types::BlockOutput;
 
 /// Message flowing from `ProverInputGenerator` → `Batcher`.
 pub struct ProverBlock {

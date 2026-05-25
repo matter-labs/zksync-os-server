@@ -6,8 +6,7 @@ use zksync_os_batch_types::batcher_model::{
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_multichain_root};
-use zksync_os_types::block_output::BlockOutput;
-use zksync_os_types::{ProvingVersion, PubdataMode, SystemTxType, ZkEnvelope};
+use zksync_os_types::{BlockOutput, ProvingVersion, PubdataMode, SystemTxType, ZkEnvelope};
 
 /// Takes a vector of blocks and produces a batch envelope.
 #[allow(clippy::too_many_arguments)]

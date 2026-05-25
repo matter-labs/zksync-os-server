@@ -43,7 +43,8 @@ pub use protocol::{
 mod block_start_cursors;
 pub use block_start_cursors::BlockStartCursors;
 
-pub mod block_output;
 mod token_price;
-
 pub use token_price::{TokenApiRatio, TokenPricesForFees};
+
+mod block_output;
+pub use block_output::BlockOutput;
