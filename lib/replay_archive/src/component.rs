@@ -2,8 +2,10 @@ use crate::metrics::REPLAY_ARCHIVE_METRICS;
 use crate::{REPLAY_ARCHIVE_QUEUE_SIZE, ReplayArchiver};
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::{StreamExt as _, TryStreamExt as _};
+use std::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_storage_api::ReplayRecord;
 
 pub type ReplayArchiveRecord = (BlockHash, ReplayRecord);
@@ -31,65 +33,41 @@ where
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
-        let Self {
-            archive,
-            mut records,
-        } = self;
-        let mut in_flight = FuturesUnordered::new();
-        let mut records_closed = false;
-        let mut highest_archived_block_number = None;
+        let Self { archive, records } = self;
+        let highest_archived_block_number = Mutex::new(None);
 
-        loop {
-            while in_flight.len() < MAX_PARALLEL_OBJECT_PUTS && !records_closed {
-                match records.try_recv() {
-                    Ok(record) => {
-                        in_flight.push(archive_replay_record(&archive, record));
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => break,
-                    Err(mpsc::error::TryRecvError::Disconnected) => records_closed = true,
-                }
-            }
+        ReceiverStream::new(records)
+            .map(Ok::<_, anyhow::Error>)
+            .try_for_each_concurrent(MAX_PARALLEL_OBJECT_PUTS, |record| {
+                let archive = &archive;
+                let highest_archived_block_number = &highest_archived_block_number;
 
-            if in_flight.is_empty() {
-                if records_closed {
-                    break;
+                async move {
+                    let archived_block_number = archive_replay_record(archive, record).await?;
+                    update_highest_archived_block_number(
+                        highest_archived_block_number,
+                        archived_block_number,
+                    );
+                    Ok(())
                 }
+            })
+            .await
+    }
+}
 
-                match records.recv().await {
-                    Some(record) => {
-                        in_flight.push(archive_replay_record(&archive, record));
-                    }
-                    None => records_closed = true,
-                }
-                continue;
-            }
+fn update_highest_archived_block_number(
+    highest_archived_block_number: &Mutex<Option<BlockNumber>>,
+    archived_block_number: BlockNumber,
+) {
+    let mut highest_archived_block_number = highest_archived_block_number
+        .lock()
+        .expect("highest archived block number mutex is poisoned");
 
-            let archived_block_number = tokio::select! {
-                record = records.recv(), if !records_closed && in_flight.len() < MAX_PARALLEL_OBJECT_PUTS => {
-                    match record {
-                        Some(record) => {
-                            in_flight.push(archive_replay_record(&archive, record));
-                            continue;
-                        }
-                        None => {
-                            records_closed = true;
-                            continue;
-                        }
-                    }
-                }
-                result = in_flight.next() => {
-                    result.expect("in-flight archive writes are not empty")?
-                }
-            };
-
-            if highest_archived_block_number.is_none_or(|highest| archived_block_number > highest) {
-                REPLAY_ARCHIVE_METRICS
-                    .last_archived_block_number
-                    .set(archived_block_number);
-                highest_archived_block_number = Some(archived_block_number);
-            }
-        }
-        Ok(())
+    if highest_archived_block_number.is_none_or(|highest| archived_block_number > highest) {
+        REPLAY_ARCHIVE_METRICS
+            .last_archived_block_number
+            .set(archived_block_number);
+        *highest_archived_block_number = Some(archived_block_number);
     }
 }
 
