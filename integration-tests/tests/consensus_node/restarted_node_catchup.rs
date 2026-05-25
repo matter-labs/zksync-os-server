@@ -10,44 +10,6 @@ const CONSENSUS_RESTART_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(120);
 const CONSENSUS_LONG_GAP_LOAD_DURATION: Duration = Duration::from_secs(60);
 const CONSENSUS_CONTINUED_LOAD_AFTER_RESTART_DURATION: Duration = Duration::from_secs(45);
 const CONSENSUS_LONG_GAP_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(180);
-const CONSENSUS_PROGRESS_TIMEOUT: Duration = Duration::from_secs(90);
-
-/// Send + replicate one block, retrying through transient cluster-formation failures and
-/// leader changes within `timeout`. Used by storm tests where CPU pressure can cause
-/// occasional leader churn during normal cluster activity.
-async fn send_transfer_and_replicate_eventually(
-    cluster: &mut ConsensusCluster,
-    timeout: Duration,
-) -> anyhow::Result<u64> {
-    let deadline = Instant::now() + timeout;
-    let mut last_error = None;
-    let mut attempts = 0;
-    while Instant::now() < deadline {
-        cluster.heal_crashed_nodes().await?;
-        let formation_timeout =
-            CLUSTER_FORMATION_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
-        let leader = match cluster.wait_healthy(formation_timeout).await {
-            Ok(leader) => leader,
-            Err(err) => {
-                last_error = Some(format!("cluster not healthy: {err:#}"));
-                sleep(Duration::from_millis(200)).await;
-                continue;
-            }
-        };
-        attempts += 1;
-        match send_transfer_and_replicate(cluster, leader).await {
-            Ok(block) => return Ok(block),
-            Err(err) => {
-                tracing::warn!(attempts, leader, error = %err, "send_transfer_and_replicate retry");
-                last_error = Some(err.to_string());
-                sleep(Duration::from_millis(200)).await;
-            }
-        }
-    }
-    anyhow::bail!(
-        "timed out producing a consensus block: attempts={attempts}, last_error={last_error:?}"
-    )
-}
 
 struct ConsensusLoadStats {
     attempts: usize,

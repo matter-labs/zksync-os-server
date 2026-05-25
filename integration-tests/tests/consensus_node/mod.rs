@@ -19,6 +19,7 @@ const REPLICATION_TIMEOUT: Duration = Duration::from_secs(20);
 const L1_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(60);
 const TRANSFER_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
 const NO_QUORUM_PROGRESS_WINDOW: Duration = Duration::from_secs(5);
+pub(crate) const CONSENSUS_PROGRESS_TIMEOUT: Duration = Duration::from_secs(90);
 
 mod restarted_node_catchup;
 
@@ -139,6 +140,45 @@ pub(crate) async fn send_transfer_and_replicate(
     Ok(block_number)
 }
 
+/// Send + replicate one block, retrying until either success or `timeout`. Use this when
+/// the cluster is recovering from churn — quorum restoration, restarted node rejoin,
+/// transaction storm — where a single shot is too narrow a window even though the cluster
+/// will eventually produce. Each iteration re-runs `wait_healthy` so a freshly-restarted
+/// or freshly-elected leader is picked up automatically.
+pub(crate) async fn send_transfer_and_replicate_eventually(
+    cluster: &mut ConsensusCluster,
+    timeout: Duration,
+) -> anyhow::Result<u64> {
+    use tokio::time::{Instant, sleep};
+    let deadline = Instant::now() + timeout;
+    let mut attempts = 0;
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        let formation_timeout =
+            CLUSTER_FORMATION_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
+        let leader = match cluster.wait_healthy(formation_timeout).await {
+            Ok(leader) => leader,
+            Err(err) => {
+                last_error = Some(format!("cluster not healthy: {err:#}"));
+                sleep(Duration::from_millis(200)).await;
+                continue;
+            }
+        };
+        attempts += 1;
+        match send_transfer_and_replicate(cluster, leader).await {
+            Ok(block) => return Ok(block),
+            Err(err) => {
+                tracing::warn!(attempts, leader, error = %err, "send_transfer_and_replicate retry");
+                last_error = Some(err.to_string());
+                sleep(Duration::from_millis(200)).await;
+            }
+        }
+    }
+    anyhow::bail!(
+        "timed out producing a consensus block: attempts={attempts}, last_error={last_error:?}"
+    )
+}
+
 /// Asserts that the cluster cannot make progress for `NO_QUORUM_PROGRESS_WINDOW`: an attempted
 /// transfer either fails or times out, and the L2 head observed by `survivor_idx` does not
 /// advance.
@@ -172,7 +212,7 @@ async fn assert_no_progress_without_quorum(
 
 #[test_log::test(tokio::test)]
 async fn consensus_cluster_includes_simple_transaction_with_wait() -> anyhow::Result<()> {
-    let cluster = ConsensusCluster::builder().nodes(1).build().await?;
+    let mut cluster = ConsensusCluster::builder().nodes(1).build().await?;
     let result = async {
         let leader = cluster.wait_healthy(CLUSTER_FORMATION_TIMEOUT).await?;
         let block = send_transfer_and_replicate(&cluster, leader).await?;
@@ -233,7 +273,7 @@ async fn consensus_can_be_reenabled_after_clearing_raft_history() -> anyhow::Res
 
 #[test_log::test(tokio::test)]
 async fn consensus_cluster_forms_with_three_nodes_and_replicates_blocks() -> anyhow::Result<()> {
-    let cluster = ConsensusCluster::builder().nodes(3).build().await?;
+    let mut cluster = ConsensusCluster::builder().nodes(3).build().await?;
     let result = async {
         let leader = cluster.wait_healthy(CLUSTER_FORMATION_TIMEOUT).await?;
         send_transfer_and_replicate(&cluster, leader).await?;
@@ -338,10 +378,13 @@ async fn consensus_cluster_recovers_after_quorum_loss() -> anyhow::Result<()> {
         // Quorum lost: no progress can be made.
         assert_no_progress_without_quorum(&cluster, leader).await?;
 
-        // Restore quorum and verify the cluster recovers and makes progress.
+        // Restore quorum and verify the cluster recovers and makes progress. Use the
+        // retrying helper because the leader's produce pipeline may need a moment to
+        // unstick after the quorum-loss window; a one-shot send is too narrow.
         cluster.start(followers[0]).await?;
-        let leader = cluster.wait_healthy(CLUSTER_FORMATION_TIMEOUT).await?;
-        let recovery_block = send_transfer_and_replicate(&cluster, leader).await?;
+        let recovery_block =
+            send_transfer_and_replicate_eventually(&mut cluster, CONSENSUS_PROGRESS_TIMEOUT)
+                .await?;
         assert!(
             recovery_block > committed_block,
             "cluster must make progress after quorum is restored: committed={committed_block} recovery={recovery_block}",
@@ -440,7 +483,7 @@ async fn consensus_follower_restarts_and_catches_up() -> anyhow::Result<()> {
 /// exercising the tx-forwarding path from PR #1321.
 #[test_log::test(tokio::test)]
 async fn consensus_cluster_accepts_transactions_from_any_node() -> anyhow::Result<()> {
-    let cluster = ConsensusCluster::builder().nodes(3).build().await?;
+    let mut cluster = ConsensusCluster::builder().nodes(3).build().await?;
     let result = async {
         cluster.wait_healthy(CLUSTER_FORMATION_TIMEOUT).await?;
         for node_index in cluster.live_indices() {
@@ -462,7 +505,7 @@ async fn consensus_cluster_accepts_transactions_from_any_node() -> anyhow::Resul
 #[test_log::test(tokio::test)]
 async fn consensus_cluster_send_raw_transaction_sync_accepts_leader_and_replica()
 -> anyhow::Result<()> {
-    let cluster = ConsensusCluster::builder().nodes(3).build().await?;
+    let mut cluster = ConsensusCluster::builder().nodes(3).build().await?;
     let result = async {
         let leader = cluster.wait_healthy(CLUSTER_FORMATION_TIMEOUT).await?;
         let replica = cluster

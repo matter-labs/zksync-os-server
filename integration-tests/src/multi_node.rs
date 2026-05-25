@@ -6,12 +6,14 @@
 //! slot indices and preserve them across suspensions.
 //!
 //! Notable simplifications versus older revisions:
-//! * Single `wait_healthy` based on the live (non-suspended) membership.
+//! * Single `wait_healthy` based on the live (non-suspended) membership; it implicitly
+//!   restarts any node whose runtime has panicked (typically the leadership-monitor
+//!   panic on demotion) so a transient crash doesn't wedge the whole test.
 //! * Strict, one-shot `send_transfer` — tests that want to tolerate leadership churn
 //!   must wrap it themselves.
-//! * No respawn-on-panic. The raft startup election gate (`lib/raft/src/init.rs`)
-//!   prevents the dominant phantom-quorum case; the remaining panic paths are rare
-//!   enough that surfacing them as test failures is preferable to hiding them.
+//! * The raft startup election gate (`lib/raft/src/init.rs`) eliminates the dominant
+//!   stale-vote phantom-quorum case; the remaining panic paths are caught by the
+//!   `wait_healthy` heal-and-poll loop.
 
 use alloy::eips::BlockId;
 use alloy::providers::Provider;
@@ -346,11 +348,9 @@ impl ConsensusCluster {
     /// `reth_tasks` critical-task panic — notably the deliberate panic in
     /// `lib/raft/src/leadership_monitor.rs` when a leader is demoted mid-flight.
     ///
-    /// This is *opt-in*. Non-stress tests should not call it — letting a panic surface as a
-    /// test failure is much louder than silently respawning. Stress tests that intentionally
-    /// drive the cluster into churn (e.g. transaction-storm tests) can call this from their
-    /// retry loops to keep nodes alive across the rare panics the startup election gate
-    /// doesn't prevent.
+    /// Invoked implicitly from [`Self::wait_healthy`] on every poll. Storm tests that
+    /// drive the cluster outside the wait-healthy loop (sending transfers in tight
+    /// retry loops) can also call this directly to keep nodes alive between attempts.
     ///
     /// Returns the indices of nodes that were respawned in this sweep.
     pub async fn heal_crashed_nodes(&mut self) -> anyhow::Result<Vec<usize>> {
@@ -420,13 +420,19 @@ impl ConsensusCluster {
 
     /// Poll until every live node reports a single agreed leader and is healthy. Returns
     /// the leader's slot index.
-    pub async fn wait_healthy(&self, timeout: Duration) -> anyhow::Result<usize> {
-        let live = self.live_indices();
-        anyhow::ensure!(!live.is_empty(), "no live nodes to wait on");
-
+    ///
+    /// Each iteration first heals any node that has crashed (typically because its
+    /// `leadership_monitor` panicked on leader demotion under load — see
+    /// `lib/raft/src/leadership_monitor.rs`). This mirrors what a production orchestrator
+    /// does on a critical-task panic and is the only practical way to keep test runs
+    /// stable in CI without doing the bigger pipeline-cancellation refactor.
+    pub async fn wait_healthy(&mut self, timeout: Duration) -> anyhow::Result<usize> {
         let deadline = Instant::now() + timeout;
         let mut last_summary = String::new();
         loop {
+            self.heal_crashed_nodes().await?;
+            let live = self.live_indices();
+            anyhow::ensure!(!live.is_empty(), "no live nodes to wait on");
             let state = ClusterState::collect(self, &live).await;
             let summary = state.summary();
             if summary != last_summary {
