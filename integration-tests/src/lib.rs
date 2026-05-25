@@ -326,11 +326,11 @@ pub struct SupportingNode {
 }
 
 #[derive(Debug)]
-struct Ports {
-    l2_rpc: LockedPort,
-    prover_api: LockedPort,
-    network: LockedPort,
-    status: LockedPort,
+pub(crate) struct Ports {
+    pub(crate) l2_rpc: LockedPort,
+    pub(crate) prover_api: LockedPort,
+    pub(crate) network: LockedPort,
+    pub(crate) status: LockedPort,
 }
 
 impl Tester {
@@ -575,15 +575,14 @@ impl Tester {
         Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, Some(ports)).await
     }
 
-    pub(crate) async fn launch_node_with_network_port(
+    pub(crate) async fn launch_node_with_ports(
         l1: AnvilL1,
         enable_prover: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
         chain_layout: ChainLayout<'static>,
-        network: LockedPort,
+        ports: Ports,
         wait_for_initial_deposit: bool,
     ) -> anyhow::Result<Self> {
-        let ports = Ports::acquire_unused_with_network(network).await?;
         let tempdir = Arc::new(tempfile::tempdir()?);
         let mut config = build_node_config(&l1, chain_layout, false).await?;
         if enable_prover {
@@ -890,20 +889,11 @@ impl Drop for SupportingNode {
 }
 
 impl Ports {
-    async fn acquire_unused() -> anyhow::Result<Self> {
+    pub(crate) async fn acquire_unused() -> anyhow::Result<Self> {
         Ok(Self {
             l2_rpc: LockedPort::acquire_unused().await?,
             prover_api: LockedPort::acquire_unused().await?,
             network: LockedPort::acquire_unused().await?,
-            status: LockedPort::acquire_unused().await?,
-        })
-    }
-
-    async fn acquire_unused_with_network(network: LockedPort) -> anyhow::Result<Self> {
-        Ok(Self {
-            l2_rpc: LockedPort::acquire_unused().await?,
-            prover_api: LockedPort::acquire_unused().await?,
-            network,
             status: LockedPort::acquire_unused().await?,
         })
     }
