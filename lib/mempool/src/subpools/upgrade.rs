@@ -89,11 +89,10 @@ impl UpgradeSubpool {
 
         // Older upgrade logs cannot be found or processed reliably by the current
         // watcher. During replay, the ReplayRecord is the source of truth.
-        self.inner
-            .write()
-            .await
-            .pending_upgrades
-            .retain(|upgrade| upgrade.protocol_version() > protocol_version);
+        self.inner.write().await.pending_upgrades.retain(|upgrade| {
+            upgrade.protocol_version()
+                > &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS
+        });
         current_protocol_version = protocol_version.clone();
         if protocol_version > &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS {
             for tx in txs {
