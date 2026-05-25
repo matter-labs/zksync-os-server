@@ -68,7 +68,7 @@ impl L1UpgradeTxWatcher {
         zk_chain_l1: ZkChain<DynProvider>,
         zk_chain_sl: ZkChain<DynProvider>,
         bytecode_supplier_address: Address,
-        mut current_protocol_version: ProtocolSemanticVersion,
+        current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
@@ -88,24 +88,11 @@ impl L1UpgradeTxWatcher {
         let ctm_sl = zk_chain_sl.get_chain_type_manager().await?;
         tracing::info!(ctm_sl = ?ctm_sl, "resolved SL chain type manager");
 
-        let last_l1_block = if current_protocol_version
-            < ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS
-        {
-            tracing::info!(
-                from_protocol_version = %current_protocol_version,
-                to_protocol_version = %ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS,
-                "skipping historical upgrade logs"
-            );
-            current_protocol_version =
-                ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS;
-            // The target protocol version may not exist on old environments. Since the
-            // historical logs below the floor are intentionally skipped, start tailing
-            // from the current L1 tip instead of searching for the floor on-chain.
-            zk_chain_l1.provider().get_block_number().await?
-        } else {
-            find_l1_block_by_protocol_version(zk_chain_l1.clone(), current_protocol_version.clone())
-                .await?
-        };
+        let last_l1_block = find_l1_block_by_protocol_version(
+            zk_chain_l1.clone(),
+            current_protocol_version.clone(),
+        )
+        .await?;
         // The configured bytecode supplier address is used as fallback for pre-v31 CTMs.
         // On v31+ CTMs, `resolve_active_bytecode_supplier` discovers the address dynamically.
         // Sanity check: make sure the fallback address has code deployed.
@@ -635,6 +622,20 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
         request: L1UpgradeRequest,
         _log: Log,
     ) -> Result<(), L1WatcherError> {
+        // We do not verify that these logs match with replay records, skip them.
+        if request.old_protocol_version
+            < ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS
+        {
+            return Ok(());
+        }
+        // Since we don't have the old events, current_version might be wrong
+        // Update it here to pass related sanity checks
+        if self.current_protocol_version
+            < ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS
+        {
+            self.current_protocol_version = request.old_protocol_version.clone();
+        }
+
         if request.old_protocol_version < self.current_protocol_version {
             tracing::info!(
                 ?request.old_protocol_version,

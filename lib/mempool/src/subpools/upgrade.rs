@@ -83,16 +83,19 @@ impl UpgradeSubpool {
         // We track current protocol version that we end up with after applying upgrade transaction.
         let mut current_protocol_version = self.inner.read().await.current_protocol_version.clone();
 
-        if protocol_version <= &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS {
-            // Older upgrade logs cannot be found or processed reliably by the current
-            // watcher. During replay, the ReplayRecord is the source of truth.
-            self.inner
-                .write()
-                .await
-                .pending_upgrades
-                .retain(|upgrade| upgrade.protocol_version() > protocol_version);
-            current_protocol_version = protocol_version.clone();
-        } else {
+        if txs.is_empty() && protocol_version == &current_protocol_version {
+            return;
+        }
+
+        // Older upgrade logs cannot be found or processed reliably by the current
+        // watcher. During replay, the ReplayRecord is the source of truth.
+        self.inner
+            .write()
+            .await
+            .pending_upgrades
+            .retain(|upgrade| upgrade.protocol_version() > protocol_version);
+        current_protocol_version = protocol_version.clone();
+        if protocol_version > &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS {
             for tx in txs {
                 // Skip fetched patch upgrades
                 let pending_tx = loop {
