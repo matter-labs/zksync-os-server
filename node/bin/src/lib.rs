@@ -8,8 +8,8 @@ mod command_source;
 pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
-mod l1_revert;
 mod init_tx_forwarder;
+mod l1_revert;
 mod migration_gate;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
@@ -29,8 +29,8 @@ use crate::config::{
     report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
-use crate::l1_revert::{apply_l1_revert_block_rebuild_config, perform_l1_revert};
 use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
+use crate::l1_revert::{apply_l1_revert_block_rebuild_config, perform_l1_revert};
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;

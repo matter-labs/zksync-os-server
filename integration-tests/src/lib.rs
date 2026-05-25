@@ -56,8 +56,8 @@ pub mod provider;
 pub mod rpc_recorder;
 pub mod test_config;
 pub mod upgrade;
-pub mod wallets;
 mod utils;
+pub mod wallets;
 
 /// L1 chain id as expected by contracts deployed in `l1-state.json.gz`
 const L1_CHAIN_ID: u64 = 31337;

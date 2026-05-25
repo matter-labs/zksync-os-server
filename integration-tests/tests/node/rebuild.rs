@@ -372,7 +372,9 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
         .expect("chain_id must be set");
     let operator_sk = load_operator_private_key(stopped.chain_layout(), chain_id)?;
     restart_config.l1_sender_config.reverter_sk = Some(SignerConfig::Local(
-        PrivateKeySigner::from_str(&operator_sk)?.credential().clone(),
+        PrivateKeySigner::from_str(&operator_sk)?
+            .credential()
+            .clone(),
     ));
     restart_config.sequencer_config.l1_revert = Some(L1RevertConfig {
         last_l1_batch_to_keep: committed_state.last_executed_batch,

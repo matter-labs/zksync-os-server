@@ -28,7 +28,6 @@ sol! {
     }
 }
 
-
 fn make_commit_only_config(config: &mut Config) {
     config.prover_api_config.fake_fri_provers.enabled = true;
     config.prover_api_config.fake_fri_provers.compute_time = Duration::from_millis(200);
