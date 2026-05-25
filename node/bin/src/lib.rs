@@ -235,12 +235,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 "L1 revert config detected, starting startup revert sequence"
             );
 
+            let last_l1_batch_to_keep = l1_revert_config.last_l1_batch_to_keep;
             assert!(
-                l1_revert_config.last_l1_batch_to_keep <= l1_state.last_committed_batch,
-                "`sequencer.l1_revert.last_l1_batch_to_keep` ({}) must be <= current last \
-                 committed batch ({})",
-                l1_revert_config.last_l1_batch_to_keep,
+                last_l1_batch_to_keep < l1_state.last_committed_batch,
+                "sequencer.l1_revert.last_l1_batch_to_keep ({last_l1_batch_to_keep}) must be \
+                 < current last committed batch ({})",
                 l1_state.last_committed_batch
+            );
+            assert!(
+                last_l1_batch_to_keep >= l1_state.last_executed_batch,
+                "sequencer.l1_revert.last_l1_batch_to_keep ({last_l1_batch_to_keep}) must be \
+                 >= last executed batch ({})",
+                l1_state.last_executed_batch
             );
 
             // Derive `block_rebuild.from_block` before the revert while the to-be-reverted

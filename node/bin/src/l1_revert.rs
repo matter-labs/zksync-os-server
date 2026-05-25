@@ -110,16 +110,6 @@ pub async fn perform_l1_revert<
         });
 
     let last_l1_batch_to_keep = l1_revert.last_l1_batch_to_keep;
-    anyhow::ensure!(
-        last_l1_batch_to_keep < l1_state.last_committed_batch,
-        "`sequencer.l1_revert.last_l1_batch_to_keep` ({last_l1_batch_to_keep}) must be < current last committed batch ({})",
-        l1_state.last_committed_batch
-    );
-    anyhow::ensure!(
-        last_l1_batch_to_keep >= l1_state.last_executed_batch,
-        "refusing startup L1 revert: target batch ({last_l1_batch_to_keep}) is below last executed batch ({})",
-        l1_state.last_executed_batch
-    );
 
     let mut sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
         l1_provider.clone()
