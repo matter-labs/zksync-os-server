@@ -3,6 +3,7 @@ use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_interface::types::{BlockHashes, BlockOutput};
+use zksync_os_merkle_tree_api::TreeBatchOutput;
 use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_types::{
     BlockStartCursors, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction,
@@ -124,6 +125,39 @@ pub struct TreeBlock {
 }
 
 impl HasBlockRangeEnd for TreeBlock {
+    fn block_number(&self) -> u64 {
+        self.record.block_context.block_number
+    }
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.record.block_context.timestamp)
+    }
+}
+
+/// Slim projection of [`TreeBlock`] for components that need the per-block
+/// inputs to [`zksync_os_batch_types::ExtendedCommitBatchInfo::build`] but not
+/// the heavy proof/witness data inside [`BlockMerkleTreeData`].
+///
+/// Used by both the L1 persist-batch consistency check and the batch
+/// verification responder to recompute batch commitments without holding the
+/// full merkle proof in memory.
+#[derive(Debug, Clone)]
+pub struct CachedBlock {
+    pub tree_output: TreeBatchOutput,
+    pub block_output: BlockOutput,
+    pub record: ReplayRecord,
+}
+
+impl From<TreeBlock> for CachedBlock {
+    fn from(tree_block: TreeBlock) -> Self {
+        Self {
+            tree_output: tree_block.tree.output,
+            block_output: tree_block.output,
+            record: tree_block.record,
+        }
+    }
+}
+
+impl HasBlockRangeEnd for CachedBlock {
     fn block_number(&self) -> u64 {
         self.record.block_context.block_number
     }

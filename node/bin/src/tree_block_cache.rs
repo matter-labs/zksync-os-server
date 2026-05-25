@@ -3,25 +3,9 @@ use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-use zksync_os_interface::types::BlockOutput;
-use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_storage_api::{ReplayRecord, TreeBlock};
-
-/// Lightweight projection of a [`TreeBlock`] held in the [`TreeBlockCache`].
-///
-/// `TreeBlock` carries a [`zksync_os_batch_types::BlockMerkleTreeData`] whose
-/// `proof` / read / write lists can be sizeable. The L1 persist watcher only
-/// needs the per-block `TreeBatchOutput` plus the block's output and replay
-/// record to rebuild [`zksync_os_batch_types::ExtendedCommitBatchInfo`] — so
-/// the cache stores just that, avoiding cloning the proof in the hot
-/// `TreeManager` → `ProverInputGenerator` path optimized by #1241.
-pub struct CachedBlock {
-    pub tree_output: TreeBatchOutput,
-    pub block_output: BlockOutput,
-    pub record: ReplayRecord,
-}
+use zksync_os_storage_api::{CachedBlock, TreeBlock};
 
 /// In-memory cache of per-block data flowing through the pipeline, shared with
 /// the L1 persist watcher so the watcher can recompute a batch's

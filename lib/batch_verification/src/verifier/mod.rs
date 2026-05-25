@@ -15,7 +15,7 @@ use zksync_os_network::{
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
-use zksync_os_storage_api::{StateError, TreeBlock, read_multichain_root};
+use zksync_os_storage_api::{CachedBlock, StateError, TreeBlock, read_multichain_root};
 
 mod block_cache;
 mod metrics;
@@ -28,7 +28,10 @@ pub struct BatchVerificationResponder<Finality, ReadState> {
     diamond_proxy_sl: Address,
     l1_state: L1State,
     signer: PrivateKeySigner,
-    block_cache: BlockCache<Finality, TreeBlock>,
+    /// Stores the slim [`CachedBlock`] projection rather than the full
+    /// [`TreeBlock`] — the responder only needs `block_output`, `record`, and
+    /// `tree_output`, not the heavy `BlockMerkleTreeData` proof/witness fields.
+    block_cache: BlockCache<Finality, CachedBlock>,
     read_state: ReadState,
     verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
@@ -99,10 +102,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                     .block_cache
                     .get(block_number)
                     .ok_or(BatchVerificationError::MissingBlock(block_number))?;
-                let (block_output, replay_record, tree_data) =
-                    (&cached.output, &cached.record, &cached.tree);
-                let tree_output = tree_data.output;
-                Ok((block_output, replay_record, tree_output))
+                Ok((&cached.block_output, &cached.record, cached.tree_output))
             })
             .collect::<Result<Vec<_>, BatchVerificationError>>()?;
 
@@ -201,7 +201,10 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
                             state_reporter.enter_state(GenericComponentState::Active);
                             let block_number = tree_block.record.block_context.block_number;
                             let block_timestamp = tree_block.record.block_context.timestamp;
-                            self.block_cache.insert(block_number, tree_block)?;
+                            // Project to the slim `CachedBlock` before inserting so the
+                            // responder's cache doesn't retain the heavy
+                            // `BlockMerkleTreeData` proof/witness.
+                            self.block_cache.insert(block_number, CachedBlock::from(tree_block))?;
                             state_reporter.record_processed(block_number, Some(block_timestamp), None);
                         }
                         None => return Ok(()),
