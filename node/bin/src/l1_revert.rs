@@ -31,7 +31,7 @@ pub async fn apply_l1_revert_block_rebuild_config(
         1
     } else {
         // Fast path: the batch watcher already persisted this batch locally.
-        let local_batch: Option<PersistedBatch> = 
+        let local_batch: Option<PersistedBatch> =
             persistent_batch_storage.get_batch_by_number(reverted_batch)?;
         if let Some(batch) = local_batch {
             batch.first_block_number()
