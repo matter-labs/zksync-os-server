@@ -93,8 +93,9 @@ impl UpgradeSubpool {
             upgrade.protocol_version()
                 > &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS
         });
-        current_protocol_version = protocol_version.clone();
-        if protocol_version > &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS {
+        if protocol_version <= &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS {
+            current_protocol_version = protocol_version.clone();
+        } else {
             for tx in txs {
                 // Skip fetched patch upgrades
                 let pending_tx = loop {
