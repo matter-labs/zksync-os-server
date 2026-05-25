@@ -622,12 +622,6 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
         request: L1UpgradeRequest,
         _log: Log,
     ) -> Result<(), L1WatcherError> {
-        // We do not verify that these logs match with replay records, skip them.
-        if request.old_protocol_version
-            < ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS
-        {
-            return Ok(());
-        }
         // Since we don't have the old events, current_version might be wrong
         // Update it here to pass related sanity checks
         if self.current_protocol_version
