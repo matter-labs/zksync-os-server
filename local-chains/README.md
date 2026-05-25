@@ -71,6 +71,8 @@ Commonly modified values include:
 - `l1_sender.operator_commit_sk` — Private key for committing batches
 - `l1_sender.operator_prove_sk` — Private key for proving batches
 - `l1_sender.operator_execute_sk` — Private key for executing batches
+- `l1_sender.reverter_sk` — Signer (private key or GCP KMS) used for startup L1 reverts
+- `sequencer.l1_revert.last_l1_batch_to_keep` — Startup revert target batch; if set, node auto-derives `sequencer.block_rebuild.from_block`
 
 ### `genesis.json`
 

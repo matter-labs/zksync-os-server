@@ -56,6 +56,7 @@ pub mod provider;
 pub mod rpc_recorder;
 pub mod test_config;
 pub mod upgrade;
+pub mod wallets;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `l1-state.json.gz`

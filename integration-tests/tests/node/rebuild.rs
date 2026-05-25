@@ -3,26 +3,19 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
-use alloy::sol;
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
-use serde::Deserialize;
-use std::fs;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use std::time::Instant;
-use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL, ReceiptAssert};
-use zksync_os_integration_tests::config::{ChainLayout, load_chain_config};
-use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_integration_tests::provider::ZksyncApi;
 use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
-use zksync_os_integration_tests::{
-    CURRENT_TO_L1, StoppedTester, TestEnvironment, Tester, test_multisetup,
-};
-use zksync_os_server::config::{Config, RebuildBlocksConfig};
+use zksync_os_integration_tests::wallets::load_operator_private_key;
+use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
+use zksync_os_operator_signer::SignerConfig;
+use zksync_os_server::config::{Config, L1RevertConfig, RebuildBlocksConfig};
 
 const BLOCKS_TO_MINE_BEFORE_REBUILD: u64 = 10;
 const BLOCKS_FROM_TIP_TO_EMPTY: u64 = 4;
@@ -59,86 +52,11 @@ async fn wait_for_l1_state(
     ))
 }
 
-sol! {
-    #[sol(rpc)]
-    contract ValidatorTimelock {
-        function REVERTER_ROLE() external view returns (bytes32);
-        function hasRoleForChainId(uint256 _chainId, bytes32 _role, address _address) external view returns (bool);
-        function revertBatchesSharedBridge(address _chainAddress, uint256 _newLastBatch) external;
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct WalletEntry {
-    private_key: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChainWallets {
-    operator: WalletEntry,
-}
-
-fn chain_wallets_path(layout: ChainLayout<'_>, chain_id: u64) -> PathBuf {
-    PathBuf::from(
-        std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set"),
-    )
-    .join("local-chains")
-    .join(layout.protocol_version())
-    .join("multi_chain")
-    .join(format!("wallets_{chain_id}.yaml"))
-}
-
-fn load_operator_private_key(layout: ChainLayout<'_>, chain_id: u64) -> anyhow::Result<String> {
-    let path = chain_wallets_path(layout, chain_id);
-    let wallets: ChainWallets = serde_yaml::from_str(&fs::read_to_string(&path)?)?;
-    Ok(wallets.operator.private_key)
-}
-
 fn make_commit_only_config(config: &mut Config) {
     config.prover_api_config.fake_fri_provers.enabled = true;
     config.prover_api_config.fake_fri_provers.compute_time = Duration::from_millis(200);
     config.prover_api_config.fake_fri_provers.min_age = Duration::ZERO;
     config.prover_api_config.fake_snark_provers.enabled = false;
-}
-
-async fn revert_batches_on_l1(stopped: &StoppedTester, new_last_batch: u64) -> anyhow::Result<()> {
-    let chain_layout = stopped.chain_layout();
-    let chain_config = load_chain_config(stopped.chain_layout()).await;
-    let chain_id = chain_config
-        .genesis_config
-        .chain_id
-        .expect("chain config must contain chain id");
-    let bridgehub_address = chain_config
-        .genesis_config
-        .bridgehub_address
-        .expect("chain config must contain bridgehub address");
-    let bridgehub = Bridgehub::new(bridgehub_address, stopped.l1_provider().clone(), chain_id);
-    let validator_timelock_address = bridgehub.validator_timelock_address().await?;
-    let chain_address = *bridgehub.zk_chain().await?.address();
-
-    let operator = PrivateKeySigner::from_str(&load_operator_private_key(chain_layout, chain_id)?)?;
-    let operator_address = operator.address();
-    let mut l1_provider = stopped.l1_provider().clone();
-    l1_provider.wallet_mut().register_signer(operator);
-
-    let validator_timelock = ValidatorTimelock::new(validator_timelock_address, l1_provider);
-    let reverter_role = validator_timelock.REVERTER_ROLE().call().await?;
-
-    assert!(
-        validator_timelock
-            .hasRoleForChainId(U256::from(chain_id), reverter_role, operator_address)
-            .call()
-            .await?,
-        "configured operator does not have the reverter role on validator timelock"
-    );
-
-    let revert_tx = validator_timelock
-        .revertBatchesSharedBridge(chain_address, U256::from(new_last_batch))
-        .from(operator_address)
-        .send()
-        .await?;
-    revert_tx.expect_successful_receipt().await?;
-    Ok(())
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
@@ -412,8 +330,8 @@ async fn rebuild_panics_if_from_block_is_already_committed(
 ///   1. Start a node with the batcher and mine until a batch is committed on L1.
 ///   2. Stop the node.
 ///   3. Revert all committed batches on L1 (last_committed_batch → 0).
-///   4. Restart the same node in rebuild mode with from_block = 1, which is now valid because
-///      from_block (1) > last_l1_committed_block (0) after the revert.
+///   4. Restart the same node with `sequencer.l1_revert` configured; the node auto-derives
+///      `sequencer.block_rebuild.from_block` from the reverted batch boundary.
 ///   5. Confirm the node is alive by sending and confirming a new L2 transaction.
 ///   6. Verify the server commits a new batch on L1 with the same number as the reverted one.
 #[test_multisetup([CURRENT_TO_L1])]
@@ -447,38 +365,17 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
     .await?;
 
     let stopped = tester.stop().await?;
-    // Revert to the last executed batch (0) to reset L1 to an uncommitted state.
-    // Without this revert, from_block = 1 would panic at node startup with
-    // "rebuild_from_block must be > last_l1_committed_block".
-    revert_batches_on_l1(&stopped, committed_state.last_executed_batch).await?;
-
-    // Verify that the revert was successful and last_committed_batch is 0.
-    let chain_config = load_chain_config(stopped.chain_layout()).await;
-    let chain_id = chain_config
+    let mut restart_config = stopped.config().clone();
+    let chain_id = restart_config
         .genesis_config
         .chain_id
-        .expect("chain config must contain chain id");
-    let bridgehub_address = chain_config
-        .genesis_config
-        .bridgehub_address
-        .expect("chain config must contain bridgehub address");
-    let reverted_state = L1State::fetch(
-        stopped.l1_provider().clone().erased(),
-        None,
-        bridgehub_address,
-        chain_id,
-    )
-    .await?;
-    assert_eq!(
-        reverted_state.last_committed_batch, 0,
-        "all batches should be reverted on L1 before rebuild"
-    );
-
-    let mut restart_config = stopped.config().clone();
-    restart_config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
-        from_block: 1,
-        blocks_to_empty: vec![],
-        reset_timestamps: false,
+        .expect("chain_id must be set");
+    let operator_sk = load_operator_private_key(stopped.chain_layout(), chain_id)?;
+    restart_config.l1_sender_config.reverter_sk = Some(SignerConfig::Local(
+        PrivateKeySigner::from_str(&operator_sk)?.credential().clone(),
+    ));
+    restart_config.sequencer_config.l1_revert = Some(L1RevertConfig {
+        last_l1_batch_to_keep: committed_state.last_executed_batch,
     });
     let restarted = stopped.start_with_config(restart_config).await?;
 

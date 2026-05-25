@@ -770,6 +770,13 @@ pub struct RebuildBlocksConfig {
     pub reset_timestamps: bool,
 }
 
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+pub struct L1RevertConfig {
+    /// Highest L1 batch number to keep on the settlement layer.
+    /// All batches with number greater than this value will be reverted.
+    pub last_l1_batch_to_keep: u64,
+}
+
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct SequencerConfig {
@@ -839,6 +846,17 @@ pub struct SequencerConfig {
         "requires `consensus.enabled=false`"
     ))]
     pub block_rebuild: Option<RebuildBlocksConfig>,
+
+    /// Optional startup L1 revert configuration.
+    ///
+    /// If set on the Main Node, the node will send `revertBatchesSharedBridge` before startup
+    /// replay / rebuild starts.
+    #[config(nest)]
+    #[config_validate(custom(
+        |root: &Config, value: &Option<L1RevertConfig>| !root.consensus_config.enabled || value.is_none(),
+        "requires `consensus.enabled=false`"
+    ))]
+    pub l1_revert: Option<L1RevertConfig>,
 
     /// If set, external node will sync up to and including this block number and then stop processing blocks.
     #[config(default)]
@@ -1035,6 +1053,13 @@ pub struct L1SenderConfig {
     /// On a Main Node, required at runtime only when settling on L1 (see `operator_commit_sk`).
     #[config(secret, alias = "operator_execute_pk", with = SignerConfigDeserializer)]
     pub operator_execute_sk: Option<SignerConfig>,
+
+    /// Signer used to submit `revertBatchesSharedBridge` transactions.
+    ///
+    /// Supports both local private keys and GCP KMS key references, same as
+    /// `operator_commit_sk`.
+    #[config(secret, alias = "reverter_pk", with = SignerConfigDeserializer)]
+    pub reverter_sk: Option<SignerConfig>,
 
     /// Max fee per gas we are willing to spend.
     #[config(default_t = 200 * EtherUnit::Gwei)]
@@ -2300,6 +2325,7 @@ mod tests {
                 operator_commit_sk: Some(local_signer(0x11)),
                 operator_prove_sk: Some(local_signer(0x22)),
                 operator_execute_sk: Some(local_signer(0x33)),
+                reverter_sk: Some(local_signer(0x44)),
                 max_fee_per_gas: 200 * EtherUnit::Gwei,
                 max_priority_fee_per_gas: 1 * EtherUnit::Gwei,
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,

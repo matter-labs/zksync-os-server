@@ -5,18 +5,16 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::sol;
-use serde::Deserialize;
-use std::fs;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL, ReceiptAssert};
-use zksync_os_integration_tests::config::{ChainLayout, load_chain_config};
+use zksync_os_integration_tests::config::load_chain_config;
 use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_integration_tests::provider::{ZksyncApi, ZksyncTestingProvider};
 use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
+use zksync_os_integration_tests::wallets::load_operator_private_key;
 use zksync_os_integration_tests::{CURRENT_TO_L1, StoppedTester, Tester, test_multisetup};
 use zksync_os_server::INTERNAL_CONFIG_FILE_NAME;
 use zksync_os_server::config::Config;
@@ -30,31 +28,6 @@ sol! {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct WalletEntry {
-    private_key: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChainWallets {
-    operator: WalletEntry,
-}
-
-fn chain_wallets_path(layout: ChainLayout<'_>, chain_id: u64) -> PathBuf {
-    PathBuf::from(
-        std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set"),
-    )
-    .join("local-chains")
-    .join(layout.protocol_version())
-    .join("multi_chain")
-    .join(format!("wallets_{chain_id}.yaml"))
-}
-
-fn load_operator_private_key(layout: ChainLayout<'_>, chain_id: u64) -> anyhow::Result<String> {
-    let path = chain_wallets_path(layout, chain_id);
-    let wallets: ChainWallets = serde_yaml::from_str(&fs::read_to_string(&path)?)?;
-    Ok(wallets.operator.private_key)
-}
 
 fn make_commit_only_config(config: &mut Config) {
     config.prover_api_config.fake_fri_provers.enabled = true;

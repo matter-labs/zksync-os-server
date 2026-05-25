@@ -8,6 +8,7 @@ mod command_source;
 pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
+mod l1_revert;
 mod migration_gate;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
@@ -27,6 +28,7 @@ use crate::config::{
     report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
+use crate::l1_revert::{apply_l1_revert_block_rebuild_config, perform_l1_revert};
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -43,9 +45,9 @@ use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::network::{Ethereum, EthereumWallet};
-use alloy::primitives::BlockNumber;
+use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::fillers::{FillProvider, TxFiller};
-use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
+use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
@@ -140,6 +142,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     runtime: &Runtime,
     config: Config,
 ) {
+    let mut config = config;
     report_static_config_metrics(&config);
 
     let node_role = config.general_config.node_role;
@@ -201,6 +204,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     GENERAL_METRICS.fee_collector_address[&fee_collector_address].set(1);
     GENERAL_METRICS.chain_id.set(chain_id);
 
+    let persistent_batch_storage =
+        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
+
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
     let l1_provider = build_node_provider(&config.l1_provider_config, ProviderKind::L1).await;
@@ -211,30 +217,53 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
 
     tracing::info!("Reading L1 state");
-    let l1_state = if node_role.is_main() && config.batcher_config.enabled {
-        // The batcher node must wait for any pending L1 commit/prove/execute transactions
-        // (from a prior run) to be mined before starting, so it doesn't conflict with itself.
-        // Non-batcher consensus nodes never submit L1 transactions, so they don't need this
-        // wait: calling fetch_finalized on them would spuriously fail when a concurrently
-        // running batcher node keeps submitting new batch transactions.
-        L1State::fetch_finalized(
-            l1_provider.clone().erased(),
-            gateway_provider.as_ref().map(|p| p.clone().erased()),
-            bridgehub_address,
-            chain_id,
-        )
-        .await
-        .expect("failed to fetch finalized L1 state")
-    } else {
-        L1State::fetch(
-            l1_provider.clone().erased(),
-            gateway_provider.as_ref().map(|p| p.clone().erased()),
-            bridgehub_address,
-            chain_id,
-        )
-        .await
-        .expect("failed to fetch L1 state")
-    };
+    // The batcher node must wait for any pending L1 commit/prove/execute transactions
+    // (from a prior run) to be mined before starting, so it doesn't conflict with itself.
+    // Non-batcher consensus nodes never submit L1 transactions, so they don't need this
+    // wait: calling fetch_finalized on them would spuriously fail when a concurrently
+    // running batcher node keeps submitting new batch transactions.
+    let use_finalized = node_role.is_main() && config.batcher_config.enabled;
+    let mut l1_state = fetch_l1_state(
+        use_finalized,
+        l1_provider.clone().erased(),
+        gateway_provider.as_ref().map(|p| p.clone().erased()),
+        bridgehub_address,
+        chain_id,
+    )
+    .await
+    .expect("failed to fetch L1 state");
+
+    if node_role.is_main() {
+        let l1_revert_config = config.sequencer_config.l1_revert.as_ref();
+        if l1_revert_config.is_some() {
+            perform_l1_revert(
+                &config,
+                &l1_state,
+                chain_id,
+                &l1_provider,
+                &gateway_provider,
+            )
+            .await
+            .expect("failed to perform startup L1 revert");
+
+            // Re-read state after revert so all further startup checks use updated L1 frontier.
+            l1_state = fetch_l1_state(
+                config.batcher_config.enabled,
+                l1_provider.clone().erased(),
+                gateway_provider.as_ref().map(|p| p.clone().erased()),
+                bridgehub_address,
+                chain_id,
+            )
+            .await
+            .expect("failed to fetch L1 state after startup revert");
+
+            // Derive (or validate) `block_rebuild.from_block` from the reverted batch so the
+            // sequencer re-executes blocks starting at the right point.
+            apply_l1_revert_block_rebuild_config(&mut config, &l1_state, &persistent_batch_storage)
+                .expect("invalid L1 revert / block rebuild configuration");
+        }
+    }
+
     let settles_on_gateway = l1_state.settles_on_gateway();
     let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
         l1_provider.clone()
@@ -902,8 +931,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // ========== Start L1 Persist Batch Watcher ===========
 
-    let persistent_batch_storage =
-        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
     let rpc_storage = RpcStorage::new(
         repositories.clone(),
         block_replay_storage.clone(),
@@ -1825,6 +1852,20 @@ fn determine_starting_block(
     }
 
     desired_starting_block
+}
+
+async fn fetch_l1_state(
+    use_finalized: bool,
+    l1_provider: DynProvider,
+    gateway_provider: Option<DynProvider>,
+    bridgehub_address: Address,
+    chain_id: u64,
+) -> anyhow::Result<L1State> {
+    if use_finalized {
+        L1State::fetch_finalized(l1_provider, gateway_provider, bridgehub_address, chain_id).await
+    } else {
+        L1State::fetch(l1_provider, gateway_provider, bridgehub_address, chain_id).await
+    }
 }
 
 /// Finds the last block number where the local node's block hash matches the main node's block hash.
