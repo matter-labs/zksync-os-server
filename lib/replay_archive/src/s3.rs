@@ -150,24 +150,25 @@ impl ReplayArchiveStorage for S3ReplayArchiveStorage {
         block_hash: BlockHash,
     ) -> anyhow::Result<bool> {
         let key = self.object_key(block_number, block_hash);
-        let response = self
+        match self
             .client
-            .list_objects_v2()
+            .head_object()
             .bucket(&self.config.bucket_base_url)
-            .prefix(&key)
-            .max_keys(1)
+            .key(&key)
             .send()
             .await
-            .with_context(|| {
+        {
+            Ok(_) => Ok(true),
+            Err(err) if matches!(err.as_service_error(), Some(err) if err.is_not_found()) => {
+                Ok(false)
+            }
+            Err(err) => Err(err).with_context(|| {
                 format!(
                     "failed to check replay archive S3 object s3://{}/{}",
                     self.config.bucket_base_url, key
                 )
-            })?;
-        Ok(response
-            .contents()
-            .iter()
-            .any(|object| object.key() == Some(key.as_str())))
+            }),
+        }
     }
 }
 
