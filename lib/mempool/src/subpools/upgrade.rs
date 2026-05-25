@@ -91,9 +91,9 @@ impl UpgradeSubpool {
         // watcher. During replay, the ReplayRecord is the source of truth.
         self.inner.write().await.pending_upgrades.retain(|upgrade| {
             upgrade.protocol_version()
-                > &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS
+                >= &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS
         });
-        if protocol_version <= &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS {
+        if protocol_version < &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS {
             current_protocol_version = protocol_version.clone();
         } else {
             for tx in txs {

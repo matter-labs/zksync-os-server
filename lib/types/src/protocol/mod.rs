@@ -37,8 +37,11 @@ impl Deref for ProtocolSemanticVersion {
 }
 
 impl ProtocolSemanticVersion {
-    /// Upgrade logs before this protocol version used a different format that
-    /// the current L1 upgrade watcher cannot find or process reliably.
+    /// Smallest version such that upgrading to that version uses the current log format
+    ///
+    /// Example:
+    /// For 30.1 -> 30.2, 30.1 -> 31.0 we expect to find a log
+    /// Fo r 30.0 -> 30.1 or 30.1 -> 30.1 we don't
     pub const MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS: Self = Self::new(0, 30, 2);
 
     pub const fn new(major: u64, minor: u64, patch: u64) -> Self {
