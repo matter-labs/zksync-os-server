@@ -46,7 +46,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         sl_chain_id,
         multichain_root,
         &protocol_version,
-        &last_replay_record.block_context.block_hashes,
+        &last_replay_record.block_context.block_hashes.0,
     );
 
     let mut logs = Vec::new();

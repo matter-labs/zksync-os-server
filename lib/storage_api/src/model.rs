@@ -3,7 +3,6 @@ use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_interface::traits::AnyBlockContext;
-use zksync_os_interface::types::BlockHashes;
 use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_types::block_output::BlockOutput;
 use zksync_os_types::{
@@ -167,6 +166,41 @@ pub struct BlockContext {
     pub blob_fee: U256,
 }
 
+/// Array of previous block hashes.
+/// Hash for block number N will be at index [256 - (current_block_number - N)]
+/// (most recent will be at the end) if N is one of the most recent
+/// 256 blocks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlockHashes(pub [U256; 256]);
+
+impl Default for BlockHashes {
+    fn default() -> Self {
+        Self([U256::ZERO; 256])
+    }
+}
+
+impl serde::Serialize for BlockHashes {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.to_vec().serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BlockHashes {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let vec: Vec<U256> = Vec::deserialize(deserializer)?;
+        let array: [U256; 256] = vec
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("Expected array of length 256"))?;
+        Ok(Self(array))
+    }
+}
+
 impl AnyBlockContext for BlockContext {
     fn chain_id(&self) -> u64 {
         self.chain_id
@@ -210,10 +244,6 @@ impl AnyBlockContext for BlockContext {
 
     fn mix_hash(&self) -> U256 {
         self.mix_hash
-    }
-
-    fn execution_version(&self) -> u32 {
-        self.execution_version
     }
 
     fn blob_fee(&self) -> U256 {

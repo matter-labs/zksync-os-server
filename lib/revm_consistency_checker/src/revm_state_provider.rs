@@ -6,9 +6,8 @@ use revm::primitives::{StorageKey, StorageValue};
 use revm::state::{AccountInfo, Bytecode};
 use ruint::aliases::B160;
 use zk_ee::common_structs::derive_flat_storage_key;
-use zksync_os_interface::types::BlockHashes;
 use zksync_os_merkle_tree::fixed_bytes_to_bytes32;
-use zksync_os_storage_api::ViewState;
+use zksync_os_storage_api::{BlockHashes, ViewState};
 
 #[derive(Debug, Clone)]
 pub struct RevmStateProvider<State>
