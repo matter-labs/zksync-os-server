@@ -36,9 +36,10 @@ filter = 'test(~to_gateway)'
 threads-required = 2
 
 [[profile.default.overrides]]
-# Consensus tests spin up 3 L2 nodes + an L1 anvil and have tight 20s raft
-# timeouts; without throttling, parallel scheduling causes flaky failures.
-filter = 'test(~consensus)'
+# Consensus transaction-storm tests intentionally drive heavy CPU load through the
+# raft+sequencer pipeline. Without reserving worker slots they starve other heavy
+# tests (e.g. upgrade flows) of CPU and cause them to time out.
+filter = 'test(~transaction_storm)'
 threads-required = 6
 
 # Fast profile for local development — excludes the slowest integration tests.
