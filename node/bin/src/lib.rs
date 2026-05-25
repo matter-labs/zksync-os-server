@@ -229,7 +229,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     if node_role.is_main() {
         let l1_revert_config = config.sequencer_config.l1_revert.as_ref();
-        if l1_revert_config.is_some() {
+        if let Some(l1_revert_config) = l1_revert_config {
+            tracing::warn!(
+                last_l1_batch_to_keep = l1_revert_config.last_l1_batch_to_keep,
+                "L1 revert config detected, starting startup revert sequence"
+            );
+            // Derive (or validate) `block_rebuild.from_block` before the revert while the
+            // to-be-reverted batch is still committed on L1. The L1 fallback relies on
+            // `totalBatchesCommitted` being >= reverted_batch at the current L1 head, which
+            // is no longer true after the revert tx lands.
+            apply_l1_revert_block_rebuild_config(&mut config, &l1_state, &persistent_batch_storage)
+                .await
+                .expect("invalid L1 revert / block rebuild configuration");
+
             perform_l1_revert(
                 &config,
                 &l1_state,
@@ -250,11 +262,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             )
             .await
             .expect("failed to fetch L1 state after startup revert");
-
-            // Derive (or validate) `block_rebuild.from_block` from the reverted batch so the
-            // sequencer re-executes blocks starting at the right point.
-            apply_l1_revert_block_rebuild_config(&mut config, &l1_state, &persistent_batch_storage)
-                .expect("invalid L1 revert / block rebuild configuration");
         }
     }
 

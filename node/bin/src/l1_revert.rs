@@ -6,10 +6,11 @@ use anyhow::Context as _;
 use ruint::aliases::U256;
 use zksync_os_contract_interface::IValidatorTimelock;
 use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_l1_watcher::util;
 use zksync_os_storage::db::ExecutedBatchStorage;
 use zksync_os_storage_api::{PersistedBatch, ReadBatch};
 
-pub fn apply_l1_revert_block_rebuild_config(
+pub async fn apply_l1_revert_block_rebuild_config(
     config: &mut Config,
     l1_state: &L1State,
     persistent_batch_storage: &ExecutedBatchStorage,
@@ -29,17 +30,53 @@ pub fn apply_l1_revert_block_rebuild_config(
     let derived_from_block = if reverted_batch == 1 {
         1
     } else {
-        let Some(batch): Option<PersistedBatch> =
-            persistent_batch_storage.get_batch_by_number(reverted_batch)?
-        else {
-            anyhow::bail!(
-                "cannot derive `sequencer.block_rebuild.from_block` for `sequencer.l1_revert.last_l1_batch_to_keep={}`: \
-                 persisted batch {} was not found in local storage",
-                l1_revert.last_l1_batch_to_keep,
-                reverted_batch
+        // Fast path: the batch watcher already persisted this batch locally.
+        let local_batch: Option<PersistedBatch> = 
+            persistent_batch_storage.get_batch_by_number(reverted_batch)?;
+        if let Some(batch) = local_batch {
+            batch.first_block_number()
+        } else {
+            // Fallback: local storage doesn't have the batch. Binary-search L1 for the commit
+            // block and decode the `ReportCommittedBatchRangeZKsyncOS` event to get firstBlockNumber.
+            tracing::info!(
+                reverted_batch,
+                last_l1_batch_to_keep = l1_revert.last_l1_batch_to_keep,
+                "batch not found in local storage, querying L1 for block range"
             );
-        };
-        batch.first_block_number()
+            let sl_block_with_commit = util::find_l1_commit_block_by_batch_number(
+                l1_state.diamond_proxy_sl.clone(),
+                reverted_batch,
+                config.l1_watcher_config.max_blocks_to_process,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to find L1 commit block for batch {reverted_batch} \
+                     while deriving `sequencer.block_rebuild.from_block`"
+                )
+            })?;
+            util::fetch_stored_batch_data(
+                &l1_state.diamond_proxy_sl,
+                sl_block_with_commit,
+                reverted_batch,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to fetch batch {reverted_batch} data from L1 \
+                     while deriving `sequencer.block_rebuild.from_block`"
+                )
+            })?
+            .with_context(|| {
+                format!(
+                    "cannot derive `sequencer.block_rebuild.from_block` for \
+                     `sequencer.l1_revert.last_l1_batch_to_keep={}`: \
+                     batch {} was not found in local storage or on L1",
+                    l1_revert.last_l1_batch_to_keep, reverted_batch
+                )
+            })?
+            .first_block_number()
+        }
     };
 
     if let Some(block_rebuild) = config.sequencer_config.block_rebuild.as_ref() {
