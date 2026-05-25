@@ -36,18 +36,11 @@ filter = 'test(~to_gateway)'
 threads-required = 2
 
 [[profile.default.overrides]]
-# Consensus tests spin up 3 L2 nodes + an L1 anvil; under `--stress-count 20`
-# they multiply by 20x and need throttling so they don't starve unrelated
-# CPU-heavy tests (network e2e, upgrade) of worker slots.
+# Consensus tests spin up 3 L2 nodes + an L1 anvil. Reserve worker slots so
+# they don't starve unrelated CPU-heavy tests (network e2e, upgrade).
+# Transaction-storm tests are covered by the same filter since they also
+# match `~consensus`.
 filter = 'test(~consensus)'
-threads-required = 6
-
-[[profile.default.overrides]]
-# Storm tests intentionally drive heavy load through the raft + sequencer
-# pipeline. Same reservation as plain consensus tests (above), kept as a
-# separate entry so this throttle survives future relaxation of the
-# general consensus throttle.
-filter = 'test(~transaction_storm)'
 threads-required = 6
 
 # Fast profile for local development — excludes the slowest integration tests.
