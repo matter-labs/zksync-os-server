@@ -1,10 +1,10 @@
-use crate::tree_block_cache::TreeBlockCache;
 use alloy::primitives::B256;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 use zksync_os_batch_types::ExtendedCommitBatchInfo;
 use zksync_os_l1_watcher::{BatchCacheEvictor, BatchCommitmentSource};
 use zksync_os_storage_api::{ReadStateHistory, read_multichain_root};
+use zksync_os_tree_block_cache::TreeBlockCache;
 use zksync_os_types::PubdataMode;
 
 /// [`BatchCommitmentSource`] backed by `TreeBlockCache` and state history.

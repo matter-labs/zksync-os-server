@@ -15969,6 +15969,7 @@ dependencies = [
  "zksync_os_status_server",
  "zksync_os_storage",
  "zksync_os_storage_api",
+ "zksync_os_tree_block_cache",
  "zksync_os_tx_validators",
  "zksync_os_types",
 ]
@@ -16073,6 +16074,19 @@ dependencies = [
  "zksync_os_pipeline",
  "zksync_os_rocksdb",
  "zksync_os_types",
+]
+
+[[package]]
+name = "zksync_os_tree_block_cache"
+version = "0.20.3"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "tokio",
+ "tracing",
+ "zksync_os_observability",
+ "zksync_os_pipeline",
+ "zksync_os_storage_api",
 ]
 
 [[package]]

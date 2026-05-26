@@ -58,6 +58,7 @@ zksync_os_merkle_tree.workspace = true
 zksync_os_interop_fee_updater.workspace = true
 zksync_os_raft.workspace = true
 zksync_os_tx_validators.workspace = true
+zksync_os_tree_block_cache.workspace = true
 zksync_os_config_validation_macros.workspace = true
 zksync_os_backpressure.workspace = true
 

@@ -53,7 +53,7 @@ pub trait BatchCacheEvictor: Send + Sync + 'static {
 /// - `ExecutedBatchStorage`, which is the concrete persistent store typically passed into this
 ///   watcher;
 /// - `RpcStorage` and RPC namespaces, which read persisted batch data to answer batch- and
-///   proof-related requests;
+///   proof-related requests;``
 pub struct L1PersistBatchWatcher<BatchStorage> {
     batch_storage: BatchStorage,
     /// `PubdataMode` is kept alongside the discovered batch (derived from L1
