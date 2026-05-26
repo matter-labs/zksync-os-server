@@ -183,12 +183,16 @@ fn spawn_startup_election_gate(
     let grace = (election_timeout_max * 3).max(Duration::from_secs(5));
     let mut metrics_rx = raft.metrics();
     runtime.spawn_critical_task("raft startup election gate", async move {
+        // openraft's *initial* metrics value carries whatever the engine reconstructed
+        // from persisted state — including a `current_leader` from the previous run.
+        // Treating that as "leader contact established" defeats the purpose of the
+        // gate: a restarted node would unlock instantly and start an election with
+        // stale state before any peer connection has actually formed. Mark the
+        // initial value as seen so the check below only ever sees post-startup
+        // updates (which require a real AppendEntries from a peer).
+        metrics_rx.mark_unchanged();
         let deadline = tokio::time::Instant::now() + grace;
         loop {
-            if metrics_rx.borrow().current_leader.is_some() {
-                tracing::info!("startup election gate: leader contact established");
-                break;
-            }
             tokio::select! {
                 changed = metrics_rx.changed() => {
                     if changed.is_err() {
@@ -198,6 +202,10 @@ fn spawn_startup_election_gate(
                             "startup election gate: raft metrics channel closed before contact"
                         );
                         return;
+                    }
+                    if metrics_rx.borrow().current_leader.is_some() {
+                        tracing::info!("startup election gate: leader contact established");
+                        break;
                     }
                 }
                 _ = tokio::time::sleep_until(deadline) => {
