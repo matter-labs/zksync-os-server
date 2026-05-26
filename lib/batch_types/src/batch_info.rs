@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 use std::ops;
 use std::ops::{Deref, DerefMut};
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
-use zksync_os_interface::types::{BlockHashes, BlockOutput};
 use zksync_os_merkle_tree_api::TreeBatchOutput;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_types::{
-    L2_TO_L1_TREE_SIZE, L2ToL1Log, ProtocolSemanticVersion, PubdataMode, ZkEnvelope, ZkTransaction,
+    BlockOutput, L2_TO_L1_TREE_SIZE, L2ToL1Log, ProtocolSemanticVersion, PubdataMode, ZkEnvelope,
+    ZkTransaction,
 };
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
@@ -39,7 +39,7 @@ impl ExtendedCommitBatchInfo {
         sl_chain_id: u64,
         multichain_root: B256,
         protocol_version: &ProtocolSemanticVersion,
-        last_256_block_hashes: &BlockHashes,
+        last_256_block_hashes: &[U256; 256],
     ) -> (Self, Option<BlobTransactionSidecar>) {
         let mut priority_operations_hash = keccak256([]);
         let mut number_of_layer1_txs = 0;
@@ -115,7 +115,7 @@ impl ExtendedCommitBatchInfo {
 
         let last_256_block_hashes_blake = {
             let mut blocks_hasher = Blake2s256::new();
-            for block_hash in &last_256_block_hashes.0[1..] {
+            for block_hash in &last_256_block_hashes[1..] {
                 blocks_hasher.update(block_hash.to_be_bytes::<32>());
             }
             blocks_hasher.update(last_block_output.header.hash());

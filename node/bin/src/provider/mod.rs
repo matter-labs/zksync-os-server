@@ -4,7 +4,6 @@ mod retry;
 
 use crate::config::ProviderConfig;
 use alloy::network::{Ethereum, EthereumWallet};
-use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use alloy::rpc::client::RpcClient;
 use alloy::signers::local::PrivateKeySigner;
@@ -21,10 +20,7 @@ pub(crate) enum ProviderKind {
 pub(crate) async fn build_node_provider(
     config: &ProviderConfig,
     provider: ProviderKind,
-) -> FillProvider<
-    impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
-    impl Provider<Ethereum> + Clone + 'static,
-> {
+) -> impl Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone + 'static {
     let max_retries = config.max_retries;
     let retry_backoff = config.retry_backoff;
     let provider_layers = ServiceBuilder::new()

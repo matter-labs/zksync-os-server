@@ -536,7 +536,12 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::BlobListTooLong
         | InvalidTransaction::EmptyBlobList
         | InvalidTransaction::FilteredByValidator
-        | InvalidTransaction::CallerGasLimitTooHigh => TxRejectionMethod::Purge,
+        | InvalidTransaction::CallerGasLimitTooHigh
+        | InvalidTransaction::FriProofTxNotSupported
+        | InvalidTransaction::FriProofSidecarMissing
+        | InvalidTransaction::FriProofVerificationFailed
+        | InvalidTransaction::FriProofStatementHashMismatch
+        | InvalidTransaction::TooManyFriStatements => TxRejectionMethod::Purge,
 
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }

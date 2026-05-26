@@ -257,8 +257,7 @@ fn compute_prover_input(
                 .expect("Failed to convert DA commitment scheme");
             generate_proof_input_from_bytes(
                 bin_bytes,
-                // todo: not ideal but will be gone in v0.4.0 with new PIG anyway
-                BlockMetadataFromOracle::from_interface(replay_record.block_context.to_interface()),
+                BlockMetadataFromOracle::from_interface(replay_record.block_context),
                 ProofData {
                     state_root_view: initial_storage_commitment,
                     last_block_timestamp: replay_record.previous_block_timestamp,
@@ -296,8 +295,7 @@ fn compute_prover_input(
                 .expect("Failed to convert DA commitment scheme");
             generate_proof_input_from_bytes(
                 bin_bytes,
-                // todo: not ideal but will be gone in v0.4.0 with new PIG anyway
-                BlockMetadataFromOracle::from_interface(replay_record.block_context.to_interface()),
+                BlockMetadataFromOracle::from_interface(replay_record.block_context),
                 ProofData {
                     state_root_view: initial_storage_commitment,
                     last_block_timestamp: replay_record.previous_block_timestamp,

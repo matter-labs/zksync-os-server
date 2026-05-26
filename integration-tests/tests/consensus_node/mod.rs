@@ -1,6 +1,6 @@
-use alloy::eips::BlockId;
-use alloy::network::TransactionBuilder;
-use alloy::primitives::{Address, U256};
+use alloy::eips::{BlockId, Encodable2718};
+use alloy::network::{NetworkTransactionBuilder, ReceiptResponse, TransactionBuilder};
+use alloy::primitives::{Address, TxHash, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use anyhow::Context as _;
@@ -52,34 +52,95 @@ pub(crate) async fn wait_for_l2_block(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum TransferSubmission {
+    SendTransaction,
+    SendRawTransactionSync,
+}
+
 async fn send_transfer(
     cluster: &MultiNodeTester,
     index: usize,
-) -> anyhow::Result<alloy::rpc::types::TransactionReceipt> {
+    submission: TransferSubmission,
+) -> anyhow::Result<u64> {
     let node = cluster.node(index);
-    let gas_price = node.l2_provider.get_gas_price().await?;
-    let tx = TransactionRequest::default()
-        .with_to(Address::random())
-        .with_value(U256::from(1))
-        .with_gas_price(gas_price);
-    node.l2_provider
-        .send_transaction(tx)
-        .await?
-        .expect_successful_receipt()
-        .await
+    let recipient = Address::random();
+
+    match submission {
+        TransferSubmission::SendTransaction => {
+            let gas_price = node.l2_provider.get_gas_price().await?;
+            let tx = TransactionRequest::default()
+                .with_to(recipient)
+                .with_value(U256::from(1))
+                .with_gas_price(gas_price);
+            let receipt = node
+                .l2_provider
+                .send_transaction(tx)
+                .await?
+                .expect_successful_receipt()
+                .await?;
+            transfer_receipt_block_number(&receipt, recipient, None)
+        }
+        TransferSubmission::SendRawTransactionSync => {
+            let sender = node.l2_wallet.default_signer().address();
+            let fees = node.l2_provider.estimate_eip1559_fees().await?;
+            let nonce = node.l2_provider.get_transaction_count(sender).await?;
+            let tx = TransactionRequest::default()
+                .with_to(recipient)
+                .with_value(U256::from(1))
+                .with_nonce(nonce)
+                .with_gas_price(fees.max_fee_per_gas)
+                .with_gas_limit(50_000);
+            let tx_envelope = tx.build(&node.l2_wallet).await?;
+            let expected_hash = *tx_envelope.tx_hash();
+            let encoded = tx_envelope.encoded_2718();
+
+            let receipt = node.l2_provider.send_raw_transaction_sync(&encoded).await?;
+            transfer_receipt_block_number(&receipt, recipient, Some(expected_hash))
+        }
+    }
 }
 
-/// Sends a transfer to `leader_index`, waits for all running nodes to expose the resulting
+fn transfer_receipt_block_number(
+    receipt: &impl ReceiptResponse,
+    recipient: Address,
+    expected_hash: Option<TxHash>,
+) -> anyhow::Result<u64> {
+    assert!(receipt.status());
+    assert_eq!(receipt.to(), Some(recipient));
+    let tx_hash = receipt.transaction_hash();
+    if let Some(expected_hash) = expected_hash {
+        assert_eq!(tx_hash, expected_hash);
+    } else {
+        assert_ne!(tx_hash, TxHash::ZERO);
+    }
+    receipt
+        .block_number()
+        .context("transfer receipt did not include a block number")
+}
+
+/// Sends a transfer to `submit_index`, waits for all running nodes to expose the resulting
 /// L2 block, then waits for L1 finalization if the batcher node is active.
 /// Returns the L2 block number that included the transfer.
 async fn send_transfer_and_wait_for_active_replication(
     cluster: &mut MultiNodeTester,
-    leader_index: usize,
+    submit_index: usize,
 ) -> anyhow::Result<u64> {
-    let receipt = send_transfer(cluster, leader_index).await?;
-    let block_number = receipt
-        .block_number
-        .context("transfer receipt did not include a block number")?;
+    let block_number =
+        send_transfer(cluster, submit_index, TransferSubmission::SendTransaction).await?;
+    cluster
+        .wait_for_active_l2_block(block_number, REPLICATION_TIMEOUT)
+        .await?;
+    wait_for_l1_finalization_if_batcher_active(cluster, block_number).await?;
+    Ok(block_number)
+}
+
+async fn send_transfer_with_submission_and_wait_for_active_replication(
+    cluster: &mut MultiNodeTester,
+    submit_index: usize,
+    submission: TransferSubmission,
+) -> anyhow::Result<u64> {
+    let block_number = send_transfer(cluster, submit_index, submission).await?;
     cluster
         .wait_for_active_l2_block(block_number, REPLICATION_TIMEOUT)
         .await?;
@@ -125,10 +186,8 @@ async fn consensus_cluster_includes_simple_transaction_with_wait() -> anyhow::Re
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
 
-        let receipt = send_transfer(&cluster, leader_index).await?;
-        let block_number = receipt
-            .block_number
-            .context("transfer receipt did not include a block number")?;
+        let block_number =
+            send_transfer(&cluster, leader_index, TransferSubmission::SendTransaction).await?;
         wait_for_l1_finalization_if_batcher_active(&cluster, block_number).await?;
 
         Ok(())
@@ -149,8 +208,8 @@ async fn consensus_can_be_reenabled_after_clearing_raft_history() -> anyhow::Res
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
 
-        send_transfer(&cluster, leader_index).await?;
-        send_transfer(&cluster, leader_index).await?;
+        send_transfer(&cluster, leader_index, TransferSubmission::SendTransaction).await?;
+        send_transfer(&cluster, leader_index, TransferSubmission::SendTransaction).await?;
 
         cluster.suspend_node(leader_index).await?;
 
@@ -163,7 +222,7 @@ async fn consensus_can_be_reenabled_after_clearing_raft_history() -> anyhow::Res
             })
             .await?;
 
-        send_transfer(&cluster, leader_index).await?;
+        send_transfer(&cluster, leader_index, TransferSubmission::SendTransaction).await?;
 
         cluster.suspend_node(leader_index).await?;
 
@@ -180,7 +239,7 @@ async fn consensus_can_be_reenabled_after_clearing_raft_history() -> anyhow::Res
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
 
-        send_transfer(&cluster, leader_index).await?;
+        send_transfer(&cluster, leader_index, TransferSubmission::SendTransaction).await?;
 
         // Restart once more with consensus enabled to verify the sparse raft history
         // written after re-enable is loadable.
@@ -191,7 +250,7 @@ async fn consensus_can_be_reenabled_after_clearing_raft_history() -> anyhow::Res
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
 
-        send_transfer(&cluster, leader_index).await?;
+        send_transfer(&cluster, leader_index, TransferSubmission::SendTransaction).await?;
 
         Ok(())
     }
@@ -211,6 +270,71 @@ async fn consensus_cluster_forms_with_three_nodes_and_replicates_blocks() -> any
             .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
             .await?;
         send_transfer_and_wait_for_active_replication(&mut cluster, leader_index).await?;
+        Ok(())
+    }
+    .await;
+    let shutdown_result = cluster.shutdown_all().await;
+    result.and(shutdown_result)
+}
+
+#[test_log::test(tokio::test)]
+async fn consensus_cluster_accepts_transactions_from_any_node() -> anyhow::Result<()> {
+    let mut cluster = MultiNodeTester::builder()
+        .with_consensus_secret_keys(consensus_test_keys(3))
+        .build()
+        .await?;
+    let result = async {
+        cluster
+            .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+
+        for node_index in 0..cluster.len() {
+            send_transfer_and_wait_for_active_replication(&mut cluster, node_index)
+                .await
+                .with_context(|| format!("transaction submitted to node {node_index} failed"))?;
+        }
+
+        Ok(())
+    }
+    .await;
+    let shutdown_result = cluster.shutdown_all().await;
+    result.and(shutdown_result)
+}
+
+#[test_log::test(tokio::test)]
+async fn consensus_cluster_send_raw_transaction_sync_accepts_leader_and_replica()
+-> anyhow::Result<()> {
+    let mut cluster = MultiNodeTester::builder()
+        .with_consensus_secret_keys(consensus_test_keys(3))
+        .build()
+        .await?;
+    let result = async {
+        let leader_index = cluster
+            .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+        let replica_index = (0..cluster.len())
+            .find(|idx| *idx != leader_index)
+            .context("3-node cluster must have a replica")?;
+
+        send_transfer_with_submission_and_wait_for_active_replication(
+            &mut cluster,
+            leader_index,
+            TransferSubmission::SendRawTransactionSync,
+        )
+        .await
+        .with_context(|| {
+            format!("eth_sendRawTransactionSync submitted to leader node {leader_index} failed")
+        })?;
+        send_transfer_with_submission_and_wait_for_active_replication(
+            &mut cluster,
+            replica_index,
+            TransferSubmission::SendRawTransactionSync,
+        )
+        .await
+        .with_context(|| {
+            format!("eth_sendRawTransactionSync submitted to replica node {replica_index} failed")
+        })?;
+
         Ok(())
     }
     .await;
