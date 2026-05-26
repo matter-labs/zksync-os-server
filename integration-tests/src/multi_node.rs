@@ -613,10 +613,15 @@ impl ConsensusClusterBuilder {
             .map(|(i, (secret, ports))| {
                 let peer_ids = peer_ids.clone();
                 let tx_forwarding_rpc_urls = tx_forwarding_rpc_urls.clone();
+                // Directed full mesh: lower-index nodes dial higher-index ones, so every pair has
+                // exactly one maintained RLPx route. A symmetric all-trust-all setup causes
+                // simultaneous crossed dials that devp2p drops as duplicates under stress; a ring
+                // is too sparse for OpenRaft, which sends RPCs directly to every voter and needs a
+                // path between every pair.
                 let boot_nodes: Vec<zksync_os_network::TrustedPeer> = node_records
                     .iter()
                     .enumerate()
-                    .filter_map(|(j, record)| (j != i).then_some((*record).into()))
+                    .filter_map(|(j, record)| (j > i).then_some((*record).into()))
                     .collect();
                 let l1 = l1.clone();
                 async move {
