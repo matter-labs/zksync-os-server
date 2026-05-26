@@ -48,7 +48,6 @@ use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::network::{Ethereum, EthereumWallet};
 use alloy::primitives::{Address, BlockNumber};
-use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{DynProvider, Provider, WalletProvider};
 use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
@@ -80,7 +79,7 @@ use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
     L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, MigrationFinalizedWatcher,
-    SettlementLayerWatcher,
+    SettlementLayerWatcher, block_updates,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
@@ -303,10 +302,28 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     let settles_on_gateway = l1_state.settles_on_gateway();
-    let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
-        l1_provider.clone()
+    let l1_block_updates = block_updates::run(
+        l1_provider.clone().erased(),
+        runtime,
+        "l1 block updates",
+        config.l1_watcher_config.poll_interval,
+    );
+    let gateway_block_updates = gateway_provider.as_ref().map(|provider| {
+        block_updates::run(
+            provider.clone().erased(),
+            runtime,
+            "gateway block updates",
+            config.l1_watcher_config.poll_interval,
+        )
+    });
+    let (sl_provider, sl_block_updates) = if l1_state.l1_chain_id == l1_state.sl_chain_id {
+        (l1_provider.clone(), l1_block_updates.clone())
     } else {
-        gateway_provider.clone().unwrap()
+        let sl_provider = gateway_provider.clone().unwrap();
+        let sl_block_updates = gateway_block_updates
+            .clone()
+            .expect("gateway block updates must be initialized when SL is Gateway");
+        (sl_provider, sl_block_updates)
     };
     tracing::info!(?l1_state, settles_on_gateway, "L1 state");
     l1_state.report_metrics();
@@ -622,6 +639,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             finality_storage.clone(),
             l1_state.sl_block_number,
             node_startup_state.l1_state.l1_chain_id,
+            sl_block_updates.clone(),
             // Only nodes that actually submit commit txs locally should arm the
             // `UnexpectedCommit` guard — otherwise consensus followers configured with
             // `batcher_config.enabled = false` panic the moment the leader's commit lands on L1.
@@ -640,6 +658,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_batch_provider.clone(),
             finality_storage.clone(),
             node_startup_state.l1_state.l1_chain_id,
+            sl_block_updates.clone(),
         )
         .await
         .expect("failed to start L1 execute watcher")
@@ -653,6 +672,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
+            sl_block_updates.clone(),
         )
         .await
         .expect("failed to start finalized L1 execute watcher")
@@ -751,6 +771,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 next_cursors.migration_number,
                 config.l1_watcher_config.clone().into(),
                 sl_chain_id_subpool.clone(),
+                l1_block_updates.clone(),
             )
             .await
             .expect("failed to start gateway migration watcher")
@@ -769,6 +790,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.l1_chain_id,
             config.l1_watcher_config.clone().into(),
             last_finalized_migration_sender,
+            sl_block_updates.clone(),
         )
         .await
         .expect("failed to start migration finalized watcher");
@@ -798,6 +820,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             next_cursors.interop_root_id,
             interop_roots_subpool.clone(),
+            gateway_block_updates.clone(),
         )
         .await
         .expect("failed to start L1 interop roots watcher")
@@ -815,6 +838,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             l1_subpool.clone(),
             next_cursors.l1_priority_id,
+            l1_block_updates.clone(),
         )
         .await
         .expect("failed to start L1 transaction watcher")
@@ -960,6 +984,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             bytecode_supplier_address,
             current_protocol_version.clone(),
             upgrade_subpool,
+            l1_block_updates.clone(),
         )
         .await
         .expect("failed to start L1 upgrade transaction watcher")
@@ -976,20 +1001,29 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
         tree_for_rpc,
     );
-    runtime.spawn_critical_task(
-        "l1 batch persist watcher",
-        L1PersistBatchWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            node_startup_state
-                .l1_state
-                .settlement_layer_intervals
-                .clone(),
-            persistent_batch_storage.clone(),
-        )
-        .await
-        .expect("failed to start L1 batch persist watcher")
-        .run(),
-    );
+    runtime.spawn_critical_task("l1 batch persist watcher", {
+        let config = config.l1_watcher_config.clone();
+        let settlement_layer_intervals = node_startup_state
+            .l1_state
+            .settlement_layer_intervals
+            .clone();
+        let persistent_batch_storage = persistent_batch_storage.clone();
+        let l1_block_updates = l1_block_updates.clone();
+        let gateway_block_updates = gateway_block_updates.clone();
+        async move {
+            L1PersistBatchWatcher::create_watcher(
+                config.into(),
+                settlement_layer_intervals,
+                persistent_batch_storage,
+                l1_block_updates,
+                gateway_block_updates,
+            )
+            .await
+            .expect("failed to start L1 batch persist watcher")
+            .run()
+            .await
+        }
+    });
 
     // ========== Start Sequencer ===========
     let repositories_clone = repositories.clone();
@@ -1207,10 +1241,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: &Config,
-    sl_provider: FillProvider<
-        impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
-        impl Provider<Ethereum> + Clone + 'static,
-    >,
+    sl_provider: impl Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     runtime: &Runtime,
@@ -1437,7 +1468,7 @@ async fn run_main_node_pipeline(
         .pipe_opt(replay_archiver.map(|replay_archiver| {
             ReplayArchiveGateComponent::new(replay_archiver, block_replay_storage.clone())
         }))
-        .pipe(L1Sender::<_, _, CommitCommand> {
+        .pipe(L1Sender::<_, CommitCommand> {
             provider: sl_provider.clone(),
             config: commit_sender_config,
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
@@ -1449,7 +1480,7 @@ async fn run_main_node_pipeline(
         .pipe(GaplessL1ProofSender::new(
             node_state_on_startup.l1_state.last_executed_batch + 1,
         ))
-        .pipe(L1Sender::<_, _, ProofCommand> {
+        .pipe(L1Sender::<_, ProofCommand> {
             provider: sl_provider.clone(),
             config: prove_sender_config,
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,

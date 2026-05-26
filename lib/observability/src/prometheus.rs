@@ -51,7 +51,7 @@ impl PrometheusExporterConfig {
         let job_id = "zksync-pushgateway";
         let namespace =
             env::var("POD_NAMESPACE").unwrap_or_else(|_| "UNKNOWN_NAMESPACE".to_owned());
-        let pod = env::var("POD_NAME").unwrap_or_else(|_| "UNKNOWN_POD".to_owned());
+        let pod = env::var("HOSTNAME").unwrap_or_else(|_| "UNKNOWN_POD".to_owned());
         format!("{base_url}/metrics/job/{job_id}/namespace/{namespace}/pod/{pod}")
     }
 

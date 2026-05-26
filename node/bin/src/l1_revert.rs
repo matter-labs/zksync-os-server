@@ -1,6 +1,5 @@
 use crate::config::Config;
 use alloy::network::{Ethereum, EthereumWallet};
-use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, WalletProvider};
 use anyhow::Context as _;
 use ruint::aliases::U256;
@@ -86,16 +85,16 @@ pub async fn derive_block_rebuild_from_block(
     Ok(derived_from_block)
 }
 
-pub async fn perform_l1_revert<
-    F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
-    P: Provider<Ethereum> + Clone + 'static,
->(
+pub async fn perform_l1_revert<T>(
     config: &Config,
     l1_state: &L1State,
     chain_id: u64,
-    l1_provider: &FillProvider<F, P>,
-    gateway_provider: &Option<FillProvider<F, P>>,
-) -> anyhow::Result<()> {
+    l1_provider: &T,
+    gateway_provider: &Option<T>,
+) -> anyhow::Result<()>
+where
+    T: Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
+{
     let l1_revert = config
         .sequencer_config
         .l1_revert

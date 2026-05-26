@@ -1,15 +1,18 @@
 use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
-use crate::{L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
+use crate::{BlockUpdates, L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
 use std::collections::HashMap;
+use tokio::sync::watch;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
+use zksync_os_contract_interface::settlement_layer_intervals::{
+    IntervalSettlementLayer, SettlementLayerIntervals,
+};
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
 /// Watches finalized commit and execute events together and persists only irreversibly executed
@@ -45,6 +48,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         config: L1WatcherConfig,
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
+        l1_block_updates: watch::Receiver<BlockUpdates>,
+        gateway_block_updates: Option<watch::Receiver<BlockUpdates>>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(
@@ -78,6 +83,14 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             }
 
             let zk_chain = &interval.proxy;
+            let block_updates = match &interval.settlement_layer {
+                IntervalSettlementLayer::L1 => l1_block_updates.clone(),
+                IntervalSettlementLayer::Gateway(_) => {
+                    gateway_block_updates.clone().with_context(|| {
+                        format!("Gateway block updates are missing for interval {interval}")
+                    })?
+                }
+            };
             let first_batch = if is_first {
                 anyhow::ensure!(
                     interval.first_batch <= last_persisted_batch + 1,
@@ -116,6 +129,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
             segments.push(SegmentSpec {
                 provider: zk_chain.provider().clone(),
+                block_updates,
                 address: (*zk_chain.address()).into(),
                 start_block,
                 end_block,
