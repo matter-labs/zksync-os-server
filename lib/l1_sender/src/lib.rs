@@ -382,7 +382,7 @@ where
                     .await
                     .context("resubmit L1 transaction at replacement fees")?;
                 let receipt = resubmitted.receipt_fut.await?;
-                Ok((resubmitted.command, receipt, resubmitted.submitted_at))
+                Ok((resubmitted.command, receipt, submitted_at))
             }
         }
     }
