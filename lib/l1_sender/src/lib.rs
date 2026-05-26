@@ -8,17 +8,16 @@ use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderFeeConfig;
 use crate::metrics::{L1_SENDER_METRICS, PriorityFeeEstimatePercentile, PriorityFeeEstimateWindow};
 use crate::pipeline_component::L1Sender;
-use alloy::consensus::BlobTransactionValidationError;
 use alloy::consensus::Transaction as ConsensusTransaction;
+use alloy::eips::eip4844::env_settings::EnvKzgSettings;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
-use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
+use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::{
     Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844, TransactionResponse,
 };
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::primitives::{Address, B256};
 use alloy::providers::ext::DebugApi;
-use alloy::providers::fillers::TxFiller;
 use alloy::providers::utils::Eip1559Estimation;
 use alloy::providers::{Provider, WalletProvider};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
@@ -94,10 +93,9 @@ struct FeeParams {
 ///
 /// Note: we pass `to_address` - L1 contract address to send transactions to.
 /// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
-impl<LF, LP, Input> L1Sender<LF, LP, Input>
+impl<P, Input> L1Sender<P, Input>
 where
-    LF: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
-    LP: Provider<Ethereum> + Clone + 'static,
+    P: Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
     Input: SendToL1 + Send + 'static,
 {
     pub async fn operator_address(&self) -> anyhow::Result<Address> {
@@ -234,34 +232,20 @@ where
                             );
                         }
                         tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
-                        tx_request
-                            .set_blob_sidecar(BlobTransactionSidecarVariant::Eip4844(blob_sidecar));
+
+                        let pending_block = self.provider.get_block(BlockId::pending()).await?.expect("no pending block");
+                        // todo: make conversion unconditional (and remove respective config) once anvil
+                        //       supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
+                        if self.config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
+                            tx_request.set_blob_sidecar(BlobTransactionSidecarVariant::Eip7594(
+                                blob_sidecar.try_into_7594(EnvKzgSettings::Default.get())?,
+                            ));
+                        } else {
+                            tx_request.set_blob_sidecar(BlobTransactionSidecarVariant::Eip4844(blob_sidecar));
+                        }
                     };
 
-                    // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an
-                    // envelope.
-                    let envelope = self.provider.fill(tx_request).await?.try_into_envelope()?.try_into_pooled()?;
-
-                    let pending_block = self.provider.get_block(BlockId::pending()).await?.expect("no pending block");
-                    // todo: make conversion unconditional (and remove respective config) once anvil
-                    //       supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
-                    let tx = if self.config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
-                        // Convert the envelope into an EIP-7594 transaction by converting the sidecar
-                        envelope.try_map_eip4844(|tx| {
-                            tx.try_map_sidecar(|sidecar| {
-                                Ok::<_, BlobTransactionValidationError>(
-                                    BlobTransactionSidecarVariant::Eip7594(sidecar.try_into_eip7594()?)
-                                )
-                            })
-                        })?
-                    } else {
-                        // Keep the regular EIP-4844 sidecar
-                        envelope
-                    };
-
-                    let pending_tx = self.provider
-                        .send_raw_transaction(&tx.encoded_2718())
-                        .await?;
+                    let pending_tx = self.provider.send_transaction(tx_request).await?;
                     let submitted_at = Instant::now();
                     let tx_hash = *pending_tx.tx_hash();
                     let receipt_fut = self.wait_for_confirmed_receipt(tx_hash);
@@ -354,7 +338,7 @@ where
     }
 
     fn wait_for_confirmed_receipt(&self, tx_hash: B256) -> TransactionReceiptFuture {
-        let provider = self.provider.root().clone();
+        let provider = self.provider.clone();
         let required_confirmations = if self.gateway {
             REQUIRED_CONFIRMATIONS_GATEWAY
         } else {

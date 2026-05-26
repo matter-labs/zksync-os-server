@@ -3,7 +3,6 @@ use alloy::network::{Ethereum, EthereumWallet, TransactionBuilder};
 use alloy::primitives::Address;
 use alloy::primitives::utils::format_ether;
 use alloy::providers::ext::DebugApi;
-use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{DynProvider, Provider, WalletProvider};
 use alloy::rpc::types::TransactionReceipt;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
@@ -76,15 +75,14 @@ impl BaseTokenPriceUpdaterConfig {
 
 #[derive(Debug)]
 pub struct BaseTokenPriceUpdater<
-    F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
-    P: Provider<Ethereum> + Clone,
+    P: Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone,
 > {
     base_token: APIToken,
     sl_token: APIToken,
     price_api_client: Box<dyn PriceApiClient>,
     config: BaseTokenPriceUpdaterConfig,
     last_l1_ratio: Ratio<BigUint>,
-    chain_admin_contract: IChainAdminOwnableInstance<FillProvider<F, P>, Ethereum>,
+    chain_admin_contract: IChainAdminOwnableInstance<P, Ethereum>,
     token_multiplier_setter_address: Option<Address>,
     zk_chain_address: Address,
     token_price_sender: watch::Sender<Option<TokenPricesForFees>>,
@@ -111,13 +109,13 @@ async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>
     Ok(address)
 }
 
-impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provider<Ethereum> + Clone>
-    BaseTokenPriceUpdater<F, P>
+impl<P: Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone>
+    BaseTokenPriceUpdater<P>
 {
     pub async fn new(
         zk_chain_l1: ZkChain<DynProvider>,
         zk_chain_gateway: Option<ZkChain<DynProvider>>,
-        mut l1_provider: FillProvider<F, P>,
+        mut l1_provider: P,
         base_token_adjuster_config: BaseTokenPriceUpdaterConfig,
         external_price_api_client_config: ExternalPriceApiClientConfig,
         token_price_sender: watch::Sender<Option<TokenPricesForFees>>,
@@ -231,7 +229,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         token_address: Address,
         token_address_override: Option<Address>,
         decimals_override: Option<u8>,
-        l1_provider: &FillProvider<F, P>,
+        l1_provider: &P,
     ) -> anyhow::Result<APIToken> {
         let token_address = token_address_override.unwrap_or(token_address);
         match token_address {
