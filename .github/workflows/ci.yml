@@ -87,8 +87,16 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
-      - name: Run tests
-        run: cargo nextest run --release --workspace ${NEXTEST_ITERATIONS}
+      # Consensus tests spin up 3 L2 nodes + an L1 anvil each and are CPU-heavy.
+      # Run them in a dedicated step so they have the whole runner to themselves
+      # (no contention from unrelated tests) while still being able to run in
+      # parallel with each other.
+      - name: Run tests (non-consensus)
+        run: cargo nextest run --release --workspace -E '!test(~consensus)' ${NEXTEST_ITERATIONS}
+
+      - name: Run consensus tests (isolated step)
+        if: always() && !cancelled()
+        run: cargo nextest run --release --workspace -E 'test(~consensus)' ${NEXTEST_ITERATIONS}
 
       - name: Upload test results
         if: always() && !cancelled()
