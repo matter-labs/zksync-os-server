@@ -199,7 +199,29 @@ impl NetworkService {
             total_difficulty: chain_spec.genesis().difficulty,
         };
         let fork_id = chain_spec.fork_id(&genesis);
+        // Compute our local peer-id so we can apply the devp2p tie-breaker at the
+        // boot_nodes layer: only actively dial peers whose peer-id is greater than
+        // ours; lower-id peers are expected to dial us. This works around an
+        // upstream race in reth's session manager
+        // (`crates/net/network/src/session/mod.rs:498-534`) where simultaneous
+        // cross-dials between the same two peers can leave both sides with zero
+        // active sessions — its duplicate-detection is "first established wins"
+        // with no peer-identity tie-breaker, so each side can pick a different
+        // "winner" and then the `AlreadyConnected` disconnect each side sends on
+        // its "loser" terminates the other side's "winner."
+        let our_peer_id = NodeRecord::from_secret_key(rlpx_address, &config.secret_key).id;
         let boot_nodes = resolve_boot_nodes_with_retry(config.boot_nodes.clone()).await?;
+        let configured_boot_node_count = boot_nodes.len();
+        let boot_nodes: Vec<TrustedPeer> = boot_nodes
+            .into_iter()
+            .filter(|peer| peer.id > our_peer_id)
+            .collect();
+        tracing::info!(
+            %our_peer_id,
+            configured = configured_boot_node_count,
+            will_dial = boot_nodes.len(),
+            "applying devp2p tie-breaker to boot nodes: dialing only higher-id peers"
+        );
         tracing::info!(?genesis, ?fork_id, "initializing p2p network service");
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
         let cfg_builder = RethNetworkConfig::builder(config.secret_key, runtime)
