@@ -29,6 +29,7 @@ pub enum ComponentId {
     RevmConsistencyChecker,
     MigrationGate,
     ReplayArchiveGate,
+    TreeBlockCacher,
 }
 
 impl ComponentId {
@@ -59,6 +60,7 @@ impl ComponentId {
             Self::RevmConsistencyChecker => "revm_consistency_checker",
             Self::MigrationGate => "migration_gate",
             Self::ReplayArchiveGate => "replay_archive_gate",
+            Self::TreeBlockCacher => "tree_block_cacher",
         }
     }
 }

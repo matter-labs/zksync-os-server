@@ -60,6 +60,7 @@ zksync_os_raft.workspace = true
 zksync_os_tx_validators.workspace = true
 zksync_os_config_validation_macros.workspace = true
 zksync_os_backpressure.workspace = true
+zksync_os_tree_block_cache.workspace = true
 
 zk_ee_prev.workspace = true
 zk_os_basic_system_prev.workspace = true

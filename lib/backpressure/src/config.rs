@@ -68,7 +68,8 @@ impl BackpressureConfig {
             | ComponentId::Batcher
             | ComponentId::BatchSink
             | ComponentId::NoopSink
-            | ComponentId::BatchVerificationResponder => PipelineCondition::default(),
+            | ComponentId::BatchVerificationResponder
+            | ComponentId::TreeBlockCacher => PipelineCondition::default(),
         }
     }
 

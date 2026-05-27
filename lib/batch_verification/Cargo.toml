@@ -18,6 +18,7 @@ zksync_os_pipeline.workspace = true
 zksync_os_batch_types.workspace = true
 zksync_os_batcher_metrics.workspace = true
 zksync_os_network.workspace = true
+zksync_os_tree_block_cache.workspace = true
 
 zksync_os_interface.workspace = true
 

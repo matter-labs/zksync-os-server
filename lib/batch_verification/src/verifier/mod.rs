@@ -3,7 +3,6 @@ use crate::verify_batch_wire::{VerificationRequest, normalized_commit_data};
 use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
 use async_trait::async_trait;
-use block_cache::BlockCache;
 use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
@@ -14,22 +13,17 @@ use zksync_os_network::{
 };
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
-use zksync_os_storage_api::{StateError, TreeBlock, read_multichain_root};
+use zksync_os_tree_block_cache::{CachedBlockNotification, LocalBatchDataCache};
 
-mod block_cache;
 mod metrics;
 
-type VerificationInput = TreeBlock;
-
 /// Batch verification responder that consumes requests from the network.
-pub struct BatchVerificationResponder<Finality, ReadState> {
+pub struct BatchVerificationResponder {
     chain_id: u64,
     diamond_proxy_sl: Address,
     l1_state: L1State,
     signer: PrivateKeySigner,
-    block_cache: BlockCache<Finality, TreeBlock>,
-    read_state: ReadState,
+    local_batch_data_cache: LocalBatchDataCache,
     verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
 }
@@ -40,21 +34,18 @@ enum BatchVerificationError {
     MissingBlock(u64),
     #[error("Batch data mismatch")]
     BatchDataMismatch,
-    #[error("State error: {0}")]
-    State(#[from] StateError),
+    #[error("Local batch data unavailable: {0}")]
+    LocalBatchData(anyhow::Error),
 }
 
-impl<Finality: ReadFinality, ReadState: ReadStateHistory>
-    BatchVerificationResponder<Finality, ReadState>
-{
+impl BatchVerificationResponder {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_id: u64,
         diamond_proxy_sl: Address,
         private_key: SecretString,
-        finality: Finality,
         l1_state: L1State,
-        read_state: ReadState,
+        local_batch_data_cache: LocalBatchDataCache,
         verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
         outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
     ) -> Self {
@@ -74,8 +65,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             diamond_proxy_sl,
             l1_state,
             signer,
-            block_cache: BlockCache::new(finality),
-            read_state,
+            local_batch_data_cache,
             verify_request_rx,
             outgoing_verify_results,
         }
@@ -93,28 +83,27 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             request.last_block_number,
         );
 
-        let blocks = (request.first_block_number..=request.last_block_number)
-            .map(|block_number| {
-                let cached = self
-                    .block_cache
-                    .get(block_number)
-                    .ok_or(BatchVerificationError::MissingBlock(block_number))?;
-                let (block_output, replay_record, tree_data) =
-                    (&cached.output, &cached.record, &cached.tree);
-                let tree_output = tree_data.output;
-                Ok((block_output, replay_record, tree_output))
-            })
-            .collect::<Result<Vec<_>, BatchVerificationError>>()?;
+        let blocks = self
+            .local_batch_data_cache
+            .get_range(request.first_block_number..=request.last_block_number)
+            .map_err(BatchVerificationError::LocalBatchData)?
+            .ok_or(BatchVerificationError::MissingBlock(
+                request.last_block_number,
+            ))?;
 
-        let state_view = self.read_state.state_view_at(request.last_block_number)?;
-        let multichain_root = read_multichain_root(state_view);
-        let (_, last_replay_record, _) = blocks.last().unwrap();
+        let last = blocks.last().unwrap();
+        let multichain_root = last.multichain_root;
+        let last_replay_record = &last.record;
 
         let (batch_info, _) = ExtendedCommitBatchInfo::build(
             blocks
                 .iter()
-                .map(|(block_output, replay_record, tree)| {
-                    (*block_output, replay_record.transactions.as_slice(), tree)
+                .map(|block| {
+                    (
+                        &block.output,
+                        block.record.transactions.as_slice(),
+                        &block.tree_output,
+                    )
                 })
                 .collect(),
             self.chain_id,
@@ -122,7 +111,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             request.pubdata_mode,
             self.l1_state.sl_chain_id,
             multichain_root,
-            &blocks.first().unwrap().1.protocol_version,
+            &blocks.first().unwrap().record.protocol_version,
             &last_replay_record.block_context.block_hashes.0,
         );
 
@@ -140,7 +129,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             self.diamond_proxy_sl,
             self.l1_state.sl_chain_id,
             self.l1_state.validator_timelock_sl,
-            &blocks.first().unwrap().1.protocol_version,
+            &blocks.first().unwrap().record.protocol_version,
             &self.signer,
         )
         .await;
@@ -176,10 +165,8 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
 }
 
 #[async_trait]
-impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
-    for BatchVerificationResponder<Finality, ReadState>
-{
-    type Input = VerificationInput;
+impl PipelineComponent for BatchVerificationResponder {
+    type Input = CachedBlockNotification;
     type Output = ();
 
     const COMPONENT_ID: zksync_os_pipeline::ComponentId =
@@ -197,12 +184,12 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
             tokio::select! {
                 block = input.recv() => {
                     match block {
-                        Some(tree_block) => {
+                        Some(notification) => {
                             state_reporter.enter_state(GenericComponentState::Active);
-                            let block_number = tree_block.record.block_context.block_number;
-                            let block_timestamp = tree_block.record.block_context.timestamp;
-                            self.block_cache.insert(block_number, tree_block)?;
-                            state_reporter.record_processed(block_number, Some(block_timestamp), None);
+                            if let Some((start, end)) = self.local_batch_data_cache.range() {
+                                BATCH_VERIFICATION_RESPONDER_METRICS.update_cache_range(start, end);
+                            }
+                            state_reporter.record_processed(notification.block_number, Some(notification.block_timestamp), None);
                         }
                         None => return Ok(()),
                     }

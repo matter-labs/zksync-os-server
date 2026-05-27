@@ -1,0 +1,23 @@
+[package]
+name = "zksync_os_tree_block_cache"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_merkle_tree_api.workspace = true
+zksync_os_observability.workspace = true
+zksync_os_pipeline.workspace = true
+zksync_os_storage_api.workspace = true
+zksync_os_types.workspace = true
+
+alloy = { workspace = true, default-features = false }
+anyhow.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tracing.workspace = true

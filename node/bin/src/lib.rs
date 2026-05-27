@@ -119,9 +119,10 @@ use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
-    BlockHashes, FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
-    ReplayRecord, WriteReplay, WriteRepository, WriteState,
+    BlockHashes, FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository,
+    ReadStateHistory, ReplayRecord, WriteReplay, WriteRepository, WriteState,
 };
+use zksync_os_tree_block_cache::{LocalBatchDataCache, TreeBlockCacher};
 use zksync_os_types::{
     BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, PubdataMode,
     TransactionAcceptanceState, UpgradeInfo, UpgradeMetadata,
@@ -347,6 +348,22 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let state = State::new(&config.general_config, &genesis).await;
 
+    let persistent_batch_storage =
+        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
+    let latest_persisted_batch = persistent_batch_storage.latest_batch();
+    let first_unpersisted_batch_block = if latest_persisted_batch == 0 {
+        1
+    } else {
+        persistent_batch_storage
+            .get_batch_by_number(latest_persisted_batch)
+            .expect("failed to read latest persisted batch")
+            .unwrap_or_else(|| {
+                panic!("latest persisted batch #{latest_persisted_batch} is missing")
+            })
+            .last_block_number()
+            + 1
+    };
+
     tracing::info!("Initializing mempools");
     let zk_provider_factory = ZkProviderFactory::new(state.clone(), repositories.clone(), chain_id);
     let l2_subpool = zksync_os_mempool::subpools::l2::in_memory(
@@ -372,6 +389,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .expect("cannot read tree last processed block after initialization")
             .expect("tree database is not initialized"),
         repositories_persisted_block: repositories.get_latest_block(),
+        first_unpersisted_batch_block,
         last_l1_committed_block,
         last_l1_proved_block,
         last_l1_executed_block,
@@ -442,6 +460,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (verify_batch_tx, verify_batch_rx) = tokio::sync::mpsc::channel::<PeerVerifyBatch>(128);
     let (outgoing_verify_results, _) =
         tokio::sync::broadcast::channel::<PeerVerifyBatchResult>(128);
+    let local_batch_data_cache = node_role.is_external().then(LocalBatchDataCache::new);
 
     let ConsensusRuntimeParts {
         canonization_engine,
@@ -919,8 +938,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // ========== Start L1 Persist Batch Watcher ===========
 
-    let persistent_batch_storage =
-        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
     let rpc_storage = RpcStorage::new(
         repositories.clone(),
         block_replay_storage.clone(),
@@ -936,6 +953,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .settlement_layer_intervals
             .clone();
         let persistent_batch_storage = persistent_batch_storage.clone();
+        let local_batch_data_cache = local_batch_data_cache.clone();
         let l1_block_updates = l1_block_updates.clone();
         let gateway_block_updates = gateway_block_updates.clone();
         async move {
@@ -943,6 +961,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 config.into(),
                 settlement_layer_intervals,
                 persistent_batch_storage,
+                local_batch_data_cache,
                 l1_block_updates,
                 gateway_block_updates,
             )
@@ -1099,6 +1118,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             verify_batch_rx,
             outgoing_verify_results.clone(),
+            local_batch_data_cache.expect("external node local batch data cache is initialized"),
         )
         .await
     };
@@ -1463,6 +1483,7 @@ async fn run_en_pipeline(
     chain_id: u64,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
+    local_batch_data_cache: LocalBatchDataCache,
 ) -> watch::Receiver<TransactionAcceptanceState> {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
@@ -1510,15 +1531,18 @@ async fn run_en_pipeline(
                 }),
         )
         .pipe(TreeManager { tree: tree.clone() })
+        .pipe(TreeBlockCacher::new(
+            local_batch_data_cache.clone(),
+            state.clone(),
+        ))
         .pipe_if(
             config.batch_verification_config.client_enabled,
             BatchVerificationResponder::new(
                 chain_id,
                 node_state_on_startup.l1_state.diamond_proxy_address_sl(),
                 config.batch_verification_config.signing_key.clone(),
-                finality.clone(),
                 node_state_on_startup.l1_state.clone(),
-                state.clone(),
+                local_batch_data_cache,
                 verify_batch_rx,
                 outgoing_verify_results,
             ),
@@ -1810,6 +1834,13 @@ fn determine_starting_block(
             // For compacted state, we need to replay all blocks that were not persisted yet.
             // For FullDiffs state (default) - this is always ahead of `last_l1_executed_block`.
             state.block_range_available().end() + 1,
+            // EN batch persistence verifies newly persisted batches against locally replayed
+            // batch data, so it must rebuild every not-yet-persisted batch from the first block.
+            if node_startup_state.node_role.is_external() {
+                node_startup_state.first_unpersisted_batch_block
+            } else {
+                u64::MAX
+            },
             // If block rebuild (aka block reversion) is configured, we should ensure we replay
             // all the blocks we are rebuilding
             config

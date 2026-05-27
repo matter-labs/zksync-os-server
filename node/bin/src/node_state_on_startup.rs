@@ -11,6 +11,7 @@ pub struct NodeStateOnStartup {
     pub block_replay_storage_last_block: u64,
     pub tree_last_block: u64,
     pub repositories_persisted_block: u64,
+    pub first_unpersisted_batch_block: u64,
     pub last_l1_committed_block: u64,
     pub last_l1_proved_block: u64,
     pub last_l1_executed_block: u64,
