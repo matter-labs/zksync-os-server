@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.20.4](https://github.com/matter-labs/zksync-os-server/compare/v0.20.3...v0.20.4) (2026-05-26)
+
+
+### Features
+
+* **multivm:** use v0.1.3 interface ([#1311](https://github.com/matter-labs/zksync-os-server/issues/1311)) ([e908627](https://github.com/matter-labs/zksync-os-server/commit/e9086271239b1f9f7e640847c57a8d1fb310292e))
+* **observability:** distinguish between default and non-default values in config metrics ([#1330](https://github.com/matter-labs/zksync-os-server/issues/1330)) ([bd44113](https://github.com/matter-labs/zksync-os-server/commit/bd44113c5d7f5dc187ac0d0f3e39dd0cbe1ffbec))
+* replay record archive ([#1279](https://github.com/matter-labs/zksync-os-server/issues/1279)) ([e412fe9](https://github.com/matter-labs/zksync-os-server/commit/e412fe94b0679d8f925a8a55f523e0d92d01ab6e))
+* **rpc:** add eth_fillTransaction ([#1288](https://github.com/matter-labs/zksync-os-server/issues/1288)) ([8507c44](https://github.com/matter-labs/zksync-os-server/commit/8507c4448a4b9f882d3a936eccc4b54591860fe3))
+* **rpc:** per-method and global JSON-RPC rate limiting ([#1297](https://github.com/matter-labs/zksync-os-server/issues/1297)) ([c9b6fd6](https://github.com/matter-labs/zksync-os-server/commit/c9b6fd6c83295fb60f6f1931c5803f0ddd451999))
+* **rpc:** surface VM rejections in eth_sendRawTransactionSync ([#1276](https://github.com/matter-labs/zksync-os-server/issues/1276)) ([bb2b452](https://github.com/matter-labs/zksync-os-server/commit/bb2b4525aa2a1eae64456eb5b7a0a3f4c1adf341))
+* **tree_manager:** combine tree writes with a single RocksDB flush ([#1304](https://github.com/matter-labs/zksync-os-server/issues/1304)) ([fd59f82](https://github.com/matter-labs/zksync-os-server/commit/fd59f8298eeb515a3562ba606c2cce9de628f0be))
+* **watcher:** shared l1/gw polling ([#1281](https://github.com/matter-labs/zksync-os-server/issues/1281)) ([9f580d1](https://github.com/matter-labs/zksync-os-server/commit/9f580d128cc13cd29893d66f42157a853b37911f))
+
+
+### Bug Fixes
+
+* **consensus:** forward follower transactions over RPC ([#1321](https://github.com/matter-labs/zksync-os-server/issues/1321)) ([6f8c110](https://github.com/matter-labs/zksync-os-server/commit/6f8c110e5781d27c0c8ea78bcf0ad922a572e9f5))
+* **integration-tests:** import NetworkTransactionBuilder ([#1305](https://github.com/matter-labs/zksync-os-server/issues/1305)) ([264d992](https://github.com/matter-labs/zksync-os-server/commit/264d9922452fd93ec5e7a1093ec6f928b67321ad))
+* **l1-watcher:** adapt upgrade watcher to ServerNotifier semantics ([#1289](https://github.com/matter-labs/zksync-os-server/issues/1289)) ([3e34339](https://github.com/matter-labs/zksync-os-server/commit/3e343399bafdb7cacfec17dcbca43d7ba883e579))
+* Revert change that returned back base fee estimation ([#1306](https://github.com/matter-labs/zksync-os-server/issues/1306)) ([e8030c8](https://github.com/matter-labs/zksync-os-server/commit/e8030c877080c0c3b7e3d54c493e9fd22b9da0d1))
+* **rpc:** return -32602 instead of -32603 for block-not-found errors ([#1310](https://github.com/matter-labs/zksync-os-server/issues/1310)) ([2f9f1f2](https://github.com/matter-labs/zksync-os-server/commit/2f9f1f2725a379e032dbfa6c4645d2aa7d3f1047))
+* **watcher:** skip old transactions in upgrade watcher ([#1325](https://github.com/matter-labs/zksync-os-server/issues/1325)) ([e9e977a](https://github.com/matter-labs/zksync-os-server/commit/e9e977a06816afe8d23a7669228efd034bb39e57))
+
+
+### Performance Improvements
+
+* **merkle-tree:** Optimize passing tree data through component pipeline ([#1241](https://github.com/matter-labs/zksync-os-server/issues/1241)) ([3dc0f18](https://github.com/matter-labs/zksync-os-server/commit/3dc0f18ea2c95da875e50bc25855e73e169d926a))
+
 ## [0.20.3](https://github.com/matter-labs/zksync-os-server/compare/v0.20.2...v0.20.3) (2026-05-18)
 
 
