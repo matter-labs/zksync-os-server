@@ -8,7 +8,7 @@ use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::Counter;
 use zksync_os_integration_tests::contracts::Counter::CounterInstance;
-use zksync_os_integration_tests::provider::ZksyncApi;
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_rpc_api::types::BatchStorageProof;
 use zksync_os_verify_storage_proof::l1::{fetch_stored_batch_hash, resolve_diamond_proxy};
 use zksync_os_verify_storage_proof::{VerificationResult, VerifyParams, verify_storage_proof};

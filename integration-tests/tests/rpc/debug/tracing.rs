@@ -14,7 +14,7 @@ use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert,
 use zksync_os_integration_tests::contracts::{
     Counter, EventEmitter, TracingPrimary, TracingSecondary,
 };
-use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
+use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
 use zksync_os_server::config::FeeConfig;
 

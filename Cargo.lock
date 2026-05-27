@@ -15047,6 +15047,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_alloy_ext"
+version = "0.20.4"
+dependencies = [
+ "alloy 2.0.4",
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "zksync_os_contract_interface",
+ "zksync_os_rpc_api",
+ "zksync_os_types",
+]
+
+[[package]]
 name = "zksync_os_api"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3#b4193659af83b6c71419ddda3f57e0302c61eb8d"
@@ -15292,6 +15308,7 @@ dependencies = [
  "test-log",
  "tokio",
  "tracing",
+ "zksync_os_alloy_ext",
  "zksync_os_api",
  "zksync_os_contract_interface",
  "zksync_os_integration_tests_macros",

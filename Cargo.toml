@@ -46,6 +46,7 @@ members = [
     "lib/raft",
     "lib/tx_validators",
     "lib/backpressure",
+    "lib/alloy_ext",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -319,6 +320,7 @@ zksync_os_reth_compat = { version = "=0.20.4", path = "lib/reth_compat" }
 zksync_os_operator_signer = { version = "=0.20.4", path = "lib/operator_signer" }
 zksync_os_integration_tests_macros = { version = "=0.20.4", path = "integration-tests-macros" }
 zksync_os_tx_validators = { version = "=0.20.4", path = "lib/tx_validators" }
+zksync_os_alloy_ext = { version = "=0.20.4", path = "lib/alloy_ext" }
 
 zksync_os_server = { version = "=0.20.4", path = "node/bin" }
 
