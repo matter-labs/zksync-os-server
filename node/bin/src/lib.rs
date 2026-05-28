@@ -46,7 +46,6 @@ use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::BlockNumber;
 use alloy::providers::Provider;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
@@ -57,6 +56,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
+use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{

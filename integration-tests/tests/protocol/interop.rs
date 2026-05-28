@@ -10,11 +10,11 @@ use alloy::{
     sol_types::{SolCall, SolType, SolValue},
 };
 use anyhow::{Context, Result};
+use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::assert_traits::ProviderAssert;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
-use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_integration_tests::{
     GatewayTester, Tester, assert_traits::ReceiptAssert, contracts::TestERC20,
 };
