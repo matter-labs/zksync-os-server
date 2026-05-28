@@ -79,6 +79,8 @@ jobs:
   #################################################
   test:
     runs-on: matterlabs-ci-runner-high-performance
+    env:
+      NEXTEST_PROFILE: ${{ github.event_name == 'pull_request' && 'pr' || 'default' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -87,16 +89,17 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Run tests
-        run: cargo nextest run --release --workspace ${NEXTEST_ITERATIONS}
+        run: cargo nextest run --release --workspace --profile "${NEXTEST_PROFILE}" ${NEXTEST_ITERATIONS}
 
       - name: Upload test results
         if: always() && !cancelled()
         uses: EnricoMi/publish-unit-test-result-action@3a74b2957438d0b6e2e61d67b05318aa25c9e6c6 # v2.20.0
         with:
           check_name: 'Test results'
-          files: target/nextest/default/${{ env.TEST_RESULTS_XML }}
+          files: target/nextest/${{ env.NEXTEST_PROFILE }}/${{ env.TEST_RESULTS_XML }}
           action_fail_on_inconclusive: true
           compare_to_earlier_commit: false # Do not compare with `main` due to different number of iterations
+          report_individual_runs: true
 
 
   # Temporary disable code coverage measurements in main due to llvm-cov issue with rustc v1.89:
