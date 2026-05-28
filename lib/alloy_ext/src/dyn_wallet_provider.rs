@@ -1,7 +1,8 @@
-use alloy::consensus::TrieAccount;
+use alloy::consensus::{BlockHeader, TrieAccount};
 use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::eips::eip2930::AccessListResult;
 use alloy::eips::{BlockId, BlockNumberOrTag};
+use alloy::network::primitives::BlockResponse;
 use alloy::network::{Ethereum, EthereumWallet, Network};
 use alloy::primitives::{
     Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, TxHash, U64, U128, U256,
@@ -105,6 +106,27 @@ impl Provider<Ethereum> for EthDynProvider {
 
     fn get_block_number(&self) -> ProviderCall<NoParams, U64, BlockNumber> {
         self.0.get_block_number()
+    }
+
+    // alloy 2.0 changed the `get_header` -> `get_block` fallback that 1.x had, so only JSON-RPC
+    // errors with -32601 code from `eth_getHeaderBy*` now propagate instead of degrading to
+    // `eth_getBlockBy*`. Upstream nodes return varying error codes for unsupported
+    // methods, so restore the pre-2.0 behavior of falling back on any error.
+    async fn get_block_number_by_id(
+        &self,
+        block_id: BlockId,
+    ) -> TransportResult<Option<BlockNumber>> {
+        match block_id {
+            BlockId::Number(BlockNumberOrTag::Number(num)) => Ok(Some(num)),
+            BlockId::Number(BlockNumberOrTag::Latest) => self.get_block_number().await.map(Some),
+            _ => {
+                if let Ok(header) = self.get_header(block_id).await {
+                    return Ok(header.map(|h| h.number()));
+                }
+                let block = self.get_block(block_id).await?;
+                Ok(block.map(|b| b.header().number()))
+            }
+        }
     }
 
     fn call(&self, tx: <Ethereum as Network>::TransactionRequest) -> EthCall<Ethereum, Bytes> {
@@ -469,5 +491,44 @@ impl EthWalletProvider for EthDynProvider {
 
     fn wallet_mut(&mut self) -> &mut EthereumWallet {
         self.0.wallet_mut()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::providers::ProviderBuilder;
+    use alloy::rpc::json_rpc::ErrorPayload;
+    use alloy::rpc::types::Block;
+    use alloy::transports::mock::Asserter;
+    use std::borrow::Cow;
+
+    #[tokio::test]
+    async fn get_block_number_by_id_falls_back_when_get_header_errors() {
+        let asserter = Asserter::new();
+        let provider = ProviderBuilder::new()
+            .disable_recommended_fillers()
+            .wallet(EthereumWallet::default())
+            .connect_mocked_client(asserter.clone());
+        let provider = EthDynProvider::new(provider);
+
+        asserter.push_failure(ErrorPayload {
+            code: -39001,
+            message: Cow::Borrowed("custom upstream error"),
+            data: None,
+        });
+        let mut block: Block = Block::default();
+        block.header.inner.number = 42;
+        asserter.push_success(&block);
+
+        let result = provider
+            .get_block_number_by_id(BlockId::finalized())
+            .await
+            .expect("fallback to get_block should succeed");
+        assert_eq!(result, Some(42));
+        assert!(
+            asserter.read_q().is_empty(),
+            "both mock responses should be consumed",
+        );
     }
 }

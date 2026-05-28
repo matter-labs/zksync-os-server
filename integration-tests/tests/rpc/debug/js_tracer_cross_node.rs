@@ -10,8 +10,8 @@ use serde_json::Value;
 use std::env;
 use std::str::FromStr;
 use tracing::info;
+use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use zksync_os_integration_tests::contracts::{TracingPrimary, TracingSecondary};
-use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
 
 const ZKSYNC_URL_ENV: &str = "JS_TRACER_ZKSYNC_RPC_URL";
 const RETH_URL_ENV: &str = "JS_TRACER_RETH_RPC_URL";

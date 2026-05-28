@@ -12,14 +12,12 @@ use alloy::consensus::Transaction as ConsensusTransaction;
 use alloy::eips::eip4844::env_settings::EnvKzgSettings;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::network::{
-    Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844, TransactionResponse,
-};
+use alloy::network::{TransactionBuilder, TransactionBuilder4844, TransactionResponse};
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::primitives::{Address, B256};
+use alloy::providers::Provider;
 use alloy::providers::ext::DebugApi;
 use alloy::providers::utils::Eip1559Estimation;
-use alloy::providers::{Provider, WalletProvider};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use alloy::transports::TransportError;
@@ -28,6 +26,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use zksync_os_alloy_ext::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState, StateLabel};
 use zksync_os_pipeline::{PeekableReceiver, SendAndRecordExt};
@@ -93,9 +92,8 @@ struct FeeParams {
 ///
 /// Note: we pass `to_address` - L1 contract address to send transactions to.
 /// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
-impl<P, Input> L1Sender<P, Input>
+impl<Input> L1Sender<Input>
 where
-    P: Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
     Input: SendToL1 + Send + 'static,
 {
     pub async fn operator_address(&self) -> anyhow::Result<Address> {

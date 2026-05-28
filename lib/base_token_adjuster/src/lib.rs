@@ -1,9 +1,9 @@
 use crate::metrics::{METRICS, OperationResult, OperationResultLabels};
-use alloy::network::{Ethereum, EthereumWallet, TransactionBuilder};
+use alloy::network::{Ethereum, TransactionBuilder};
 use alloy::primitives::Address;
 use alloy::primitives::utils::format_ether;
 use alloy::providers::ext::DebugApi;
-use alloy::providers::{DynProvider, Provider, WalletProvider};
+use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::TransactionReceipt;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use anyhow::Context;
@@ -12,6 +12,7 @@ use num::{BigUint, ToPrimitive};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
+use zksync_os_alloy_ext::dyn_wallet_provider::{EthDynProvider, EthWalletProvider};
 use zksync_os_contract_interface::{
     IChainAdminOwnable::{self, IChainAdminOwnableInstance},
     IERC20, ZkChain,
@@ -74,22 +75,20 @@ impl BaseTokenPriceUpdaterConfig {
 }
 
 #[derive(Debug)]
-pub struct BaseTokenPriceUpdater<
-    P: Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone,
-> {
+pub struct BaseTokenPriceUpdater {
     base_token: APIToken,
     sl_token: APIToken,
     price_api_client: Box<dyn PriceApiClient>,
     config: BaseTokenPriceUpdaterConfig,
     last_l1_ratio: Ratio<BigUint>,
-    chain_admin_contract: IChainAdminOwnableInstance<P, Ethereum>,
+    chain_admin_contract: IChainAdminOwnableInstance<EthDynProvider, Ethereum>,
     token_multiplier_setter_address: Option<Address>,
     zk_chain_address: Address,
     token_price_sender: watch::Sender<Option<TokenPricesForFees>>,
 }
 
-async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>>(
-    provider: &mut P,
+async fn register_operator(
+    provider: &mut EthDynProvider,
     signer_config: SignerConfig,
 ) -> anyhow::Result<Address> {
     let address = signer_config
@@ -109,13 +108,11 @@ async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>
     Ok(address)
 }
 
-impl<P: Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone>
-    BaseTokenPriceUpdater<P>
-{
+impl BaseTokenPriceUpdater {
     pub async fn new(
         zk_chain_l1: ZkChain<DynProvider>,
         zk_chain_gateway: Option<ZkChain<DynProvider>>,
-        mut l1_provider: P,
+        mut l1_provider: EthDynProvider,
         base_token_adjuster_config: BaseTokenPriceUpdaterConfig,
         external_price_api_client_config: ExternalPriceApiClientConfig,
         token_price_sender: watch::Sender<Option<TokenPricesForFees>>,
@@ -229,7 +226,7 @@ impl<P: Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone>
         token_address: Address,
         token_address_override: Option<Address>,
         decimals_override: Option<u8>,
-        l1_provider: &P,
+        l1_provider: &EthDynProvider,
     ) -> anyhow::Result<APIToken> {
         let token_address = token_address_override.unwrap_or(token_address);
         match token_address {
@@ -489,7 +486,7 @@ impl<P: Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone>
 }
 
 async fn validate_tx_receipt(
-    provider: &impl Provider,
+    provider: &EthDynProvider,
     receipt: TransactionReceipt,
 ) -> anyhow::Result<()> {
     if receipt.status() {
