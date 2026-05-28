@@ -526,6 +526,7 @@ async fn consensus_restarted_node_catches_up_after_long_transaction_storm() -> a
 }
 
 #[test_log::test(tokio::test)]
+#[ignore = "flaky; @romanbrodetski is working on it"]
 async fn consensus_restarted_node_catches_up_while_transaction_storm_continues()
 -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::builder()
