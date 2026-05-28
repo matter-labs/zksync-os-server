@@ -97,6 +97,14 @@ pub struct L1SenderMetrics {
     /// Buckets cover 0.5s → ~17 minutes in doubling steps, spanning normal (15-30s) to heavily congested (10min+).
     #[metrics(labels = ["command"], buckets = Buckets::exponential(0.5..=1024.0, 2.0))]
     pub tx_inclusion_latency_seconds: LabeledFamily<&'static str, Histogram<f64>>,
+
+    /// Amount of ETH that is supposed to be on balance to submit transaction with current fee params & gas limit
+    #[metrics(labels = ["command"])]
+    pub balance_required_for_tx: LabeledFamily<&'static str, Gauge<u64>>,
+
+    /// Actual amount of ETH that was consumed by transaction
+    #[metrics(labels = ["command"])]
+    pub balance_consumed_by_tx: LabeledFamily<&'static str, Gauge<u64>>,
 }
 
 impl L1SenderMetrics {
