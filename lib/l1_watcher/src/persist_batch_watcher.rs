@@ -244,27 +244,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         })
     }
 
-    async fn verify_pending_batch(
-        &self,
-        pending: &PendingCommittedBatch,
-        execute: &BlockExecution,
-    ) -> anyhow::Result<()> {
+    async fn verify_committed_batch(&self, pending: &PendingCommittedBatch) -> anyhow::Result<()> {
         let discovered = &pending.discovered;
-        anyhow::ensure!(
-            execute.batchHash == discovered.batch_info.state_commitment,
-            "executed batch #{} state commitment does not match committed batch data: execute={:?}, commit={:?}",
-            discovered.number(),
-            execute.batchHash,
-            discovered.batch_info.state_commitment
-        );
-        anyhow::ensure!(
-            execute.commitment == discovered.batch_info.commitment,
-            "executed batch #{} commitment does not match committed batch data: execute={:?}, commit={:?}",
-            discovered.number(),
-            execute.commitment,
-            discovered.batch_info.commitment
-        );
-
         let Some(cache) = &self.local_batch_data_cache else {
             tracing::debug!(
                 batch_number = discovered.number(),
@@ -293,6 +274,28 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             first_block = discovered.first_block_number(),
             last_block = discovered.last_block_number(),
             "verified committed batch against local replayed data"
+        );
+        Ok(())
+    }
+
+    fn verify_execute_matches_committed_batch(
+        pending: &PendingCommittedBatch,
+        execute: &BlockExecution,
+    ) -> anyhow::Result<()> {
+        let discovered = &pending.discovered;
+        anyhow::ensure!(
+            execute.batchHash == discovered.batch_info.state_commitment,
+            "executed batch #{} state commitment does not match committed batch data: execute={:?}, commit={:?}",
+            discovered.number(),
+            execute.batchHash,
+            discovered.batch_info.state_commitment
+        );
+        anyhow::ensure!(
+            execute.commitment == discovered.batch_info.commitment,
+            "executed batch #{} commitment does not match committed batch data: execute={:?}, commit={:?}",
+            discovered.number(),
+            execute.commitment,
+            discovered.batch_info.commitment
         );
         Ok(())
     }
@@ -358,6 +361,9 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             }
             tracing::debug!(batch_number, "discovered committed batch");
             let committed_batch = self.parse_committed_batch(provider, report, log).await?;
+            self.verify_committed_batch(&committed_batch)
+                .await
+                .map_err(L1WatcherError::Other)?;
 
             self.committed_batches.insert(batch_number, committed_batch);
             self.last_processed_commit_batch = batch_number;
@@ -399,8 +405,7 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                 if batch_number > self.last_persisted_batch_on_start {
                     let batch_hash = execute.batchHash;
                     if let Some(committed_batch) = self.committed_batches.remove(&batch_number) {
-                        self.verify_pending_batch(&committed_batch, &execute)
-                            .await
+                        Self::verify_execute_matches_committed_batch(&committed_batch, &execute)
                             .map_err(L1WatcherError::Other)?;
                         let last_block_number = committed_batch.discovered.last_block_number();
                         tracing::debug!(
