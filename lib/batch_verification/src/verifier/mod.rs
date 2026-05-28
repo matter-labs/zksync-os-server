@@ -9,15 +9,13 @@ use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
 use zksync_os_batch_types::{BatchSignature, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
-use zksync_os_interface::types::BlockOutput;
-use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
 };
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
-use zksync_os_storage_api::{ReplayRecord, StateError, TreeBlock, read_multichain_root};
+use zksync_os_storage_api::{StateError, TreeBlock, read_multichain_root};
 
 mod block_cache;
 mod metrics;
@@ -40,8 +38,6 @@ pub struct BatchVerificationResponder<Finality, ReadState> {
 enum BatchVerificationError {
     #[error("Missing records for block {0}")]
     MissingBlock(u64),
-    #[error("Tree error")]
-    TreeError,
     #[error("Batch data mismatch")]
     BatchDataMismatch,
     #[error("State error: {0}")]
@@ -97,29 +93,18 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             request.last_block_number,
         );
 
-        let blocks: Vec<(&BlockOutput, &ReplayRecord, TreeBatchOutput)> =
-            (request.first_block_number..=request.last_block_number)
-                .map(|block_number| {
-                    let cached = self
-                        .block_cache
-                        .get(block_number)
-                        .ok_or(BatchVerificationError::MissingBlock(block_number))?;
-                    let (block_output, replay_record, tree_data) =
-                        (&cached.output, &cached.record, &cached.tree);
-
-                    let (root_hash, leaf_count) = tree_data
-                        .block_end
-                        .clone()
-                        .root_info()
-                        .map_err(|_| BatchVerificationError::TreeError)?;
-
-                    let tree_output = TreeBatchOutput {
-                        root_hash,
-                        leaf_count,
-                    };
-                    Ok((block_output, replay_record, tree_output))
-                })
-                .collect::<Result<Vec<_>, BatchVerificationError>>()?;
+        let blocks = (request.first_block_number..=request.last_block_number)
+            .map(|block_number| {
+                let cached = self
+                    .block_cache
+                    .get(block_number)
+                    .ok_or(BatchVerificationError::MissingBlock(block_number))?;
+                let (block_output, replay_record, tree_data) =
+                    (&cached.output, &cached.record, &cached.tree);
+                let tree_output = tree_data.output;
+                Ok((block_output, replay_record, tree_output))
+            })
+            .collect::<Result<Vec<_>, BatchVerificationError>>()?;
 
         let state_view = self.read_state.state_view_at(request.last_block_number)?;
         let multichain_root = read_multichain_root(state_view);
@@ -138,7 +123,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             self.l1_state.sl_chain_id,
             multichain_root,
             &blocks.first().unwrap().1.protocol_version,
-            &last_replay_record.block_context.block_hashes,
+            &last_replay_record.block_context.block_hashes.0,
         );
 
         let expected_commit_data = normalized_commit_data(

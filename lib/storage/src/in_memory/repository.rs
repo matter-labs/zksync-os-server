@@ -6,11 +6,11 @@ use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
-use zksync_os_interface::types::{BlockOutput, ExecutionResult};
+use zksync_os_interface::types::ExecutionResult;
 use zksync_os_storage_api::{
     LogIndex, ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
-use zksync_os_types::{L2ToL1Log, ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
+use zksync_os_types::{BlockOutput, L2ToL1Log, ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
 
 /// In-memory repositories that store node data required for RPC but not for VM execution.
 ///

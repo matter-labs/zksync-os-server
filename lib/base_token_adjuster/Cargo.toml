@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_alloy_ext.workspace = true
 vise.workspace = true
 
 tokio = { workspace = true, features = ["time"] }

@@ -15,12 +15,10 @@ use zksync_os_batch_types::batcher_model::{
 };
 use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_contract_interface::models::StoredBatchInfo;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_watcher::CommittedBatchProvider;
-use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
-use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
+use zksync_os_storage_api::ReadStateHistory;
 use zksync_os_types::PubdataMode;
 
 pub mod batch_builder;
@@ -219,7 +217,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         let mut first_block_timestamp: Option<u64> = None;
 
         let batch_number = prev_batch_info.batch_number + 1;
-        let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
+        let mut blocks = vec![];
         let mut accumulator = BatchInfoAccumulator::new(
             self.batcher_config.tx_per_batch_limit,
             self.pubdata_limit_bytes,
@@ -252,7 +250,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                             break;
                         }
                         Some(false) => {
-                            let Some(ProverBlock { output: block_output, record: replay_record, prover_input, tree }) = block_receiver.pop_buffer() else {
+                            let Some(ProverBlock { output: block_output, record: replay_record, prover_input, tree_output }) = block_receiver.pop_buffer() else {
                                 anyhow::bail!("No block received in buffer after peeking")
                             };
 
@@ -269,13 +267,6 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                                 block_number,
                                 "Adding block to a pending batch."
                             );
-
-                            let (root_hash, leaf_count) = tree.block_end.root_info()?;
-
-                            let tree_output = TreeBatchOutput {
-                                root_hash,
-                                leaf_count,
-                            };
 
                             // Always record the first block's timestamp as the stable deadline
                             // anchor. This must happen before the last_persisted_block check so
@@ -357,7 +348,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
             "Recreating existing batch"
         );
 
-        let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
+        let mut blocks = vec![];
 
         let expected_block_count = existing_batch.block_count();
         // Collect all blocks in this batch
@@ -367,19 +358,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 output: block_output,
                 record: replay_record,
                 prover_input,
-                tree,
+                tree_output,
             }) = block_receiver.recv().await
             else {
                 tracing::info!("inbound channel closed");
                 return Ok(None);
             };
             state_reporter.enter_state(GenericComponentState::Active);
-
-            let (root_hash, leaf_count) = tree.block_end.root_info()?;
-            let tree_output = TreeBatchOutput {
-                root_hash,
-                leaf_count,
-            };
 
             tracing::debug!(
                 batch_number,

@@ -5,9 +5,8 @@ use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::ops::Range;
 use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_rocksdb::rocksdb;
-use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
+use zksync_os_types::{BlockOutput, ZkReceiptEnvelope, ZkTransaction};
 
 /// Log index over persisted blocks, mapping addresses and topics to the block numbers where they
 /// appear. Blocks outside the returned covered range must fall back to a bloom scan.

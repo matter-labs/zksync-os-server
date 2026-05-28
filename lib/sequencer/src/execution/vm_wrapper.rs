@@ -1,4 +1,6 @@
 use crate::execution::metrics::EXECUTION_METRICS;
+use crate::execution::utils::ReadRecordingState;
+use crate::model::blocks::BlockOutputWithReads;
 use anyhow::Context;
 use std::time::Duration;
 use tokio::{
@@ -8,14 +10,14 @@ use tokio::{
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::traits::{EncodedTx, NextTxResponse, TxResultCallback, TxSource};
-use zksync_os_interface::types::{BlockOutput, TxProcessingOutputOwned};
+use zksync_os_interface::types::TxProcessingOutputOwned;
 use zksync_os_storage_api::{BlockContext, ViewState};
 
 /// A one‐by‐one driver around `run_block`, enabling `execute_next_tx` interface
 /// (as opposed to pull interface of `run_block` in zksync-os)
 /// consider changing that interface on zksync-os side, which will make this file redundant
 pub struct VmWrapper {
-    handle: Option<JoinHandle<Result<BlockOutput, anyhow::Error>>>,
+    handle: Option<JoinHandle<Result<BlockOutputWithReads, anyhow::Error>>>,
     tx_sender: Sender<NextTxResponse>,
     tx_result_receiver: Receiver<Result<TxProcessingOutputOwned, InvalidTransaction>>,
 }
@@ -39,15 +41,21 @@ impl VmWrapper {
 
         // Spawn the blocking run_block(...) call.
         let join_handle = spawn_blocking(move || {
-            zksync_os_multivm::run_block(
+            let (recording_state, recording_handle) = ReadRecordingState::new(state_view.clone());
+            let block_output = zksync_os_multivm::run_block(
                 context,
-                state_view.clone(),
+                recording_state,
                 state_view,
                 tx_source,
                 tx_callback,
                 &mut tracer,
                 &mut validator,
-            )
+            )?;
+
+            Ok(BlockOutputWithReads::new(
+                block_output,
+                recording_handle.into_read_keys(),
+            ))
         });
 
         Self {
@@ -106,7 +114,7 @@ impl VmWrapper {
     }
 
     /// Tell the VM to seal the block and return the final `BlockOutput`.
-    pub async fn seal_block(self) -> anyhow::Result<BlockOutput> {
+    pub async fn seal_block(self) -> anyhow::Result<BlockOutputWithReads> {
         // Request batch seal.
         let _ = self.tx_sender.send(NextTxResponse::SealBlock).await;
         // Await the blocking task's result.

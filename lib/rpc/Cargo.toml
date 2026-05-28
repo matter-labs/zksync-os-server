@@ -25,6 +25,7 @@ zksync_os_batch_types.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_merkle_tree_api.workspace = true
+zksync_os_raft.workspace = true
 
 zksync_os_evm_errors.workspace = true
 zksync_os_interface.workspace = true
@@ -54,6 +55,7 @@ tracing.workspace = true
 vise.workspace = true
 tower.workspace = true
 tower-http = { workspace = true, features = ["cors"] }
+governor.workspace = true
 hyper.workspace = true
 
 boa_engine.workspace = true

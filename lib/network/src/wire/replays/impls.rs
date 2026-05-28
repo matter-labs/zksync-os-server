@@ -7,9 +7,9 @@ use crate::wire::replays::{WireReplayRecord, v0, v1, v2, v3};
 use crate::wire::{BlockHashes, ForcedPreimage};
 use alloy::consensus::crypto::RecoveryError;
 use alloy::primitives::{BlockNumber, Bytes};
-use zksync_os_interface::types::BlockHashes as InterfaceBlockHashes;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_storage_api::BlockContext as StorageBlockContext;
+use zksync_os_storage_api::BlockHashes as StorageBlockHashes;
 use zksync_os_storage_api::ReplayRecord as StorageReplayRecord;
 use zksync_os_types::InteropRootsLogIndex;
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
@@ -115,7 +115,7 @@ impl From<v1::BlockContext> for StorageBlockContext {
         Self {
             chain_id: value.chain_id,
             block_number: value.block_number,
-            block_hashes: InterfaceBlockHashes(value.block_hashes.0),
+            block_hashes: StorageBlockHashes(value.block_hashes.0),
             timestamp: value.timestamp,
             eip1559_basefee: value.eip1559_basefee,
             pubdata_price: value.pubdata_price,
@@ -197,7 +197,7 @@ impl From<v2::BlockContext> for StorageBlockContext {
         Self {
             chain_id: value.chain_id,
             block_number: value.block_number,
-            block_hashes: InterfaceBlockHashes(value.block_hashes.0),
+            block_hashes: StorageBlockHashes(value.block_hashes.0),
             timestamp: value.timestamp,
             eip1559_basefee: value.eip1559_basefee,
             pubdata_price: value.pubdata_price,
@@ -308,7 +308,7 @@ impl From<v3::BlockContext> for StorageBlockContext {
         Self {
             chain_id: value.chain_id,
             block_number: value.block_number,
-            block_hashes: InterfaceBlockHashes(value.block_hashes.0),
+            block_hashes: StorageBlockHashes(value.block_hashes.0),
             timestamp: value.timestamp,
             eip1559_basefee: value.eip1559_basefee,
             pubdata_price: value.pubdata_price,

@@ -7,13 +7,13 @@ use alloy::sol_types::SolEvent;
 use anyhow::Context as _;
 use regex::Regex;
 use std::time::Duration;
+use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::IExecutor::BlockCommit;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::Counter::CounterInstance;
 use zksync_os_integration_tests::contracts::{Counter, EventEmitter};
-use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
-use zksync_os_integration_tests::provider::ZksyncApi;
 use zksync_os_integration_tests::{
     CURRENT_TO_L1, NEXT_TO_GATEWAY, TestEnvironment, Tester, test_multisetup,
 };
