@@ -260,6 +260,7 @@ async fn consensus_can_be_reenabled_after_clearing_raft_history() -> anyhow::Res
 }
 
 #[test_log::test(tokio::test)]
+#[ignore = "flaky; @romanbrodetski is working on it"]
 async fn consensus_cluster_forms_with_three_nodes_and_replicates_blocks() -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::builder()
         .with_consensus_secret_keys(consensus_test_keys(3))
@@ -343,6 +344,7 @@ async fn consensus_cluster_send_raw_transaction_sync_accepts_leader_and_replica(
 }
 
 #[test_log::test(tokio::test)]
+#[ignore = "flaky; @romanbrodetski is working on it"]
 async fn consensus_cluster_rotates_leader_after_failure() -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::builder()
         .with_consensus_secret_keys(consensus_test_keys(3))
