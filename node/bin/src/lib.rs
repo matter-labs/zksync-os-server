@@ -233,10 +233,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         runtime,
         "l1 block updates",
         config.l1_watcher_config.poll_interval,
-        config
-            .l1_watcher_config
-            .finalized_poll_interval
-            .unwrap_or(config.l1_watcher_config.poll_interval),
+        config.l1_watcher_config.finalized_poll_interval,
     );
     let gateway_block_updates = gateway_provider.as_ref().map(|provider| {
         block_updates::run(
@@ -244,10 +241,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             runtime,
             "gateway block updates",
             config.l1_watcher_config.poll_interval,
-            config
-                .l1_watcher_config
-                .finalized_poll_interval
-                .unwrap_or(config.l1_watcher_config.poll_interval),
+            config.l1_watcher_config.finalized_poll_interval,
         )
     });
     let (sl_provider, sl_block_updates) = if l1_state.l1_chain_id == l1_state.sl_chain_id {

@@ -1203,14 +1203,13 @@ pub struct L1WatcherConfig {
     pub confirmations: u64,
 
     /// How often to poll L1 for the latest block.
-    /// Also used for polling latest finalized block, unless overriden by `finalized_poll_interval`
     #[config(default_t = 1 * TimeUnit::Seconds)]
     pub poll_interval: Duration,
 
     /// How often to poll L1 for the latest finalized block.
-    /// If unset, regular `poll_interval` will be used.
     /// Note: Finalization advances at epoch boundaries. Which is every ~6.4 minutes on L1.
-    pub finalized_poll_interval: Option<Duration>,
+    #[config(default_t = 1 * TimeUnit::Minutes)]
+    pub finalized_poll_interval: Duration,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
