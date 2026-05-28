@@ -757,7 +757,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let l1_subpool = L1Subpool::new(10);
     runtime.spawn_critical_task(
-        "gateway migration watcher",
+        "L1 transaction watcher",
         L1TxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy_l1.clone(),
