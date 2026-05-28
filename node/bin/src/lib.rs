@@ -44,9 +44,8 @@ use crate::provider::{ProviderKind, build_node_provider};
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
-use alloy::network::{Ethereum, EthereumWallet};
 use alloy::primitives::BlockNumber;
-use alloy::providers::{Provider, WalletProvider};
+use alloy::providers::Provider;
 use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
@@ -57,6 +56,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
+use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{
@@ -1189,7 +1189,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: &Config,
-    sl_provider: impl Provider<Ethereum> + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
+    sl_provider: EthDynProvider,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     runtime: &Runtime,
@@ -1416,7 +1416,7 @@ async fn run_main_node_pipeline(
         .pipe_opt(replay_archiver.map(|replay_archiver| {
             ReplayArchiveGateComponent::new(replay_archiver, block_replay_storage.clone())
         }))
-        .pipe(L1Sender::<_, CommitCommand> {
+        .pipe(L1Sender::<CommitCommand> {
             provider: sl_provider.clone(),
             config: commit_sender_config,
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
@@ -1428,7 +1428,7 @@ async fn run_main_node_pipeline(
         .pipe(GaplessL1ProofSender::new(
             node_state_on_startup.l1_state.last_executed_batch + 1,
         ))
-        .pipe(L1Sender::<_, ProofCommand> {
+        .pipe(L1Sender::<ProofCommand> {
             provider: sl_provider.clone(),
             config: prove_sender_config,
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,

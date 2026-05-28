@@ -1,9 +1,7 @@
 use crate::config::{ChainLayout, load_chain_config};
-use crate::dyn_wallet_provider::EthDynProvider;
-use crate::network::Zksync;
 use crate::node_log::NodeLogState;
 use crate::prover_tester::ProverTester;
-use crate::provider::{ZksyncApi, ZksyncTestingProvider};
+use crate::provider::ZksyncTestingProvider;
 use crate::rpc_recorder::{HttpRpcRecorder, RpcRecordConfig};
 use crate::test_config::{
     TEST_PROVIDER_POLL_INTERVAL, build_node_config, disable_prover_input_generation,
@@ -29,6 +27,9 @@ use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
+use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
+use zksync_os_alloy_ext::network::Zksync;
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
@@ -47,9 +48,7 @@ use zksync_os_types::{
 pub mod assert_traits;
 pub mod config;
 pub mod contracts;
-pub mod dyn_wallet_provider;
 pub mod multi_node;
-mod network;
 mod node_log;
 mod prover_tester;
 pub mod provider;

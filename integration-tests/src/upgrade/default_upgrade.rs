@@ -3,10 +3,8 @@ use alloy::{
     sol_types::SolValue as _,
 };
 
-use crate::{
-    dyn_wallet_provider::EthDynProvider,
-    upgrade::interfaces::{self, FacetCut, ProposedUpgrade},
-};
+use crate::upgrade::interfaces::{self, FacetCut, ProposedUpgrade};
+use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 
 #[derive(Debug)]
 pub struct DefaultUpgrade {
