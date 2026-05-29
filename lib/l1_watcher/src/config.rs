@@ -15,4 +15,7 @@ pub struct L1WatcherConfig {
     /// How often to poll L1 for the latest finalized block.
     /// Note: Finalization advances at epoch boundaries. Which is every ~6.4 minutes on L1.
     pub finalized_poll_interval: Duration,
+
+    /// Number of recent blocks retained in the shared logs cache.
+    pub logs_cache_capacity: usize,
 }
