@@ -3,67 +3,7 @@ use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::rpc::types::TransactionReceipt;
 use anyhow::Context;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
-use std::time::Duration;
 use vise::{Buckets, EncodeLabelValue, Gauge, Histogram, LabeledFamily, Metrics};
-use zksync_os_alloy_ext::retry::RpcRetryEvent;
-
-pub(crate) struct LongRpcCallGaugeGuard {
-    command: &'static str,
-    call_name: &'static str,
-    rpc_call_timeout_critical: Duration,
-    reported: Arc<AtomicBool>,
-}
-
-impl LongRpcCallGaugeGuard {
-    pub(crate) fn new(
-        command: &'static str,
-        call_name: &'static str,
-        rpc_call_timeout_critical: Duration,
-    ) -> Self {
-        Self {
-            command,
-            call_name,
-            rpc_call_timeout_critical,
-            reported: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    pub(crate) fn on_retry(&self) -> impl for<'a> Fn(&RpcRetryEvent<'a>) + Send + Sync + 'static {
-        let command = self.command;
-        let call_name = self.call_name;
-        let rpc_call_timeout_critical = self.rpc_call_timeout_critical;
-        let reported = Arc::clone(&self.reported);
-        move |event| {
-            if event.elapsed <= rpc_call_timeout_critical || reported.swap(true, Ordering::Relaxed)
-            {
-                return;
-            }
-
-            L1_SENDER_METRICS.long_rpc_call[&(command, call_name)].set(1);
-            tracing::warn!(
-                call = event.call_name,
-                retry_number = event.retry_number,
-                elapsed_ms = event.elapsed.as_millis(),
-                backoff_ms = event.backoff.as_millis(),
-                rpc_call_timeout_critical_ms = rpc_call_timeout_critical.as_millis(),
-                err = %event.error,
-                "L1 sender RPC request is still retrying after critical timeout"
-            );
-        }
-    }
-}
-
-impl Drop for LongRpcCallGaugeGuard {
-    fn drop(&mut self) {
-        if self.reported.swap(false, Ordering::Relaxed) {
-            L1_SENDER_METRICS.long_rpc_call[&(self.command, self.call_name)].set(0);
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "percentile", rename_all = "snake_case")]

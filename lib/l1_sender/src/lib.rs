@@ -6,10 +6,7 @@ pub mod upgrade_gatekeeper;
 
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderFeeConfig;
-use crate::metrics::{
-    L1_SENDER_METRICS, LongRpcCallGaugeGuard, PriorityFeeEstimatePercentile,
-    PriorityFeeEstimateWindow,
-};
+use crate::metrics::{L1_SENDER_METRICS, PriorityFeeEstimatePercentile, PriorityFeeEstimateWindow};
 use crate::pipeline_component::L1Sender;
 use alloy::consensus::Transaction as ConsensusTransaction;
 use alloy::eips::eip4844::env_settings::EnvKzgSettings;
@@ -27,8 +24,10 @@ use alloy::transports::TransportError;
 use anyhow::Context as _;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use vise::GaugeGuard;
 use zksync_os_alloy_ext::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_alloy_ext::retry::{RpcRetryFutureExt, RpcRetryOverride};
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
@@ -257,17 +256,32 @@ where
                     L1_SENDER_METRICS.balance_required_for_tx[&Input::COMPONENT_ID.as_str()].set(balance_required);
 
                     let pending_tx = {
-                        let long_rpc_call =
-                            LongRpcCallGaugeGuard::new(
-                                command_name,
-                                "l1_sender_send_transaction",
-                                self.config.rpc_call_timeout_critical,
-                            );
+                        let call_name = "l1_sender_send_transaction";
+                        let timeout = self.config.rpc_call_timeout_critical;
+                        let long_rpc_call = OnceLock::<GaugeGuard<u64>>::new();
                         self.provider
                             .send_transaction(tx_request)
                             .with_retry_override(
-                                RpcRetryOverride::infinite("l1_sender_send_transaction")
-                                    .on_retry(long_rpc_call.on_retry()),
+                                RpcRetryOverride::infinite(call_name).on_retry(move |event| {
+                                    if event.elapsed <= timeout {
+                                        return;
+                                    }
+
+                                    long_rpc_call.get_or_init(|| {
+                                        tracing::warn!(
+                                            call = event.call_name,
+                                            retry_number = event.retry_number,
+                                            elapsed_ms = event.elapsed.as_millis(),
+                                            backoff_ms = event.backoff.as_millis(),
+                                            rpc_call_timeout_critical_ms = timeout.as_millis(),
+                                            err = %event.error,
+                                            "L1 sender RPC request is still retrying after critical timeout"
+                                        );
+                                        L1_SENDER_METRICS.long_rpc_call
+                                            [&(command_name, event.call_name)]
+                                            .inc_guard(1)
+                                    });
+                                }),
                             )
                             .await?
                     };
