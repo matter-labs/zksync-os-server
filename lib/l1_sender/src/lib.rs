@@ -251,7 +251,7 @@ where
                         tx_request.max_fee_per_blob_gas.unwrap_or(0)
                         + tx_request.max_priority_fee_per_gas.unwrap_or(0)
                         + tx_request.max_fee_per_gas.unwrap_or(0)
-                    ) as u64 * tx_request.gas.unwrap_or(0) as u64;
+                    ) as u64 * tx_request.gas.unwrap_or(0);
 
                     L1_SENDER_METRICS.balance_required_for_tx[&Input::COMPONENT_ID.as_str()].set(balance_required);
 
