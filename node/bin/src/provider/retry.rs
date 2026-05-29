@@ -4,9 +4,10 @@ use alloy::rpc::json_rpc::{RequestPacket, ResponsePacket};
 use alloy::transports::layers::{RateLimitRetryPolicy, RetryPolicy};
 use alloy::transports::{TransportError, TransportErrorKind, TransportFut};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tower::Service;
+use zksync_os_alloy_ext::retry::{RpcRetryEvent, RpcRetryLimit, RpcRetryOverride};
 
 /// Retry RPC requests & track retry count metric
 #[derive(Debug, Clone)]
@@ -18,6 +19,11 @@ pub(super) struct RetryService<S> {
 }
 
 impl<S> RetryService<S> {
+    fn retry_override(request: &RequestPacket) -> Option<&RpcRetryOverride> {
+        let request = request.as_single()?;
+        request.meta().extensions().get::<RpcRetryOverride>()
+    }
+
     fn should_retry(error: &TransportError) -> bool {
         if RateLimitRetryPolicy::default().should_retry(error) {
             return true;
@@ -68,8 +74,18 @@ where
         let provider = self.provider;
         let max_retries = self.max_retries;
         let backoff = self.backoff;
+        let retry_override = Self::retry_override(&request).cloned();
         Box::pin(async move {
-            let mut retry_number = 0;
+            let retry_limit = retry_override
+                .as_ref()
+                .map(|override_| override_.limit)
+                .unwrap_or(RpcRetryLimit::Attempts(max_retries));
+            let backoff = retry_override
+                .as_ref()
+                .and_then(|override_| override_.backoff)
+                .unwrap_or(backoff);
+            let started_at = Instant::now();
+            let mut retry_number: u32 = 0;
             loop {
                 let err;
                 let res = inner.call(request.clone()).await;
@@ -86,15 +102,28 @@ where
                 }
 
                 if Self::should_retry(&err) {
-                    retry_number += 1;
-                    if retry_number > max_retries {
+                    retry_number = retry_number.saturating_add(1);
+                    if let RpcRetryLimit::Attempts(max_retries) = retry_limit
+                        && retry_number > max_retries
+                    {
                         return Err(TransportErrorKind::custom_str(&format!(
                             "Max retries exceeded {err}"
                         )));
                     }
                     METRICS[&provider].retry_count.inc();
-
-                    sleep(Self::backoff_hint(&err).unwrap_or(backoff)).await;
+                    let next_backoff = Self::backoff_hint(&err).unwrap_or(backoff);
+                    if let Some(override_) = &retry_override {
+                        if let Some(on_retry) = &override_.on_retry {
+                            on_retry(&RpcRetryEvent {
+                                call_name: override_.call_name,
+                                retry_number,
+                                elapsed: started_at.elapsed(),
+                                backoff: next_backoff,
+                                error: &err,
+                            });
+                        }
+                    }
+                    sleep(next_backoff).await;
                 } else {
                     return Err(err);
                 }

@@ -7,3 +7,4 @@
 pub mod dyn_wallet_provider;
 pub mod network;
 pub mod provider;
+pub mod retry;

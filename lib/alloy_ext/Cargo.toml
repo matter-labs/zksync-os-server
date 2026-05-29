@@ -14,7 +14,7 @@ zksync_os_contract_interface.workspace = true
 zksync_os_rpc_api.workspace = true
 zksync_os_types.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["json-rpc", "rpc-types"] }
+alloy = { workspace = true, default-features = false, features = ["json-rpc", "providers", "rpc-client", "rpc-types", "transports"] }
 async-trait.workspace = true
 anyhow.workspace = true
 serde.workspace = true
