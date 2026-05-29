@@ -128,6 +128,9 @@ impl PipelineComponent for TreeManager {
             assert_eq!(last_processed_block, last_block_number);
 
             // Forward each block downstream.
+            //
+            // **IMPORTANT.** Since downstream components (e.g., the proof input generator) read tree data,
+            // it is vital that the tree is fully persisted before block data is sent downstream.
             for tree_block in tree_blocks {
                 output.send_and_record(tree_block, &state_reporter)?;
             }
@@ -196,10 +199,8 @@ impl TreeManager {
                 (entry, write.key)
             })
             .unzip();
-        let read_keys: Vec<_> = read_keys.into_iter().collect();
         let block_number = block_output.header.number;
         let write_count = written_keys.len();
-        let read_count = read_keys.len();
 
         let (root_hash, leaf_count) =
             patched_tree.root_info(block_number - 1)?.with_context(|| {
@@ -209,15 +210,11 @@ impl TreeManager {
             root_hash,
             leaf_count,
         };
-        let (tree_output, update_proof) =
-            patched_tree.extend_with_proof(&tree_entries, &read_keys)?;
+        let (tree_output, update_proof) = patched_tree.extend_with_proof(&tree_entries, &[])?;
 
         tracing::debug!(
             block_number = block_number,
             written_keys.len = written_keys.len(),
-            read_keys.len = read_keys.len(),
-            proof.sorted_leaves.len = update_proof.sorted_leaves.len(),
-            proof.hashes.len = update_proof.hashes.len(),
             input = ?tree_input,
             output = ?tree_output,
             "Processed tree update"
@@ -227,26 +224,15 @@ impl TreeManager {
         TREE_METRICS
             .entry_time
             .observe(block_time / (write_count.max(1) as u32));
-        TREE_METRICS
-            .entry_time_with_reads
-            .observe(block_time / ((write_count + read_count).max(1) as u32));
         TREE_METRICS.unique_leafs.set(tree_output.leaf_count);
         TREE_METRICS.processing_range.observe(write_count);
-        TREE_METRICS.block_number.set(block_number);
-        TREE_METRICS.processing_read_range.observe(read_count);
-        TREE_METRICS
-            .update_proof_sorted_leaves
-            .observe(update_proof.sorted_leaves.len());
-        TREE_METRICS
-            .update_proof_hashes
-            .observe(update_proof.hashes.len());
         TREE_METRICS.block_number.set(block_number);
 
         let tree_data = BlockMerkleTreeData {
             input: tree_input,
             output: tree_output,
             proof: update_proof,
-            read_keys,
+            read_keys: read_keys.into_iter().collect(),
             written_keys,
         };
         Ok(TreeBlock {
@@ -260,6 +246,7 @@ impl TreeManager {
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
 const BLOCK_RANGE_SIZE: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);
 
+// FIXME: remove unused metrics
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "tree")]
 pub struct TreeMetrics {

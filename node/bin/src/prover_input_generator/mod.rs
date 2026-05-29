@@ -219,6 +219,11 @@ fn compute_prover_input(
         .map(|tx| tx.clone().encode())
         .collect::<VecDeque<_>>();
 
+    // FIXME: measure as a separate stage?
+    let read_proof = versioned_tree
+        .get_proof(&tree_view.read_keys)
+        .expect("cannot get batch proof for read tree keys");
+
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
     let proving_version = ProvingVersion::try_from(replay_record.protocol_version.clone())
@@ -263,7 +268,7 @@ fn compute_prover_input(
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                TreeOutputAdapter::new(tree_view).with_fallback(versioned_tree),
+                TreeOutputAdapter::new(tree_view, read_proof).with_fallback(versioned_tree),
                 state_view,
                 list_source,
             )
@@ -301,7 +306,7 @@ fn compute_prover_input(
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                TreeOutputAdapter::new(tree_view).with_fallback(versioned_tree),
+                TreeOutputAdapter::new(tree_view, read_proof).with_fallback(versioned_tree),
                 state_view,
                 list_source,
             )
