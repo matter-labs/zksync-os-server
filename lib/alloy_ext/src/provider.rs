@@ -1,5 +1,4 @@
 use crate::network::Zksync;
-use crate::retry::{RpcRetryExt, RpcRetryOverride};
 use alloy::primitives::{Address, BlockNumber, StorageKey, TxHash};
 use alloy::providers::Provider;
 use alloy::transports::TransportResult;
@@ -59,20 +58,6 @@ pub trait ZksyncApi: Provider<Zksync> {
         let CommittedBatchView { batch_info } = self
             .client()
             .request("unstable_getBatchByBlockNumber", (block_number,))
-            .with_retry_override(
-                RpcRetryOverride::infinite("unstable_getBatchByBlockNumber").on_retry(|event| {
-                    if event.retry_number == 20 {
-                        tracing::warn!(
-                            call = event.call_name,
-                            retry_number = event.retry_number,
-                            elapsed_ms = event.elapsed.as_millis(),
-                            backoff_ms = event.backoff.as_millis(),
-                            err = %event.error,
-                            "RPC request is still retrying"
-                        );
-                    }
-                }),
-            )
             .await?;
         tracing::debug!(block_number, ?batch_info, "got batch info for block");
         Ok(batch_info.batch_number)

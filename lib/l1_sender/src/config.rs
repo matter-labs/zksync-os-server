@@ -25,6 +25,9 @@ pub struct L1SenderConfig<Input> {
     /// Maximum time to wait for a transaction to be included on L1.
     pub transaction_timeout: Duration,
 
+    /// Critical elapsed time for a still-retrying RPC transaction submission.
+    pub rpc_call_timeout_critical: Duration,
+
     /// Use Fusaka blob transaction format if the timestamp has passed.
     pub fusaka_upgrade_timestamp: u64,
 

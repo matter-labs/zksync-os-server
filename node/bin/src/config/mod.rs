@@ -1071,6 +1071,10 @@ pub struct L1SenderConfig {
     #[config(default_t = 600 * TimeUnit::Seconds)]
     pub transaction_timeout: Duration,
 
+    /// Critical elapsed time for a still-retrying L1 sender RPC transaction submission.
+    #[config(default_t = 10 * TimeUnit::Minutes)]
+    pub rpc_call_timeout_critical: Duration,
+
     /// Use Fusaka blob transaction format if the timestamp has passed.
     ///
     /// Defaults to `2^64-1` which is practically never. This is needed for local setup as anvil
@@ -1182,6 +1186,10 @@ pub struct GatewaySenderConfig {
     /// Maximum time to wait for a Gateway transaction to be included.
     #[config(default_t = 600 * TimeUnit::Seconds)]
     pub transaction_timeout: Duration,
+
+    /// Critical elapsed time for a still-retrying Gateway sender RPC transaction submission.
+    #[config(default_t = 10 * TimeUnit::Minutes)]
+    pub rpc_call_timeout_critical: Duration,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1904,6 +1912,7 @@ impl L1SenderConfig {
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
+            rpc_call_timeout_critical: self.rpc_call_timeout_critical,
             fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
             phantom_data: Default::default(),
         }
@@ -1962,6 +1971,7 @@ impl GatewaySenderConfig {
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
+            rpc_call_timeout_critical: self.rpc_call_timeout_critical,
             // Gateway transactions never carry blobs, so the EIP-7594 cutover does not apply.
             fusaka_upgrade_timestamp: u64::MAX,
             phantom_data: Default::default(),
@@ -2311,6 +2321,7 @@ mod tests {
                 command_limit: 16,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
+                rpc_call_timeout_critical: Duration::from_secs(600),
                 fusaka_upgrade_timestamp: u64::MAX,
                 enabled: true,
                 pubdata_mode: Some(PubdataMode::Blobs),

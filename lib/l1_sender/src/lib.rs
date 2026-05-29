@@ -6,7 +6,10 @@ pub mod upgrade_gatekeeper;
 
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderFeeConfig;
-use crate::metrics::{L1_SENDER_METRICS, PriorityFeeEstimatePercentile, PriorityFeeEstimateWindow};
+use crate::metrics::{
+    L1_SENDER_METRICS, LongRpcCallGaugeGuard, PriorityFeeEstimatePercentile,
+    PriorityFeeEstimateWindow,
+};
 use crate::pipeline_component::L1Sender;
 use alloy::consensus::Transaction as ConsensusTransaction;
 use alloy::eips::eip4844::env_settings::EnvKzgSettings;
@@ -27,6 +30,7 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use zksync_os_alloy_ext::dyn_wallet_provider::EthWalletProvider;
+use zksync_os_alloy_ext::retry::{RpcRetryFutureExt, RpcRetryOverride};
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState, StateLabel};
 use zksync_os_pipeline::{PeekableReceiver, SendAndRecordExt};
@@ -252,7 +256,21 @@ where
 
                     L1_SENDER_METRICS.balance_required_for_tx[&Input::COMPONENT_ID.as_str()].set(balance_required);
 
-                    let pending_tx = self.provider.send_transaction(tx_request).await?;
+                    let pending_tx = {
+                        let long_rpc_call =
+                            LongRpcCallGaugeGuard::new(
+                                command_name,
+                                "l1_sender_send_transaction",
+                                self.config.rpc_call_timeout_critical,
+                            );
+                        self.provider
+                            .send_transaction(tx_request)
+                            .with_retry_override(
+                                RpcRetryOverride::infinite("l1_sender_send_transaction")
+                                    .on_retry(long_rpc_call.on_retry()),
+                            )
+                            .await?
+                    };
                     let submitted_at = Instant::now();
                     let tx_hash = *pending_tx.tx_hash();
                     let receipt_fut = self.wait_for_confirmed_receipt(tx_hash);
@@ -705,7 +723,7 @@ where
         command: &Input,
         receipt: TransactionReceipt,
     ) -> anyhow::Result<()> {
-         let execution_fee_wei = (receipt.gas_used as u128 * receipt.effective_gas_price) as u64;
+        let execution_fee_wei = (receipt.gas_used as u128 * receipt.effective_gas_price) as u64;
 
         let blob_fee_wei = receipt
             .blob_gas_used

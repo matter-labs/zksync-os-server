@@ -7,7 +7,9 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tower::Service;
-use zksync_os_alloy_ext::retry::{RpcRetryEvent, RpcRetryLimit, RpcRetryOverride};
+use zksync_os_alloy_ext::retry::{
+    RpcRetryEvent, RpcRetryLimit, RpcRetryOverride, scoped_rpc_retry_override,
+};
 
 /// Retry RPC requests & track retry count metric
 #[derive(Debug, Clone)]
@@ -74,7 +76,9 @@ where
         let provider = self.provider;
         let max_retries = self.max_retries;
         let backoff = self.backoff;
-        let retry_override = Self::retry_override(&request).cloned();
+        let retry_override = Self::retry_override(&request)
+            .cloned()
+            .or_else(scoped_rpc_retry_override);
         Box::pin(async move {
             let retry_limit = retry_override
                 .as_ref()
@@ -112,16 +116,16 @@ where
                     }
                     METRICS[&provider].retry_count.inc();
                     let next_backoff = Self::backoff_hint(&err).unwrap_or(backoff);
-                    if let Some(override_) = &retry_override {
-                        if let Some(on_retry) = &override_.on_retry {
-                            on_retry(&RpcRetryEvent {
-                                call_name: override_.call_name,
-                                retry_number,
-                                elapsed: started_at.elapsed(),
-                                backoff: next_backoff,
-                                error: &err,
-                            });
-                        }
+                    if let Some(override_) = &retry_override
+                        && let Some(on_retry) = &override_.on_retry
+                    {
+                        on_retry(&RpcRetryEvent {
+                            call_name: override_.call_name,
+                            retry_number,
+                            elapsed: started_at.elapsed(),
+                            backoff: next_backoff,
+                            error: &err,
+                        });
                     }
                     sleep(next_backoff).await;
                 } else {

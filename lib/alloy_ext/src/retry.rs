@@ -3,6 +3,7 @@ use alloy::rpc::client::RpcCall;
 use alloy::rpc::json_rpc::{RpcRecv, RpcSend};
 use alloy::transports::TransportError;
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -73,6 +74,42 @@ impl RpcRetryOverride {
     }
 }
 
+tokio::task_local! {
+    static SCOPED_RPC_RETRY_OVERRIDE: RpcRetryOverride;
+}
+
+/// Applies a retry override to every RPC request issued while `future` is running.
+///
+/// This is useful for higher-level provider calls that do not expose the underlying
+/// `RpcCall` where [`RpcRetryExt`] can attach metadata directly.
+pub async fn with_rpc_retry_override<F>(override_: RpcRetryOverride, future: F) -> F::Output
+where
+    F: Future,
+{
+    SCOPED_RPC_RETRY_OVERRIDE.scope(override_, future).await
+}
+
+/// Returns the currently scoped retry override, if one is active.
+pub fn scoped_rpc_retry_override() -> Option<RpcRetryOverride> {
+    SCOPED_RPC_RETRY_OVERRIDE.try_with(Clone::clone).ok()
+}
+
+/// Adds scoped retry metadata to provider futures that hide their underlying RPC call.
+pub trait RpcRetryFutureExt: Future + Sized {
+    fn with_retry_override(
+        self,
+        override_: RpcRetryOverride,
+    ) -> impl Future<Output = Self::Output> {
+        with_rpc_retry_override(override_, self)
+    }
+
+    fn with_infinite_retries(self, call_name: &'static str) -> impl Future<Output = Self::Output> {
+        self.with_retry_override(RpcRetryOverride::infinite(call_name))
+    }
+}
+
+impl<F> RpcRetryFutureExt for F where F: Future {}
+
 /// Adds per-call retry metadata to prepared Alloy RPC calls.
 pub trait RpcRetryExt: Sized {
     fn with_retry_override(self, override_: RpcRetryOverride) -> Self;
@@ -103,7 +140,7 @@ where
 {
     fn with_retry_override(self, override_: RpcRetryOverride) -> Self {
         match self {
-            Self::RpcCall(call) => Self::RpcCall(call.with_retry_override(override_)),
+            Self::RpcCall(call) => Self::RpcCall(RpcRetryExt::with_retry_override(call, override_)),
             other => other,
         }
     }
