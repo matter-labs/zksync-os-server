@@ -3,9 +3,10 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use std::time::Duration;
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert};
-use zksync_os_integration_tests::provider::{ZksyncApi, ZksyncTestingProvider};
+use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
 
 const TRANSACTIONS_TO_SEND_BEFORE_RESTART: usize = 5;

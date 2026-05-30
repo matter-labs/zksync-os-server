@@ -1,11 +1,11 @@
-use crate::dyn_wallet_provider::EthDynProvider;
-use crate::network::Zksync;
-use crate::provider::ZksyncApi;
 use alloy::eips::BlockNumberOrTag;
 use alloy::primitives::{U256, keccak256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use std::time::Duration;
+use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
+use zksync_os_alloy_ext::network::Zksync;
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::l1_discovery::L1State;
 
 #[derive(Debug)]

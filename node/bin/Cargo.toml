@@ -22,6 +22,7 @@ jemalloc = [
 ]
 
 [dependencies]
+zksync_os_alloy_ext.workspace = true
 zksync_os_l1_sender.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_mempool.workspace = true

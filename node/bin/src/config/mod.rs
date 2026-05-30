@@ -1202,9 +1202,14 @@ pub struct L1WatcherConfig {
     #[config(default_t = 2)]
     pub confirmations: u64,
 
-    /// How often to poll L1 for new priority requests.
+    /// How often to poll L1 for the latest block.
     #[config(default_t = 1 * TimeUnit::Seconds)]
     pub poll_interval: Duration,
+
+    /// How often to poll L1 for the latest finalized block.
+    /// Note: Finalization advances at epoch boundaries. Which is every ~6.4 minutes on L1.
+    #[config(default_t = 1 * TimeUnit::Minutes)]
+    pub finalized_poll_interval: Duration,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -2005,6 +2010,7 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
             max_blocks_to_process: c.max_blocks_to_process,
             confirmations: c.confirmations,
             poll_interval: c.poll_interval,
+            finalized_poll_interval: c.finalized_poll_interval,
         }
     }
 }

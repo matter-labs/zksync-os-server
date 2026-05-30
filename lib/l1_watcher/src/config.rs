@@ -9,6 +9,10 @@ pub struct L1WatcherConfig {
     /// Number of latest L1 blocks to leave unprocessed in order to reduce reorg risk.
     pub confirmations: u64,
 
-    /// How often to poll L1 for new priority requests.
+    /// How often to poll L1 for the latest block.
     pub poll_interval: Duration,
+
+    /// How often to poll L1 for the latest finalized block.
+    /// Note: Finalization advances at epoch boundaries. Which is every ~6.4 minutes on L1.
+    pub finalized_poll_interval: Duration,
 }
