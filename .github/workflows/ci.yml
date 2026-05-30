@@ -87,8 +87,11 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
+      # Excludes the `consensus_node::nonblocking` lane (leader-change / restart / quorum-loss
+      # scenarios) — those run in the non-required `consensus-nonblocking` job below because they
+      # are flaky under the test environment's RLPx simultaneous-dial artifact, not in production.
       - name: Run tests
-        run: cargo nextest run --release --workspace ${NEXTEST_ITERATIONS}
+        run: cargo nextest run --release --workspace -E 'not test(consensus_node::nonblocking)' ${NEXTEST_ITERATIONS}
 
       - name: Upload test results
         if: always() && !cancelled()
@@ -98,6 +101,25 @@ jobs:
           files: target/nextest/default/${{ env.TEST_RESULTS_XML }}
           action_fail_on_inconclusive: true
           compare_to_earlier_commit: false # Do not compare with `main` due to different number of iterations
+
+
+  #################################################################
+  #   Non-blocking consensus tests (leader-change / restart / …)  #
+  #################################################################
+  # These exercise real but flaky-under-CI scenarios (the reth simultaneous-dial artifact). They
+  # run every PR for visibility but are intentionally NOT in the `ci-success` required-checks list,
+  # so they never block a merge. Run once (no stress) — we already know they're flaky under stress.
+  consensus-nonblocking:
+    runs-on: matterlabs-ci-runner-high-performance
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+
+      - name: Run non-blocking consensus tests
+        run: cargo nextest run --release --workspace -E 'test(consensus_node::nonblocking)'
 
 
   # Temporary disable code coverage measurements in main due to llvm-cov issue with rustc v1.89:

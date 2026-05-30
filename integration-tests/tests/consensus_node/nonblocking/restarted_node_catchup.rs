@@ -1,5 +1,10 @@
-use super::*;
+use crate::consensus_node::{
+    CLUSTER_FORMATION_TIMEOUT, CONSENSUS_PROGRESS_TIMEOUT, REPLICATION_TIMEOUT,
+    send_transfer_and_replicate, send_transfer_and_replicate_eventually,
+};
+use zksync_os_integration_tests::multi_node::ConsensusCluster;
 
+use anyhow::Context as _;
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
 use zksync_os_integration_tests::rpc_recorder::{HttpRpcRecorder, HttpRpcReport, RpcRecordConfig};
