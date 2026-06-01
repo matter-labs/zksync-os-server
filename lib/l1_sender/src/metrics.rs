@@ -101,14 +101,6 @@ pub struct L1SenderMetrics {
     /// Whether an L1 sender RPC call is still retrying after the configured critical timeout.
     #[metrics(labels = ["command", "call_name"])]
     pub long_rpc_call: LabeledFamily<(&'static str, &'static str), Gauge<u64>, 2>,
-
-    /// Amount of ETH that is supposed to be on balance to submit transaction with current fee params & gas limit
-    #[metrics(labels = ["command"])]
-    pub balance_required_for_tx: LabeledFamily<&'static str, Gauge<u64>>,
-
-    /// Actual amount of ETH that was consumed by transaction
-    #[metrics(labels = ["command"])]
-    pub balance_consumed_by_tx: LabeledFamily<&'static str, Gauge<u64>>,
 }
 
 impl L1SenderMetrics {

@@ -245,14 +245,6 @@ where
                         }
                     };
 
-                    let balance_required = (
-                        tx_request.max_fee_per_blob_gas.unwrap_or(0)
-                        + tx_request.max_priority_fee_per_gas.unwrap_or(0)
-                        + tx_request.max_fee_per_gas.unwrap_or(0)
-                    ) as u64 * tx_request.gas.unwrap_or(0);
-
-                    L1_SENDER_METRICS.balance_required_for_tx[&Input::COMPONENT_ID.as_str()].set(balance_required);
-
                     let pending_tx = {
                         let retry_override = RpcRetryOverride::new().retry_all_errors().with_limit(u32::MAX).with_context("l1_sender");
                         with_scoped_rpc_retry_override(
@@ -713,15 +705,6 @@ where
         command: &Input,
         receipt: TransactionReceipt,
     ) -> anyhow::Result<()> {
-        let execution_fee_wei = (receipt.gas_used as u128 * receipt.effective_gas_price) as u64;
-
-        let blob_fee_wei = receipt
-            .blob_gas_used
-            .zip(receipt.blob_gas_price)
-            .map(|(gas_used, gas_price)| gas_used as u128 * gas_price)
-            .unwrap_or_default() as u64;
-        L1_SENDER_METRICS.balance_consumed_by_tx[&Input::COMPONENT_ID.as_str()]
-            .set(execution_fee_wei + blob_fee_wei);
         if receipt.status() {
             // Transaction succeeded - log output and return OK(())
             L1_SENDER_METRICS.report_tx_receipt(command, receipt)?;
