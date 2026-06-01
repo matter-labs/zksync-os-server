@@ -82,14 +82,14 @@ where
             .cloned()
             .or_else(scoped_rpc_retry_override);
         Box::pin(async move {
-            if let Some(override_) = retry_override {
+            if let Some(override_) = retry_override.clone() {
                 if let Some(max_retries_override) = override_.limit {
                     max_retries = max_retries_override;
                 }
                 if let Some(backoff_override) = override_.backoff {
                     backoff = backoff_override;
                 }
-                call_names = override_.call_context.to_owned() + call_names;
+                call_names = override_.call_context.to_owned() + call_names.as_str();
             }
             let started_at = Instant::now();
             let mut retry_number: u32 = 0;
