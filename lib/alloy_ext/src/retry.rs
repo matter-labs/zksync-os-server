@@ -36,6 +36,7 @@ pub struct RpcRetryOverride {
     pub limit: RpcRetryLimit,
     pub backoff: Option<Duration>,
     pub call_name: &'static str,
+    pub retry_all_errors: bool,
     pub on_retry: Option<RpcRetryCallback>,
 }
 
@@ -45,6 +46,7 @@ impl fmt::Debug for RpcRetryOverride {
             .field("limit", &self.limit)
             .field("backoff", &self.backoff)
             .field("call_name", &self.call_name)
+            .field("retry_all_errors", &self.retry_all_errors)
             .field("has_on_retry", &self.on_retry.is_some())
             .finish()
     }
@@ -56,6 +58,7 @@ impl RpcRetryOverride {
             limit: RpcRetryLimit::Infinite,
             backoff: None,
             call_name,
+            retry_all_errors: false,
             on_retry: None,
         }
     }
@@ -70,6 +73,11 @@ impl RpcRetryOverride {
 
     pub const fn with_backoff(mut self, backoff: Duration) -> Self {
         self.backoff = Some(backoff);
+        self
+    }
+
+    pub const fn retry_all_errors(mut self) -> Self {
+        self.retry_all_errors = true;
         self
     }
 }

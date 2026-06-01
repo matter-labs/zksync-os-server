@@ -259,8 +259,9 @@ where
                         let call_name = "l1_sender_send_transaction";
                         let timeout = self.config.rpc_call_timeout_critical;
                         let long_rpc_call = OnceLock::<GaugeGuard<u64>>::new();
-                        let retry_override =
-                            RpcRetryOverride::infinite(call_name).on_retry(move |event| {
+                        let retry_override = RpcRetryOverride::infinite(call_name)
+                            .retry_all_errors()
+                            .on_retry(move |event| {
                                 if event.elapsed <= timeout {
                                     return;
                                 }

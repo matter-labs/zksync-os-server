@@ -105,7 +105,11 @@ where
                     Err(e) => err = e,
                 }
 
-                if Self::should_retry(&err) {
+                let should_retry = retry_override
+                    .as_ref()
+                    .is_some_and(|override_| override_.retry_all_errors)
+                    || Self::should_retry(&err);
+                if should_retry {
                     retry_number = retry_number.saturating_add(1);
                     if let RpcRetryLimit::Attempts(max_retries) = retry_limit
                         && retry_number > max_retries
