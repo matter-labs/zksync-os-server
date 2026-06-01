@@ -1,3 +1,4 @@
+use crate::TxForwarder;
 use crate::config::RpcConfig;
 use crate::eth_call_handler::EthCallHandler;
 use crate::metrics::{TX_SUBMISSION, TxRejectionReason};
@@ -12,12 +13,11 @@ use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
 use alloy::network::BlockResponse;
 use alloy::network::primitives::BlockTransactions;
 use alloy::primitives::{Address, B256, Bytes, TxHash, U64, U256};
-use alloy::providers::DynProvider;
 use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
     AccountInfo, BlockOverrides, Bundle, EIP1186AccountProofResponse, EthCallResponse, FeeHistory,
-    Index, Log, StateContext, SyncStatus, TransactionRequest,
+    FillTransaction, Index, Log, StateContext, SyncStatus, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
@@ -25,15 +25,16 @@ use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use tokio::sync::watch;
 use zk_ee::common_structs::derive_flat_storage_key;
-use zk_os_api::helpers::{get_balance, get_code};
+use zk_os_api::helpers::get_code;
 use zksync_os_interface::traits::ReadStorage;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::types::{
     L2FeeHistory, RpcBlockConvert, ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt,
 };
-use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
-use zksync_os_types::{L2Envelope, TransactionAcceptanceState, ZkReceiptEnvelope};
+use zksync_os_storage_api::{BlockContext, RepositoryError, StateError, TxMeta, ViewState};
+use zksync_os_tx_validators::policy_client::PolicyClient;
+use zksync_os_types::{L2Envelope, TransactionAcceptanceState, ZkEnvelope, ZkReceiptEnvelope};
 
 pub struct EthNamespace<RpcStorage, Mempool> {
     config: RpcConfig,
@@ -49,6 +50,7 @@ pub struct EthNamespace<RpcStorage, Mempool> {
 }
 
 impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Mempool> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: RpcConfig,
         storage: RpcStorage,
@@ -56,14 +58,19 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         eth_call_handler: EthCallHandler<RpcStorage>,
         chain_id: u64,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
-        tx_forwarder: Option<DynProvider>,
+        tx_forwarder: Option<TxForwarder>,
+        policy_client: Option<PolicyClient>,
+        last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     ) -> Self {
         let tx_handler = TxHandler::new(
             config.clone(),
             storage.clone(),
+            chain_id,
             mempool.clone(),
             acceptance_state,
             tx_forwarder,
+            policy_client,
+            last_constructed_block_context,
         );
 
         Self {
@@ -261,13 +268,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthError::BlockNotFound(block_id));
         };
-        Ok(self
-            .storage
-            .state_view_at(block_number)?
-            .get_account(address)
-            .as_ref()
-            .map(get_balance)
-            .unwrap_or(U256::ZERO))
+        Ok(self.storage.state_view_at(block_number)?.balance(address))
     }
 
     fn storage_at_impl(
@@ -300,7 +301,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         let on_chain_account_nonce = self
             .storage
             .state_at_block_id_or_latest(block_id)?
-            .account_nonce(address)
+            .nonce(address)
             .unwrap_or(0);
 
         if block_id == Some(BlockId::pending())
@@ -700,6 +701,29 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
             .to_rpc_result()
     }
 
+    fn fill_transaction(
+        &self,
+        request: TransactionRequest,
+    ) -> RpcResult<FillTransaction<ZkEnvelope>> {
+        let pending_nonce = if request.nonce.is_none() {
+            self.transaction_count_impl(request.from.unwrap_or_default(), Some(BlockId::pending()))
+                .to_rpc_result()?
+                .saturating_to()
+        } else {
+            0
+        };
+
+        let fill_gas_price = if request.gas_price.is_none() && request.max_fee_per_gas.is_none() {
+            self.gas_price_impl().to_rpc_result()?
+        } else {
+            U256::ZERO
+        };
+
+        self.eth_call_handler
+            .fill_transaction_impl(request, pending_nonce, fill_gas_price)
+            .to_rpc_result()
+    }
+
     fn call_many(
         &self,
         _bundles: Vec<Bundle>,
@@ -781,10 +805,14 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
         self.tx_handler
             .send_raw_transaction_sync_impl(bytes, max_wait_ms)
             .await
-            .inspect_err(|err| {
-                if let EthSendRawTransactionSyncError::Regular(inner) = err {
+            .inspect_err(|err| match err {
+                EthSendRawTransactionSyncError::Regular(inner) => {
                     TX_SUBMISSION.rejections[&TxRejectionReason::from(inner)].inc();
                 }
+                EthSendRawTransactionSyncError::RejectedDuringExecution(_) => {
+                    TX_SUBMISSION.rejections[&TxRejectionReason::RejectedDuringExecution].inc();
+                }
+                EthSendRawTransactionSyncError::Timeout(_) => {}
             })
             .to_rpc_result()
     }
@@ -904,6 +932,7 @@ pub fn build_api_tx(tx: zksync_os_types::ZkTransaction, meta: Option<&TxMeta>) -
         inner: tx.inner,
         block_hash: meta.map(|meta| meta.block_hash),
         block_number: meta.map(|meta| meta.block_number),
+        block_timestamp: meta.map(|meta| meta.block_timestamp),
         transaction_index: meta.map(|meta| meta.tx_index_in_block),
         effective_gas_price: meta.map(|meta| meta.effective_gas_price),
     }

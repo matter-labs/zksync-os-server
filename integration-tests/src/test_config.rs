@@ -18,6 +18,7 @@ pub(crate) fn disable_prover_input_generation(config: &mut Config) {
 pub(crate) async fn build_node_config(
     l1: &AnvilL1,
     chain_layout: ChainLayout<'static>,
+    with_proofs: bool,
 ) -> anyhow::Result<Config> {
     let mut config = load_chain_config(chain_layout).await;
     config.l1_provider_config =
@@ -27,8 +28,8 @@ pub(crate) async fn build_node_config(
     }
     config.sequencer_config.fee_collector_address = Address::random();
     config.rpc_config.send_raw_transaction_sync_timeout = Duration::from_secs(10);
-    config.prover_api_config.fake_fri_provers.enabled = true;
-    config.prover_api_config.fake_snark_provers.enabled = true;
+    config.prover_api_config.fake_fri_provers.enabled = !with_proofs;
+    config.prover_api_config.fake_snark_provers.enabled = !with_proofs;
     config.batch_verification_config.server_enabled = false;
     config.batch_verification_config.client_enabled = false;
     config.batch_verification_config.threshold = 1;

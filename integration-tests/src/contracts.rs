@@ -2,13 +2,13 @@
 //! See `./test-contracts/README.md` for instructions on how to build the artifacts.
 
 use crate::assert_traits::ReceiptAssert;
-use crate::network::Zksync;
-use crate::provider::ZksyncApi;
 use alloy::network::ReceiptResponse;
 use alloy::primitives::{Address, B256, U256, address};
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::TransactionReceipt;
 use tokio::time::{Duration, Instant};
+use zksync_os_alloy_ext::network::Zksync;
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
 use zksync_os_types::L2_INTEROP_ROOT_STORAGE_ADDRESS;

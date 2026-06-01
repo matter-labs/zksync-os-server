@@ -3,6 +3,9 @@ pub use config::L1WatcherConfig;
 
 mod metrics;
 
+pub mod block_updates;
+pub use block_updates::{BlockBoundary, BlockUpdates};
+
 mod tx_watcher;
 pub use tx_watcher::L1TxWatcher;
 

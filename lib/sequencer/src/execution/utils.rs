@@ -1,10 +1,63 @@
 use alloy::primitives::{B256, keccak256};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use std::cell::OnceCell;
+use std::collections::HashSet;
+use std::mem;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use zksync_os_interface::types::{BlockContext, BlockOutput};
-use zksync_os_types::ZkTransaction;
+use zksync_os_interface::traits::ReadStorage;
+use zksync_os_storage_api::BlockContext;
+use zksync_os_types::{BlockOutput, ZkTransaction};
+
+/// [`ReadStorage`] wrapper that tracks read storage slots.
+#[derive(Debug)]
+pub(super) struct ReadRecordingState<S> {
+    inner: S,
+    local_read_keys: HashSet<B256>,
+    read_keys_handle: Rc<OnceCell<HashSet<B256>>>,
+}
+
+impl<S: ReadStorage> ReadRecordingState<S> {
+    pub(super) fn new(inner: S) -> (Self, ReadRecordingHandle) {
+        let handle = ReadRecordingHandle(Rc::default());
+        let this = Self {
+            inner,
+            local_read_keys: HashSet::new(),
+            read_keys_handle: handle.0.clone(),
+        };
+        (this, handle)
+    }
+}
+
+impl<S: ReadStorage> ReadStorage for ReadRecordingState<S> {
+    fn read(&mut self, key: B256) -> Option<B256> {
+        self.local_read_keys.insert(key);
+        self.inner.read(key)
+    }
+}
+
+impl<S> Drop for ReadRecordingState<S> {
+    fn drop(&mut self) {
+        let read_keys = mem::take(&mut self.local_read_keys);
+        // `unwrap()` is safe: the recording state is never duplicated
+        self.read_keys_handle.set(read_keys).unwrap();
+    }
+}
+
+/// Handle for [`ReadRecordingState`] that allows to extract read storage slots after the state is dropped.
+#[derive(Debug)]
+pub(super) struct ReadRecordingHandle(Rc<OnceCell<HashSet<B256>>>);
+
+impl ReadRecordingHandle {
+    pub(super) fn into_read_keys(self) -> HashSet<B256> {
+        Rc::try_unwrap(self.0)
+            .expect("`into_read_keys()` called before the recording state is dropped")
+            .into_inner()
+            .expect("recording state didn't set read keys")
+    }
+}
 
 // Hash of the block output, which is used to identify divergences in block execution.
 // It's incomplete, in a sense that it does not include all the data from the block output.

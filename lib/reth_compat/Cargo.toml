@@ -17,7 +17,7 @@ zk_os_api.workspace = true
 
 reth-chainspec = { workspace = true }
 reth-db-models = { workspace = true }
-reth-primitives = { workspace = true }
+reth-ethereum-primitives = { workspace = true }
 reth-storage-api = { workspace = true }
 reth-trie-common = { workspace = true }
 reth-primitives-traits = { workspace = true }

@@ -669,6 +669,7 @@ mod tests {
             block_number: Some(0x3),
             transaction_index: Some(0x0),
             effective_gas_price: Some(0xee6fcf4),
+            block_timestamp: None,
         };
         assert_eq!(l1_tx, expected_l1_tx);
 

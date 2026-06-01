@@ -170,7 +170,11 @@ impl CommittedBatchProvider {
     ) -> anyhow::Result<()> {
         stream::iter(batch_numbers)
             .map(|batch_number| async move {
-                let proxy = self.intervals.resolve_proxy(batch_number)?;
+                let proxy = &self
+                    .intervals
+                    .find_interval(batch_number)
+                    .with_context(|| format!("batch {batch_number} does not belong to any known settlement layer interval"))?
+                    .proxy;
                 let discovered_batch =
                     fetch_batch(proxy, batch_number, max_l1_blocks_to_scan).await?;
                 tracing::info!(

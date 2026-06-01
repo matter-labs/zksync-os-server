@@ -1,6 +1,6 @@
-use crate::{IChainAssetHandler, ZkChain, is_method_missing};
+use crate::{Bridgehub, IChainAssetHandler, ZkChain, is_method_missing};
 use alloy::primitives::{Address, U256};
-use alloy::providers::DynProvider;
+use alloy::providers::{DynProvider, Provider};
 use anyhow::Context;
 use std::fmt;
 use std::sync::Arc;
@@ -23,7 +23,8 @@ impl fmt::Display for IntervalSettlementLayer {
     }
 }
 
-/// Inclusive batch-number range during which the chain committed to a single settlement layer.
+/// Inclusive batch-number range during which the chain committed to a single settlement layer,
+/// paired with the diamond proxy for that settlement layer.
 ///
 /// `last_batch` is `None` for the currently-active (open-ended) interval.
 #[derive(Debug, Clone)]
@@ -31,6 +32,8 @@ pub struct SettlementLayerInterval {
     pub settlement_layer: IntervalSettlementLayer,
     pub first_batch: u64,
     pub last_batch: Option<u64>,
+    /// Diamond proxy on `settlement_layer`.
+    pub proxy: ZkChain<DynProvider>,
 }
 
 impl fmt::Display for SettlementLayerInterval {
@@ -50,41 +53,95 @@ impl fmt::Display for SettlementLayerInterval {
     }
 }
 
-/// Settlement layer intervals for a chain paired with the diamond proxies needed to route batch
-/// lookups to the correct RPC.
+struct RawSettlementLayerInterval {
+    settlement_layer: IntervalSettlementLayer,
+    first_batch: u64,
+    last_batch: Option<u64>,
+}
+
+/// Settlement layer intervals for a chain. Each entry carries the diamond proxy needed to route
+/// batch lookups to the correct RPC.
 ///
 /// The intervals cover all batches from `1` upwards in ascending order, with the last entry being
 /// open-ended (`last_batch = None`).
 #[derive(Debug, Clone)]
 pub struct SettlementLayerIntervals {
     intervals: Arc<Vec<SettlementLayerInterval>>,
-    diamond_proxy_l1: ZkChain<DynProvider>,
-    /// Diamond proxy of the chain's current settlement layer, paired with that SL's chain ID.
-    /// `None` means the chain currently settles on L1, in which case lookups for historical
-    /// Gateway intervals are unsupported (no Gateway provider is configured).
-    diamond_proxy_gw: Option<(u64, ZkChain<DynProvider>)>,
 }
 
 impl SettlementLayerIntervals {
-    /// Discovers the intervals on-chain from `IL1ChainAssetHandler.migrationInterval` and stores
-    /// the diamond proxies needed to resolve future lookups.
+    /// Discovers the intervals on-chain from `IL1ChainAssetHandler.migrationInterval` and attaches
+    /// the matching diamond proxy to each. Fails if a historical Gateway interval references a
+    /// chain that the configured `gateway_provider` cannot serve.
     pub async fn discover(
         chain_asset_handler: Address,
         diamond_proxy_l1: ZkChain<DynProvider>,
-        diamond_proxy_gw: Option<(u64, ZkChain<DynProvider>)>,
-        chain_id: u64,
+        gateway_provider: Option<DynProvider>,
+        l2_chain_id: u64,
     ) -> anyhow::Result<Self> {
-        let intervals = find_settlement_layer_intervals(
+        let raw_intervals = find_settlement_layer_intervals(
             chain_asset_handler,
             diamond_proxy_l1.provider().clone(),
-            chain_id,
+            l2_chain_id,
         )
         .await
         .context("failed to discover settlement layer intervals")?;
+        // Resolve historical Gateway diamond proxy if the chain has any Gateway interval AND
+        // gateway_provider is configured.
+        let has_historical_gateway = raw_intervals
+            .iter()
+            .any(|i| matches!(i.settlement_layer, IntervalSettlementLayer::Gateway(_)));
+        let diamond_proxy_gw =
+            if has_historical_gateway && let Some(gateway_provider) = &gateway_provider {
+                let gw_chain_id = gateway_provider.get_chain_id().await?;
+                let bridgehub_gw = Bridgehub::new(
+                    crate::l1_discovery::L2_BRIDGEHUB_ADDRESS,
+                    gateway_provider.clone(),
+                    l2_chain_id,
+                );
+                let historical_diamond_proxy_gw = bridgehub_gw
+                    .zk_chain()
+                    .await
+                    .context("failed to resolve historical Gateway diamond proxy")?;
+                Some((gw_chain_id, historical_diamond_proxy_gw))
+            } else {
+                None
+            };
+
+        let mut intervals = Vec::with_capacity(raw_intervals.len());
+        for raw in raw_intervals {
+            let proxy = match raw.settlement_layer {
+                IntervalSettlementLayer::L1 => diamond_proxy_l1.clone(),
+                IntervalSettlementLayer::Gateway(chain_id) => match &diamond_proxy_gw {
+                    Some((gw_chain_id, gw)) if *gw_chain_id == chain_id => gw.clone(),
+                    Some((gw_chain_id, _)) => anyhow::bail!(
+                        "interval {}..{} was committed on Gateway with chain ID {chain_id} but \
+                         the chain's current Gateway is {gw_chain_id}; no provider is available \
+                         for the historical Gateway",
+                        raw.first_batch,
+                        raw.last_batch
+                            .map(|b| b.to_string())
+                            .unwrap_or_else(|| "?".to_string()),
+                    ),
+                    None => anyhow::bail!(
+                        "interval {}..{} was committed on Gateway with chain ID {chain_id} but \
+                         the chain currently settles on L1; no Gateway provider is configured",
+                        raw.first_batch,
+                        raw.last_batch
+                            .map(|b| b.to_string())
+                            .unwrap_or_else(|| "?".to_string()),
+                    ),
+                },
+            };
+            intervals.push(SettlementLayerInterval {
+                settlement_layer: raw.settlement_layer,
+                first_batch: raw.first_batch,
+                last_batch: raw.last_batch,
+                proxy,
+            });
+        }
         Ok(Self {
             intervals: Arc::new(intervals),
-            diamond_proxy_l1,
-            diamond_proxy_gw,
         })
     }
 
@@ -110,30 +167,8 @@ impl SettlementLayerIntervals {
         )
     }
 
-    /// Returns the diamond proxy that should be used to fetch data about `batch_number`, based on
-    /// which settlement layer interval it falls into.
-    pub fn resolve_proxy(&self, batch_number: u64) -> anyhow::Result<&ZkChain<DynProvider>> {
-        let interval = self.find_interval(batch_number).with_context(|| {
-            format!("batch {batch_number} does not belong to any known settlement layer interval")
-        })?;
-        match interval.settlement_layer {
-            IntervalSettlementLayer::L1 => Ok(&self.diamond_proxy_l1),
-            IntervalSettlementLayer::Gateway(chain_id) => match &self.diamond_proxy_gw {
-                Some((gw_chain_id, gw)) if *gw_chain_id == chain_id => Ok(gw),
-                Some((gw_chain_id, _)) => anyhow::bail!(
-                    "batch {batch_number} was committed on Gateway with chain ID {chain_id} but \
-                     the chain's current Gateway is {gw_chain_id}; no provider is available for \
-                     the historical Gateway"
-                ),
-                None => anyhow::bail!(
-                    "batch {batch_number} was committed on Gateway with chain ID {chain_id} but \
-                     the chain currently settles on L1; no Gateway provider is configured"
-                ),
-            },
-        }
-    }
-
-    fn find_interval(&self, batch_number: u64) -> Option<&SettlementLayerInterval> {
+    /// Returns the settlement layer interval containing `batch_number`.
+    pub fn find_interval(&self, batch_number: u64) -> Option<&SettlementLayerInterval> {
         self.intervals.iter().find(|i| {
             batch_number >= i.first_batch && i.last_batch.is_none_or(|last| batch_number <= last)
         })
@@ -157,7 +192,7 @@ async fn find_settlement_layer_intervals(
     chain_asset_handler: Address,
     provider: DynProvider,
     chain_id: u64,
-) -> anyhow::Result<Vec<SettlementLayerInterval>> {
+) -> anyhow::Result<Vec<RawSettlementLayerInterval>> {
     let cah = IChainAssetHandler::new(chain_asset_handler, provider);
     let total_migrations: u64 = match cah.migrationNumber(U256::from(chain_id)).call().await {
         Ok(n) => n
@@ -170,7 +205,7 @@ async fn find_settlement_layer_intervals(
                 "ChainAssetHandler does not expose migrationNumber; assuming pre-V31 protocol \
                  with no Gateway migrations: {e}"
             );
-            return Ok(vec![SettlementLayerInterval {
+            return Ok(vec![RawSettlementLayerInterval {
                 settlement_layer: IntervalSettlementLayer::L1,
                 first_batch: 1,
                 last_batch: None,
@@ -217,7 +252,7 @@ async fn find_settlement_layer_intervals(
             to_batch + 1,
             cursor
         );
-        intervals.push(SettlementLayerInterval {
+        intervals.push(RawSettlementLayerInterval {
             settlement_layer: IntervalSettlementLayer::L1,
             first_batch: cursor,
             last_batch: Some(to_batch),
@@ -225,7 +260,7 @@ async fn find_settlement_layer_intervals(
         cursor = to_batch + 1;
 
         if raw.isActive {
-            intervals.push(SettlementLayerInterval {
+            intervals.push(RawSettlementLayerInterval {
                 settlement_layer: IntervalSettlementLayer::Gateway(sl_chain_id),
                 first_batch: cursor,
                 last_batch: None,
@@ -237,7 +272,7 @@ async fn find_settlement_layer_intervals(
             .migrateFromGWBatchNumber
             .try_into()
             .map_err(|e| anyhow::anyhow!("migrateFromGWBatchNumber overflow: {e}"))?;
-        intervals.push(SettlementLayerInterval {
+        intervals.push(RawSettlementLayerInterval {
             settlement_layer: IntervalSettlementLayer::Gateway(sl_chain_id),
             first_batch: cursor,
             last_batch: Some(from_batch),
@@ -245,7 +280,7 @@ async fn find_settlement_layer_intervals(
         cursor = from_batch + 1;
     }
     if !on_active_gw {
-        intervals.push(SettlementLayerInterval {
+        intervals.push(RawSettlementLayerInterval {
             settlement_layer: IntervalSettlementLayer::L1,
             first_batch: cursor,
             last_batch: None,

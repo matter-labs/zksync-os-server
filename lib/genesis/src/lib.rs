@@ -19,7 +19,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_interface::types::BlockContext;
+use zksync_os_storage_api::BlockContext;
 use zksync_os_types::{ConfigFormat, ExecutionVersion, L1UpgradeEnvelope, ProtocolSemanticVersion};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,6 +302,8 @@ async fn build_genesis(
         excess_blob_gas: None,
         parent_beacon_block_root: None,
         requests_hash: None,
+        block_access_list_hash: None,
+        slot_number: None,
     };
 
     let context = BlockContext {
