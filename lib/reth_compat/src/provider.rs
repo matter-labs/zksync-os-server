@@ -28,6 +28,7 @@ use std::fmt::Debug;
 use std::ops::{RangeBounds, RangeInclusive};
 use std::sync::Arc;
 use zk_os_api::helpers::{get_balance, get_nonce};
+use zksync_os_interface::traits::PreimageSource;
 use zksync_os_storage_api::{ReadRepository, ReadStateHistory, ViewState};
 
 #[derive(Debug, Clone)]
@@ -46,10 +47,13 @@ impl<State: ReadStateHistory, Repository: ReadRepository> ZkProviderFactory<Stat
             .into_parts();
         let builder = ChainSpecBuilder::default()
             .chain(Chain::from(chain_id))
-            // Activate everything up to Cancun
-            // todo: does it make sense to active Cancun if we do not support 4844 transactions?
-            //       maybe drop down to Shanghai?
-            .cancun_activated()
+            // Activate everything up to Prague. Prague (Pectra) is required so that reth's
+            // mempool validator accepts EIP-7702 (set-code) transactions: it only admits type
+            // 0x04 txs when `fork_tracker.is_prague_activated()` is true, which is seeded from
+            // this chain spec. ZKsync OS itself executes 7702 unconditionally via the RLP path,
+            // so activating Prague here only affects mempool admission (this chain spec is not
+            // used for block execution or gas pricing).
+            .prague_activated()
             .genesis(Genesis {
                 // todo: evaluate whether genesis config needs to be tweaked
                 config: ChainConfig::default(),
@@ -161,12 +165,43 @@ impl<State: ReadStateHistory> AccountReader for ZkProvider<State> {
 }
 
 impl<ReadStorage: ReadStateHistory> BytecodeReader for ZkProvider<ReadStorage> {
-    fn bytecode_by_hash(&self, _code_hash: &B256) -> ProviderResult<Option<Bytecode>> {
-        unimplemented!(
-            "reth mempool only calls this for EIP-7702 transactions which we do not support yet"
-        )
+    fn bytecode_by_hash(&self, code_hash: &B256) -> ProviderResult<Option<Bytecode>> {
+        // reth's mempool validator calls this from `validate_sender_bytecode` once Prague is
+        // active: a sender that has bytecode is only allowed to send transactions if that
+        // bytecode is an EIP-7702 delegation designator (i.e. the account is a delegated EOA).
+        //
+        // ZKsync OS stores a delegation as the 23-byte designator `0xef0100 || address`
+        // (see `EIP7702_DELEGATION_MARKER` in zksync-os), padded with trailing zeroes in the
+        // preimage. revm's 7702 parser requires the bytecode to be *exactly* 23 bytes, so we
+        // trim the padding before constructing it. Regular contract bytecode is returned
+        // verbatim and reth (correctly) rejects such an account as a sender.
+        let mut view = self
+            .state
+            .state_view_at(self.latest_block)
+            .map_err(|_| ProviderError::StateAtBlockPruned(self.latest_block))?;
+        let Some(full_bytecode) = view.get_preimage(*code_hash) else {
+            return Ok(None);
+        };
+        let bytecode = if full_bytecode.len() >= EIP7702_DELEGATION_DESIGNATOR_LEN
+            && full_bytecode.starts_with(&EIP7702_DELEGATION_PREFIX)
+        {
+            Bytecode::new_raw_checked(Bytes::copy_from_slice(
+                &full_bytecode[..EIP7702_DELEGATION_DESIGNATOR_LEN],
+            ))
+            .map_err(ProviderError::other)?
+        } else {
+            Bytecode::new_raw(full_bytecode.into())
+        };
+        Ok(Some(bytecode))
     }
 }
+
+/// First three bytes of an EIP-7702 delegation designator: the `0xef01` magic followed by the
+/// version byte `0x00`. Matches `EIP7702_DELEGATION_MARKER` used by ZKsync OS when installing
+/// delegation code.
+const EIP7702_DELEGATION_PREFIX: [u8; 3] = [0xef, 0x01, 0x00];
+/// Full length of an EIP-7702 delegation designator: 3-byte prefix + 20-byte address.
+const EIP7702_DELEGATION_DESIGNATOR_LEN: usize = 23;
 
 //
 //

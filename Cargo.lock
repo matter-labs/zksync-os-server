@@ -15915,6 +15915,7 @@ dependencies = [
  "reth-storage-api",
  "reth-trie-common",
  "zksync_os_api",
+ "zksync_os_interface",
  "zksync_os_storage_api",
 ]
 

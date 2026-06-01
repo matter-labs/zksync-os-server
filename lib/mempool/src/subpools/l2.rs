@@ -149,7 +149,10 @@ pub fn in_memory(
         let chain_spec = zk_provider_factory.chain_spec();
         RethPool::new(
             EthTransactionValidatorBuilder::new(zk_provider_factory, EthEvmConfig::new(chain_spec))
-                .no_prague()
+                // EIP-7702 (set-code) transactions require the Prague fork to be active in the
+                // validator. The builder derives this from the chain spec (Prague-activated in
+                // `ZkProviderFactory`), so we must NOT disable it here. `eip7702` already
+                // defaults to enabled.
                 .with_max_tx_input_bytes(validator_config.max_input_bytes)
                 // set tx_fee_cap to 0, effectively disabling the tx fee checks in the reth mempool
                 // this is necessary to process transactions with more than 1e18 tx fee

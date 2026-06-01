@@ -6,7 +6,7 @@ use crate::result::RevertError;
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
 use crate::sandbox::{call_trace_simulate, execute, execute_with};
 use alloy::consensus::transaction::Recovered;
-use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
+use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxEip7702, TxLegacy, TxType};
 use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
@@ -136,8 +136,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             blob_versioned_hashes: _,
             max_fee_per_blob_gas: _,
             sidecar: _,
-            // todo(EIP-7702)
-            authorization_list: _,
+            authorization_list,
             // EIP-2718 transaction type - ignored
             transaction_type: _,
         } = request;
@@ -250,7 +249,27 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 return Err(EthCallError::Eip4844NotSupported);
             }
             TxType::Eip7702 => {
-                return Err(EthCallError::Eip7702NotSupported);
+                // EIP-7702 transactions must have a concrete `to` address (the bootloader
+                // rejects a create-style 7702 tx). Note we use `unwrap_or_default()` for the
+                // priority fee rather than requiring it: an `authorization_list` forces the
+                // minimal tx type to 7702, so a fee-less `eth_estimateGas`/`eth_fillTransaction`
+                // request must still build successfully.
+                let to = to.into_to().ok_or(EthCallError::Eip7702RequiresToAddress)?;
+                L2Envelope::from(
+                    TxEip7702 {
+                        chain_id,
+                        nonce,
+                        gas_limit,
+                        max_fee_per_gas: gas_price,
+                        max_priority_fee_per_gas: max_priority_fee_per_gas.unwrap_or_default(),
+                        to,
+                        value,
+                        input,
+                        access_list: access_list.unwrap_or_default(),
+                        authorization_list: authorization_list.unwrap_or_default(),
+                    }
+                    .into_signed(signature),
+                )
             }
         };
         Ok(Recovered::new_unchecked(tx, from).into())
@@ -749,9 +768,8 @@ pub enum EthCallError {
     // todo(EIP-4844)
     #[error("EIP-4844 transactions are not supported")]
     Eip4844NotSupported,
-    // todo(EIP-7702)
-    #[error("EIP-7702 transactions are not supported")]
-    Eip7702NotSupported,
+    #[error("EIP-7702 transactions require a `to` address")]
+    Eip7702RequiresToAddress,
     #[error("upgrade transactions cannot be estimated")]
     UpgradeTxNotEstimatable,
     #[error("system transactions cannot be estimated")]

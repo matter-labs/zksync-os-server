@@ -50,13 +50,14 @@ async fn call_fail(tester: Tester) -> anyhow::Result<()> {
         })
         .expect_to_fail("EIP-4844 transactions are not supported")
         .await;
+    // EIP-7702 transactions are supported, but they require a concrete `to` address.
     tester
         .l2_provider
         .call(TransactionRequest {
             authorization_list: Some(vec![]),
             ..Default::default()
         })
-        .expect_to_fail("EIP-7702 transactions are not supported")
+        .expect_to_fail("EIP-7702 transactions require a `to` address")
         .await;
 
     // Block not found errors

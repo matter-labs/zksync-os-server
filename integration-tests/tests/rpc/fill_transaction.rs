@@ -154,6 +154,7 @@ async fn fill_transaction_fail(tester: Tester) -> anyhow::Result<()> {
     )
     .await;
 
+    // EIP-7702 transactions are supported, but they require a concrete `to` address.
     expect_fill_transaction_to_fail(
         &tester,
         TransactionRequest {
@@ -161,7 +162,7 @@ async fn fill_transaction_fail(tester: Tester) -> anyhow::Result<()> {
             authorization_list: Some(vec![]),
             ..Default::default()
         },
-        "EIP-7702 transactions are not supported",
+        "EIP-7702 transactions require a `to` address",
     )
     .await;
 
