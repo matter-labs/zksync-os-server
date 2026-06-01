@@ -44,16 +44,10 @@ impl RecentBlocks {
     }
 
     fn contains_range(&self, from_block: u64, to_block: u64) -> bool {
-        if from_block > to_block {
-            return false;
-        }
-        let Some(first_block) = self.first_block else {
+        let (Some(first), Some(last)) = (self.first_block, self.latest_block()) else {
             return false;
         };
-        let Some(last_block) = self.latest_block() else {
-            return false;
-        };
-        from_block >= first_block && to_block <= last_block
+        from_block <= to_block && from_block >= first && to_block <= last
     }
 
     fn cached_logs_in_range(
@@ -179,24 +173,15 @@ impl LogsCache {
             return Ok(());
         }
 
-        self.synchronize_locked(&mut recent, latest_snapshot)
-            .await?;
-        recent.synced_with = latest_snapshot;
-        Ok(())
-    }
-
-    async fn synchronize_locked(
-        &self,
-        recent: &mut RecentBlocks,
-        latest_snapshot: BlockUpdates,
-    ) -> TransportResult<()> {
         if recent.capacity == 0 {
+            recent.synced_with = latest_snapshot;
             return Ok(());
         }
 
         let target_head = latest_snapshot.latest_block;
         let floor = target_head.saturating_sub(recent.capacity as u64 - 1);
-        self.update_block(recent, target_head, floor).await?;
+        self.update_block(&mut recent, target_head, floor).await?;
+        recent.synced_with = latest_snapshot;
         Ok(())
     }
 
