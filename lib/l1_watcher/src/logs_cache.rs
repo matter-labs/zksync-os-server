@@ -2,8 +2,9 @@ use crate::{BlockUpdates, metrics::METRICS};
 use alloy::eips::BlockNumberOrTag;
 use alloy::primitives::{B256, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
-use alloy::rpc::types::{Block, Filter, Log};
+use alloy::rpc::types::{Filter, Log};
 use alloy::transports::{TransportErrorKind, TransportResult};
+use futures::future::BoxFuture;
 use std::{collections::VecDeque, sync::Arc};
 use tokio::sync::{RwLock, watch};
 
@@ -97,13 +98,22 @@ impl RecentBlocks {
         result
     }
 
-    fn truncate_latest_to(&mut self, to_block: u64) {
+    fn truncate_above(&mut self, max_kept_block: Option<u64>) -> u64 {
+        let mut removed = 0;
         while self
             .latest_block()
-            .is_some_and(|latest_block| latest_block > to_block)
+            .is_some_and(|latest_block| max_kept_block.is_none_or(|max| latest_block > max))
         {
             self.pop_back();
+            removed += 1;
         }
+        removed
+    }
+
+    fn cached_hash(&self, block_number: u64) -> Option<B256> {
+        let first_block = self.first_block?;
+        let offset = block_number.checked_sub(first_block)? as usize;
+        self.blocks.get(offset).map(|block| block.hash)
     }
 }
 
@@ -219,47 +229,19 @@ impl LogsCache {
         recent: &mut RecentBlocks,
         latest_snapshot: BlockUpdates,
     ) -> TransportResult<()> {
-        let target_head = latest_snapshot.latest_block;
         if self.capacity == 0 {
             recent.blocks.clear();
             recent.first_block = None;
             return Ok(());
         }
 
-        if recent.blocks.is_empty() {
-            let start_block = target_head.saturating_sub(self.capacity as u64 - 1);
-            self.fill_blocks(recent, start_block, target_head).await?;
-            return Ok(());
-        }
-
-        recent.truncate_latest_to(target_head);
-        if recent.blocks.is_empty() {
-            return Err(TransportErrorKind::custom_str(
-                "recent logs cache could not find common ancestor within retained window",
-            ));
-        }
-
+        let target_head = latest_snapshot.latest_block;
+        let floor = target_head.saturating_sub(self.capacity as u64 - 1);
         let mut rewind_depth = 0;
-        while let Some(cached_tip_block) = recent.latest_block() {
-            let canonical_hash = self.fetch_block_hash(cached_tip_block).await?;
-            let cached_hash = recent
-                .blocks
-                .back()
-                .expect("latest_block implies cache is not empty")
-                .hash;
-            if canonical_hash == cached_hash {
-                break;
-            }
-            recent.pop_back();
-            rewind_depth += 1;
-        }
+        self.update_block(recent, target_head, floor, &mut rewind_depth)
+            .await?;
 
         if rewind_depth > 0 {
-            if recent.blocks.is_empty() {
-                return Err(TransportErrorKind::custom_str(
-                    "recent logs cache could not find common ancestor within retained window",
-                ));
-            }
             METRICS.logs_cache_reorg_rewinds.inc();
             METRICS.logs_cache_reorg_rewind_depth.inc_by(rewind_depth);
             tracing::warn!(
@@ -268,49 +250,47 @@ impl LogsCache {
                 "recent logs cache detected reorg"
             );
         }
-
-        let start_block = recent.latest_block().map_or(
-            target_head.saturating_sub(self.capacity as u64 - 1),
-            |last_cached| last_cached.saturating_add(1),
-        );
-        self.fill_blocks(recent, start_block, target_head).await?;
         Ok(())
     }
 
-    async fn fill_blocks(
-        &self,
-        recent: &mut RecentBlocks,
-        from_block: u64,
-        to_block: u64,
-    ) -> TransportResult<()> {
-        if from_block > to_block {
-            return Ok(());
-        }
+    fn update_block<'a>(
+        &'a self,
+        recent: &'a mut RecentBlocks,
+        block_number: u64,
+        floor: u64,
+        rewind_depth: &'a mut u64,
+    ) -> BoxFuture<'a, TransportResult<()>> {
+        Box::pin(async move {
+            if block_number < floor {
+                return Ok(());
+            }
 
-        for block_number in from_block..=to_block {
-            let block = self.fetch_block(block_number).await?;
-            let logs = self.fetch_block_logs(block.header.hash).await?;
+            let block = self
+                .provider
+                .get_block_by_number(BlockNumberOrTag::Number(block_number))
+                .await?
+                .ok_or_else(|| TransportErrorKind::custom_str("block not found"))?;
+            if let Some(previous_number) = block_number.checked_sub(1).filter(|&n| n >= floor)
+                && recent.cached_hash(previous_number) != Some(block.header.parent_hash)
+            {
+                self.update_block(recent, previous_number, floor, rewind_depth)
+                    .await?;
+                self.update_block(recent, block_number, floor, rewind_depth)
+                    .await?;
+                return Ok(());
+            }
+
+            let max_kept_block = block_number.checked_sub(1).filter(|&n| n >= floor);
+            *rewind_depth += recent.truncate_above(max_kept_block);
+
+            let logs = self
+                .provider
+                .get_logs(&Filter::new().at_block_hash(block.header.hash))
+                .await?;
             recent.push_block(block_number, block.header.hash, logs, self.capacity);
             METRICS.logs_cache_blocks_loaded.inc();
-        }
-        Ok(())
-    }
-
-    async fn fetch_block(&self, block_number: u64) -> TransportResult<Block> {
-        self.provider
-            .get_block_by_number(BlockNumberOrTag::Number(block_number))
-            .await?
-            .ok_or_else(|| TransportErrorKind::custom_str("block not found"))
-    }
-
-    async fn fetch_block_hash(&self, block_number: u64) -> TransportResult<B256> {
-        Ok(self.fetch_block(block_number).await?.header.hash)
-    }
-
-    async fn fetch_block_logs(&self, block_hash: B256) -> TransportResult<Vec<Log>> {
-        self.provider
-            .get_logs(&Filter::new().at_block_hash(block_hash))
-            .await
+            Ok(())
+        })
     }
 }
 
@@ -318,7 +298,7 @@ impl LogsCache {
 mod tests {
     use super::*;
     use alloy::providers::ProviderBuilder;
-    use alloy::rpc::types::Header;
+    use alloy::rpc::types::{Block, Header};
     use alloy::transports::mock::Asserter;
     use alloy::{network::EthereumWallet, primitives::Address};
 
@@ -520,6 +500,142 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn reorg_sync_repairs_parent_before_refetching_current_block() {
+        let (provider, asserter) = mocked_provider();
+        let cache = LogsCache {
+            provider,
+            block_updates: block_updates(12, 0),
+            recent: RwLock::new(RecentBlocks {
+                synced_with: BlockUpdates {
+                    latest_block: 11,
+                    finalized_block: 0,
+                },
+                first_block: Some(10),
+                blocks: VecDeque::from([
+                    CachedBlockLogs {
+                        hash: B256::repeat_byte(10),
+                        logs: vec![rpc_log(
+                            10,
+                            B256::repeat_byte(10),
+                            Address::repeat_byte(1),
+                            [B256::repeat_byte(2), B256::repeat_byte(3)],
+                        )],
+                    },
+                    CachedBlockLogs {
+                        hash: B256::repeat_byte(0x11),
+                        logs: vec![rpc_log(
+                            11,
+                            B256::repeat_byte(0x11),
+                            Address::repeat_byte(1),
+                            [B256::repeat_byte(2), B256::repeat_byte(3)],
+                        )],
+                    },
+                    CachedBlockLogs {
+                        hash: B256::repeat_byte(0x12),
+                        logs: vec![rpc_log(
+                            12,
+                            B256::repeat_byte(0x12),
+                            Address::repeat_byte(1),
+                            [B256::repeat_byte(2), B256::repeat_byte(3)],
+                        )],
+                    },
+                ]),
+            }),
+            capacity: 128,
+        };
+
+        asserter.push_success(&Some(rpc_block(
+            12,
+            B256::repeat_byte(0x22),
+            B256::repeat_byte(0x21),
+        )));
+        asserter.push_success(&Some(rpc_block(
+            11,
+            B256::repeat_byte(0x21),
+            B256::repeat_byte(10),
+        )));
+        asserter.push_success(&vec![rpc_log(
+            11,
+            B256::repeat_byte(0x21),
+            Address::repeat_byte(1),
+            [B256::repeat_byte(2), B256::repeat_byte(3)],
+        )]);
+        asserter.push_success(&Some(rpc_block(
+            12,
+            B256::repeat_byte(0x22),
+            B256::repeat_byte(0x21),
+        )));
+        asserter.push_success(&vec![rpc_log(
+            12,
+            B256::repeat_byte(0x22),
+            Address::repeat_byte(1),
+            [B256::repeat_byte(2), B256::repeat_byte(3)],
+        )]);
+
+        let filter = Filter::new()
+            .from_block(10u64)
+            .to_block(12u64)
+            .address(Address::repeat_byte(1))
+            .event_signature(B256::repeat_byte(2))
+            .topic1(B256::repeat_byte(3));
+
+        let logs = cache
+            .get_logs(&filter)
+            .await
+            .expect("reorg repair should succeed");
+
+        assert_eq!(logs.len(), 3);
+        assert_eq!(logs[1].block_hash, Some(B256::repeat_byte(0x21)));
+        assert_eq!(logs[2].block_hash, Some(B256::repeat_byte(0x22)));
+        assert!(
+            asserter.read_q().is_empty(),
+            "the recursive reorg repair should consume exactly the prepared responses",
+        );
+    }
+
+    #[tokio::test]
+    async fn syncs_genesis_block_without_underflow() {
+        let (provider, asserter) = mocked_provider();
+        let cache = LogsCache {
+            provider,
+            block_updates: block_updates(0, 0),
+            recent: RwLock::new(RecentBlocks::default()),
+            capacity: 128,
+        };
+
+        asserter.push_success(&Some(rpc_block(
+            0,
+            B256::repeat_byte(0x10),
+            B256::ZERO,
+        )));
+        asserter.push_success(&vec![rpc_log(
+            0,
+            B256::repeat_byte(0x10),
+            Address::repeat_byte(1),
+            [B256::repeat_byte(2), B256::repeat_byte(3)],
+        )]);
+
+        let filter = Filter::new()
+            .from_block(0u64)
+            .to_block(0u64)
+            .address(Address::repeat_byte(1))
+            .event_signature(B256::repeat_byte(2))
+            .topic1(B256::repeat_byte(3));
+
+        let logs = cache
+            .get_logs(&filter)
+            .await
+            .expect("genesis block sync should succeed");
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].block_number, Some(0));
+        assert!(
+            asserter.read_q().is_empty(),
+            "genesis sync should consume exactly one header and one logs response",
+        );
+    }
+
     fn rpc_log(block_number: u64, block_hash: B256, address: Address, topics: [B256; 2]) -> Log {
         let mut log: Log<alloy::primitives::LogData> = Log::default();
         log.inner =
@@ -530,12 +646,13 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn rpc_block(number: u64, hash: B256) -> Block {
+    fn rpc_block(number: u64, hash: B256, parent_hash: B256) -> Block {
         let mut block = Block::default();
         block.header = Header {
             hash,
             inner: alloy::consensus::Header {
                 number,
+                parent_hash,
                 ..Default::default()
             },
             total_difficulty: None,
