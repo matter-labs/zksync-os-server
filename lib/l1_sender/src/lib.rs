@@ -24,10 +24,8 @@ use alloy::transports::TransportError;
 use anyhow::Context as _;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use vise::GaugeGuard;
 use zksync_os_alloy_ext::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_alloy_ext::retry::{RpcRetryOverride, with_scoped_rpc_retry_override};
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
@@ -256,31 +254,7 @@ where
                     L1_SENDER_METRICS.balance_required_for_tx[&Input::COMPONENT_ID.as_str()].set(balance_required);
 
                     let pending_tx = {
-                        let call_name = "l1_sender_send_transaction";
-                        let timeout = self.config.rpc_call_timeout_critical;
-                        let long_rpc_call = OnceLock::<GaugeGuard<u64>>::new();
-                        let retry_override = RpcRetryOverride::infinite(call_name)
-                            .retry_all_errors()
-                            .on_retry(move |event| {
-                                if event.elapsed <= timeout {
-                                    return;
-                                }
-
-                                long_rpc_call.get_or_init(|| {
-                                    tracing::warn!(
-                                        call = event.call_name,
-                                        retry_number = event.retry_number,
-                                        elapsed_ms = event.elapsed.as_millis(),
-                                        backoff_ms = event.backoff.as_millis(),
-                                        rpc_call_timeout_critical_ms = timeout.as_millis(),
-                                        err = %event.error,
-                                        "L1 sender RPC request is still retrying after critical timeout"
-                                    );
-                                    L1_SENDER_METRICS.long_rpc_call
-                                        [&(command_name, event.call_name)]
-                                        .inc_guard(1)
-                                });
-                            });
+                        let retry_override = RpcRetryOverride::new().retry_all_errors().with_limit(u32::MAX).with_context("l1_sender");
                         with_scoped_rpc_retry_override(
                             retry_override,
                             self.provider.send_transaction(tx_request),

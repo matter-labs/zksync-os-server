@@ -1,43 +1,19 @@
 use alloy::providers::ProviderCall;
 use alloy::rpc::client::RpcCall;
 use alloy::rpc::json_rpc::{RpcRecv, RpcSend};
-use alloy::transports::TransportError;
 use std::fmt;
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
-
-/// Per-call retry limit override consumed by the node provider retry middleware.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RpcRetryLimit {
-    /// Retry at most this many times after the initial attempt.
-    Attempts(u32),
-    /// Keep retrying retryable errors until the call succeeds.
-    Infinite,
-}
-
-/// Data passed to a per-call retry callback before the next backoff sleep.
-#[derive(Debug)]
-pub struct RpcRetryEvent<'a> {
-    pub call_name: &'static str,
-    pub retry_number: u32,
-    pub elapsed: Duration,
-    pub backoff: Duration,
-    pub error: &'a TransportError,
-}
-
-pub type RpcRetryCallback = Arc<dyn for<'a> Fn(&RpcRetryEvent<'a>) + Send + Sync>;
 
 /// Per-call retry policy override consumed by the node provider retry middleware.
 ///
 /// Without this marker, provider-level config is used.
 #[derive(Clone)]
 pub struct RpcRetryOverride {
-    pub limit: RpcRetryLimit,
+    pub limit: Option<u32>,
     pub backoff: Option<Duration>,
-    pub call_name: &'static str,
     pub retry_all_errors: bool,
-    pub on_retry: Option<RpcRetryCallback>,
+    pub call_context: &'static str,
 }
 
 impl fmt::Debug for RpcRetryOverride {
@@ -45,29 +21,24 @@ impl fmt::Debug for RpcRetryOverride {
         f.debug_struct("RpcRetryOverride")
             .field("limit", &self.limit)
             .field("backoff", &self.backoff)
-            .field("call_name", &self.call_name)
             .field("retry_all_errors", &self.retry_all_errors)
-            .field("has_on_retry", &self.on_retry.is_some())
+            .field("call_context", &self.call_context)
             .finish()
     }
 }
 
 impl RpcRetryOverride {
-    pub const fn infinite(call_name: &'static str) -> Self {
+    pub const fn new() -> Self {
         Self {
-            limit: RpcRetryLimit::Infinite,
+            limit: None,
             backoff: None,
-            call_name,
             retry_all_errors: false,
-            on_retry: None,
+            call_context: "",
         }
     }
 
-    pub fn on_retry(
-        mut self,
-        callback: impl for<'a> Fn(&RpcRetryEvent<'a>) + Send + Sync + 'static,
-    ) -> Self {
-        self.on_retry = Some(Arc::new(callback));
+    pub const fn with_limit(mut self, limit: u32) -> Self {
+        self.limit = Some(limit);
         self
     }
 
@@ -79,6 +50,17 @@ impl RpcRetryOverride {
     pub const fn retry_all_errors(mut self) -> Self {
         self.retry_all_errors = true;
         self
+    }
+
+    pub const fn with_context(mut self, call_context: &'static str) -> Self {
+        self.call_context = call_context;
+        self
+    }
+}
+
+impl Default for RpcRetryOverride {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -105,10 +87,6 @@ pub fn scoped_rpc_retry_override() -> Option<RpcRetryOverride> {
 /// Adds per-call retry metadata to prepared Alloy RPC calls.
 pub trait RpcRetryExt: Sized {
     fn with_retry_override(self, override_: RpcRetryOverride) -> Self;
-
-    fn with_infinite_retries(self, call_name: &'static str) -> Self {
-        self.with_retry_override(RpcRetryOverride::infinite(call_name))
-    }
 }
 
 impl<Params, Resp, Output, Map> RpcRetryExt for RpcCall<Params, Resp, Output, Map>

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tower::Service;
 use zksync_os_alloy_ext::retry::{
-    RpcRetryEvent, RpcRetryLimit, RpcRetryOverride, scoped_rpc_retry_override,
+    RpcRetryOverride, scoped_rpc_retry_override,
 };
 
 /// Retry RPC requests & track retry count metric
@@ -74,22 +74,26 @@ where
         let inner = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, inner);
         let provider = self.provider;
-        let max_retries = self.max_retries;
-        let backoff = self.backoff;
+        let mut max_retries = self.max_retries;
+        let mut backoff = self.backoff;
+        let mut call_names = request.method_names().fold(String::new(), |acc, name| acc + "_" + name);
+
         let retry_override = Self::retry_override(&request)
             .cloned()
             .or_else(scoped_rpc_retry_override);
         Box::pin(async move {
-            let retry_limit = retry_override
-                .as_ref()
-                .map(|override_| override_.limit)
-                .unwrap_or(RpcRetryLimit::Attempts(max_retries));
-            let backoff = retry_override
-                .as_ref()
-                .and_then(|override_| override_.backoff)
-                .unwrap_or(backoff);
+            if let Some(override_) = retry_override {
+                if let Some(max_retries_override) = override_.limit {
+                    max_retries = max_retries_override;
+                }
+                if let Some(backoff_override) = override_.backoff {
+                    backoff = backoff_override;
+                }
+                call_names = override_.call_context.to_owned() + call_names;
+            }
             let started_at = Instant::now();
             let mut retry_number: u32 = 0;
+
             loop {
                 let err;
                 let res = inner.call(request.clone()).await;
@@ -111,8 +115,7 @@ where
                     || Self::should_retry(&err);
                 if should_retry {
                     retry_number = retry_number.saturating_add(1);
-                    if let RpcRetryLimit::Attempts(max_retries) = retry_limit
-                        && retry_number > max_retries
+                    if retry_number > max_retries
                     {
                         return Err(TransportErrorKind::custom_str(&format!(
                             "Max retries exceeded {err}"
@@ -120,17 +123,13 @@ where
                     }
                     METRICS[&provider].retry_count.inc();
                     let next_backoff = Self::backoff_hint(&err).unwrap_or(backoff);
-                    if let Some(override_) = &retry_override
-                        && let Some(on_retry) = &override_.on_retry
-                    {
-                        on_retry(&RpcRetryEvent {
-                            call_name: override_.call_name,
-                            retry_number,
-                            elapsed: started_at.elapsed(),
-                            backoff: next_backoff,
-                            error: &err,
-                        });
+
+                    let elapsed_secs = started_at.elapsed().as_secs();
+                    
+                    if retry_number % 10 == 0 {
+                        tracing::warn!("Query {call_names} was retried {retry_number} times, time elapsed: {elapsed_secs} seconds. Latest error: {err}");
                     }
+                    
                     sleep(next_backoff).await;
                 } else {
                     return Err(err);
