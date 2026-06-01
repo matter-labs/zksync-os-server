@@ -9,7 +9,7 @@ use crate::config::L1SenderFeeConfig;
 use crate::metrics::{L1_SENDER_METRICS, PriorityFeeEstimatePercentile, PriorityFeeEstimateWindow};
 use crate::pipeline_component::L1Sender;
 use alloy::consensus::Transaction as ConsensusTransaction;
-use alloy::eips::eip4844::env_settings::EnvKzgSettings;
+use alloy::eips::eip4844::{DATA_GAS_PER_BLOB, env_settings::EnvKzgSettings};
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::{TransactionBuilder, TransactionBuilder4844, TransactionResponse};
@@ -216,7 +216,9 @@ where
                         .with_to(self.to_address)
                         .with_input(cmd.solidity_call(self.gateway, &operator_address));
 
+                    let mut blob_gas_limit = 0;
                     if let Some(blob_sidecar) = cmd.blob_sidecar() {
+                        blob_gas_limit = blob_sidecar.blobs.len() as u64 * DATA_GAS_PER_BLOB;
                         let fee_per_blob_gas = self.provider.get_blob_base_fee().await?;
                         L1_SENDER_METRICS
                             .report_blob_base_fee(fee_per_blob_gas)?;
@@ -242,6 +244,19 @@ where
                             tx_request.set_blob_sidecar(BlobTransactionSidecarVariant::Eip4844(blob_sidecar));
                         }
                     };
+
+                    let execution_balance_required = tx_request.max_fee_per_gas.unwrap_or_default()
+                        * u128::from(tx_request.gas.unwrap_or_default());
+                    let blob_balance_required = tx_request
+                        .max_fee_per_blob_gas
+                        .unwrap_or_default()
+                        * u128::from(blob_gas_limit);
+                    let balance_required = execution_balance_required
+                        .saturating_add(blob_balance_required)
+                        .min(u128::from(u64::MAX)) as u64;
+
+                    L1_SENDER_METRICS.balance_required_for_tx[&Input::COMPONENT_ID.as_str()]
+                        .set(balance_required);
 
                     let pending_tx = self.provider.send_transaction(tx_request).await?;
                     let submitted_at = Instant::now();
@@ -696,6 +711,19 @@ where
         command: &Input,
         receipt: TransactionReceipt,
     ) -> anyhow::Result<()> {
+        let execution_fee = receipt.gas_used as u128 * receipt.effective_gas_price;
+        let blob_fee = receipt
+            .blob_gas_used
+            .zip(receipt.blob_gas_price)
+            .map(|(gas_used, gas_price)| gas_used as u128 * gas_price)
+            .unwrap_or_default();
+        let balance_consumed = execution_fee
+            .saturating_add(blob_fee)
+            .min(u128::from(u64::MAX)) as u64;
+
+        L1_SENDER_METRICS.balance_consumed_by_tx[&Input::COMPONENT_ID.as_str()]
+            .set(balance_consumed);
+
         if receipt.status() {
             // Transaction succeeded - log output and return OK(())
             L1_SENDER_METRICS.report_tx_receipt(command, receipt)?;
