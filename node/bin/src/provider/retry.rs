@@ -7,9 +7,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tower::Service;
-use zksync_os_alloy_ext::retry::{
-    RpcRetryOverride, scoped_rpc_retry_override,
-};
+use zksync_os_alloy_ext::retry::{RpcRetryOverride, scoped_rpc_retry_override};
 
 /// Retry RPC requests & track retry count metric
 #[derive(Debug, Clone)]
@@ -76,7 +74,9 @@ where
         let provider = self.provider;
         let mut max_retries = self.max_retries;
         let mut backoff = self.backoff;
-        let mut call_names = request.method_names().fold(String::new(), |acc, name| acc + "_" + name);
+        let mut call_names = request
+            .method_names()
+            .fold(String::new(), |acc, name| acc + "_" + name);
 
         let retry_override = Self::retry_override(&request)
             .cloned()
@@ -92,7 +92,7 @@ where
                 call_names = override_.call_context.to_owned() + call_names.as_str();
             }
             let started_at = Instant::now();
-            let mut retry_number: u32 = 0;
+            let mut retry_number = 0;
 
             loop {
                 let err;
@@ -114,23 +114,23 @@ where
                     .is_some_and(|override_| override_.retry_all_errors)
                     || Self::should_retry(&err);
                 if should_retry {
-                    retry_number = retry_number.saturating_add(1);
-                    if retry_number > max_retries
-                    {
+                    retry_number += 1;
+                    if retry_number > max_retries {
                         return Err(TransportErrorKind::custom_str(&format!(
                             "Max retries exceeded {err}"
                         )));
                     }
                     METRICS[&provider].retry_count.inc();
-                    let next_backoff = Self::backoff_hint(&err).unwrap_or(backoff);
 
                     let elapsed_secs = started_at.elapsed().as_secs();
-                    
+
                     if retry_number % 10 == 0 {
-                        tracing::warn!("Query {call_names} was retried {retry_number} times, time elapsed: {elapsed_secs} seconds. Latest error: {err}");
+                        tracing::warn!(
+                            "Query {call_names} was retried {retry_number} times, time elapsed: {elapsed_secs} seconds. Latest error: {err}"
+                        );
                     }
-                    
-                    sleep(next_backoff).await;
+
+                    sleep(Self::backoff_hint(&err).unwrap_or(backoff)).await;
                 } else {
                     return Err(err);
                 }
