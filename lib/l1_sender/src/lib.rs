@@ -27,6 +27,7 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use zksync_os_alloy_ext::dyn_wallet_provider::EthWalletProvider;
+use zksync_os_alloy_ext::retry::{RpcRetryOverride, with_scoped_rpc_retry_override};
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState, StateLabel};
 use zksync_os_pipeline::{PeekableReceiver, SendAndRecordExt};
@@ -208,6 +209,7 @@ where
                     )
                     .await?;
                     let operator_address = self.operator_address().await?;
+
                     let mut tx_request = TransactionRequest::default()
                         .with_from(operator_address)
                         .with_max_fee_per_gas(fee_params.max_fee_per_gas)
@@ -243,7 +245,14 @@ where
                         }
                     };
 
-                    let pending_tx = self.provider.send_transaction(tx_request).await?;
+                    let pending_tx = {
+                        let retry_override = RpcRetryOverride::new().retry_all_errors().with_limit(u32::MAX).with_context("l1_sender");
+                        with_scoped_rpc_retry_override(
+                            retry_override,
+                            self.provider.send_transaction(tx_request),
+                        )
+                        .await?
+                    };
                     let submitted_at = Instant::now();
                     let tx_hash = *pending_tx.tx_hash();
                     let receipt_fut = self.wait_for_confirmed_receipt(tx_hash);
