@@ -97,10 +97,6 @@ pub struct L1SenderMetrics {
     /// Buckets cover 0.5s → ~17 minutes in doubling steps, spanning normal (15-30s) to heavily congested (10min+).
     #[metrics(labels = ["command"], buckets = Buckets::exponential(0.5..=1024.0, 2.0))]
     pub tx_inclusion_latency_seconds: LabeledFamily<&'static str, Histogram<f64>>,
-
-    /// Whether an L1 sender RPC call is still retrying after the configured critical timeout.
-    #[metrics(labels = ["command", "call_name"])]
-    pub long_rpc_call: LabeledFamily<(&'static str, &'static str), Gauge<u64>, 2>,
 }
 
 impl L1SenderMetrics {
