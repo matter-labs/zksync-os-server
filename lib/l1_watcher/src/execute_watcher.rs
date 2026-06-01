@@ -4,7 +4,6 @@ use crate::{
 };
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
-use std::sync::Arc;
 use tokio::sync::watch;
 use zksync_os_contract_interface::IExecutor::BlockExecution;
 use zksync_os_contract_interface::ZkChain;
@@ -45,7 +44,7 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         finality: Finality,
         l1_chain_id: u64,
         block_updates: watch::Receiver<BlockUpdates>,
-        logs_cache: Arc<LogsCache>,
+        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_executed_batch = finality.get_finality_status().last_executed_batch;
@@ -93,7 +92,7 @@ impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         block_updates: watch::Receiver<BlockUpdates>,
-        logs_cache: Arc<LogsCache>,
+        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_finalized_executed_batch =

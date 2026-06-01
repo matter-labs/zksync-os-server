@@ -6,7 +6,6 @@ use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::watch;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
@@ -51,8 +50,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         batch_storage: BatchStorage,
         l1_block_updates: watch::Receiver<BlockUpdates>,
         gateway_block_updates: Option<watch::Receiver<BlockUpdates>>,
-        l1_logs_cache: Arc<LogsCache>,
-        gateway_logs_cache: Option<Arc<LogsCache>>,
+        l1_logs_cache: LogsCache,
+        gateway_logs_cache: Option<LogsCache>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(

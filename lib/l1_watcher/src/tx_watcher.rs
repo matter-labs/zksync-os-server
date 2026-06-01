@@ -32,7 +32,7 @@ impl L1TxWatcher {
         l1_subpool: L1Subpool,
         next_l1_priority_id: u64,
         block_updates: watch::Receiver<BlockUpdates>,
-        logs_cache: Arc<LogsCache>,
+        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             config.max_blocks_to_process,

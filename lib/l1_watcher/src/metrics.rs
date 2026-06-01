@@ -10,8 +10,6 @@ pub struct L1Metrics {
     pub logs_cache_hits: Counter,
     pub logs_cache_fallbacks: Counter,
     pub logs_cache_blocks_loaded: Counter,
-    pub logs_cache_reorg_rewinds: Counter,
-    pub logs_cache_reorg_rewind_depth: Counter,
 }
 
 #[vise::register]

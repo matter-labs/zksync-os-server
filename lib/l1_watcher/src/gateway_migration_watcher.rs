@@ -4,7 +4,6 @@ use alloy::primitives::{B256, ChainId, U256};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
-use std::sync::Arc;
 use tokio::sync::watch;
 use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
 use zksync_os_contract_interface::{Bridgehub, ServerNotifier::MigrateToGateway, ZkChain};
@@ -42,7 +41,7 @@ impl GatewayMigrationWatcher {
         config: L1WatcherConfig,
         sl_chain_id_subpool: SlChainIdSubpool,
         block_updates: watch::Receiver<BlockUpdates>,
-        logs_cache: Arc<LogsCache>,
+        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         let server_notifier_contract = zk_chain.get_server_notifier_address().await?;
         let chain_asset_handler_address = bridgehub.chain_asset_handler_address().await?;

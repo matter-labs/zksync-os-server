@@ -4,7 +4,6 @@ use alloy::primitives::{B256, U256};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
-use std::sync::Arc;
 use tokio::sync::watch;
 use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_contract_interface::{Bridgehub, IChainAssetHandler::MigrationFinalized, ZkChain};
@@ -38,7 +37,7 @@ impl MigrationFinalizedWatcher {
         config: L1WatcherConfig,
         last_finalized_migration: watch::Sender<u64>,
         block_updates: watch::Receiver<BlockUpdates>,
-        logs_cache: Arc<LogsCache>,
+        logs_cache: LogsCache,
     ) -> anyhow::Result<Option<L1Watcher>> {
         let active_migration_number = (intervals.intervals().len() - 1) as u64;
         let sl_migration_number: u64 = bridgehub_sl

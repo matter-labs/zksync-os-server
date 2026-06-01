@@ -21,22 +21,22 @@ struct CachedBlockLogs {
 
 #[derive(Debug)]
 struct RecentBlocks {
+    capacity: usize,
     synced_with: BlockUpdates,
     first_block: Option<u64>,
     blocks: VecDeque<CachedBlockLogs>,
 }
 
-impl Default for RecentBlocks {
-    fn default() -> Self {
+impl RecentBlocks {
+    fn new(capacity: usize) -> Self {
         Self {
+            capacity,
             synced_with: UNSYNCED_BLOCK_UPDATES,
             first_block: None,
             blocks: VecDeque::new(),
         }
     }
-}
 
-impl RecentBlocks {
     fn latest_block(&self) -> Option<u64> {
         self.first_block
             .zip(self.blocks.len().checked_sub(1))
@@ -44,6 +44,9 @@ impl RecentBlocks {
     }
 
     fn contains_range(&self, from_block: u64, to_block: u64) -> bool {
+        if from_block > to_block {
+            return false;
+        }
         let Some(first_block) = self.first_block else {
             return false;
         };
@@ -73,13 +76,32 @@ impl RecentBlocks {
         )
     }
 
-    fn push_block(&mut self, number: u64, hash: B256, logs: Vec<Log>, capacity: usize) {
+    fn push_back(&mut self, number: u64, hash: B256, logs: Vec<Log>) -> TransportResult<()> {
+        while self
+            .latest_block()
+            .is_some_and(|latest_block| latest_block >= number)
+        {
+            self.blocks.pop_back();
+        }
+        if self.blocks.is_empty() {
+            self.first_block = None;
+        }
+
+        if let Some(latest_block) = self.latest_block()
+            && latest_block.checked_add(1) != Some(number)
+        {
+            return Err(TransportErrorKind::custom_str(
+                "recent logs cache cannot append a non-contiguous block",
+            )
+            .into());
+        }
+
         if self.blocks.is_empty() {
             self.first_block = Some(number);
         }
         self.blocks.push_back(CachedBlockLogs { hash, logs });
 
-        while self.blocks.len() > capacity {
+        while self.blocks.len() > self.capacity {
             self.blocks.pop_front();
             if let Some(first_block) = &mut self.first_block {
                 *first_block += 1;
@@ -88,26 +110,7 @@ impl RecentBlocks {
         if self.blocks.is_empty() {
             self.first_block = None;
         }
-    }
-
-    fn pop_back(&mut self) -> Option<CachedBlockLogs> {
-        let result = self.blocks.pop_back();
-        if self.blocks.is_empty() {
-            self.first_block = None;
-        }
-        result
-    }
-
-    fn truncate_above(&mut self, max_kept_block: Option<u64>) -> u64 {
-        let mut removed = 0;
-        while self
-            .latest_block()
-            .is_some_and(|latest_block| max_kept_block.is_none_or(|max| latest_block > max))
-        {
-            self.pop_back();
-            removed += 1;
-        }
-        removed
+        Ok(())
     }
 
     fn cached_hash(&self, block_number: u64) -> Option<B256> {
@@ -117,42 +120,11 @@ impl RecentBlocks {
     }
 }
 
-#[derive(Debug)]
-struct CacheEligibility {
-    is_cache_hit_candidate: bool,
-    from_block: u64,
-    to_block: u64,
-}
-
-impl CacheEligibility {
-    fn for_filter(filter: &Filter, first_cached_block: u64, last_cached_block: u64) -> Self {
-        let supported_topics = filter.topics[2].is_empty() && filter.topics[3].is_empty();
-        let block_hash = filter.get_block_hash().is_none();
-        let (from_block, to_block) = filter.extract_block_range();
-
-        let is_cache_hit_candidate = supported_topics
-            && block_hash
-            && filter.address.to_value_or_array().is_some()
-            && from_block
-                .zip(to_block)
-                .is_some_and(|(from_block, to_block)| {
-                    from_block >= first_cached_block && to_block <= last_cached_block
-                });
-
-        Self {
-            is_cache_hit_candidate,
-            from_block: from_block.unwrap_or_default(),
-            to_block: to_block.unwrap_or_default(),
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LogsCache {
     provider: DynProvider,
     block_updates: watch::Receiver<BlockUpdates>,
-    recent: RwLock<RecentBlocks>,
-    capacity: usize,
+    recent: Arc<RwLock<RecentBlocks>>,
 }
 
 impl LogsCache {
@@ -160,40 +132,29 @@ impl LogsCache {
         provider: DynProvider,
         block_updates: watch::Receiver<BlockUpdates>,
         capacity: usize,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Self {
+        Self {
             provider,
             block_updates,
-            recent: RwLock::new(RecentBlocks::default()),
-            capacity,
-        })
+            recent: Arc::new(RwLock::new(RecentBlocks::new(capacity))),
+        }
     }
 
     pub async fn get_logs(&self, filter: &Filter) -> TransportResult<Vec<Log>> {
         let latest_snapshot = *self.block_updates.borrow();
         self.synchronize_if_needed(latest_snapshot).await?;
 
-        let cached_logs = {
+        let cached_logs = if let (Some(from_block), Some(to_block)) = filter.extract_block_range() {
             let recent = self.recent.read().await;
-            match recent.first_block.zip(recent.latest_block()) {
-                Some((first_cached_block, last_cached_block)) => {
-                    let eligibility =
-                        CacheEligibility::for_filter(filter, first_cached_block, last_cached_block);
-                    if !eligibility.is_cache_hit_candidate {
-                        None
-                    } else {
-                        Some(
-                            recent
-                                .cached_logs_in_range(eligibility.from_block, eligibility.to_block)
-                                .expect("eligibility guarantees full cached range coverage")
-                                .filter(|log| filter.rpc_matches(log))
-                                .cloned()
-                                .collect(),
-                        )
-                    }
-                }
-                None => None,
-            }
+            recent
+                .cached_logs_in_range(from_block, to_block)
+                .map(|logs| {
+                    logs.filter(|log| filter.rpc_matches(log))
+                        .cloned()
+                        .collect()
+                })
+        } else {
+            None
         };
 
         if let Some(cached_logs) = cached_logs {
@@ -229,27 +190,13 @@ impl LogsCache {
         recent: &mut RecentBlocks,
         latest_snapshot: BlockUpdates,
     ) -> TransportResult<()> {
-        if self.capacity == 0 {
-            recent.blocks.clear();
-            recent.first_block = None;
+        if recent.capacity == 0 {
             return Ok(());
         }
 
         let target_head = latest_snapshot.latest_block;
-        let floor = target_head.saturating_sub(self.capacity as u64 - 1);
-        let mut rewind_depth = 0;
-        self.update_block(recent, target_head, floor, &mut rewind_depth)
-            .await?;
-
-        if rewind_depth > 0 {
-            METRICS.logs_cache_reorg_rewinds.inc();
-            METRICS.logs_cache_reorg_rewind_depth.inc_by(rewind_depth);
-            tracing::warn!(
-                rewind_depth,
-                target_head,
-                "recent logs cache detected reorg"
-            );
-        }
+        let floor = target_head.saturating_sub(recent.capacity as u64 - 1);
+        self.update_block(recent, target_head, floor).await?;
         Ok(())
     }
 
@@ -258,7 +205,6 @@ impl LogsCache {
         recent: &'a mut RecentBlocks,
         block_number: u64,
         floor: u64,
-        rewind_depth: &'a mut u64,
     ) -> BoxFuture<'a, TransportResult<()>> {
         Box::pin(async move {
             if block_number < floor {
@@ -273,21 +219,21 @@ impl LogsCache {
             if let Some(previous_number) = block_number.checked_sub(1).filter(|&n| n >= floor)
                 && recent.cached_hash(previous_number) != Some(block.header.parent_hash)
             {
-                self.update_block(recent, previous_number, floor, rewind_depth)
-                    .await?;
-                self.update_block(recent, block_number, floor, rewind_depth)
-                    .await?;
+                tracing::warn!(
+                    block_number,
+                    previous_number,
+                    "recent logs cache detected reorg"
+                );
+                self.update_block(recent, previous_number, floor).await?;
+                self.update_block(recent, block_number, floor).await?;
                 return Ok(());
             }
-
-            let max_kept_block = block_number.checked_sub(1).filter(|&n| n >= floor);
-            *rewind_depth += recent.truncate_above(max_kept_block);
 
             let logs = self
                 .provider
                 .get_logs(&Filter::new().at_block_hash(block.header.hash))
                 .await?;
-            recent.push_block(block_number, block.header.hash, logs, self.capacity);
+            recent.push_back(block_number, block.header.hash, logs)?;
             METRICS.logs_cache_blocks_loaded.inc();
             Ok(())
         })
@@ -321,28 +267,96 @@ mod tests {
     }
 
     #[test]
-    fn cache_eligibility_accepts_bounded_watcher_style_filters() {
+    fn cached_logs_in_range_rejects_reversed_ranges() {
+        let recent = RecentBlocks {
+            capacity: 128,
+            synced_with: BlockUpdates {
+                latest_block: 12,
+                finalized_block: 0,
+            },
+            first_block: Some(10),
+            blocks: VecDeque::from([
+                CachedBlockLogs {
+                    hash: B256::repeat_byte(10),
+                    logs: vec![],
+                },
+                CachedBlockLogs {
+                    hash: B256::repeat_byte(11),
+                    logs: vec![],
+                },
+                CachedBlockLogs {
+                    hash: B256::repeat_byte(12),
+                    logs: vec![],
+                },
+            ]),
+        };
+
+        assert!(recent.cached_logs_in_range(12, 10).is_none());
+    }
+
+    #[tokio::test]
+    async fn reversed_numeric_ranges_fall_back_to_provider() {
+        let (provider, asserter) = mocked_provider();
+        let expected_log = rpc_log(
+            10,
+            B256::repeat_byte(10),
+            Address::repeat_byte(1),
+            [B256::repeat_byte(2), B256::repeat_byte(3)],
+        );
+        asserter.push_success(&vec![expected_log.clone()]);
+        let cache = LogsCache {
+            provider,
+            block_updates: block_updates(12, 0),
+            recent: Arc::new(RwLock::new(RecentBlocks {
+                capacity: 128,
+                synced_with: BlockUpdates {
+                    latest_block: 12,
+                    finalized_block: 0,
+                },
+                first_block: Some(10),
+                blocks: VecDeque::from([CachedBlockLogs {
+                    hash: B256::repeat_byte(10),
+                    logs: vec![expected_log.clone()],
+                }]),
+            })),
+        };
+
+        let filter = Filter::new()
+            .from_block(12u64)
+            .to_block(10u64)
+            .address(Address::repeat_byte(1))
+            .event_signature(B256::repeat_byte(2))
+            .topic1(B256::repeat_byte(3));
+
+        let logs = cache
+            .get_logs(&filter)
+            .await
+            .expect("reversed numeric ranges should fall back to the provider");
+
+        assert_eq!(logs, vec![expected_log]);
+        assert!(
+            asserter.read_q().is_empty(),
+            "provider fallback response should be consumed",
+        );
+    }
+
+    #[test]
+    fn exact_numeric_ranges_are_cache_hit_candidates() {
         let filter = Filter::new()
             .from_block(10u64)
             .to_block(12u64)
             .address(Address::repeat_byte(1))
             .event_signature(B256::repeat_byte(2))
             .topic1(B256::repeat_byte(3));
-
-        let eligibility = CacheEligibility::for_filter(&filter, 10, 12);
-
-        assert!(eligibility.is_cache_hit_candidate);
+        assert_eq!(filter.extract_block_range(), (Some(10), Some(12)));
     }
 
     #[test]
-    fn cache_eligibility_rejects_block_hash_queries() {
+    fn block_hash_queries_do_not_have_exact_numeric_ranges() {
         let filter = Filter::new()
             .at_block_hash(B256::repeat_byte(9))
             .address(Address::repeat_byte(1));
-
-        let eligibility = CacheEligibility::for_filter(&filter, 0, 0);
-
-        assert!(!eligibility.is_cache_hit_candidate);
+        assert_eq!(filter.extract_block_range(), (None, None));
     }
 
     #[tokio::test]
@@ -351,7 +365,8 @@ mod tests {
         let cache = LogsCache {
             provider,
             block_updates: block_updates(12, 0),
-            recent: RwLock::new(RecentBlocks {
+            recent: Arc::new(RwLock::new(RecentBlocks {
+                capacity: 128,
                 synced_with: BlockUpdates {
                     latest_block: 12,
                     finalized_block: 0,
@@ -386,8 +401,7 @@ mod tests {
                         )],
                     },
                 ]),
-            }),
-            capacity: 128,
+            })),
         };
 
         let filter = Filter::new()
@@ -419,7 +433,8 @@ mod tests {
         let cache = LogsCache {
             provider,
             block_updates: block_updates(12, 0),
-            recent: RwLock::new(RecentBlocks {
+            recent: Arc::new(RwLock::new(RecentBlocks {
+                capacity: 128,
                 synced_with: BlockUpdates {
                     latest_block: 12,
                     finalized_block: 0,
@@ -429,8 +444,7 @@ mod tests {
                     hash: B256::repeat_byte(12),
                     logs: vec![expected_log.clone()],
                 }]),
-            }),
-            capacity: 128,
+            })),
         };
 
         let filter = Filter::new()
@@ -462,7 +476,8 @@ mod tests {
         let cache = LogsCache {
             provider,
             block_updates: block_updates(12, 0),
-            recent: RwLock::new(RecentBlocks {
+            recent: Arc::new(RwLock::new(RecentBlocks {
+                capacity: 128,
                 synced_with: BlockUpdates {
                     latest_block: 12,
                     finalized_block: 0,
@@ -477,8 +492,7 @@ mod tests {
                         [B256::repeat_byte(2), B256::repeat_byte(3)],
                     )],
                 }]),
-            }),
-            capacity: 128,
+            })),
         };
 
         let filter = Filter::new()
@@ -506,7 +520,8 @@ mod tests {
         let cache = LogsCache {
             provider,
             block_updates: block_updates(12, 0),
-            recent: RwLock::new(RecentBlocks {
+            recent: Arc::new(RwLock::new(RecentBlocks {
+                capacity: 128,
                 synced_with: BlockUpdates {
                     latest_block: 11,
                     finalized_block: 0,
@@ -541,8 +556,7 @@ mod tests {
                         )],
                     },
                 ]),
-            }),
-            capacity: 128,
+            })),
         };
 
         asserter.push_success(&Some(rpc_block(
@@ -600,15 +614,10 @@ mod tests {
         let cache = LogsCache {
             provider,
             block_updates: block_updates(0, 0),
-            recent: RwLock::new(RecentBlocks::default()),
-            capacity: 128,
+            recent: Arc::new(RwLock::new(RecentBlocks::new(128))),
         };
 
-        asserter.push_success(&Some(rpc_block(
-            0,
-            B256::repeat_byte(0x10),
-            B256::ZERO,
-        )));
+        asserter.push_success(&Some(rpc_block(0, B256::repeat_byte(0x10), B256::ZERO)));
         asserter.push_success(&vec![rpc_log(
             0,
             B256::repeat_byte(0x10),

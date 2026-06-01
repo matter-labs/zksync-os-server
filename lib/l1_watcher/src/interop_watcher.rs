@@ -19,7 +19,6 @@ use crate::sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};
 use crate::util::{find_l1_block_by_interop_root_id, find_l1_execute_block_by_batch_number};
 use crate::watcher::L1WatcherError;
 use crate::{BlockUpdates, L1WatcherConfig, LogsCache, ProcessRawEvents};
-use std::sync::Arc;
 
 /// Watches interop root updates emitted by Gateway settlement layers and feeds them into the
 /// interop subpool.
@@ -46,7 +45,7 @@ impl InteropWatcher {
         starting_interop_root_id: u64,
         interop_roots_subpool: InteropRootsSubpool,
         gateway_block_updates: Option<watch::Receiver<BlockUpdates>>,
-        gateway_logs_cache: Option<Arc<LogsCache>>,
+        gateway_logs_cache: Option<LogsCache>,
     ) -> anyhow::Result<Option<SlAwareL1Watcher>> {
         let mut segments = Vec::new();
         for interval in intervals.intervals() {

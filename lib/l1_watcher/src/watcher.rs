@@ -3,7 +3,6 @@ use crate::{BlockBoundary, BlockUpdates, L1WatcherConfig, LogsCache, ProcessRawE
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
-use std::sync::Arc;
 use tokio::sync::watch;
 
 /// An abstract watcher for events.
@@ -14,7 +13,7 @@ use tokio::sync::watch;
 /// [`SlAwareL1Watcher`](crate::SlAwareL1Watcher) to scan a closed segment to completion).
 pub struct L1Watcher {
     provider: DynProvider,
-    logs_cache: Arc<LogsCache>,
+    logs_cache: LogsCache,
     address: ValueOrArray<Address>,
     next_block: BlockNumber,
     /// `Some(eb)` makes the watcher exit `run` once `next_block > eb`. `None` runs forever.
@@ -30,7 +29,7 @@ impl L1Watcher {
     pub(crate) async fn new(
         config: L1WatcherConfig,
         provider: DynProvider,
-        logs_cache: Arc<LogsCache>,
+        logs_cache: LogsCache,
         block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
@@ -61,7 +60,7 @@ impl L1Watcher {
     pub(crate) fn new_finalized(
         config: L1WatcherConfig,
         provider: DynProvider,
-        logs_cache: Arc<LogsCache>,
+        logs_cache: LogsCache,
         block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,

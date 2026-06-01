@@ -4,7 +4,6 @@ use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::ValueOrArray;
 use std::collections::VecDeque;
-use std::sync::Arc;
 use tokio::sync::watch;
 
 /// Description of a single settlement-layer segment that [`SlAwareL1Watcher`] should scan, in
@@ -19,7 +18,7 @@ pub struct SegmentSpec {
     /// Block updates for the segment's settlement-layer provider.
     pub block_updates: watch::Receiver<BlockUpdates>,
     /// Shared logs cache for the segment's settlement-layer provider.
-    pub logs_cache: Arc<LogsCache>,
+    pub logs_cache: LogsCache,
     /// Contract address(es) whose logs the segment scans (e.g. the chain's diamond proxy or a
     /// bridgehub's message-root contract).
     pub address: ValueOrArray<Address>,

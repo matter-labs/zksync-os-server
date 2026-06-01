@@ -72,7 +72,7 @@ impl L1UpgradeTxWatcher {
         current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
         block_updates: watch::Receiver<BlockUpdates>,
-        logs_cache: Arc<LogsCache>,
+        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             config.max_blocks_to_process,
