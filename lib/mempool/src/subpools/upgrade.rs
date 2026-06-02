@@ -162,15 +162,15 @@ enum StreamState {
     Closed,
 }
 
-/// Holds the upgrade in `Waiting` until its timestamp; a zero delay (past timestamp) is released
-/// on the next poll.
-fn gate(upgrade: UpgradeInfo) -> StreamState {
+/// `Some(delay)` until the timestamp is reached, `None` once the upgrade is already executable.
+/// Returning `None` for past/zero timestamps lets the stream yield synchronously without a timer —
+/// important so the biased mempool select doesn't skip a ready upgrade (e.g. the genesis upgrade).
+fn delay_until_timestamp(timestamp_secs: u64) -> Option<Duration> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let delay = Duration::from_secs(upgrade.metadata.timestamp.saturating_sub(now));
-    StreamState::Waiting(upgrade, Box::pin(tokio::time::sleep(delay)))
+    (timestamp_secs > now).then(|| Duration::from_secs(timestamp_secs - now))
 }
 
 impl Stream for UpgradeInfoStream {
@@ -179,14 +179,15 @@ impl Stream for UpgradeInfoStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.as_mut().get_mut();
         loop {
-            match &mut this.state {
+            // Pull the next candidate upgrade, or release one whose timestamp has elapsed.
+            let upgrade = match &mut this.state {
                 StreamState::Empty(receiver) => {
                     let Some(upgrade) = ready!(receiver.poll_next_unpin(cx)) else {
                         tracing::debug!("upgrade watcher stream is closed");
                         this.state = StreamState::Closed;
                         return Poll::Ready(None);
                     };
-                    this.state = gate(upgrade);
+                    upgrade
                 }
                 StreamState::Pending(_) => {
                     let StreamState::Pending(upgrade) =
@@ -194,7 +195,7 @@ impl Stream for UpgradeInfoStream {
                     else {
                         unreachable!()
                     };
-                    this.state = gate(upgrade);
+                    upgrade
                 }
                 StreamState::Waiting(_, sleep) => {
                     ready!(sleep.as_mut().poll(cx));
@@ -206,6 +207,16 @@ impl Stream for UpgradeInfoStream {
                     return Poll::Ready(Some(upgrade));
                 }
                 StreamState::Closed => return Poll::Ready(None),
+            };
+            match delay_until_timestamp(upgrade.metadata.timestamp) {
+                // Already executable: serve it now (state is/becomes `Closed` — one upgrade total).
+                None => {
+                    this.state = StreamState::Closed;
+                    return Poll::Ready(Some(upgrade));
+                }
+                Some(delay) => {
+                    this.state = StreamState::Waiting(upgrade, Box::pin(tokio::time::sleep(delay)));
+                }
             }
         }
     }
@@ -358,6 +369,25 @@ mod tests {
             subpool.inner.read().await.current_protocol_version,
             target_version
         );
+    }
+
+    #[tokio::test]
+    async fn executable_upgrade_is_ready_on_first_poll() {
+        // The biased select in `best_transactions_stream` only picks the upgrade if its branch is
+        // `Ready` on the first poll; a stray `Pending` would let other txs into the upgrade's block.
+        let subpool =
+            UpgradeSubpool::new(ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS);
+        let tx = upgrade_tx(1);
+        // timestamp 0 == genesis-upgrade case: already executable.
+        subpool
+            .insert(upgrade_info(version(31, 0), Some(tx.clone())))
+            .await;
+
+        let mut stream = subpool.upgrade_info_stream().await;
+        let Poll::Ready(Some(upgrade)) = futures::poll!(stream.next()) else {
+            panic!("an already-executable upgrade must be yielded on the first poll");
+        };
+        assert_eq!(upgrade.tx.as_ref(), Some(&tx));
     }
 
     #[tokio::test]
