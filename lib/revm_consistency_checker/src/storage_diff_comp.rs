@@ -266,12 +266,13 @@ where
             if code.is_empty() {
                 B256::ZERO
             } else {
+                // Both kinds expose the original (unpadded) code via `original_byte_slice()`:
+                // legacy contract code, or the 23-byte EIP-7702 designator `0xef0100 || address`.
+                // `set_properties_code` detects the delegation marker and reproduces ZKsync OS's
+                // canonical hash for either case, so the same path works for both.
                 match code.kind() {
-                    BytecodeKind::LegacyAnalyzed => calculate_bytecode_hash(code),
-                    BytecodeKind::Eip7702 => {
-                        return Err(anyhow::anyhow!(
-                            "EIP-7702 bytecode is not supported on Consistency Checker"
-                        ));
+                    BytecodeKind::LegacyAnalyzed | BytecodeKind::Eip7702 => {
+                        calculate_bytecode_hash(code)
                     }
                 }
             }
