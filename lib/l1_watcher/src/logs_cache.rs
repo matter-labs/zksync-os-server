@@ -160,8 +160,15 @@ impl LogsCache {
 
     /// Identical to alloy's get_logs but with caching optimizations.
     pub async fn get_logs(&self, filter: &Filter) -> TransportResult<Vec<Log>> {
-        // TODO: instead of returning an error, disable cache
-        self.synchronize_if_needed().await?;
+        if let Err(err) = self.synchronize_if_needed().await {
+            tracing::warn!(
+                ?err,
+                "recent logs cache synchronization failed; clearing cache"
+            );
+            let mut recent = self.recent.write().await;
+            let capacity = recent.capacity;
+            *recent = RecentLogs::new(capacity);
+        }
 
         let cached_logs = if let (Some(from_block), Some(to_block)) = filter.extract_block_range() {
             self.recent
@@ -557,11 +564,6 @@ mod tests {
         };
 
         asserter.push_success(&Some(rpc_block(
-            12,
-            B256::repeat_byte(0x22),
-            B256::repeat_byte(0x21),
-        )));
-        asserter.push_success(&Some(rpc_block(
             11,
             B256::repeat_byte(0x21),
             B256::repeat_byte(10),
@@ -572,6 +574,11 @@ mod tests {
             Address::repeat_byte(1),
             [B256::repeat_byte(2), B256::repeat_byte(3)],
         )]);
+        asserter.push_success(&Some(rpc_block(
+            12,
+            B256::repeat_byte(0x22),
+            B256::repeat_byte(0x21),
+        )));
         asserter.push_success(&vec![rpc_log(
             12,
             B256::repeat_byte(0x22),
@@ -650,6 +657,12 @@ mod tests {
             B256::repeat_byte(0x22),
             B256::repeat_byte(0x21),
         )));
+        asserter.push_success(&vec![rpc_log(
+            12,
+            B256::repeat_byte(0x22),
+            Address::repeat_byte(1),
+            [B256::repeat_byte(2), B256::repeat_byte(3)],
+        )]);
         asserter.push_success(&Some(rpc_block(
             11,
             B256::repeat_byte(0x21),
@@ -661,6 +674,11 @@ mod tests {
             Address::repeat_byte(1),
             [B256::repeat_byte(2), B256::repeat_byte(3)],
         )]);
+        asserter.push_success(&Some(rpc_block(
+            12,
+            B256::repeat_byte(0x22),
+            B256::repeat_byte(0x21),
+        )));
         asserter.push_success(&vec![rpc_log(
             12,
             B256::repeat_byte(0x22),
@@ -686,6 +704,80 @@ mod tests {
         assert!(
             asserter.read_q().is_empty(),
             "the recursive reorg repair should consume exactly the prepared responses",
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_error_clears_cache_and_future_requests_can_rebuild() {
+        let (provider, asserter) = mocked_provider();
+        let expected_log = rpc_log(
+            12,
+            B256::repeat_byte(0x12),
+            Address::repeat_byte(1),
+            [B256::repeat_byte(2), B256::repeat_byte(3)],
+        );
+        let cache = LogsCache {
+            provider,
+            block_updates: block_updates(12, 0),
+            recent: Arc::new(RwLock::new(RecentLogs {
+                capacity: 1,
+                synced_with: BlockUpdates {
+                    latest_block: 11,
+                    finalized_block: 0,
+                },
+                first_block: Some(11),
+                blocks: VecDeque::from([CachedBlockLogs {
+                    hash: B256::repeat_byte(0x11),
+                    logs: vec![rpc_log(
+                        11,
+                        B256::repeat_byte(0x11),
+                        Address::repeat_byte(1),
+                        [B256::repeat_byte(2), B256::repeat_byte(3)],
+                    )],
+                }]),
+            })),
+        };
+
+        asserter.push_failure_msg("sync failed");
+        asserter.push_success(&vec![expected_log.clone()]);
+
+        let filter = Filter::new()
+            .from_block(12u64)
+            .to_block(12u64)
+            .address(Address::repeat_byte(1))
+            .event_signature(B256::repeat_byte(2))
+            .topic1(B256::repeat_byte(3));
+
+        let logs = cache
+            .get_logs(&filter)
+            .await
+            .expect("sync failures should fall back to provider");
+
+        assert_eq!(logs, vec![expected_log.clone()]);
+
+        let recent = cache.recent.read().await;
+        assert_eq!(recent.capacity, 1);
+        assert_eq!(recent.synced_with, UNSYNCED_BLOCK_UPDATES);
+        assert!(recent.first_block.is_none());
+        assert!(recent.blocks.is_empty());
+        drop(recent);
+
+        asserter.push_success(&Some(rpc_block(
+            12,
+            B256::repeat_byte(0x12),
+            B256::repeat_byte(0x11),
+        )));
+        asserter.push_success(&vec![expected_log.clone()]);
+
+        let logs = cache
+            .get_logs(&filter)
+            .await
+            .expect("cache should rebuild after being cleared");
+
+        assert_eq!(logs, vec![expected_log]);
+        assert!(
+            asserter.read_q().is_empty(),
+            "the sync failure and recovery path should consume exactly the prepared responses",
         );
     }
 
