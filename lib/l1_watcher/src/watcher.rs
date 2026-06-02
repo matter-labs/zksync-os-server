@@ -91,27 +91,13 @@ impl L1Watcher {
 
     /// Non-consuming version of `run`, intended for internal usage in this crate.
     pub(crate) async fn run_inner(&mut self) {
-        let event_name = self.processor.name();
         loop {
-            METRICS.poll_iterations[&event_name].inc();
-            match tokio::time::timeout(self.poll_iteration_timeout, self.poll()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    tracing::error!(event_name, "l1 watcher fatal error: {e}");
-                    panic!("watcher failed: {e}");
-                }
-                Err(_) => {
-                    tracing::error!(
-                        event_name,
-                        timeout_secs = self.poll_iteration_timeout.as_secs(),
-                        next_block = self.next_block,
-                        "l1 watcher poll timed out, panicking to get restarted"
-                    );
-                    panic!(
-                        "l1 watcher {event_name} poll iteration timed out after {:?}",
-                        self.poll_iteration_timeout
-                    );
-                }
+            if let Err(e) = self.poll().await {
+                tracing::error!(
+                    event_name = self.processor.name(),
+                    "l1 watcher fatal error: {e}"
+                );
+                panic!("watcher failed: {e}");
             }
             if let Some(eb) = self.end_block
                 && self.next_block > eb
@@ -125,7 +111,14 @@ impl L1Watcher {
         }
     }
 
+    /// Polls for new events.
+    ///
+    /// Each `max_blocks_to_process` chunk has its own `poll_iteration_timeout`, so a long but
+    /// healthy catch-up (e.g. an EN syncing from genesis) never trips the watchdog; only a stalled
+    /// chunk does, erroring out to restart the watcher.
     async fn poll(&mut self) -> Result<(), L1WatcherError> {
+        let event_name = self.processor.name();
+        let chunk_timeout = self.poll_iteration_timeout;
         let cap = match self.end_block {
             // Closed segment: `end_block` was already resolved against a finalized/executed batch,
             // so the confirmation/finalization window doesn't apply and we don't need an
@@ -138,23 +131,40 @@ impl L1Watcher {
         };
 
         while self.next_block <= cap {
+            // Heartbeat: one increment per processed chunk. A flat counter means a stuck chunk.
+            METRICS.poll_iterations[&event_name].inc();
             let from_block = self.next_block;
             // Inspect up to `self.max_blocks_to_process` blocks at a time
             let to_block = cap.min(from_block + self.max_blocks_to_process - 1);
 
-            let events = self
-                .extract_logs_from_l1_blocks(from_block, to_block)
-                .await?;
-
-            let events = self.processor.filter_events(events);
-
-            METRICS.events_loaded[&self.processor.name()].inc_by(events.len() as u64);
-            METRICS.most_recently_scanned_l1_block[&self.processor.name()].set(to_block);
-
-            for event in events {
-                self.processor
-                    .process_raw_event(&self.provider, event)
+            let process = async {
+                let events = self
+                    .extract_logs_from_l1_blocks(from_block, to_block)
                     .await?;
+                let events = self.processor.filter_events(events);
+                METRICS.events_loaded[&event_name].inc_by(events.len() as u64);
+                METRICS.most_recently_scanned_l1_block[&event_name].set(to_block);
+                for event in events {
+                    self.processor
+                        .process_raw_event(&self.provider, event)
+                        .await?;
+                }
+                Ok::<(), L1WatcherError>(())
+            };
+            match tokio::time::timeout(chunk_timeout, process).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    tracing::error!(
+                        event_name,
+                        timeout_secs = chunk_timeout.as_secs(),
+                        from_block,
+                        to_block,
+                        "l1 watcher chunk timed out, panicking to get restarted"
+                    );
+                    return Err(L1WatcherError::Other(anyhow::anyhow!(
+                        "l1 watcher {event_name} chunk [{from_block}..={to_block}] timed out after {chunk_timeout:?}"
+                    )));
+                }
             }
 
             self.next_block = to_block + 1;

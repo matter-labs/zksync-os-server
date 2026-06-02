@@ -1,9 +1,12 @@
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Notify, RwLock, mpsc};
+use tokio::time::Sleep;
 use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion, UpgradeInfo, ZkTransaction};
 
@@ -143,39 +146,67 @@ pub struct UpgradeInfoStream {
     state: StreamState,
 }
 
-/// State machine to ensure we serve up to one upgrade transaction.
+/// State machine to ensure we serve up to one upgrade transaction, and never before its activation
+/// timestamp is reached.
 #[allow(clippy::large_enum_variant)]
 enum StreamState {
     /// No discovered upgrade yet, streaming from L1 watcher subscription.
     Empty(ReceiverStream<UpgradeInfo>),
     /// Upgrade has been previously discovered.
     Pending(UpgradeInfo),
+    /// Holding a discovered upgrade until its activation timestamp. The watcher inserts upgrades
+    /// eagerly, so the wait-until-timestamp lives here rather than in the watcher's poll loop.
+    Waiting(UpgradeInfo, Pin<Box<Sleep>>),
     /// Stream is closed because either one upgrade was already returned or upstream receiver was
     /// closed prematurely.
     Closed,
+}
+
+/// Holds the upgrade in `Waiting` until its timestamp; a zero delay (past timestamp) is released
+/// on the next poll.
+fn gate(upgrade: UpgradeInfo) -> StreamState {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let delay = Duration::from_secs(upgrade.metadata.timestamp.saturating_sub(now));
+    StreamState::Waiting(upgrade, Box::pin(tokio::time::sleep(delay)))
 }
 
 impl Stream for UpgradeInfoStream {
     type Item = UpgradeInfo;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.as_mut();
-        match &mut this.state {
-            StreamState::Empty(receiver) => {
-                let Some(upgrade) = ready!(receiver.poll_next_unpin(cx)) else {
-                    tracing::debug!("upgrade watcher stream is closed");
-                    this.state = StreamState::Closed;
-                    return Poll::Ready(None);
-                };
-                this.state = StreamState::Closed;
-                Poll::Ready(Some(upgrade))
+        let this = self.as_mut().get_mut();
+        loop {
+            match &mut this.state {
+                StreamState::Empty(receiver) => {
+                    let Some(upgrade) = ready!(receiver.poll_next_unpin(cx)) else {
+                        tracing::debug!("upgrade watcher stream is closed");
+                        this.state = StreamState::Closed;
+                        return Poll::Ready(None);
+                    };
+                    this.state = gate(upgrade);
+                }
+                StreamState::Pending(_) => {
+                    let StreamState::Pending(upgrade) =
+                        std::mem::replace(&mut this.state, StreamState::Closed)
+                    else {
+                        unreachable!()
+                    };
+                    this.state = gate(upgrade);
+                }
+                StreamState::Waiting(_, sleep) => {
+                    ready!(sleep.as_mut().poll(cx));
+                    let StreamState::Waiting(upgrade, _) =
+                        std::mem::replace(&mut this.state, StreamState::Closed)
+                    else {
+                        unreachable!()
+                    };
+                    return Poll::Ready(Some(upgrade));
+                }
+                StreamState::Closed => return Poll::Ready(None),
             }
-            StreamState::Pending(upgrade) => {
-                let upgrade = upgrade.clone();
-                this.state = StreamState::Closed;
-                Poll::Ready(Some(upgrade))
-            }
-            StreamState::Closed => Poll::Ready(None),
         }
     }
 }
@@ -327,6 +358,36 @@ mod tests {
             subpool.inner.read().await.current_protocol_version,
             target_version
         );
+    }
+
+    #[tokio::test]
+    async fn upgrade_is_held_until_its_timestamp() {
+        let subpool =
+            UpgradeSubpool::new(ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS);
+        let target_version = version(31, 0);
+        let tx = upgrade_tx(1);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut info = upgrade_info(target_version, Some(tx.clone()));
+        info.metadata.timestamp = now + 2;
+        subpool.insert(info).await;
+
+        let mut stream = subpool.upgrade_info_stream().await;
+        // Not yet executable: the stream must hold the upgrade back.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), stream.next())
+                .await
+                .is_err(),
+            "upgrade must not be surfaced before its timestamp"
+        );
+        // Once the timestamp passes, the upgrade is released.
+        let upgrade = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("upgrade should be released after its timestamp")
+            .expect("stream should yield the upgrade");
+        assert_eq!(upgrade.tx.as_ref(), Some(&tx));
     }
 
     #[tokio::test]

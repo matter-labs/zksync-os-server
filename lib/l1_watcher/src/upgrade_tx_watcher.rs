@@ -363,27 +363,6 @@ impl L1UpgradeTxWatcher {
         Ok(event.newProtocolVersion)
     }
 
-    async fn wait_until_timestamp(&self, target_timestamp: u64) {
-        let mut current_timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time before UNIX_EPOCH")
-            .as_secs();
-        while current_timestamp < target_timestamp {
-            let wait_duration =
-                std::time::Duration::from_secs(target_timestamp - current_timestamp);
-            tracing::info!(
-                wait_duration = ?wait_duration,
-                target_timestamp = target_timestamp,
-                "waiting until the upgrade timestamp to send the upgrade transaction"
-            );
-            tokio::time::sleep(wait_duration).await;
-            current_timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time before UNIX EPOCH")
-                .as_secs();
-        }
-    }
-
     /// Fetches bytecodes published to the `BytecodesSupplier` on L1, filtered by the
     /// requested `hashes` (the `factory_deps` array from the upgrade tx).
     ///
@@ -677,13 +656,11 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
             "detected upgrade transaction to be sent"
         );
 
-        // Wait until the timestamp before sending the upgrade tx, so that it's immediately executable.
-        // TODO: this will block the watcher, so if e.g. a timestamp is set far in the future, and then an event
-        // to override it is emitted, we will not be able to process it.
-        self.wait_until_timestamp(request.timestamp).await;
-
+        // Insert immediately; `UpgradeInfoStream` holds it back until its timestamp. Blocking here
+        // would trip the poll watchdog and stall processing of later events.
         tracing::info!(
             protocol_version = ?upgrade_info.protocol_version(),
+            target_timestamp = request.timestamp,
             "sending upgrade transaction to the mempool"
         );
 

@@ -1211,7 +1211,8 @@ pub struct L1WatcherConfig {
     #[config(default_t = 1 * TimeUnit::Minutes)]
     pub finalized_poll_interval: Duration,
 
-    /// Max duration of a single watcher `poll()` call before the watcher panics and gets restarted.
+    /// Max duration to process a single `max_blocks_to_process` chunk before the watcher restarts.
+    /// Bounds per-chunk progress, not the whole catch-up.
     #[config(default_t = 600 * TimeUnit::Seconds)]
     pub poll_iteration_timeout: Duration,
 
