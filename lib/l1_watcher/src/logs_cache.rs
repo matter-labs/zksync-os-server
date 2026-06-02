@@ -37,19 +37,9 @@ impl RecentBlocks {
         }
     }
 
-    fn latest_block(&self) -> Option<u64> {
-        self.first_block
-            .zip(self.blocks.len().checked_sub(1))
-            .map(|(first_block, last_offset)| first_block + last_offset as u64)
-    }
-
-    fn contains_range(&self, from_block: u64, to_block: u64) -> bool {
-        let (Some(first), Some(last)) = (self.first_block, self.latest_block()) else {
-            return false;
-        };
-        from_block <= to_block && from_block >= first && to_block <= last
-    }
-
+    /// If the buffer contains all blocks from `from_block` to `to_block`.
+    /// Returns an iterator over the logs from these blocks
+    /// Otherwise returns `None`
     fn cached_logs_in_range(
         &self,
         from_block: u64,
@@ -70,19 +60,28 @@ impl RecentBlocks {
         )
     }
 
-    fn push_back(&mut self, number: u64, hash: B256, logs: Vec<Log>) -> TransportResult<()> {
+    /// Returns the hash of the block at depth `block_number` according to the cache.
+    /// Can differ from canonical chain. This is used for revert handling.
+    fn cached_hash(&self, block_number: u64) -> Option<B256> {
+        let first_block = self.first_block?;
+        let offset = block_number.checked_sub(first_block)? as usize;
+        self.blocks.get(offset).map(|block| block.hash)
+    }
+
+    /// Add a block
+    fn push_head(&mut self, number: u64, hash: B256, logs: Vec<Log>) -> TransportResult<()> {
+        if self.capacity == 0 {
+            return Ok(());
+        }
         while self
             .latest_block()
             .is_some_and(|latest_block| latest_block >= number)
         {
             self.blocks.pop_back();
         }
-        if self.blocks.is_empty() {
-            self.first_block = None;
-        }
-
-        if let Some(latest_block) = self.latest_block()
-            && latest_block.checked_add(1) != Some(number)
+        if self
+            .latest_block()
+            .map_or(true, |b| b.checked_add(1) == Some(number))
         {
             return Err(TransportErrorKind::custom_str(
                 "recent logs cache cannot append a non-contiguous block",
@@ -94,23 +93,25 @@ impl RecentBlocks {
             self.first_block = Some(number);
         }
         self.blocks.push_back(CachedBlockLogs { hash, logs });
-
         while self.blocks.len() > self.capacity {
             self.blocks.pop_front();
             if let Some(first_block) = &mut self.first_block {
                 *first_block += 1;
             }
         }
-        if self.blocks.is_empty() {
-            self.first_block = None;
-        }
+
         Ok(())
     }
 
-    fn cached_hash(&self, block_number: u64) -> Option<B256> {
-        let first_block = self.first_block?;
-        let offset = block_number.checked_sub(first_block)? as usize;
-        self.blocks.get(offset).map(|block| block.hash)
+    fn latest_block(&self) -> Option<u64> {
+        Some(self.first_block? + (self.blocks.len().checked_sub(1)? as u64))
+    }
+
+    fn contains_range(&self, from_block: u64, to_block: u64) -> bool {
+        let (Some(first), Some(last)) = (self.first_block, self.latest_block()) else {
+            return false;
+        };
+        from_block <= to_block && from_block >= first && to_block <= last
     }
 }
 
@@ -139,8 +140,9 @@ impl LogsCache {
         self.synchronize_if_needed(latest_snapshot).await?;
 
         let cached_logs = if let (Some(from_block), Some(to_block)) = filter.extract_block_range() {
-            let recent = self.recent.read().await;
-            recent
+            self.recent
+                .read()
+                .await
                 .cached_logs_in_range(from_block, to_block)
                 .map(|logs| {
                     logs.filter(|log| filter.rpc_matches(log))
@@ -161,26 +163,16 @@ impl LogsCache {
     }
 
     async fn synchronize_if_needed(&self, latest_snapshot: BlockUpdates) -> TransportResult<()> {
-        {
-            let recent = self.recent.read().await;
-            if recent.synced_with == latest_snapshot {
-                return Ok(());
-            }
+        if self.recent.read().await.synced_with == latest_snapshot {
+            return Ok(());
         }
 
         let mut recent = self.recent.write().await;
-        if recent.synced_with == latest_snapshot {
-            return Ok(());
+        if recent.synced_with != latest_snapshot && recent.capacity > 0 {
+            let target_head = latest_snapshot.latest_block;
+            let floor = target_head.saturating_sub(recent.capacity as u64 - 1);
+            self.update_block(&mut recent, target_head, floor).await?;
         }
-
-        if recent.capacity == 0 {
-            recent.synced_with = latest_snapshot;
-            return Ok(());
-        }
-
-        let target_head = latest_snapshot.latest_block;
-        let floor = target_head.saturating_sub(recent.capacity as u64 - 1);
-        self.update_block(&mut recent, target_head, floor).await?;
         recent.synced_with = latest_snapshot;
         Ok(())
     }
@@ -218,7 +210,7 @@ impl LogsCache {
                 .provider
                 .get_logs(&Filter::new().at_block_hash(block.header.hash))
                 .await?;
-            recent.push_back(block_number, block.header.hash, logs)?;
+            recent.push_head(block_number, block.header.hash, logs)?;
             METRICS.logs_cache_blocks_loaded.inc();
             Ok(())
         })
