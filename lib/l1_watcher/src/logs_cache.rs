@@ -160,8 +160,8 @@ impl LogsCache {
 
     /// Identical to alloy's get_logs but with caching optimizations.
     pub async fn get_logs(&self, filter: &Filter) -> TransportResult<Vec<Log>> {
-        let latest_snapshot = *self.block_updates.borrow();
-        self.synchronize_if_needed(latest_snapshot).await?;
+        // TODO: instead of returning an error, disable cache
+        self.synchronize_if_needed().await?;
 
         let cached_logs = if let (Some(from_block), Some(to_block)) = filter.extract_block_range() {
             self.recent
@@ -190,7 +190,8 @@ impl LogsCache {
     ///
     /// We check for reverts if either latest or latest finalized has changed.
     /// This is not exact but it keeps the behavior consistent with how this worked previously.
-    async fn synchronize_if_needed(&self, latest_snapshot: BlockUpdates) -> TransportResult<()> {
+    async fn synchronize_if_needed(&self) -> TransportResult<()> {
+        let latest_snapshot = *self.block_updates.borrow();
         if self.recent.read().await.synced_with == latest_snapshot {
             return Ok(());
         }
@@ -217,29 +218,38 @@ impl LogsCache {
                 return Ok(());
             }
 
+            // Ensure the parent block is cached before fetching this one.
+            let has_parent = block_number > floor;
+            if has_parent && recent.cached_hash(block_number - 1).is_none() {
+                self.update_block(recent, block_number - 1, floor).await?;
+            }
+
             let block = self
                 .provider
                 .get_block_by_number(BlockNumberOrTag::Number(block_number))
                 .await?
                 .ok_or_else(|| TransportErrorKind::custom_str("block not found"))?;
-            if let Some(previous_number) = block_number.checked_sub(1).filter(|&n| n >= floor)
-                && recent.cached_hash(previous_number) != Some(block.header.parent_hash)
-            {
-                tracing::warn!(
-                    block_number,
-                    previous_number,
-                    "recent logs cache detected reorg"
-                );
-                self.update_block(recent, previous_number, floor).await?;
-                // Instead of adding the block check for reorgs at `block_number` once again.
-                self.update_block(recent, block_number, floor).await?;
-                return Ok(());
-            }
-
             let logs = self
                 .provider
                 .get_logs(&Filter::new().at_block_hash(block.header.hash))
                 .await?;
+            // TODO: A very rare corner case is introduced here.
+            // We get `block`. Reorg happens before we get `logs`. Some RPCs would return
+            // empty list(instead of proper logs) or an error.
+
+            // Reorg check: our cached parent hash doesn't match the block's parent_hash.
+            let parent_hash_mismatch = has_parent
+                && recent.cached_hash(block_number - 1) != Some(block.header.parent_hash);
+            if parent_hash_mismatch {
+                tracing::warn!(block_number, "recent logs cache detected reorg");
+                // Update blocks to match current chain
+                self.update_block(recent, block_number - 1, floor).await?;
+                // Re-fetch this block from the start for the rare case where `blcok` & `logs` got
+                // reorged while we were fetching the previous blocks.
+                self.update_block(recent, block_number, floor).await?;
+                return Ok(());
+            }
+
             recent.push_head(block_number, block.header.hash, logs)?;
             METRICS.logs_cache_blocks_loaded.inc();
             Ok(())
@@ -522,6 +532,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn syncs_missing_parent_without_refetching_current_block() {
+        let (provider, asserter) = mocked_provider();
+        let cache = LogsCache {
+            provider,
+            block_updates: block_updates(12, 0),
+            recent: Arc::new(RwLock::new(RecentLogs {
+                capacity: 128,
+                synced_with: BlockUpdates {
+                    latest_block: 10,
+                    finalized_block: 0,
+                },
+                first_block: Some(10),
+                blocks: VecDeque::from([CachedBlockLogs {
+                    hash: B256::repeat_byte(10),
+                    logs: vec![rpc_log(
+                        10,
+                        B256::repeat_byte(10),
+                        Address::repeat_byte(1),
+                        [B256::repeat_byte(2), B256::repeat_byte(3)],
+                    )],
+                }]),
+            })),
+        };
+
+        asserter.push_success(&Some(rpc_block(
+            12,
+            B256::repeat_byte(0x22),
+            B256::repeat_byte(0x21),
+        )));
+        asserter.push_success(&Some(rpc_block(
+            11,
+            B256::repeat_byte(0x21),
+            B256::repeat_byte(10),
+        )));
+        asserter.push_success(&vec![rpc_log(
+            11,
+            B256::repeat_byte(0x21),
+            Address::repeat_byte(1),
+            [B256::repeat_byte(2), B256::repeat_byte(3)],
+        )]);
+        asserter.push_success(&vec![rpc_log(
+            12,
+            B256::repeat_byte(0x22),
+            Address::repeat_byte(1),
+            [B256::repeat_byte(2), B256::repeat_byte(3)],
+        )]);
+
+        let filter = Filter::new()
+            .from_block(10u64)
+            .to_block(12u64)
+            .address(Address::repeat_byte(1))
+            .event_signature(B256::repeat_byte(2))
+            .topic1(B256::repeat_byte(3));
+
+        let logs = cache
+            .get_logs(&filter)
+            .await
+            .expect("missing parents should be backfilled without refetching the current block");
+
+        assert_eq!(logs.len(), 3);
+        assert_eq!(logs[1].block_hash, Some(B256::repeat_byte(0x21)));
+        assert_eq!(logs[2].block_hash, Some(B256::repeat_byte(0x22)));
+        assert!(
+            asserter.read_q().is_empty(),
+            "the missing-parent sync should consume exactly the prepared responses",
+        );
+    }
+
+    #[tokio::test]
     async fn reorg_sync_repairs_parent_before_refetching_current_block() {
         let (provider, asserter) = mocked_provider();
         let cache = LogsCache {
@@ -582,11 +661,6 @@ mod tests {
             Address::repeat_byte(1),
             [B256::repeat_byte(2), B256::repeat_byte(3)],
         )]);
-        asserter.push_success(&Some(rpc_block(
-            12,
-            B256::repeat_byte(0x22),
-            B256::repeat_byte(0x21),
-        )));
         asserter.push_success(&vec![rpc_log(
             12,
             B256::repeat_byte(0x22),
