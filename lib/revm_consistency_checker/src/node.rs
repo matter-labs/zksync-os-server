@@ -244,17 +244,20 @@ where
                         let mut skip_block = false;
                         for tx in txs {
                             if let Err(err) = evm.transact_commit(tx) {
-                                // The checker's revm fork targets Cancun and cannot validate
-                                // EIP-7702 (set-code) transactions, which require Prague. ZKsync OS
-                                // applies them natively, so skip the block rather than tearing down
-                                // the pipeline. Any other execution error is a genuine bug and is
-                                // still propagated.
+                                // Pre-Prague specs (AtlasV1/V2, i.e. execution versions <= V5)
+                                // can't validate EIP-7702 (set-code) transactions, which revm only
+                                // accepts under Prague. The V5 zksync-os binary applies 7702 but
+                                // otherwise keeps the AtlasV2 fee model, so no stock revm spec
+                                // re-executes such a block faithfully — skip it rather than tearing
+                                // down the pipeline. 7702 blocks are fully checked once they reach
+                                // V6 (AtlasV3 -> Prague). Genuine execution errors are still
+                                // propagated.
                                 if is_unsupported_tx_type(&err) {
                                     PUSH_METRICS.revm_blocks_skipped.inc();
                                     tracing::warn!(
                                         block_number = replay_record.block_context.block_number,
                                         "Skipping REVM consistency check for block, transaction type \
-                                         unsupported by the checker's revm: {err}"
+                                         unsupported by the checker's revm spec: {err}"
                                     );
                                     skip_block = true;
                                     break;
@@ -295,11 +298,11 @@ where
     }
 }
 
-/// Whether a revm execution error is a transaction type the checker's revm cannot validate.
+/// Whether a revm execution error is a transaction type the checker's revm spec cannot validate.
 ///
-/// The checker runs against a Cancun-targeted revm fork, so EIP-7702 (set-code) transactions —
-/// which require Prague — are rejected up front with `Eip7702NotSupported`. Such blocks are
-/// skipped instead of failing the pipeline; every other error is treated as a real divergence.
+/// Pre-Prague specs (AtlasV1/V2) reject EIP-7702 (set-code) transactions up front with
+/// `Eip7702NotSupported`. Blocks containing such a tx are skipped rather than failing the
+/// pipeline; every other error is treated as a real divergence.
 fn is_unsupported_tx_type<DBError>(err: &EVMError<DBError, ZKsyncTxError>) -> bool {
     matches!(
         err,

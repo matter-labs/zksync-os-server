@@ -15250,7 +15250,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-revm"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os-revm?tag=v0.1.0#b8ecfb814326afd527a43c84abc96e007a28df05"
+source = "git+https://github.com/matter-labs/zksync-os-revm?branch=use-prague-for-atlasv3#1fdc2863068b3c221a0bc17663f5ab9427972ae2"
 dependencies = [
  "auto_impl",
  "revm",

@@ -7,7 +7,7 @@ use alloy::signers::local::PrivateKeySigner;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::Counter;
 use zksync_os_integration_tests::contracts::Counter::CounterInstance;
-use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
+use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_multisetup};
 
 /// End-to-end test for EIP-7702 (set-code transactions).
 ///
@@ -22,7 +22,7 @@ use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
 ///    `validate_sender_bytecode`, which reads the sender's delegation bytecode via
 ///    `bytecode_by_hash` and only admits the transaction because the code is an EIP-7702
 ///    designator.
-#[test_multisetup([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 async fn delegate_and_call(tester: Tester) -> anyhow::Result<()> {
     let provider = tester.l2_provider.clone();
     let sponsor = tester.l2_wallet.default_signer().address();
