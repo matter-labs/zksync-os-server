@@ -14,7 +14,7 @@ use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::{TransactionBuilder, TransactionBuilder4844, TransactionResponse};
 use alloy::primitives::utils::{format_ether, format_units};
-use alloy::primitives::{Address, B256, U256};
+use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::providers::Provider;
 use alloy::providers::ext::DebugApi;
 use alloy::providers::utils::Eip1559Estimation;
@@ -74,12 +74,51 @@ const OPERATOR_METRICS_POLL_INTERVAL: Duration = Duration::from_secs(60);
 /// Per-tx gas limit used when `eth_simulateV1` cannot produce a usable estimate.
 /// Sized to cover the bounded set of commit/prove/execute calls.
 const L1_GAS_LIMIT_FALLBACK: u64 = 15_000_000;
+/// Per-call cap for `eth_simulateV1`. The simulation reports the actual `gas_used`.
+const L1_SIM_GAS_LIMIT: u64 = 30_000_000;
 
 #[derive(Debug, Clone, Copy)]
 struct FeeParams {
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
     max_fee_per_blob_gas: u128,
+}
+
+fn build_l1_simulation_request(
+    operator_address: Address,
+    to_address: Address,
+    input: Bytes,
+    nonce: u64,
+    fee_params: FeeParams,
+    blob_sidecar: Option<alloy::consensus::BlobTransactionSidecar>,
+    use_eip7594_sidecar: bool,
+) -> anyhow::Result<TransactionRequest> {
+    // Mirror submission fees so providers (e.g. anvil) that parse the request
+    // as a typed tx accept it.
+    let mut req = TransactionRequest::default()
+        .with_from(operator_address)
+        .with_to(to_address)
+        .with_input(input)
+        .with_max_fee_per_gas(fee_params.max_fee_per_gas)
+        .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
+        .with_nonce(nonce)
+        .with_gas_limit(L1_SIM_GAS_LIMIT);
+
+    if let Some(blob_sidecar) = blob_sidecar {
+        req.max_fee_per_blob_gas = Some(fee_params.max_fee_per_blob_gas);
+        if use_eip7594_sidecar {
+            req.set_blob_sidecar(BlobTransactionSidecarVariant::Eip7594(
+                blob_sidecar.try_into_7594(EnvKzgSettings::Default.get())?,
+            ));
+        } else {
+            req.set_blob_sidecar(BlobTransactionSidecarVariant::Eip4844(blob_sidecar));
+        }
+        // Anvil routes blob requests through the EIP-4844 arm only when
+        // `type=3` is set explicitly; otherwise it returns -32602.
+        req.transaction_type = Some(3);
+    }
+
+    Ok(req)
 }
 
 /// Process responsible for sending transactions to L1.
@@ -659,9 +698,6 @@ where
             .pending()
             .await
             .context("get pending nonce for L1 sender gas estimation")?;
-        // Per-call cap. The simulation reports the actual `gas_used`.
-        const SIM_GAS_LIMIT: u64 = 30_000_000;
-
         // Some L1 providers check sender balance even with `validation=false`; override
         // to bypass.
         let balance_override = StateOverridesBuilder::default()
@@ -674,32 +710,35 @@ where
             )
             .build();
 
+        let use_eip7594_sidecar = if commands.iter().any(|cmd| cmd.blob_sidecar().is_some()) {
+            let pending_block = self
+                .provider
+                .get_block(BlockId::pending())
+                .await?
+                .expect("no pending block");
+            self.config.fusaka_upgrade_timestamp <= pending_block.header.timestamp
+        } else {
+            false
+        };
+
         let block_state_calls = commands
             .iter()
             .enumerate()
             .map(|(i, cmd)| {
-                // Mirror submission fees so providers (e.g. anvil) that parse the request
-                // as a typed tx accept it.
-                let mut req = TransactionRequest::default()
-                    .with_from(operator_address)
-                    .with_to(self.to_address)
-                    .with_input(cmd.solidity_call(self.gateway, &operator_address))
-                    .with_max_fee_per_gas(fee_params.max_fee_per_gas)
-                    .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
-                    .with_nonce(starting_nonce + i as u64)
-                    .with_gas_limit(SIM_GAS_LIMIT);
-                if let Some(sidecar) = cmd.blob_sidecar() {
-                    req.blob_versioned_hashes = Some(sidecar.versioned_hashes().collect());
-                    req.max_fee_per_blob_gas = Some(fee_params.max_fee_per_blob_gas);
-                    // Anvil routes blob requests through the EIP-4844 arm only when
-                    // `type=3` is set explicitly; otherwise it returns -32602.
-                    req.transaction_type = Some(3);
-                }
+                let req = build_l1_simulation_request(
+                    operator_address,
+                    self.to_address,
+                    cmd.solidity_call(self.gateway, &operator_address),
+                    starting_nonce + i as u64,
+                    fee_params,
+                    cmd.blob_sidecar(),
+                    use_eip7594_sidecar,
+                )?;
                 let mut sim_block = SimBlock::default().call(req);
                 sim_block.state_overrides = Some(balance_override.clone());
-                sim_block
+                anyhow::Ok(sim_block)
             })
-            .collect();
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         let payload = SimulatePayload {
             block_state_calls,
@@ -966,6 +1005,54 @@ impl L1SenderFeeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blob_simulation_request_is_buildable_only_with_sidecar() {
+        let operator_address = Address::with_last_byte(1);
+        let to_address = Address::with_last_byte(2);
+        let input = Bytes::from_static(b"commit");
+        let nonce = 7;
+        let fee_params = FeeParams {
+            max_fee_per_gas: 100,
+            max_priority_fee_per_gas: 10,
+            max_fee_per_blob_gas: 20,
+        };
+        let blob_sidecar = alloy::consensus::BlobTransactionSidecar::default();
+
+        let mut old_request = TransactionRequest::default()
+            .with_from(operator_address)
+            .with_to(to_address)
+            .with_input(input.clone())
+            .with_max_fee_per_gas(fee_params.max_fee_per_gas)
+            .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
+            .with_nonce(nonce)
+            .with_gas_limit(L1_SIM_GAS_LIMIT);
+        old_request.blob_versioned_hashes = Some(blob_sidecar.versioned_hashes().collect());
+        old_request.max_fee_per_blob_gas = Some(fee_params.max_fee_per_blob_gas);
+        old_request.transaction_type = Some(3);
+
+        let old_err = old_request
+            .build_typed_simulate_transaction()
+            .expect_err("hashes-only blob simulation request should not be buildable");
+        assert!(
+            old_err.to_string().contains("Transaction is not buildable"),
+            "unexpected old request error: {old_err}",
+        );
+
+        let fixed_request = build_l1_simulation_request(
+            operator_address,
+            to_address,
+            input,
+            nonce,
+            fee_params,
+            Some(blob_sidecar),
+            false,
+        )
+        .expect("sidecar-backed blob simulation request should be constructed");
+        fixed_request
+            .build_typed_simulate_transaction()
+            .expect("sidecar-backed blob simulation request should be buildable");
+    }
 
     /// `max_fee_per_gas` and `max_fee_per_blob_gas` are static caps set by
     /// the operator — they must equal the configured values regardless of
