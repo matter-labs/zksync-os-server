@@ -1212,6 +1212,7 @@ pub struct L1WatcherConfig {
     pub finalized_poll_interval: Duration,
 
     /// Number of recent blocks retained in the shared logs cache.
+    /// The value should be based on the depth at which blocks are finalized. Which could be >60 on L1.
     #[config(default_t = 128)]
     pub logs_cache_capacity: usize,
 }

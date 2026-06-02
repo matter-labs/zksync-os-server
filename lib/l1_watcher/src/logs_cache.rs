@@ -19,15 +19,22 @@ struct CachedBlockLogs {
     logs: Vec<Log>,
 }
 
+/// In-memory cache for logs from recent blocks.
+/// Logs from `capacity` most recent blocks are stored.
+/// New blocks are added with `push_head`.
+/// For reorg handling & detection `cached_hash` function is provided.
 #[derive(Debug)]
-struct RecentBlocks {
+struct RecentLogs {
+    /// The maximum number of blocks to store in the cache.
     capacity: usize,
+    /// The chain head current cache corresponds to.
     synced_with: BlockUpdates,
     first_block: Option<u64>,
+    /// Logs & block hashes for blocks from `first_block` to `first_block + blocks.len() - 1`
     blocks: VecDeque<CachedBlockLogs>,
 }
 
-impl RecentBlocks {
+impl RecentLogs {
     fn new(capacity: usize) -> Self {
         Self {
             capacity,
@@ -37,7 +44,7 @@ impl RecentBlocks {
         }
     }
 
-    /// If the buffer contains all blocks from `from_block` to `to_block`.
+    /// If the cache contains all blocks from `from_block` to `to_block`.
     /// Returns an iterator over the logs from these blocks
     /// Otherwise returns `None`
     fn cached_logs_in_range(
@@ -60,15 +67,21 @@ impl RecentBlocks {
         )
     }
 
-    /// Returns the hash of the block at depth `block_number` according to the cache.
-    /// Can differ from canonical chain. This is used for revert handling.
+    /// Returns the hash of the block at depth `block_number` according to the cache, if present.
+    ///
+    /// Can differ from current canonical chain. This is used for reorg handling.
     fn cached_hash(&self, block_number: u64) -> Option<B256> {
         let first_block = self.first_block?;
         let offset = block_number.checked_sub(first_block)? as usize;
         self.blocks.get(offset).map(|block| block.hash)
     }
 
-    /// Add a block
+    /// Adds information about a new block to the cache.
+    /// If the cache contains blocks with height at least `number` they will be discarded/reverted.
+    /// Returns an error if after reverts adding this block results in non-continuous block numbers.
+    ///
+    /// This function does not verify that previous block's hash matches the parent_hash of the new
+    /// one. This should be done by the user.
     fn push_head(&mut self, number: u64, hash: B256, logs: Vec<Log>) -> TransportResult<()> {
         if self.capacity == 0 {
             return Ok(());
@@ -79,9 +92,8 @@ impl RecentBlocks {
         {
             self.blocks.pop_back();
         }
-        if self
-            .latest_block()
-            .map_or(true, |b| b.checked_add(1) == Some(number))
+        if let Some(latest_block) = self.latest_block()
+            && latest_block.checked_add(1) != Some(number)
         {
             return Err(TransportErrorKind::custom_str(
                 "recent logs cache cannot append a non-contiguous block",
@@ -103,10 +115,12 @@ impl RecentBlocks {
         Ok(())
     }
 
+    /// Largest `block_number` that is present in the cache.
     fn latest_block(&self) -> Option<u64> {
         Some(self.first_block? + (self.blocks.len().checked_sub(1)? as u64))
     }
 
+    /// Check if all blocks in the range are present in the cache.
     fn contains_range(&self, from_block: u64, to_block: u64) -> bool {
         let (Some(first), Some(last)) = (self.first_block, self.latest_block()) else {
             return false;
@@ -115,11 +129,20 @@ impl RecentBlocks {
     }
 }
 
+/// This structure exposes get_logs with signature identical to provider.get_logs.
+/// And should be used by watchers to get recent blocks instead of the provider. As it reduces the
+/// number of RPC calls/RPC cost.
+///
+/// Currently, it reads all the logs for new blocks in one call.
+/// And remembers them for last `watcher_config.capacity` blocks.
+///
+/// TODO: As of now there is no filtering for these logs. Although with current settings memory usage shouldn't be a problem.
+/// TODO: In reorg checks we do additional eth_getBlockByNumber - this can be avoided by extending BlockUpdates.
 #[derive(Clone, Debug)]
 pub struct LogsCache {
     provider: DynProvider,
     block_updates: watch::Receiver<BlockUpdates>,
-    recent: Arc<RwLock<RecentBlocks>>,
+    recent: Arc<RwLock<RecentLogs>>,
 }
 
 impl LogsCache {
@@ -131,10 +154,11 @@ impl LogsCache {
         Self {
             provider,
             block_updates,
-            recent: Arc::new(RwLock::new(RecentBlocks::new(capacity))),
+            recent: Arc::new(RwLock::new(RecentLogs::new(capacity))),
         }
     }
 
+    /// Identical to alloy's get_logs but with caching optimizations.
     pub async fn get_logs(&self, filter: &Filter) -> TransportResult<Vec<Log>> {
         let latest_snapshot = *self.block_updates.borrow();
         self.synchronize_if_needed(latest_snapshot).await?;
@@ -162,6 +186,10 @@ impl LogsCache {
         }
     }
 
+    /// If the chain head has changed, check for reorgs & add new blocks.
+    ///
+    /// We check for reverts if either latest or latest finalized has changed.
+    /// This is not exact but it keeps the behavior consistent with how this worked previously.
     async fn synchronize_if_needed(&self, latest_snapshot: BlockUpdates) -> TransportResult<()> {
         if self.recent.read().await.synced_with == latest_snapshot {
             return Ok(());
@@ -177,9 +205,10 @@ impl LogsCache {
         Ok(())
     }
 
+    /// Recursive helper that adds new blocks to the recent logs cache & handles reorgs.
     fn update_block<'a>(
         &'a self,
-        recent: &'a mut RecentBlocks,
+        recent: &'a mut RecentLogs,
         block_number: u64,
         floor: u64,
     ) -> BoxFuture<'a, TransportResult<()>> {
@@ -202,6 +231,7 @@ impl LogsCache {
                     "recent logs cache detected reorg"
                 );
                 self.update_block(recent, previous_number, floor).await?;
+                // Instead of adding the block check for reorgs at `block_number` once again.
                 self.update_block(recent, block_number, floor).await?;
                 return Ok(());
             }
@@ -245,7 +275,7 @@ mod tests {
 
     #[test]
     fn cached_logs_in_range_rejects_reversed_ranges() {
-        let recent = RecentBlocks {
+        let recent = RecentLogs {
             capacity: 128,
             synced_with: BlockUpdates {
                 latest_block: 12,
@@ -284,7 +314,7 @@ mod tests {
         let cache = LogsCache {
             provider,
             block_updates: block_updates(12, 0),
-            recent: Arc::new(RwLock::new(RecentBlocks {
+            recent: Arc::new(RwLock::new(RecentLogs {
                 capacity: 128,
                 synced_with: BlockUpdates {
                     latest_block: 12,
@@ -342,7 +372,7 @@ mod tests {
         let cache = LogsCache {
             provider,
             block_updates: block_updates(12, 0),
-            recent: Arc::new(RwLock::new(RecentBlocks {
+            recent: Arc::new(RwLock::new(RecentLogs {
                 capacity: 128,
                 synced_with: BlockUpdates {
                     latest_block: 12,
@@ -410,7 +440,7 @@ mod tests {
         let cache = LogsCache {
             provider,
             block_updates: block_updates(12, 0),
-            recent: Arc::new(RwLock::new(RecentBlocks {
+            recent: Arc::new(RwLock::new(RecentLogs {
                 capacity: 128,
                 synced_with: BlockUpdates {
                     latest_block: 12,
@@ -453,7 +483,7 @@ mod tests {
         let cache = LogsCache {
             provider,
             block_updates: block_updates(12, 0),
-            recent: Arc::new(RwLock::new(RecentBlocks {
+            recent: Arc::new(RwLock::new(RecentLogs {
                 capacity: 128,
                 synced_with: BlockUpdates {
                     latest_block: 12,
@@ -497,7 +527,7 @@ mod tests {
         let cache = LogsCache {
             provider,
             block_updates: block_updates(12, 0),
-            recent: Arc::new(RwLock::new(RecentBlocks {
+            recent: Arc::new(RwLock::new(RecentLogs {
                 capacity: 128,
                 synced_with: BlockUpdates {
                     latest_block: 11,
@@ -591,7 +621,7 @@ mod tests {
         let cache = LogsCache {
             provider,
             block_updates: block_updates(0, 0),
-            recent: Arc::new(RwLock::new(RecentBlocks::new(128))),
+            recent: Arc::new(RwLock::new(RecentLogs::new(128))),
         };
 
         asserter.push_success(&Some(rpc_block(0, B256::repeat_byte(0x10), B256::ZERO)));
