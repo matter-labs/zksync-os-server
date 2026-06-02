@@ -57,6 +57,7 @@ impl L1Watcher {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_finalized(
         config: L1WatcherConfig,
         provider: DynProvider,

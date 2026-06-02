@@ -97,8 +97,7 @@ impl RecentLogs {
         {
             return Err(TransportErrorKind::custom_str(
                 "recent logs cache cannot append a non-contiguous block",
-            )
-            .into());
+            ));
         }
 
         if self.blocks.is_empty() {
@@ -819,27 +818,32 @@ mod tests {
     }
 
     fn rpc_log(block_number: u64, block_hash: B256, address: Address, topics: [B256; 2]) -> Log {
-        let mut log: Log<alloy::primitives::LogData> = Log::default();
-        log.inner =
-            alloy::primitives::Log::new_unchecked(address, topics.into(), Default::default());
-        log.block_number = Some(block_number);
-        log.block_hash = Some(block_hash);
-        log
+        Log {
+            inner: alloy::primitives::Log::new_unchecked(
+                address,
+                topics.into(),
+                Default::default(),
+            ),
+            block_number: Some(block_number),
+            block_hash: Some(block_hash),
+            ..Default::default()
+        }
     }
 
     #[allow(dead_code)]
     fn rpc_block(number: u64, hash: B256, parent_hash: B256) -> Block {
-        let mut block = Block::default();
-        block.header = Header {
-            hash,
-            inner: alloy::consensus::Header {
-                number,
-                parent_hash,
-                ..Default::default()
+        Block {
+            header: Header {
+                hash,
+                inner: alloy::consensus::Header {
+                    number,
+                    parent_hash,
+                    ..Default::default()
+                },
+                total_difficulty: None,
+                size: None,
             },
-            total_difficulty: None,
-            size: None,
-        };
-        block
+            ..Default::default()
+        }
     }
 }
