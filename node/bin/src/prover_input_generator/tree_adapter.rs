@@ -104,6 +104,21 @@ impl TreeOutputAdapter {
         // in a `BTreeMap`.
         sorted_leaves.append(&mut read_sorted_leaves);
 
+        // Report joint proof metrics.
+        PROVER_INPUT_GENERATOR_METRICS
+            .batch_proof_sorted_leaves
+            .observe(sorted_leaves.len());
+        PROVER_INPUT_GENERATOR_METRICS
+            .batch_proof_hashes
+            .observe(sibling_hashes.len());
+        tracing::debug!(
+            written_keys.len = tree_data.written_keys.len(),
+            read_keys.len = tree_data.read_keys.len(),
+            sorted_leaves.len = sorted_leaves.len(),
+            sibling_hashes.len = sibling_hashes.len(),
+            "created joint batch proof for state update"
+        );
+
         Self {
             queried_proofs: HashSet::with_capacity(sorted_leaves.len()),
             leaf_count_before_update: tree_data.input.leaf_count,

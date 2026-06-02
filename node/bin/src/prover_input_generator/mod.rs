@@ -203,6 +203,11 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
     }
 }
 
+#[tracing::instrument(
+    level = "debug",
+    skip_all,
+    fields(block_number = replay_record.block_context.block_number)
+)]
 fn compute_prover_input(
     replay_record: &ReplayRecord,
     state_handle: impl ReadStateHistory,
@@ -219,10 +224,20 @@ fn compute_prover_input(
         .map(|tx| tx.clone().encode())
         .collect::<VecDeque<_>>();
 
-    // FIXME: measure as a separate stage?
+    PROVER_INPUT_GENERATOR_METRICS
+        .batch_proof_read_keys
+        .observe(tree_view.read_keys.len());
+    let read_proof_latency =
+        PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"read_proof"].start();
     let read_proof = versioned_tree
         .get_proof(&tree_view.read_keys)
         .expect("cannot get batch proof for read tree keys");
+    let read_proof_latency = read_proof_latency.observe();
+    tracing::debug!(
+        read_keys.len = tree_view.read_keys.len(),
+        ?read_proof_latency,
+        "generated read proof"
+    );
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
@@ -325,6 +340,7 @@ fn compute_prover_input(
 }
 
 const LEN_BUCKETS: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);
+const LARGE_LEN_BUCKETS: Buckets = Buckets::exponential(10.0..=10_000.0, 2.0);
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
 
 #[derive(Debug, Metrics)]
@@ -332,6 +348,15 @@ const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
 struct ProverInputGeneratorMetrics {
     #[metrics(unit = Unit::Seconds, labels = ["stage"], buckets = LATENCIES_FAST)]
     prover_input_generation: LabeledFamily<&'static str, Histogram<Duration>>,
+    /// Number of distinct tree entries read (but not written) per block.
+    #[metrics(buckets = LEN_BUCKETS)]
+    batch_proof_read_keys: Histogram<usize>,
+    /// Number of sorted leaves included in the batch update proof for a single block.
+    #[metrics(buckets = LEN_BUCKETS)]
+    batch_proof_sorted_leaves: Histogram<usize>,
+    /// Number of intermediate (aka sibling) hashes included in the batch update proof for a single block.
+    #[metrics(buckets = LARGE_LEN_BUCKETS)]
+    batch_proof_hashes: Histogram<usize>,
     /// Number of unexpected existing storage slots queried per block. Positive values are abnormal.
     #[metrics(buckets = LEN_BUCKETS)]
     unexpected_queried_keys: Histogram<usize>,
