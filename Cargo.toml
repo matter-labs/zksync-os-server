@@ -47,6 +47,7 @@ members = [
     "lib/tx_validators",
     "lib/backpressure",
     "lib/alloy_ext",
+    "lib/provider",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -286,6 +287,7 @@ zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = 
 revm = { version = "=38.0.0", features = ["optional_balance_check"] }
 
 # "Local" dependencies
+zksync_os_provider = { version = "=0.20.5", path = "lib/provider" }
 zksync_os_contract_interface = { version = "=0.20.5", path = "lib/contract_interface" }
 zksync_os_consensus_types = { version = "=0.20.5", path = "lib/consensus_types" }
 zksync_os_crypto = { version = "=0.20.5", path = "lib/crypto" }

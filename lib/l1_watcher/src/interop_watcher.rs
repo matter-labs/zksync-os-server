@@ -1,5 +1,5 @@
 use alloy::primitives::ruint::FromUintError;
-use alloy::providers::DynProvider;
+use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
@@ -166,7 +166,7 @@ impl ProcessRawEvents for InteropWatcher {
 
     async fn process_raw_event(
         &mut self,
-        _provider: &DynProvider,
+        _provider: &NodeProvider,
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let event = NewInteropRoot::decode_log(&log.inner)?.data;

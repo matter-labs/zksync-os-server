@@ -1,7 +1,7 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{BlockUpdates, L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, ChainId, U256};
-use alloy::providers::DynProvider;
+use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use tokio::sync::watch;
@@ -32,8 +32,8 @@ pub struct GatewayMigrationWatcher {
 impl GatewayMigrationWatcher {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
-        zk_chain: ZkChain<DynProvider>,
-        bridgehub: Bridgehub<DynProvider>,
+        zk_chain: ZkChain<NodeProvider>,
+        bridgehub: Bridgehub<NodeProvider>,
         l2_chain_id: ChainId,
         l1_chain_id: ChainId,
         gw_chain_id: ChainId,
@@ -107,7 +107,7 @@ impl ProcessRawEvents for GatewayMigrationWatcher {
 
     async fn process_raw_event(
         &mut self,
-        _provider: &DynProvider,
+        _provider: &NodeProvider,
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let Some(&topic0) = log.topic0() else {

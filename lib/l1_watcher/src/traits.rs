@@ -1,6 +1,6 @@
 use crate::watcher::L1WatcherError;
 use alloy::primitives::B256;
-use alloy::providers::DynProvider;
+use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 
@@ -40,7 +40,7 @@ pub trait ProcessRawEvents: Send + Sync + 'static {
     /// storing a stale provider reference; single-SL processors can ignore it.
     async fn process_raw_event(
         &mut self,
-        provider: &DynProvider,
+        provider: &NodeProvider,
         event: Log,
     ) -> Result<(), L1WatcherError>;
 }
@@ -70,7 +70,7 @@ where
 
     async fn process_raw_event(
         &mut self,
-        provider: &DynProvider,
+        provider: &NodeProvider,
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let sol_event = T::SolEvent::decode_log(&log.inner)?.data;
@@ -105,7 +105,7 @@ pub trait ProcessL1Event {
     /// [`ProcessRawEvents::process_raw_event`].
     async fn process_event(
         &mut self,
-        provider: &DynProvider,
+        provider: &NodeProvider,
         event: Self::WatchedEvent,
         log: Log,
     ) -> Result<(), L1WatcherError>;

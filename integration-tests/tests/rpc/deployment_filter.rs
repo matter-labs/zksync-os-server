@@ -6,7 +6,7 @@ use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::Result;
 use tokio::time::{Duration, timeout};
-use zksync_os_alloy_ext::dyn_wallet_provider::EthWalletProvider;
+use zksync_os_provider::EthWalletProvider;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::{DeploymentFilterConfig, GatewayTester};

@@ -1,7 +1,7 @@
 use crate::watcher::L1Watcher;
 use crate::{BlockUpdates, L1WatcherConfig, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
-use alloy::providers::DynProvider;
+use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::ValueOrArray;
 use std::collections::VecDeque;
 use tokio::sync::watch;
@@ -14,7 +14,7 @@ use tokio::sync::watch;
 #[derive(Clone, Debug)]
 pub struct SegmentSpec {
     /// Provider for the settlement layer this segment is scanned on.
-    pub provider: DynProvider,
+    pub provider: NodeProvider,
     /// Block updates for the segment's settlement-layer provider.
     pub block_updates: watch::Receiver<BlockUpdates>,
     /// Contract address(es) whose logs the segment scans (e.g. the chain's diamond proxy or a

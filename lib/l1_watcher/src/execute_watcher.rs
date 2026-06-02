@@ -1,6 +1,7 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{BlockUpdates, CommittedBatchProvider, L1WatcherConfig, ProcessL1Event, util};
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::Provider;
+use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::Log;
 use tokio::sync::watch;
 use zksync_os_contract_interface::IExecutor::BlockExecution;
@@ -37,7 +38,7 @@ struct ExecuteWatcherState<Finality> {
 impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
     pub async fn create_watcher(
         config: L1WatcherConfig,
-        zk_chain: ZkChain<DynProvider>,
+        zk_chain: ZkChain<NodeProvider>,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         l1_chain_id: u64,
@@ -84,7 +85,7 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
 impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
     pub async fn create_finalized_watcher(
         config: L1WatcherConfig,
-        zk_chain: ZkChain<DynProvider>,
+        zk_chain: ZkChain<NodeProvider>,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         block_updates: watch::Receiver<BlockUpdates>,
@@ -207,7 +208,7 @@ impl<Finality: WriteFinality> ProcessL1Event for L1ExecuteWatcher<Finality> {
 
     async fn process_event(
         &mut self,
-        _provider: &DynProvider,
+        _provider: &NodeProvider,
         batch_execute: BlockExecution,
         _log: Log,
     ) -> Result<(), L1WatcherError> {
@@ -226,7 +227,7 @@ impl<Finality: WriteFinality> ProcessL1Event for L1FinalizedExecuteWatcher<Final
 
     async fn process_event(
         &mut self,
-        _provider: &DynProvider,
+        _provider: &NodeProvider,
         batch_execute: BlockExecution,
         _log: Log,
     ) -> Result<(), L1WatcherError> {

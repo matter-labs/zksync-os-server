@@ -28,7 +28,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthWalletProvider;
+use zksync_os_provider::EthWalletProvider;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState, StateLabel};
 use zksync_os_pipeline::{PeekableReceiver, SendAndRecordExt};

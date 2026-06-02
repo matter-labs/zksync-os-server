@@ -10,7 +10,7 @@ use alloy::rpc::types::trace::geth::{
 };
 use alloy::sol_types::{Revert, SolCall, SolError};
 use std::collections::HashMap;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
+use zksync_os_provider::NodeProvider;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert, ReceiptsAssert};
 use zksync_os_integration_tests::contracts::{
     Counter, EventEmitter, TracingPrimary, TracingSecondary,
@@ -333,7 +333,7 @@ async fn check_tx_equivalency<
 >(
     name: &str,
     tester: &Tester,
-    f: impl Fn(EthDynProvider) -> Fut,
+    f: impl Fn(NodeProvider) -> Fut,
 ) -> anyhow::Result<()> {
     tracing::info!(name, "checking trace equivalence");
     let l1_call_frame = f(tester.l1_provider().clone())
@@ -352,7 +352,7 @@ async fn check_tx_equivalency<
 async fn check_call_equivalency<Fut: Future<Output = anyhow::Result<TransactionRequest>>>(
     name: &str,
     tester: &Tester,
-    f: impl Fn(EthDynProvider) -> Fut,
+    f: impl Fn(NodeProvider) -> Fut,
 ) -> anyhow::Result<()> {
     tracing::info!(name, "checking trace equivalence");
     let l1_tx_request = f(tester.l1_provider().clone()).await?;

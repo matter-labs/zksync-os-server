@@ -1,6 +1,6 @@
 use crate::util;
 use alloy::primitives::BlockNumber;
-use alloy::providers::DynProvider;
+use zksync_os_provider::NodeProvider;
 use anyhow::Context;
 use futures::stream::{self, StreamExt};
 use rangemap::RangeInclusiveMap;
@@ -227,7 +227,7 @@ fn startup_batch_numbers(
 /// Resolves a committed batch from L1 by first finding the block that committed it and then
 /// decoding the corresponding stored batch data.
 async fn fetch_batch(
-    diamond_proxy_sl: &ZkChain<DynProvider>,
+    diamond_proxy_sl: &ZkChain<NodeProvider>,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<DiscoveredCommittedBatch> {

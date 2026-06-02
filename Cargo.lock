@@ -15262,10 +15262,7 @@ name = "zksync_os_alloy_ext"
 version = "0.20.5"
 dependencies = [
  "alloy",
- "anyhow",
- "async-trait",
  "serde",
- "serde_json",
  "tokio",
  "tracing",
  "zksync_os_contract_interface",
@@ -15322,6 +15319,7 @@ dependencies = [
  "zksync_os_contract_interface",
  "zksync_os_external_price_api",
  "zksync_os_operator_signer",
+ "zksync_os_provider",
  "zksync_os_types",
 ]
 
@@ -15407,6 +15405,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tracing",
  "vise",
+ "zksync_os_provider",
 ]
 
 [[package]]
@@ -15489,6 +15488,7 @@ dependencies = [
  "zksync_os_api",
  "zksync_os_contract_interface",
  "zksync_os_l1_watcher",
+ "zksync_os_provider",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -15527,6 +15527,7 @@ dependencies = [
  "zksync_os_merkle_tree_api",
  "zksync_os_multivm",
  "zksync_os_network",
+ "zksync_os_provider",
  "zksync_os_replay_archive",
  "zksync_os_rpc_api",
  "zksync_os_server",
@@ -15603,6 +15604,7 @@ dependencies = [
  "zksync_os_observability",
  "zksync_os_operator_signer",
  "zksync_os_pipeline",
+ "zksync_os_provider",
  "zksync_os_types",
 ]
 
@@ -15627,6 +15629,7 @@ dependencies = [
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_mempool",
+ "zksync_os_provider",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -15845,6 +15848,19 @@ dependencies = [
  "zksync_os_rocksdb",
  "zksync_os_storage_api",
  "zksync_os_types",
+]
+
+[[package]]
+name = "zksync_os_provider"
+version = "0.20.4"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -16199,6 +16215,7 @@ dependencies = [
  "zksync_os_operator_signer",
  "zksync_os_pipeline",
  "zksync_os_priority_tree",
+ "zksync_os_provider",
  "zksync_os_raft",
  "zksync_os_replay_archive",
  "zksync_os_reth_compat",

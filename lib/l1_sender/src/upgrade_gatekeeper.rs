@@ -1,10 +1,11 @@
 use crate::commands::{L1SenderCommand, commit::CommitCommand};
-use alloy::{eips::BlockId, providers::DynProvider};
+use alloy::eips::BlockId;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use std::cmp::Ordering;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::ZkChain;
+use zksync_os_provider::NodeProvider;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_types::ProtocolSemanticVersion;
@@ -13,11 +14,11 @@ use zksync_os_types::ProtocolSemanticVersion;
 /// Makes sure that batches are only passed to L1 if batch version matches the current protocol version.
 #[derive(Debug)]
 pub struct UpgradeGatekeeper {
-    zk_chain_sl: ZkChain<DynProvider>,
+    zk_chain_sl: ZkChain<NodeProvider>,
 }
 
 impl UpgradeGatekeeper {
-    pub fn new(zk_chain_sl: ZkChain<DynProvider>) -> Self {
+    pub fn new(zk_chain_sl: ZkChain<NodeProvider>) -> Self {
         Self { zk_chain_sl }
     }
 
