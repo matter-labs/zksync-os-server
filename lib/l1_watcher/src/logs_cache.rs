@@ -243,7 +243,7 @@ impl LogsCache {
             // We get `block`. Reorg happens before we get `logs`. Some RPCs would return
             // empty list(instead of proper logs) or an error.
             if logs.is_empty() && block.header.logs_bloom != Bloom::ZERO {
-                return TransportError(TransportErrorKind::custom_str(
+                return Err(TransportErrorKind::custom_str(
                     "RPC returned empty logs, but the block has logs. Most likely due to reorg.",
                 ));
             }
