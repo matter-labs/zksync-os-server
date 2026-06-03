@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.20.6](https://github.com/matter-labs/zksync-os-server/compare/v0.20.5...v0.20.6) (2026-06-03)
+
+
+### Features
+
+* **l1:** use deployment block as lower bound for binsearch ([#1350](https://github.com/matter-labs/zksync-os-server/issues/1350)) ([3ec0af1](https://github.com/matter-labs/zksync-os-server/commit/3ec0af16c65184418866883fb4a846a6ec63f6cb))
+
+
+### Bug Fixes
+
+* **l1-sender:** Blob tx gas estimation ([#1351](https://github.com/matter-labs/zksync-os-server/issues/1351)) ([4119dc1](https://github.com/matter-labs/zksync-os-server/commit/4119dc13469bf76363bd8dc907364a12baf4b24a))
+
 ## [0.20.5](https://github.com/matter-labs/zksync-os-server/compare/v0.20.4...v0.20.5) (2026-06-02)
 
 
