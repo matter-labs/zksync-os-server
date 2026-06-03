@@ -1,5 +1,5 @@
 use alloy::primitives::B256;
-use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::ops::RangeInclusive;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
@@ -13,56 +13,60 @@ use zksync_os_types::BlockOutput;
 /// caller's responsibility; they decide when to call [`TreeBlockCache::remove_lower_then`]
 #[derive(Debug)]
 pub struct TreeBlockCache<Data> {
-    data: HashMap<u64, Data>,
-    /// Range of cached data. Range is inclusive of both bounds.
-    range: Option<(u64, u64)>,
+    data: VecDeque<Data>,
+    first_block: Option<u64>,
 }
 
 impl<Data> TreeBlockCache<Data> {
     pub fn new() -> Self {
         Self {
-            data: HashMap::new(),
-            range: None,
+            data: VecDeque::new(),
+            first_block: None,
         }
     }
 
     /// Insert a block into the cache. Blocks must arrive in strictly ascending order.
     pub fn insert(&mut self, block_number: u64, block: Data) -> anyhow::Result<()> {
-        if let Some((low, high)) = self.range {
-            if block_number != high + 1 {
+        if let Some((_, last_block)) = self.range() {
+            if block_number != last_block + 1 {
                 anyhow::bail!("Out of order block received. This should never happen");
             }
-            self.range = Some((low, block_number));
         } else {
-            self.range = Some((block_number, block_number));
+            self.first_block = Some(block_number);
         }
-        self.data.insert(block_number, block);
+        self.data.push_back(block);
         Ok(())
     }
 
     pub fn get(&self, block_number: u64) -> Option<&Data> {
-        self.data.get(&block_number)
+        if let Some((first_block, last_block)) = self.range()
+            && first_block <= block_number
+            && block_number <= last_block
+        {
+            return self.data.get((block_number - first_block) as usize);
+        }
+        None
     }
 
     /// Currently cached block-number range (inclusive bounds), or `None` if empty.
     pub fn range(&self) -> Option<(u64, u64)> {
-        self.range
+        self.first_block
+            .map(|block| (block, block + self.data.len() as u64 - 1))
     }
 
     /// Removes all blocks lower than the given block number.
     pub fn remove_lower_then(&mut self, block_number: u64) {
-        if let Some((low, high)) = self.range {
-            if block_number <= low {
+        if let Some((first_block, last_block)) = self.range() {
+            if block_number <= first_block {
                 return;
             }
-            for num in low..block_number {
-                self.data.remove(&num);
+
+            for _ in first_block..=(block_number - 1).min(last_block) {
+                self.data.pop_front();
             }
-            let new_range = (block_number, high);
-            if new_range.0 > new_range.1 {
-                self.range = None;
-            } else {
-                self.range = Some(new_range);
+
+            if self.data.len() > 0 {
+                self.first_block = Some(block_number);
             }
         }
     }
@@ -145,15 +149,15 @@ impl LocalBatchDataCache {
             .lock()
             .expect("local batch data cache mutex poisoned");
 
-        let Some((low, high)) = guard.cache.range() else {
+        let Some((first_block, last_block)) = guard.cache.range() else {
             return Ok(None);
         };
-        if start < low {
+        if start < first_block {
             anyhow::bail!(
-                "requested local batch data range {start}..={end} was already evicted; cached range is {low}..={high}"
+                "requested local batch data range {start}..={end} was already evicted; cached range is {first_block}..={last_block}"
             );
         }
-        if end > high {
+        if end > last_block {
             return Ok(None);
         }
 
@@ -161,7 +165,7 @@ impl LocalBatchDataCache {
         for block_number in start..=end {
             let Some(block) = guard.cache.get(block_number) else {
                 anyhow::bail!(
-                    "missing local batch data for block {block_number} inside cached range {low}..={high}"
+                    "missing local batch data for block {block_number} inside cached range {first_block}..={last_block}"
                 );
             };
             result.push(block.clone());
