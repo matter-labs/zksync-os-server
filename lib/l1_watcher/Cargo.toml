@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_provider.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true

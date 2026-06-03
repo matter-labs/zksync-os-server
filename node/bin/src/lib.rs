@@ -56,7 +56,6 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{
@@ -99,6 +98,7 @@ use zksync_os_network::service::{NetworkService, PeerVerifyBatch, PeerVerifyBatc
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
+use zksync_os_provider::NodeProvider;
 use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, init_consensus,
     loopback_consensus,
@@ -211,8 +211,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // wait: calling fetch_finalized on them would spuriously fail when a concurrently
         // running batcher node keeps submitting new batch transactions.
         L1State::fetch_finalized(
-            l1_provider.clone().erased(),
-            gateway_provider.as_ref().map(|p| p.clone().erased()),
+            l1_provider.clone(),
+            gateway_provider.clone(),
             bridgehub_address,
             chain_id,
         )
@@ -220,8 +220,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to fetch finalized L1 state")
     } else {
         L1State::fetch(
-            l1_provider.clone().erased(),
-            gateway_provider.as_ref().map(|p| p.clone().erased()),
+            l1_provider.clone(),
+            gateway_provider.clone(),
             bridgehub_address,
             chain_id,
         )
@@ -230,17 +230,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
     let settles_on_gateway = l1_state.settles_on_gateway();
     let l1_block_updates = block_updates::run(
-        l1_provider.clone().erased(),
+        l1_provider.clone(),
         runtime,
         "l1 block updates",
         config.l1_watcher_config.poll_interval,
+        config.l1_watcher_config.finalized_poll_interval,
     );
     let gateway_block_updates = gateway_provider.as_ref().map(|provider| {
         block_updates::run(
-            provider.clone().erased(),
+            provider.clone(),
             runtime,
             "gateway block updates",
             config.l1_watcher_config.poll_interval,
+            config.l1_watcher_config.finalized_poll_interval,
         )
     });
     let (sl_provider, sl_block_updates) = if l1_state.l1_chain_id == l1_state.sl_chain_id {
@@ -776,7 +778,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let l1_subpool = L1Subpool::new(10);
     runtime.spawn_critical_task(
-        "gateway migration watcher",
+        "L1 transaction watcher",
         L1TxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy_l1.clone(),
@@ -1189,7 +1191,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: &Config,
-    sl_provider: EthDynProvider,
+    sl_provider: NodeProvider,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     runtime: &Runtime,

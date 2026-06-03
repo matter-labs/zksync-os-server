@@ -2,7 +2,7 @@ use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{BlockUpdates, L1WatcherConfig, ProcessL1Event, util};
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::Provider;
 use alloy::rpc::types::Log;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +10,7 @@ use tokio::sync::watch;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_mempool::subpools::l1::L1Subpool;
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::L1PriorityEnvelope;
 
 /// Watches L1 priority transaction events and feeds them into the L1 transaction subpool.
@@ -19,7 +20,7 @@ use zksync_os_types::L1PriorityEnvelope;
 /// `L1PriorityEnvelope` into `L1Subpool`.
 pub struct L1TxWatcher {
     next_l1_priority_id: u64,
-    zk_chain_sl: ZkChain<DynProvider>,
+    zk_chain_sl: ZkChain<NodeProvider>,
     cached_total_priority_ops_resp: Option<u64>,
     l1_subpool: L1Subpool,
 }
@@ -27,8 +28,8 @@ pub struct L1TxWatcher {
 impl L1TxWatcher {
     pub async fn create_watcher(
         config: L1WatcherConfig,
-        zk_chain_l1: ZkChain<DynProvider>,
-        zk_chain_sl: ZkChain<DynProvider>,
+        zk_chain_l1: ZkChain<NodeProvider>,
+        zk_chain_sl: ZkChain<NodeProvider>,
         l1_subpool: L1Subpool,
         next_l1_priority_id: u64,
         block_updates: watch::Receiver<BlockUpdates>,
@@ -67,13 +68,18 @@ impl L1TxWatcher {
 }
 
 async fn find_l1_block_by_priority_id(
-    zk_chain: ZkChain<DynProvider>,
+    zk_chain: ZkChain<NodeProvider>,
     next_l1_priority_id: u64,
 ) -> anyhow::Result<BlockNumber> {
-    util::find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| async move {
-        let res = zk.get_total_priority_txs_at_block(block.into()).await?;
-        Ok(res >= next_l1_priority_id)
-    })
+    let deployment_block = zk_chain.deployment_block().await?;
+    util::find_l1_block_by_predicate(
+        Arc::new(zk_chain),
+        deployment_block,
+        move |zk, block| async move {
+            let res = zk.get_total_priority_txs_at_block(block.into()).await?;
+            Ok(res >= next_l1_priority_id)
+        },
+    )
     .await
 }
 
@@ -86,7 +92,7 @@ impl ProcessL1Event for L1TxWatcher {
 
     async fn process_event(
         &mut self,
-        _provider: &DynProvider,
+        _provider: &NodeProvider,
         tx: L1PriorityEnvelope,
         _log: Log,
     ) -> Result<(), L1WatcherError> {

@@ -1,12 +1,12 @@
 use crate::committed_batch_provider::CommittedBatchProvider;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{BlockUpdates, L1WatcherConfig, ProcessL1Event, util};
-use alloy::providers::DynProvider;
 use alloy::rpc::types::Log;
 use tokio::sync::watch;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
+use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::WriteFinality;
 
 /// Watches settlement-layer commit events and advances the committed finality frontier.
@@ -35,7 +35,7 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
         config: L1WatcherConfig,
-        zk_chain: ZkChain<DynProvider>,
+        zk_chain: ZkChain<NodeProvider>,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         sl_block_initial_finality_init_at: u64,
@@ -93,7 +93,7 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
 
     async fn process_event(
         &mut self,
-        provider: &DynProvider,
+        provider: &NodeProvider,
         report: ReportCommittedBatchRangeZKsyncOS,
         log: Log,
     ) -> Result<(), L1WatcherError> {

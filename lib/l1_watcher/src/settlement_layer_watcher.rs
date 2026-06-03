@@ -1,9 +1,9 @@
 use alloy::eips::BlockId;
 use alloy::primitives::Address;
-use alloy::providers::DynProvider;
 use std::time::Duration;
 use tokio::sync::watch;
 use zksync_os_contract_interface::ZkChain;
+use zksync_os_provider::NodeProvider;
 
 /// Polls `getSettlementLayer()` on the L1 diamond proxy and terminates the process once all three
 /// conditions are simultaneously satisfied:
@@ -17,7 +17,7 @@ use zksync_os_contract_interface::ZkChain;
 /// Waiting for all three conditions prevents the node from restarting prematurely — before the
 /// old settlement layer has finalised all the batches that were in-flight at migration time.
 pub struct SettlementLayerWatcher {
-    diamond_proxy_l1: ZkChain<DynProvider>,
+    diamond_proxy_l1: ZkChain<NodeProvider>,
     /// Value of `getSettlementLayer()` at the time the node started.
     initial_settlement_layer: Address,
     poll_interval: Duration,
@@ -28,7 +28,7 @@ pub struct SettlementLayerWatcher {
 
 impl SettlementLayerWatcher {
     pub fn new(
-        diamond_proxy_l1: ZkChain<DynProvider>,
+        diamond_proxy_l1: ZkChain<NodeProvider>,
         initial_settlement_layer: Address,
         poll_interval: Duration,
         migration_triggered: watch::Receiver<Option<u64>>,

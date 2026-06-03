@@ -4,11 +4,12 @@ use crate::settlement_layer_intervals::SettlementLayerIntervals;
 use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256, address};
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::Provider;
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
 use std::fmt::Debug;
 use std::time::Duration;
+use zksync_os_provider::NodeProvider;
 
 /// Standard L2 bridgehub address — present at the same well-known address on every Gateway.
 pub const L2_BRIDGEHUB_ADDRESS: Address = address!("0x0000000000000000000000000000000000010002");
@@ -27,10 +28,10 @@ pub enum BatchVerificationSL {
 
 #[derive(Clone, Debug)]
 pub struct L1State {
-    pub bridgehub_l1: Bridgehub<DynProvider>,
-    pub bridgehub_sl: Bridgehub<DynProvider>,
-    pub diamond_proxy_l1: ZkChain<DynProvider>,
-    pub diamond_proxy_sl: ZkChain<DynProvider>,
+    pub bridgehub_l1: Bridgehub<NodeProvider>,
+    pub bridgehub_sl: Bridgehub<NodeProvider>,
+    pub diamond_proxy_l1: ZkChain<NodeProvider>,
+    pub diamond_proxy_sl: ZkChain<NodeProvider>,
     pub validator_timelock_sl: Address,
     pub batch_verification: BatchVerificationSL,
     pub last_committed_batch: u64,
@@ -68,8 +69,8 @@ impl L1State {
     /// proxy is resolved from it so historical batches committed on the Gateway can still be
     /// looked up via [`SettlementLayerIntervals::resolve_proxy`].
     pub async fn fetch(
-        l1_provider: DynProvider,
-        gateway_provider: Option<DynProvider>,
+        l1_provider: NodeProvider,
+        gateway_provider: Option<NodeProvider>,
         bridgehub_address_l1: Address,
         l2_chain_id: u64,
     ) -> anyhow::Result<Self> {
@@ -192,8 +193,8 @@ impl L1State {
     }
 
     async fn validate_chain_ids(
-        bridgehub_l1: &Bridgehub<DynProvider>,
-        bridgehub_sl: &Bridgehub<DynProvider>,
+        bridgehub_l1: &Bridgehub<NodeProvider>,
+        bridgehub_sl: &Bridgehub<NodeProvider>,
         l2_chain_id: u64,
     ) -> anyhow::Result<()> {
         let all_chain_ids_l1 = bridgehub_l1.get_all_zk_chain_chain_ids().await?;
@@ -223,8 +224,8 @@ impl L1State {
     /// NOTE: This should only be called on the main node as ENs will observe pending changes that
     /// are being submitted by the main node.
     pub async fn fetch_finalized(
-        l1_provider: DynProvider,
-        gateway_provider: Option<DynProvider>,
+        l1_provider: NodeProvider,
+        gateway_provider: Option<NodeProvider>,
         bridgehub_address: Address,
         chain_id: u64,
     ) -> anyhow::Result<Self> {
@@ -291,7 +292,7 @@ impl L1State {
 }
 
 async fn fetch_finalized_executed_batch(
-    zk_chain_sl: &ZkChain<DynProvider>,
+    zk_chain_sl: &ZkChain<NodeProvider>,
 ) -> anyhow::Result<(u64, u64)> {
     let finalized_sl_block_number = zk_chain_sl
         .provider()
@@ -316,7 +317,7 @@ async fn fetch_finalized_executed_batch(
 
 /// Waits until the pending SL state matches the latest finalized SL block.
 async fn wait_to_finalize<T: Debug + PartialEq, Fut: Future<Output = crate::Result<T>>>(
-    provider: &DynProvider,
+    provider: &NodeProvider,
     f: impl Fn(BlockId) -> Fut,
 ) -> anyhow::Result<(u64, T)> {
     /// Ethereum blocks are mined every ~12 seconds on average, but we wait in 1-second intervals

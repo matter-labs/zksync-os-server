@@ -1,7 +1,6 @@
 use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
 use crate::{BlockUpdates, L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
-use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
@@ -14,6 +13,7 @@ use zksync_os_contract_interface::models::DACommitmentScheme;
 use zksync_os_contract_interface::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
+use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 use zksync_os_tree_block_cache::{LocalBatchBlockData, LocalBatchDataCache};
 use zksync_os_types::PubdataMode;
@@ -165,7 +165,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
     async fn parse_committed_batch(
         &self,
-        provider: &DynProvider,
+        provider: &NodeProvider,
         report: ReportCommittedBatchRangeZKsyncOS,
         log: Log,
     ) -> Result<PendingCommittedBatch, L1WatcherError> {
@@ -316,7 +316,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
     async fn process_commit(
         &mut self,
-        provider: &DynProvider,
+        provider: &NodeProvider,
         report: ReportCommittedBatchRangeZKsyncOS,
         log: Log,
     ) -> Result<(), L1WatcherError> {
@@ -415,7 +415,7 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
 
     async fn process_raw_event(
         &mut self,
-        provider: &DynProvider,
+        provider: &NodeProvider,
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let event_signature = log.topics()[0];
