@@ -59,6 +59,7 @@ where
             state_reporter.enter_state(GenericComponentState::Active);
             let block_number = tree_block.record.block_context.block_number;
             let block_timestamp = tree_block.record.block_context.timestamp;
+            // The multichain root is read after this block has been applied to local state.
             let state_view = self.read_state.state_view_at(block_number)?;
             let multichain_root = read_multichain_root(state_view);
             self.cache.insert(tree_block, multichain_root)?;

@@ -70,6 +70,7 @@ impl<Data> TreeBlockCache<Data> {
                 self.data.pop_front();
             }
 
+            // Keep `first_block` aligned with the deque; an empty cache has no valid range.
             if self.data.is_empty() {
                 self.first_block = None;
             } else if first_block <= block_number {
@@ -209,6 +210,7 @@ impl LocalBatchDataCache {
         range: RangeInclusive<u64>,
     ) -> anyhow::Result<Vec<LocalBatchBlockData>> {
         loop {
+            // Subscribe before checking the cache to avoid missing a concurrent insert.
             let notified = self.notify.notified();
             if let Some(blocks) = self.get_range(range.clone())? {
                 return Ok(blocks);

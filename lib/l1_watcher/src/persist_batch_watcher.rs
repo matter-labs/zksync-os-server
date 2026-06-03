@@ -42,6 +42,7 @@ pub struct L1PersistBatchWatcher<BatchStorage> {
 #[derive(Debug)]
 struct PendingCommittedBatch {
     discovered: DiscoveredCommittedBatch,
+    // Kept until execute so we can verify local reconstruction with the original commit metadata.
     extended_info: ExtendedCommitBatchInfo,
 }
 
@@ -264,6 +265,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         };
 
         let blocks = cache.wait_for_range(discovered.block_range.clone()).await?;
+        // Rebuild the exact commit payload from local replay data and compare it to L1 calldata.
         let local_batch = Self::reconstruct_local_batch(
             pending.discovered.number(),
             Self::pubdata_mode_from_scheme(
@@ -389,9 +391,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             self.committed_batches.insert(batch_number, committed_batch);
 
             if let Some(cache) = &self.local_batch_data_cache {
-                // It should be safe to clean cache for already committed blocks,
-                // as the only other component that depend on cache is batch verifier
-                // which needs uncommited batches
+                // Committed blocks are no longer needed locally; the verifier only needs open batches.
                 cache.remove_lower_than(last_block_number + 1);
             }
 
