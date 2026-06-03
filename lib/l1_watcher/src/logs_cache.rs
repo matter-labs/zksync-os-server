@@ -252,10 +252,10 @@ impl LogsCache {
             let parent_hash_mismatch = has_parent
                 && recent.cached_hash(block_number - 1) != Some(block.header.parent_hash);
             if parent_hash_mismatch {
-                tracing::warn!(block_number, "recent logs cache detected reorg");
+                tracing::warn!("recent logs cache detected reorg at block {block_number}");
                 // Update blocks to match current chain
                 self.update_block(recent, block_number - 1, floor).await?;
-                // Re-fetch this block from the start for the rare case where `blcok` & `logs` got
+                // Re-fetch this block from the start for the rare case where `block` & `logs` got
                 // reorged while we were fetching the previous blocks.
                 self.update_block(recent, block_number, floor).await?;
                 return Ok(());
