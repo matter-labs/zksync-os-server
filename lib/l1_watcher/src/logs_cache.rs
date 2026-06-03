@@ -1,12 +1,16 @@
-use crate::{BlockUpdates, metrics::METRICS};
+use crate::{
+    BlockUpdates,
+    metrics::{LogsCacheLabels, METRICS},
+};
 use alloy::eips::BlockNumberOrTag;
 use alloy::primitives::{B256, BlockNumber, Bloom};
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log};
 use alloy::transports::{TransportErrorKind, TransportResult};
 use futures::future::BoxFuture;
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, mem, sync::Arc};
 use tokio::sync::{RwLock, watch};
+use zksync_os_provider::NodeProvider;
 
 const UNSYNCED_BLOCK_UPDATES: BlockUpdates = BlockUpdates {
     latest_block: BlockNumber::MAX,
@@ -17,6 +21,23 @@ const UNSYNCED_BLOCK_UPDATES: BlockUpdates = BlockUpdates {
 struct CachedBlockLogs {
     hash: B256,
     logs: Vec<Log>,
+    approx_bytes: usize,
+}
+
+impl CachedBlockLogs {
+    fn new(hash: B256, logs: Vec<Log>) -> Self {
+        let approx_bytes = mem::size_of::<Self>()
+            + logs.capacity() * mem::size_of::<Log>()
+            + logs
+                .iter()
+                .map(|log| mem::size_of_val(log.topics()) + log.data().data.len())
+                .sum::<usize>();
+        Self {
+            hash,
+            logs,
+            approx_bytes,
+        }
+    }
 }
 
 /// In-memory cache for logs from recent blocks.
@@ -32,6 +53,8 @@ struct RecentLogs {
     first_block: Option<u64>,
     /// Logs & block hashes for blocks from `first_block` to `first_block + blocks.len() - 1`
     blocks: VecDeque<CachedBlockLogs>,
+    /// Approximate retained size of cached log payloads in bytes.
+    approx_bytes: usize,
 }
 
 impl RecentLogs {
@@ -41,6 +64,7 @@ impl RecentLogs {
             synced_with: UNSYNCED_BLOCK_UPDATES,
             first_block: None,
             blocks: VecDeque::new(),
+            approx_bytes: 0,
         }
     }
 
@@ -90,7 +114,11 @@ impl RecentLogs {
             .latest_block()
             .is_some_and(|latest_block| latest_block >= number)
         {
-            self.blocks.pop_back();
+            let removed = self
+                .blocks
+                .pop_back()
+                .expect("cache tail must exist when latest_block() is present");
+            self.approx_bytes -= removed.approx_bytes;
         }
         if let Some(latest_block) = self.latest_block()
             && latest_block.checked_add(1) != Some(number)
@@ -103,12 +131,19 @@ impl RecentLogs {
         if self.blocks.is_empty() {
             self.first_block = Some(number);
         }
-        self.blocks.push_back(CachedBlockLogs { hash, logs });
+        let cached_block = CachedBlockLogs::new(hash, logs);
+        self.approx_bytes += cached_block.approx_bytes;
+        self.blocks.push_back(cached_block);
         while self.blocks.len() > self.capacity {
-            self.blocks.pop_front();
-            if let Some(first_block) = &mut self.first_block {
-                *first_block += 1;
-            }
+            let removed = self
+                .blocks
+                .pop_front()
+                .expect("cache head must exist when capacity eviction runs");
+            self.approx_bytes -= removed.approx_bytes;
+            *self
+                .first_block
+                .as_mut()
+                .expect("first_block must be present when cache contains blocks") += 1;
         }
 
         Ok(())
@@ -139,20 +174,23 @@ impl RecentLogs {
 /// TODO: In reorg checks we do additional eth_getBlockByNumber - this can be avoided by extending BlockUpdates.
 #[derive(Clone, Debug)]
 pub struct LogsCache {
-    provider: DynProvider,
+    provider: NodeProvider,
     block_updates: watch::Receiver<BlockUpdates>,
+    metric_labels: LogsCacheLabels,
     recent: Arc<RwLock<RecentLogs>>,
 }
 
 impl LogsCache {
     pub fn new(
-        provider: DynProvider,
+        provider: NodeProvider,
         block_updates: watch::Receiver<BlockUpdates>,
         capacity: usize,
+        chain_id: u64,
     ) -> Self {
         Self {
             provider,
             block_updates,
+            metric_labels: LogsCacheLabels { chain_id },
             recent: Arc::new(RwLock::new(RecentLogs::new(capacity))),
         }
     }
@@ -167,6 +205,7 @@ impl LogsCache {
             let mut recent = self.recent.write().await;
             let capacity = recent.capacity;
             *recent = RecentLogs::new(capacity);
+            METRICS.logs_cache_approx_bytes[&self.metric_labels].set(0);
         }
 
         let cached_logs = if let (Some(from_block), Some(to_block)) = filter.extract_block_range() {
@@ -184,10 +223,10 @@ impl LogsCache {
         };
 
         if let Some(cached_logs) = cached_logs {
-            METRICS.logs_cache_hits.inc();
+            METRICS.logs_cache_hits[&self.metric_labels].inc();
             Ok(cached_logs)
         } else {
-            METRICS.logs_cache_fallbacks.inc();
+            METRICS.logs_cache_fallbacks[&self.metric_labels].inc();
             self.provider.get_logs(filter).await
         }
     }
@@ -262,7 +301,8 @@ impl LogsCache {
             }
 
             recent.push_head(block_number, block.header.hash, logs)?;
-            METRICS.logs_cache_blocks_loaded.inc();
+            METRICS.logs_cache_blocks_loaded[&self.metric_labels].inc();
+            METRICS.logs_cache_approx_bytes[&self.metric_labels].set(recent.approx_bytes);
             Ok(())
         })
     }
