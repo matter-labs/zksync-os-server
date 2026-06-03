@@ -65,7 +65,7 @@ impl<Data> TreeBlockCache<Data> {
                 self.data.pop_front();
             }
 
-            if self.data.len() > 0 && first_block <= block_number {
+            if !self.data.is_empty() && first_block <= block_number {
                 self.first_block = Some(block_number);
             }
         }
