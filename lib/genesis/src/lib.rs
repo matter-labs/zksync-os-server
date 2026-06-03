@@ -211,6 +211,36 @@ fn account_properties_flat_key(address: Address) -> B256 {
     )
 }
 
+pub fn genesis_header() -> Sealed<Header> {
+    let header = Header {
+        parent_hash: B256::ZERO,
+        ommers_hash: EMPTY_OMMER_ROOT_HASH,
+        beneficiary: Address::ZERO,
+        // for now state root is zero
+        state_root: B256::ZERO,
+        transactions_root: B256::ZERO,
+        receipts_root: B256::ZERO,
+        logs_bloom: Bloom::ZERO,
+        difficulty: U256::ZERO,
+        number: 0,
+        gas_limit: 5_000,
+        gas_used: 0,
+        timestamp: 0,
+        extra_data: Default::default(),
+        mix_hash: B256::ZERO,
+        nonce: B64::ZERO,
+        base_fee_per_gas: Some(INITIAL_BASE_FEE),
+        withdrawals_root: None,
+        blob_gas_used: None,
+        excess_blob_gas: None,
+        parent_beacon_block_root: None,
+        requests_hash: None,
+        block_access_list_hash: None,
+        slot_number: None,
+    };
+    header.seal_slow()
+}
+
 async fn build_genesis(
     genesis_input_source: &dyn GenesisInputSource,
     chain_id: u64,
@@ -280,33 +310,7 @@ async fn build_genesis(
         ));
     }
 
-    let header = Header {
-        parent_hash: B256::ZERO,
-        ommers_hash: EMPTY_OMMER_ROOT_HASH,
-        beneficiary: Address::ZERO,
-        // for now state root is zero
-        state_root: B256::ZERO,
-        transactions_root: B256::ZERO,
-        receipts_root: B256::ZERO,
-        logs_bloom: Bloom::ZERO,
-        difficulty: U256::ZERO,
-        number: 0,
-        gas_limit: 5_000,
-        gas_used: 0,
-        timestamp: 0,
-        extra_data: Default::default(),
-        mix_hash: B256::ZERO,
-        nonce: B64::ZERO,
-        base_fee_per_gas: Some(INITIAL_BASE_FEE),
-        withdrawals_root: None,
-        blob_gas_used: None,
-        excess_blob_gas: None,
-        parent_beacon_block_root: None,
-        requests_hash: None,
-        block_access_list_hash: None,
-        slot_number: None,
-    };
-
+    let header = genesis_header();
     let context = BlockContext {
         chain_id,
         block_number: 0,
@@ -326,7 +330,7 @@ async fn build_genesis(
     Ok(GenesisState {
         storage_logs: storage_logs.into_iter().collect(),
         preimages,
-        header: header.seal_slow(),
+        header,
         context,
         expected_genesis_root: genesis_input.genesis_root,
     })

@@ -50,7 +50,6 @@ use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
 use reth_tasks::Runtime;
-use ruint::aliases::U256;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -119,8 +118,8 @@ use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
-    BlockHashes, FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
-    ReplayRecord, WriteReplay, WriteRepository, WriteState,
+    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord,
+    WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
     BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, PubdataMode,
@@ -419,8 +418,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // Some batches committed - starting from an already committed batch
         determine_starting_block(&config, &node_startup_state, &state, last_matching_block)
     } else {
-        // No batches committed - starting from block/batch 1.
-        1
+        // No batches committed - starting from genesis.
+        0
     };
 
     tracing::info!(
@@ -662,8 +661,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let interop_roots_subpool =
         InteropRootsSubpool::new(config.sequencer_config.interop_roots_per_tx);
 
-    // If we start from the very first block, we should start by sending upgrade tx for genesis.
-    if starting_block == 1 {
+    // If we start from genesis, we should start by sending upgrade tx for genesis.
+    if starting_block == 0 {
         let genesis_upgrade = genesis.genesis_upgrade_tx().await;
         let upgrade_tx = UpgradeInfo {
             tx: Some(genesis_upgrade.tx.clone()),
@@ -829,26 +828,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // ========== Start BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
 
-    let previous_block_timestamp: u64 = first_replay_record
-        .as_ref()
-        .map_or(0, |record| record.previous_block_timestamp); // if no previous block, assume genesis block
-
-    let block_hashes_for_next_block = first_replay_record
-        .as_ref()
-        .map(|record| record.block_context.block_hashes)
-        .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
-
     let (token_price_sender, token_price_receiver) = watch::channel(None);
     let interop_fee_token_price_receiver = token_price_receiver.clone();
-    let previous_block_fee_params = if starting_block == 1 {
+    let previous_block_fee_params = if starting_block == 0 {
         None
     } else {
         let prev_record = block_replay_storage
-            .get_replay_record(starting_block - 1)
+            .get_replay_record(starting_block)
             .unwrap_or_else(|| {
                 panic!(
-                    "Missing replay record for block `starting_block - 1` = {}",
-                    starting_block - 1
+                    "Missing replay record for block `starting_block` = {}",
+                    starting_block
                 )
             });
         Some(FeeParams {
@@ -878,25 +868,22 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l2_subpool.clone(),
     );
     let block_context_provider = BlockContextProvider::new(
-        next_cursors,
-        pool,
-        block_hashes_for_next_block,
-        previous_block_timestamp,
-        starting_block,
-        config.sequencer_config.block_time,
-        config.sequencer_config.max_transactions_in_block,
-        chain_id,
-        config.sequencer_config.block_gas_limit,
-        config.sequencer_config.block_pubdata_limit_bytes,
-        // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
-        config.batcher_config.interop_roots_per_batch_limit,
-        config.sequencer_config.service_block_delay,
-        current_protocol_version.clone(),
-        node_startup_state.l1_state.sl_chain_id,
-        node_startup_state.l1_state.l1_chain_id,
-        config.sequencer_config.fee_collector_address,
-        last_constructed_block_ctx_sender,
         fee_provider,
+        pool,
+        zksync_os_sequencer::execution::block_context_provider::Config {
+            l2_chain_id: chain_id,
+            l1_chain_id: node_startup_state.l1_state.l1_chain_id,
+            gas_limit: config.sequencer_config.block_gas_limit,
+            pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
+            fee_collector_address: config.sequencer_config.fee_collector_address,
+            block_time: config.sequencer_config.block_time,
+            service_block_delay: config.sequencer_config.service_block_delay,
+            max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
+            // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
+            interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
+        },
+        &node_startup_state.l1_state.settlement_layer_intervals,
+        last_constructed_block_ctx_sender,
     );
 
     // ========== Start L1 Upgrade Watcher ===========
@@ -1212,7 +1199,7 @@ async fn run_main_node_pipeline(
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::unbounded_channel();
     let (applied_block_number_sender, applied_block_number_receiver) =
-        watch::channel(starting_block - 1);
+        watch::channel(starting_block.saturating_sub(1));
 
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ConsensusNodeCommandSource {
@@ -1473,7 +1460,7 @@ async fn run_en_pipeline(
             .join(INTERNAL_CONFIG_FILE_NAME),
     );
     let (applied_block_number_sender, applied_block_number_receiver) =
-        watch::channel(starting_block - 1);
+        watch::channel(starting_block.saturating_sub(1));
 
     let monitor =
         BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver.clone());
@@ -1564,16 +1551,6 @@ async fn run_en_pipeline(
         clear_failing_block_config_task(finality, internal_config_manager),
     );
     monitor.spawn(runtime, snapshot_rx)
-}
-
-fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashes {
-    let mut block_hashes = BlockHashes::default();
-    let genesis_block = repositories
-        .get_block_by_number(0)
-        .expect("Failed to read genesis block from repositories")
-        .expect("Missing genesis block in repositories");
-    block_hashes.0[255] = U256::from_be_slice(genesis_block.hash().as_slice());
-    block_hashes
 }
 
 fn init_and_report_internal_config_manager(
@@ -1822,9 +1799,7 @@ fn determine_starting_block(
         ]
         .into_iter()
         .min()
-        .unwrap()
-        // We don't execute the genesis block (number 0) - the earliest we can start is `0`
-        .max(1);
+        .unwrap();
 
         if last_matching_block + 1 < want_to_start_from {
             tracing::warn!(
@@ -1837,7 +1812,9 @@ fn determine_starting_block(
         (last_matching_block + 1).min(want_to_start_from)
     };
 
-    if desired_starting_block < state.block_range_available().start() + 1 {
+    if desired_starting_block > 0
+        && desired_starting_block < state.block_range_available().start() + 1
+    {
         // This may only happen with Compacted State. This means that the block we want to rerun was already compacted.
         // This can be fixed by manually removing the storage persistence - which will force the node to start from block 1.
 
