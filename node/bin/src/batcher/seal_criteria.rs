@@ -1,3 +1,4 @@
+use alloy::primitives::U256;
 use std::collections::HashSet;
 use zk_ee::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL};
 use zksync_os_batcher_metrics::BATCHER_METRICS;
@@ -40,7 +41,7 @@ impl BatchInfoAccumulator {
     }
 
     pub fn add(&mut self, block_output: &BlockOutput, replay_record: &ReplayRecord) -> &Self {
-        self.native_cycles += block_output.computational_native_used;
+        self.native_cycles += computational_native_used(block_output, replay_record);
         self.pubdata_bytes += block_output.pubdata.len() as u64;
         self.l2_to_l1_logs_count += block_output
             .tx_results
@@ -180,4 +181,28 @@ impl BatchInfoAccumulator {
             .pubdata_per_batch
             .observe(self.pubdata_bytes);
     }
+}
+
+// In some cases, zksync os incorrectly calculates `computational_native_used`
+// so we re-calculate it as `native_used - pubdata_used * native_per_pubdata`
+// and take maximum of what we computed locally and what zksync os returns.
+//
+// TODO: get rid of method and just use `block_output.computational_native_used` after v30 proving support is removed.
+fn computational_native_used(block_output: &BlockOutput, replay_record: &ReplayRecord) -> u64 {
+    let native_used = block_output
+        .tx_results
+        .iter()
+        .flatten()
+        .map(|tx| tx.computational_native_used)
+        .sum::<u64>();
+
+    let native_per_pubdata = replay_record.block_context.pubdata_price
+        / replay_record.block_context.native_price.max(U256::ONE);
+    let pubdata_native_used = native_per_pubdata
+        .saturating_mul(U256::from(block_output.pubdata.len()))
+        .saturating_to::<u64>();
+
+    let zksync_os_computational_native_used = block_output.computational_native_used;
+    let local_computational_native_used = native_used.saturating_sub(pubdata_native_used);
+    zksync_os_computational_native_used.max(local_computational_native_used)
 }
