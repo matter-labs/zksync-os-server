@@ -65,7 +65,7 @@ impl<Data> TreeBlockCache<Data> {
                 self.data.pop_front();
             }
 
-            if self.data.len() > 0 && first_block <= block_number{
+            if self.data.len() > 0 && first_block <= block_number {
                 self.first_block = Some(block_number);
             }
         }
@@ -130,6 +130,8 @@ impl LocalBatchDataCache {
             .range()
     }
 
+    /// NOTE: this method is called by user and should be called after careful consideration to not clean up 
+    /// the cache that can still be used
     pub fn remove_lower_than(&self, block_number: u64) {
         self.inner
             .lock()

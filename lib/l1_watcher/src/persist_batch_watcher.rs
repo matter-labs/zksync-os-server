@@ -195,7 +195,9 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     }
 
     fn reconstruct_local_batch(
-        pending: &PendingCommittedBatch,
+        batch_number: u64,
+        pubdata_mode: PubdataMode,
+        sl_chain_id: u64,
         blocks: &[LocalBatchBlockData],
     ) -> anyhow::Result<DiscoveredCommittedBatch> {
         let first = blocks
@@ -204,20 +206,23 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         let last = blocks
             .last()
             .context("cannot reconstruct committed batch from an empty block range")?;
-        let protocol_version = &first.record.protocol_version;
         for block in blocks.iter().skip(1) {
             anyhow::ensure!(
-                &block.record.protocol_version == protocol_version,
+                block.record.protocol_version == first.record.protocol_version,
                 "mismatched protocol versions in batch #{}: expected {}, found {}",
-                pending.discovered.number(),
-                protocol_version,
+                batch_number,
+                first.record.protocol_version,
                 block.record.protocol_version
+            );
+            anyhow::ensure!(
+                block.record.block_context.chain_id == first.record.block_context.chain_id,
+                "mismatched chain id in batch #{}, expected {}, found {}",
+                batch_number,
+                first.record.block_context.chain_id,
+                block.record.block_context.chain_id
             );
         }
 
-        let pubdata_mode = Self::pubdata_mode_from_scheme(
-            pending.extended_info.commit_info.l2_da_commitment_scheme,
-        )?;
         let (local_extended_info, _) = ExtendedCommitBatchInfo::build(
             blocks
                 .iter()
@@ -229,18 +234,19 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                     )
                 })
                 .collect(),
-            pending.extended_info.commit_info.chain_id,
-            pending.extended_info.commit_info.batch_number,
+            last.record.block_context.chain_id,
+            batch_number,
             pubdata_mode,
-            pending.extended_info.commit_info.sl_chain_id,
+            sl_chain_id,
             last.multichain_root,
-            protocol_version,
+            &last.record.protocol_version,
             &last.record.block_context.block_hashes.0,
         );
 
         Ok(DiscoveredCommittedBatch {
             batch_info: local_extended_info.into_stored(),
-            block_range: pending.discovered.block_range.clone(),
+            block_range: first.record.block_context.block_number
+                ..=last.record.block_context.block_number,
         })
     }
 
@@ -255,7 +261,15 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         };
 
         let blocks = cache.wait_for_range(discovered.block_range.clone()).await?;
-        let local_batch = Self::reconstruct_local_batch(pending, &blocks)?;
+        let local_batch = Self::reconstruct_local_batch(
+            pending.discovered.number(),
+            Self::pubdata_mode_from_scheme(
+                pending.extended_info.commit_info.l2_da_commitment_scheme,
+            )?,
+            pending.extended_info.commit_info.sl_chain_id,
+            &blocks,
+        )?;
+
         if local_batch != *discovered {
             tracing::error!(
                 batch_number = discovered.number(),
@@ -361,11 +375,22 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             }
             tracing::debug!(batch_number, "discovered committed batch");
             let committed_batch = self.parse_committed_batch(provider, report, log).await?;
+
+            let last_block_number = committed_batch.discovered.last_block_number();
+
             self.verify_committed_batch(&committed_batch)
                 .await
                 .map_err(L1WatcherError::Other)?;
 
             self.committed_batches.insert(batch_number, committed_batch);
+
+            if let Some(cache) = &self.local_batch_data_cache {
+                // It should be safe to clean cache for already committed blocks,
+                // as the only other component that depend on cache is batch verifier
+                // which needs uncommited batches
+                cache.remove_lower_than(last_block_number + 1);
+            }
+
             self.last_processed_commit_batch = batch_number;
         }
         Ok(())
@@ -407,7 +432,6 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                     if let Some(committed_batch) = self.committed_batches.remove(&batch_number) {
                         Self::verify_execute_matches_committed_batch(&committed_batch, &execute)
                             .map_err(L1WatcherError::Other)?;
-                        let last_block_number = committed_batch.discovered.last_block_number();
                         tracing::debug!(
                             batch_number,
                             ?batch_hash,
@@ -419,9 +443,6 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                                 log.block_number.expect("Missing block number in log"),
                             ),
                         });
-                        if let Some(cache) = &self.local_batch_data_cache {
-                            cache.remove_lower_than(last_block_number + 1);
-                        }
                     } else if self.last_processed_commit_batch == self.last_persisted_batch_on_start
                     {
                         // No `ReportCommittedBatchRangeZKsyncOS` event was processed yet, it is very likely that the batch is legacy
