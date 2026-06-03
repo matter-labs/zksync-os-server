@@ -5,9 +5,9 @@ use async_trait::async_trait;
 use std::cmp::Ordering;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_provider::NodeProvider;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::ProtocolSemanticVersion;
 
 /// Receives Batches with proofs - potentially with incompatible protocol version.

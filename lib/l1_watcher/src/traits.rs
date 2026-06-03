@@ -1,8 +1,8 @@
 use crate::watcher::L1WatcherError;
 use alloy::primitives::B256;
-use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
+use zksync_os_provider::NodeProvider;
 
 /// A "raw" event processor that works with decoded logs.
 /// Provides more flexibility compared to [`ProcessL1Event`], but requires the author

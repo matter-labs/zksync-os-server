@@ -1,11 +1,11 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{BlockUpdates, CommittedBatchProvider, L1WatcherConfig, ProcessL1Event, util};
 use alloy::providers::Provider;
-use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::Log;
 use tokio::sync::watch;
 use zksync_os_contract_interface::IExecutor::BlockExecution;
 use zksync_os_contract_interface::ZkChain;
+use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::WriteFinality;
 
 /// Watches settlement-layer execution events and advances the executed finality frontier.

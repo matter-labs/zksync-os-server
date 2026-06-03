@@ -56,7 +56,6 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
-use zksync_os_provider::NodeProvider;
 use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{
@@ -99,6 +98,7 @@ use zksync_os_network::service::{NetworkService, PeerVerifyBatch, PeerVerifyBatc
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
+use zksync_os_provider::NodeProvider;
 use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, init_consensus,
     loopback_consensus,

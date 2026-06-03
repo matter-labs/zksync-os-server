@@ -1,5 +1,4 @@
 use alloy::primitives::ruint::FromUintError;
-use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
@@ -13,6 +12,7 @@ use zksync_os_contract_interface::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
 use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::IndexedInteropRoot;
 
 use crate::sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};

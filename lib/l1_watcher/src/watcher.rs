@@ -2,9 +2,9 @@ use crate::metrics::METRICS;
 use crate::{BlockBoundary, BlockUpdates, L1WatcherConfig, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
-use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
 use tokio::sync::watch;
+use zksync_os_provider::NodeProvider;
 
 /// An abstract watcher for events.
 /// Handles polling for new blocks and extracting logs,

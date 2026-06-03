@@ -1,13 +1,13 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{BlockUpdates, L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, ChainId, U256};
-use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use tokio::sync::watch;
 use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
 use zksync_os_contract_interface::{Bridgehub, ServerNotifier::MigrateToGateway, ZkChain};
 use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::SystemTxEnvelope;
 
 /// Watches for both `MigrateToGateway` and `MigrateFromGateway` events on L1 in a single

@@ -2,8 +2,8 @@ use crate::metrics::{METRICS, OperationResult, OperationResultLabels};
 use alloy::network::{Ethereum, TransactionBuilder};
 use alloy::primitives::Address;
 use alloy::primitives::utils::format_ether;
-use alloy::providers::ext::DebugApi;
 use alloy::providers::Provider;
+use alloy::providers::ext::DebugApi;
 use alloy::rpc::types::TransactionReceipt;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use anyhow::Context;
@@ -12,7 +12,6 @@ use num::{BigUint, ToPrimitive};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
-use zksync_os_provider::{NodeProvider, EthWalletProvider};
 use zksync_os_contract_interface::{
     IChainAdminOwnable::{self, IChainAdminOwnableInstance},
     IERC20, ZkChain,
@@ -24,6 +23,7 @@ use zksync_os_external_price_api::{
     APIToken, ExternalPriceApiClientConfig, PriceApiClient, ZK_L1_ADDRESS,
 };
 use zksync_os_operator_signer::SignerConfig;
+use zksync_os_provider::{EthWalletProvider, NodeProvider};
 use zksync_os_types::{TokenApiRatio, TokenPricesForFees};
 
 mod metrics;

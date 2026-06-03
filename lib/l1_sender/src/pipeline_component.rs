@@ -3,10 +3,10 @@ use crate::config::L1SenderConfig;
 use alloy::primitives::Address;
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
-use zksync_os_provider::NodeProvider;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_provider::NodeProvider;
 
 /// Generic L1 Sender pipeline component
 /// Can be used for commit, prove, or execute operations

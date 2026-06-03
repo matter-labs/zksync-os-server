@@ -1,10 +1,10 @@
 use crate::watcher::L1Watcher;
 use crate::{BlockUpdates, L1WatcherConfig, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
-use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::ValueOrArray;
 use std::collections::VecDeque;
 use tokio::sync::watch;
+use zksync_os_provider::NodeProvider;
 
 /// Description of a single settlement-layer segment that [`SlAwareL1Watcher`] should scan, in
 /// isolation, before advancing to the next one. `end_block = None` marks the open-ended (live)

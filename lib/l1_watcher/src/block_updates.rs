@@ -1,10 +1,10 @@
 use alloy::eips::BlockId;
 use alloy::primitives::BlockNumber;
 use alloy::providers::Provider;
-use zksync_os_provider::NodeProvider;
 use reth_tasks::Runtime;
 use std::time::Duration;
 use tokio::sync::watch;
+use zksync_os_provider::NodeProvider;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockBoundary {

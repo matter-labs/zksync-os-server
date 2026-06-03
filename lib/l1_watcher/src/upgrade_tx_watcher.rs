@@ -7,7 +7,6 @@ use crate::{BlockUpdates, L1WatcherConfig, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
 use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
 use alloy::providers::Provider;
-use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use blake2::{Blake2s256, Digest};
@@ -20,6 +19,7 @@ use zksync_os_contract_interface::ServerNotifier::UpgradeTimestampUpdated;
 use zksync_os_contract_interface::is_method_missing;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::{
     L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
     UpgradeMetadata,

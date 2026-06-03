@@ -18,10 +18,10 @@ use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::{TransactionInput, TransactionReceipt, TransactionRequest};
 use anyhow::Context;
-use zksync_os_provider::NodeProvider;
 use zksync_os_alloy_ext::provider::ZksyncApi as _;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_provider::NodeProvider;
 use zksync_os_server::config::Config;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, ProtocolSemanticVersion, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,

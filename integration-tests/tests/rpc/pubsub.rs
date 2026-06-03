@@ -8,11 +8,11 @@ use alloy::rpc::types::{Filter, Header, Log, Transaction, TransactionRequest};
 use alloy::sol_types::SolEvent;
 use futures::StreamExt;
 use tokio::time::error::Elapsed;
-use zksync_os_provider::NodeProvider;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::contracts::EventEmitter::{EventEmitterInstance, TestEvent};
 use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
+use zksync_os_provider::NodeProvider;
 
 trait PubsubSuite: Sized {
     type Expected: RpcRecv + PartialEq;

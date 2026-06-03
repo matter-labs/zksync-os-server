@@ -15852,7 +15852,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_provider"
-version = "0.20.4"
+version = "0.20.5"
 dependencies = [
  "alloy",
  "anyhow",

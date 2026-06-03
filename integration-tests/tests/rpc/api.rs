@@ -7,7 +7,6 @@ use alloy::sol_types::SolEvent;
 use anyhow::Context as _;
 use regex::Regex;
 use std::time::Duration;
-use zksync_os_provider::NodeProvider;
 use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::IExecutor::BlockCommit;
 use zksync_os_contract_interface::l1_discovery::L1State;
@@ -17,6 +16,7 @@ use zksync_os_integration_tests::contracts::{Counter, EventEmitter};
 use zksync_os_integration_tests::{
     CURRENT_TO_L1, NEXT_TO_GATEWAY, TestEnvironment, Tester, test_multisetup,
 };
+use zksync_os_provider::NodeProvider;
 use zksync_os_rpc_api::types::BatchStorageProof;
 use zksync_os_server::config::FeeConfig;
 

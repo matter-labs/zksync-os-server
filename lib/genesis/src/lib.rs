@@ -3,7 +3,6 @@ use alloy::eips::eip1559::INITIAL_BASE_FEE;
 use alloy::hex;
 use alloy::primitives::{Address, B64, B256, Bloom, Sealable, Sealed, U256};
 use alloy::providers::Provider;
-use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
@@ -20,6 +19,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
+use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::BlockContext;
 use zksync_os_types::{ConfigFormat, ExecutionVersion, L1UpgradeEnvelope, ProtocolSemanticVersion};
 

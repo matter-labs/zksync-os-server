@@ -3,7 +3,6 @@ use crate::{BlockUpdates, L1WatcherConfig, ProcessL1Event, util};
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
 use alloy::providers::Provider;
-use zksync_os_provider::NodeProvider;
 use alloy::rpc::types::Log;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +10,7 @@ use tokio::sync::watch;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_mempool::subpools::l1::L1Subpool;
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::L1PriorityEnvelope;
 
 /// Watches L1 priority transaction events and feeds them into the L1 transaction subpool.

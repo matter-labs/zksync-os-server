@@ -6,10 +6,10 @@ use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256, address};
 use alloy::providers::Provider;
 use anyhow::Context;
-use zksync_os_provider::NodeProvider;
 use backon::{ConstantBuilder, Retryable};
 use std::fmt::Debug;
 use std::time::Duration;
+use zksync_os_provider::NodeProvider;
 
 /// Standard L2 bridgehub address — present at the same well-known address on every Gateway.
 pub const L2_BRIDGEHUB_ADDRESS: Address = address!("0x0000000000000000000000000000000000010002");
