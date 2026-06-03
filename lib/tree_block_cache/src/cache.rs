@@ -50,8 +50,12 @@ impl<Data> TreeBlockCache<Data> {
 
     /// Currently cached block-number range (inclusive bounds), or `None` if empty.
     pub fn range(&self) -> Option<(u64, u64)> {
-        self.first_block
-            .map(|block| (block, block + self.data.len() as u64 - 1))
+        if self.data.is_empty() {
+            None
+        } else {
+            self.first_block
+                .map(|block| (block, block + self.data.len() as u64 - 1))
+        }
     }
 
     /// Removes all blocks lower than the given block number.
@@ -65,7 +69,9 @@ impl<Data> TreeBlockCache<Data> {
                 self.data.pop_front();
             }
 
-            if !self.data.is_empty() && first_block <= block_number {
+            if self.data.is_empty() {
+                self.first_block = None;
+            } else if first_block <= block_number {
                 self.first_block = Some(block_number);
             }
         }
@@ -75,6 +81,24 @@ impl<Data> TreeBlockCache<Data> {
 impl<Data> Default for TreeBlockCache<Data> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TreeBlockCache;
+
+    #[test]
+    fn removing_all_blocks_resets_cache_range() {
+        let mut cache = TreeBlockCache::new();
+        cache.insert(1, "block 1").unwrap();
+
+        cache.remove_lower_then(2);
+
+        assert_eq!(cache.range(), None);
+        cache.insert(2, "block 2").unwrap();
+        assert_eq!(cache.range(), Some((2, 2)));
+        assert_eq!(cache.get(2), Some(&"block 2"));
     }
 }
 
