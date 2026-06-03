@@ -253,13 +253,13 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         })
     }
 
-    /// Verifies committed batch data against locally replayed blocks. If there is no local cache configured - return Ok as is
+    /// Verifies committed batch data against local replay. Used only on external nodes.
     async fn verify_committed_batch(&self, pending: &PendingCommittedBatch) -> anyhow::Result<()> {
         let discovered = &pending.discovered;
         let Some(cache) = &self.local_batch_data_cache else {
             tracing::debug!(
-                batch_number = discovered.number(),
-                "local batch data cache is not configured; skipping local batch reconstruction"
+                "local batch data cache is not configured; skipping local batch #{} reconstruction",
+                discovered.number()
             );
             return Ok(());
         };
@@ -277,10 +277,10 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
         if local_batch != *discovered {
             tracing::error!(
-                batch_number = discovered.number(),
-                ?local_batch,
-                committed_batch = ?discovered,
-                "locally reconstructed batch data does not match committed batch data"
+                "locally reconstructed batch #{} does not match committed batch data: local={:?}, committed={:?}",
+                discovered.number(),
+                local_batch,
+                discovered
             );
             anyhow::bail!(
                 "locally reconstructed batch #{} does not match committed batch data",
@@ -289,10 +289,10 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         }
 
         tracing::debug!(
-            batch_number = discovered.number(),
-            first_block = discovered.first_block_number(),
-            last_block = discovered.last_block_number(),
-            "verified committed batch against local replayed data"
+            "verified committed batch #{} against local replayed data, blocks {}..={}",
+            discovered.number(),
+            discovered.first_block_number(),
+            discovered.last_block_number()
         );
         Ok(())
     }
