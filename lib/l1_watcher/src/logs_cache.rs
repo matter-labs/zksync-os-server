@@ -205,7 +205,7 @@ impl LogsCache {
             let mut recent = self.recent.write().await;
             let capacity = recent.capacity;
             *recent = RecentLogs::new(capacity);
-            METRICS.logs_cache_approx_bytes[&self.metric_labels].set(0);
+            METRICS.logs_cache_approx_memory[&self.metric_labels].set(0);
         }
 
         let cached_logs = if let (Some(from_block), Some(to_block)) = filter.extract_block_range() {
@@ -302,7 +302,7 @@ impl LogsCache {
 
             recent.push_head(block_number, block.header.hash, logs)?;
             METRICS.logs_cache_blocks_loaded[&self.metric_labels].inc();
-            METRICS.logs_cache_approx_bytes[&self.metric_labels].set(recent.approx_bytes);
+            METRICS.logs_cache_approx_memory[&self.metric_labels].set(recent.approx_bytes);
             Ok(())
         })
     }

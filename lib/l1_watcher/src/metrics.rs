@@ -16,7 +16,7 @@ pub struct L1Metrics {
     pub logs_cache_fallbacks: Family<LogsCacheLabels, Counter>,
     pub logs_cache_blocks_loaded: Family<LogsCacheLabels, Counter>,
     #[metrics(unit = Unit::Bytes)]
-    pub logs_cache_approx_bytes: Family<LogsCacheLabels, Gauge<usize>>,
+    pub logs_cache_approx_memory: Family<LogsCacheLabels, Gauge<usize>>,
 }
 
 #[vise::register]
