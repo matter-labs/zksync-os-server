@@ -193,7 +193,7 @@ fn computational_native_used(block_output: &BlockOutput, replay_record: &ReplayR
         .tx_results
         .iter()
         .flatten()
-        .map(|tx| tx.computational_native_used)
+        .map(|tx| tx.native_used)
         .sum::<u64>();
 
     let native_per_pubdata = replay_record.block_context.pubdata_price
