@@ -130,7 +130,7 @@ impl LocalBatchDataCache {
             .range()
     }
 
-    /// NOTE: this method is called by user and should be called after careful consideration to not clean up 
+    /// NOTE: this method is called by user and should be called after careful consideration to not clean up
     /// the cache that can still be used
     pub fn remove_lower_than(&self, block_number: u64) {
         self.inner
