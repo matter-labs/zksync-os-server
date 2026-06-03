@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.20.5](https://github.com/matter-labs/zksync-os-server/compare/v0.20.4...v0.20.5) (2026-06-02)
+
+
+### Features
+
+* S3 replay archive implementation ([#1319](https://github.com/matter-labs/zksync-os-server/issues/1319)) ([4d522d4](https://github.com/matter-labs/zksync-os-server/commit/4d522d40080cc79857bfa7ef6ca0c93fbcdb8d64))
+* use simulateV1 for gas limits ([#1308](https://github.com/matter-labs/zksync-os-server/issues/1308)) ([f1aca77](https://github.com/matter-labs/zksync-os-server/commit/f1aca77356960105fa5766931ee616c741e072ea))
+* **watcher:** Separate value for finalized block polling ([#1342](https://github.com/matter-labs/zksync-os-server/issues/1342)) ([de4a84f](https://github.com/matter-labs/zksync-os-server/commit/de4a84f875218d082e9d0c98b4576b2af8d97277))
+
+
+### Bug Fixes
+
+* **alloy:** fallback to eth_getBlockByNumber with old behaviour ([#1338](https://github.com/matter-labs/zksync-os-server/issues/1338)) ([3653b37](https://github.com/matter-labs/zksync-os-server/commit/3653b37163ac0c33ea50fc5ffd86b8767d1525fe))
+
 ## [0.20.4](https://github.com/matter-labs/zksync-os-server/compare/v0.20.3...v0.20.4) (2026-05-26)
 
 

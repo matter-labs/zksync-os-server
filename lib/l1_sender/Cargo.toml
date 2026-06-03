@@ -11,6 +11,7 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_alloy_ext.workspace = true
+zksync_os_provider.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_observability.workspace = true
 zksync_os_pipeline.workspace = true

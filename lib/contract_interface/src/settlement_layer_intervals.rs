@@ -1,9 +1,10 @@
 use crate::{Bridgehub, IChainAssetHandler, ZkChain, is_method_missing};
 use alloy::primitives::{Address, U256};
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::Provider;
 use anyhow::Context;
 use std::fmt;
 use std::sync::Arc;
+use zksync_os_provider::NodeProvider;
 
 /// Settlement layer that a chain was committing to during a given batch range.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +34,7 @@ pub struct SettlementLayerInterval {
     pub first_batch: u64,
     pub last_batch: Option<u64>,
     /// Diamond proxy on `settlement_layer`.
-    pub proxy: ZkChain<DynProvider>,
+    pub proxy: ZkChain<NodeProvider>,
 }
 
 impl fmt::Display for SettlementLayerInterval {
@@ -75,8 +76,8 @@ impl SettlementLayerIntervals {
     /// chain that the configured `gateway_provider` cannot serve.
     pub async fn discover(
         chain_asset_handler: Address,
-        diamond_proxy_l1: ZkChain<DynProvider>,
-        gateway_provider: Option<DynProvider>,
+        diamond_proxy_l1: ZkChain<NodeProvider>,
+        gateway_provider: Option<NodeProvider>,
         l2_chain_id: u64,
     ) -> anyhow::Result<Self> {
         let raw_intervals = find_settlement_layer_intervals(
@@ -190,7 +191,7 @@ impl SettlementLayerIntervals {
 /// - `MAX_ALLOWED_NUMBER_OF_MIGRATIONS = 2` on-chain, so at most two cycles are supported.
 async fn find_settlement_layer_intervals(
     chain_asset_handler: Address,
-    provider: DynProvider,
+    provider: NodeProvider,
     chain_id: u64,
 ) -> anyhow::Result<Vec<RawSettlementLayerInterval>> {
     let cah = IChainAssetHandler::new(chain_asset_handler, provider);

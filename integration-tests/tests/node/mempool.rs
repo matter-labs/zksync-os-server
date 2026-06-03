@@ -6,9 +6,9 @@ use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use futures::FutureExt;
 use std::time::Duration;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
+use zksync_os_provider::EthWalletProvider;
 use zksync_os_server::config::FeeConfig;
 
 #[test_multisetup([CURRENT_TO_L1])]
