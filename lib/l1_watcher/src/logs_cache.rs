@@ -1,6 +1,6 @@
 use crate::{BlockUpdates, metrics::METRICS};
 use alloy::eips::BlockNumberOrTag;
-use alloy::primitives::{B256, BlockNumber};
+use alloy::primitives::{B256, BlockNumber, Bloom};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::transports::{TransportErrorKind, TransportResult};
@@ -162,7 +162,7 @@ impl LogsCache {
         if let Err(err) = self.synchronize_if_needed().await {
             tracing::warn!(
                 ?err,
-                "recent logs cache synchronization failed; clearing cache"
+                "Recent logs cache synchronization failed; Clearing cache & not using it for this request."
             );
             let mut recent = self.recent.write().await;
             let capacity = recent.capacity;
@@ -239,9 +239,14 @@ impl LogsCache {
                 .provider
                 .get_logs(&Filter::new().at_block_hash(block.header.hash))
                 .await?;
-            // TODO: A very rare corner case is introduced here.
+            // A very rare corner case is introduced here.
             // We get `block`. Reorg happens before we get `logs`. Some RPCs would return
             // empty list(instead of proper logs) or an error.
+            if logs.is_empty() && block.header.logs_bloom != Bloom::ZERO {
+                return TransportError(TransportErrorKind::custom_str(
+                    "RPC returned empty logs, but the block has logs. Most likely due to reorg.",
+                ));
+            }
 
             // Reorg check: our cached parent hash doesn't match the block's parent_hash.
             let parent_hash_mismatch = has_parent
