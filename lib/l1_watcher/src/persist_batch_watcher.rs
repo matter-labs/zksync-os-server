@@ -183,6 +183,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         })
     }
 
+    /// Converts an on-chain DA scheme into the local pubdata mode.
     fn pubdata_mode_from_scheme(scheme: DACommitmentScheme) -> anyhow::Result<PubdataMode> {
         match scheme {
             DACommitmentScheme::EmptyNoDA => Ok(PubdataMode::Validium),
@@ -194,6 +195,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         }
     }
 
+    /// Rebuilds committed batch data from locally replayed blocks.
     fn reconstruct_local_batch(
         batch_number: u64,
         pubdata_mode: PubdataMode,
@@ -250,6 +252,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         })
     }
 
+    /// Verifies committed batch data against locally replayed blocks. If there is no local cache configured - return Ok as is
     async fn verify_committed_batch(&self, pending: &PendingCommittedBatch) -> anyhow::Result<()> {
         let discovered = &pending.discovered;
         let Some(cache) = &self.local_batch_data_cache else {
@@ -292,6 +295,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         Ok(())
     }
 
+    /// Checks that an execute event matches the discovered commit data.
     fn verify_execute_matches_committed_batch(
         pending: &PendingCommittedBatch,
         execute: &BlockExecution,

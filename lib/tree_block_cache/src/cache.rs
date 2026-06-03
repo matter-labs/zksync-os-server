@@ -38,6 +38,7 @@ impl<Data> TreeBlockCache<Data> {
         Ok(())
     }
 
+    /// Returns cached data for a block, if it is still retained.
     pub fn get(&self, block_number: u64) -> Option<&Data> {
         if let Some((first_block, last_block)) = self.range()
             && first_block <= block_number
@@ -124,10 +125,12 @@ pub struct LocalBatchDataCache {
 }
 
 impl LocalBatchDataCache {
+    /// Creates an empty shared local batch data cache.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Stores replayed block data and wakes waiters for newly available ranges.
     pub fn insert(&self, tree_block: TreeBlock, multichain_root: B256) -> anyhow::Result<()> {
         let block_number = tree_block.record.block_context.block_number;
         let data = LocalBatchBlockData {
@@ -146,6 +149,7 @@ impl LocalBatchDataCache {
         Ok(())
     }
 
+    /// Returns the retained block-number range, if any.
     pub fn range(&self) -> Option<(u64, u64)> {
         self.inner
             .lock()
@@ -154,8 +158,7 @@ impl LocalBatchDataCache {
             .range()
     }
 
-    /// NOTE: this method is called by user and should be called after careful consideration to not clean up
-    /// the cache that can still be used
+    /// Evicts cached blocks below `block_number`.
     pub fn remove_lower_than(&self, block_number: u64) {
         self.inner
             .lock()
@@ -164,6 +167,7 @@ impl LocalBatchDataCache {
             .remove_lower_then(block_number);
     }
 
+    /// Returns a complete cached block range, or `None` if it is not fully available yet.
     pub fn get_range(
         &self,
         range: RangeInclusive<u64>,
@@ -199,6 +203,7 @@ impl LocalBatchDataCache {
         Ok(Some(result))
     }
 
+    /// Waits until a complete block range is available in the cache.
     pub async fn wait_for_range(
         &self,
         range: RangeInclusive<u64>,
