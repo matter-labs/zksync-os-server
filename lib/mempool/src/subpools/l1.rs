@@ -72,6 +72,7 @@ impl L1Subpool {
     pub async fn on_canonical_state_change(
         &self,
         txs: Vec<&L1PriorityEnvelope>,
+        _strict_subpool_cleanup: bool,
     ) -> Option<L1TxSerialId> {
         if txs.is_empty() {
             return None;
