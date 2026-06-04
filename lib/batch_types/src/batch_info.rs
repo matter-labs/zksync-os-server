@@ -29,6 +29,25 @@ pub struct ExtendedCommitBatchInfo {
     pub protocol_version: ProtocolSemanticVersion,
 }
 
+#[derive(Debug, Clone)]
+pub struct CanonicalBatchCommitData {
+    pub first_block_number: u64,
+    pub last_block_number: u64,
+    pub first_block_timestamp: u64,
+    pub last_block_timestamp: u64,
+    pub new_state_commitment: B256,
+    pub da_commitment: B256,
+    pub number_of_layer1_txs: u64,
+    pub number_of_layer2_txs: u64,
+    pub priority_operations_hash: B256,
+    pub dependency_roots_rolling_hash: B256,
+    pub l2_to_l1_logs_root_hash: B256,
+    pub upgrade_tx_hash: Option<B256>,
+    pub chain_id: u64,
+    pub sl_chain_id: u64,
+    pub pubdata: Vec<u8>,
+}
+
 impl ExtendedCommitBatchInfo {
     #[allow(clippy::too_many_arguments)]
     pub fn build(
@@ -177,6 +196,49 @@ impl ExtendedCommitBatchInfo {
             },
             da_fields.blob_sidecar,
         )
+    }
+
+    pub fn build_from_canonical_output(
+        batch_number: u64,
+        pubdata_mode: PubdataMode,
+        protocol_version: &ProtocolSemanticVersion,
+        batch: CanonicalBatchCommitData,
+    ) -> anyhow::Result<(Self, Option<BlobTransactionSidecar>)> {
+        let da_fields = calculate_da_fields(&batch.pubdata, pubdata_mode);
+        anyhow::ensure!(
+            da_fields.da_commitment == batch.da_commitment,
+            "canonical batch DA commitment mismatch: expected {}, got {}",
+            batch.da_commitment,
+            da_fields.da_commitment,
+        );
+
+        let commit_info = CommitBatchInfo {
+            batch_number,
+            new_state_commitment: batch.new_state_commitment,
+            number_of_layer1_txs: batch.number_of_layer1_txs,
+            number_of_layer2_txs: batch.number_of_layer2_txs,
+            priority_operations_hash: batch.priority_operations_hash,
+            dependency_roots_rolling_hash: batch.dependency_roots_rolling_hash,
+            l2_to_l1_logs_root_hash: batch.l2_to_l1_logs_root_hash,
+            l2_da_commitment_scheme: pubdata_mode.da_commitment_scheme(),
+            da_commitment: batch.da_commitment,
+            first_block_timestamp: batch.first_block_timestamp,
+            first_block_number: Some(batch.first_block_number),
+            last_block_timestamp: batch.last_block_timestamp,
+            last_block_number: Some(batch.last_block_number),
+            chain_id: batch.chain_id,
+            operator_da_input: da_fields.operator_da_input,
+            sl_chain_id: batch.sl_chain_id,
+        };
+
+        Ok((
+            Self {
+                commit_info,
+                upgrade_tx_hash: batch.upgrade_tx_hash,
+                protocol_version: protocol_version.clone(),
+            },
+            da_fields.blob_sidecar,
+        ))
     }
 
     /// Calculate keccak256 hash of BatchOutput part of public input

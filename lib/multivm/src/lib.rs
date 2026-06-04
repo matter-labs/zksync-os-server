@@ -30,6 +30,7 @@ macro_rules! into_block_output {
             account_diffs: $o.account_diffs,
             published_preimages: $o.published_preimages,
             pubdata: $o.pubdata,
+            pubdata_used: $o.pubdata.len() as u64,
             computational_native_used: $o.computational_native_used,
         }
     };

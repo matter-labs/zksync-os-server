@@ -104,12 +104,8 @@ fn main() {
         if package.name.as_str() != "forward_system" {
             continue;
         }
-        let tag = match parse_git_tag(&package.id) {
-            Ok(tag) => tag,
-            Err(err) => {
-                println!("cargo::error=failed to parse forward_system's git tag: {err}");
-                return;
-            }
+        let Ok(tag) = parse_git_tag(&package.id) else {
+            continue;
         };
 
         if let Some(proving_version) = proving_version_from_tag(&tag) {

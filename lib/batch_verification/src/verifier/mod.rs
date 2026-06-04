@@ -7,8 +7,10 @@ use block_cache::BlockCache;
 use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
-use zksync_os_batch_types::{BatchSignature, ExtendedCommitBatchInfo};
+use zksync_os_batch_types::{BatchSignature, CanonicalBatchCommitData, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
+use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
+use zksync_os_native_pig::generate_batch_run;
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
 };
@@ -16,6 +18,7 @@ use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
 use zksync_os_storage_api::{StateError, TreeBlock, read_multichain_root};
+use zksync_os_types::ProvingVersion;
 
 mod block_cache;
 mod metrics;
@@ -30,6 +33,7 @@ pub struct BatchVerificationResponder<Finality, ReadState> {
     signer: PrivateKeySigner,
     block_cache: BlockCache<Finality, TreeBlock>,
     read_state: ReadState,
+    merkle_tree: MerkleTree<RocksDBWrapper>,
     verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
 }
@@ -42,6 +46,8 @@ enum BatchVerificationError {
     BatchDataMismatch,
     #[error("State error: {0}")]
     State(#[from] StateError),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
 }
 
 impl<Finality: ReadFinality, ReadState: ReadStateHistory>
@@ -55,6 +61,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
         finality: Finality,
         l1_state: L1State,
         read_state: ReadState,
+        merkle_tree: MerkleTree<RocksDBWrapper>,
         verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
         outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
     ) -> Self {
@@ -76,6 +83,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             signer,
             block_cache: BlockCache::new(finality),
             read_state,
+            merkle_tree,
             verify_request_rx,
             outgoing_verify_results,
         }
@@ -109,22 +117,62 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
         let state_view = self.read_state.state_view_at(request.last_block_number)?;
         let multichain_root = read_multichain_root(state_view);
         let (_, last_replay_record, _) = blocks.last().unwrap();
+        let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
+        let proving_version =
+            ProvingVersion::try_from(protocol_version.clone()).map_err(anyhow::Error::from)?;
 
-        let (batch_info, _) = ExtendedCommitBatchInfo::build(
-            blocks
-                .iter()
-                .map(|(block_output, replay_record, tree)| {
-                    (*block_output, replay_record.transactions.as_slice(), tree)
-                })
-                .collect(),
-            self.chain_id,
-            request.batch_number,
-            request.pubdata_mode,
-            self.l1_state.sl_chain_id,
-            multichain_root,
-            &blocks.first().unwrap().1.protocol_version,
-            &last_replay_record.block_context.block_hashes.0,
-        );
+        let (batch_info, _) = if proving_version == ProvingVersion::V8 {
+            let native_batch_run = generate_batch_run(
+                proving_version,
+                &blocks
+                    .iter()
+                    .map(|(_, replay_record, _)| (*replay_record).clone())
+                    .collect::<Vec<_>>(),
+                &self.read_state,
+                self.merkle_tree.clone(),
+                request.pubdata_mode,
+            )
+            .map_err(anyhow::Error::from)?;
+            ExtendedCommitBatchInfo::build_from_canonical_output(
+                request.batch_number,
+                request.pubdata_mode,
+                &protocol_version,
+                CanonicalBatchCommitData {
+                    first_block_number: request.first_block_number,
+                    last_block_number: request.last_block_number,
+                    first_block_timestamp: native_batch_run.first_block_timestamp,
+                    last_block_timestamp: native_batch_run.last_block_timestamp,
+                    new_state_commitment: native_batch_run.new_state_commitment,
+                    da_commitment: native_batch_run.da_commitment,
+                    number_of_layer1_txs: native_batch_run.number_of_layer1_txs,
+                    number_of_layer2_txs: native_batch_run.number_of_layer2_txs,
+                    priority_operations_hash: native_batch_run.priority_operations_hash,
+                    dependency_roots_rolling_hash: native_batch_run.dependency_roots_rolling_hash,
+                    l2_to_l1_logs_root_hash: native_batch_run.l2_to_l1_logs_root_hash,
+                    upgrade_tx_hash: native_batch_run.upgrade_tx_hash,
+                    chain_id: native_batch_run.chain_id,
+                    sl_chain_id: native_batch_run.sl_chain_id,
+                    pubdata: native_batch_run.pubdata,
+                },
+            )
+            .map_err(anyhow::Error::from)?
+        } else {
+            ExtendedCommitBatchInfo::build(
+                blocks
+                    .iter()
+                    .map(|(block_output, replay_record, tree)| {
+                        (*block_output, replay_record.transactions.as_slice(), tree)
+                    })
+                    .collect(),
+                self.chain_id,
+                request.batch_number,
+                request.pubdata_mode,
+                self.l1_state.sl_chain_id,
+                multichain_root,
+                &protocol_version,
+                &last_replay_record.block_context.block_hashes.0,
+            )
+        };
 
         let expected_commit_data = normalized_commit_data(
             batch_info.commit_info.clone(),

@@ -379,7 +379,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     EXECUTION_METRICS.gas_per_block.observe(cumulative_gas_used);
     EXECUTION_METRICS
         .pubdata_per_block
-        .observe(output.pubdata.len() as u64);
+        .observe(output.pubdata_used);
     EXECUTION_METRICS
         .transactions_per_block
         .observe(executed_txs.len() as u64);
@@ -394,7 +394,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         "Block {block_number} ({label}) sealed because of {seal_reason:?} in block executor \
         with {tx_count} transactions ({purged_tx_count} purged) and {cumulative_gas_used} gas. \
         Block hash output: {block_hash_output:?}, canonical hash: {canonical_hash:?}. \
-        storage writes: {write_count}, unique reads: {unique_reads_count}, preimages: {preimages_count}, pubdata bytes: {pubdata_len}.",
+        storage writes: {write_count}, unique reads: {unique_reads_count}, preimages: {preimages_count}, pubdata bytes: {pubdata_used}.",
         block_number = output.header.number,
         label = command.metrics_label,
         tx_count = executed_txs.len(),
@@ -402,7 +402,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         canonical_hash = output.header.hash(),
         write_count = output.storage_writes.len(),
         preimages_count = output.published_preimages.len(),
-        pubdata_len = output.pubdata.len(),
+        pubdata_used = output.pubdata_used,
     );
 
     tracing::debug!(

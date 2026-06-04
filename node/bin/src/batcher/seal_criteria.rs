@@ -41,7 +41,7 @@ impl BatchInfoAccumulator {
 
     pub fn add(&mut self, block_output: &BlockOutput, replay_record: &ReplayRecord) -> &Self {
         self.native_cycles += block_output.computational_native_used;
-        self.pubdata_bytes += block_output.pubdata.len() as u64;
+        self.pubdata_bytes += block_output.pubdata_used;
         self.l2_to_l1_logs_count += block_output
             .tx_results
             .iter()

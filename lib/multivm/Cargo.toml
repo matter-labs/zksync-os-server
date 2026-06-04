@@ -13,7 +13,6 @@ build = "build.rs"
 
 [dependencies]
 zksync_os_interface.workspace = true
-zksync_os_storage_api.workspace = true
 zk_os_forward_system_0_1_2.workspace = true
 zk_os_forward_system_0_0_28.workspace = true
 zk_os_forward_system_0_2_8.workspace = true
@@ -26,7 +25,6 @@ alloy = { workspace = true, default-features = false, features = [
     "eips",
     "rlp",
 ] }
-tracing.workspace = true
 
 [build-dependencies]
 anyhow.workspace = true

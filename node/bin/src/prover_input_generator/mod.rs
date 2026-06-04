@@ -158,12 +158,24 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             .adapt_for_protocol_version(&replay_record.protocol_version)
             .da_commitment_scheme();
         let block_number = replay_record.block_context.block_number;
+        let proving_version = ProvingVersion::try_from(replay_record.protocol_version.clone())
+            .expect("invalid protocol version");
         tracing::debug!(
             block_number,
             "ProverInputGenerator started processing block {} with {} transactions",
             block_number,
             replay_record.transactions.len(),
         );
+        if proving_version == ProvingVersion::V8 {
+            let _ = result_tx.send(ProverBlock {
+                output: block_output,
+                record: replay_record,
+                prover_input: ProverInput::Fake,
+                tree_output: tree.output,
+            });
+            return result_rx;
+        }
+
         let versioned_tree = VersionedMerkleTree::new(self.merkle_tree.clone(), block_number - 1);
 
         let mut handle = tokio::task::spawn_blocking(move || {
@@ -306,6 +318,9 @@ fn compute_prover_input(
                 list_source,
             )
             .expect("proof gen failed")
+        }
+        ProvingVersion::V8 => {
+            unreachable!("V8 prover input is generated natively at batch seal time")
         }
     };
     let latency = prover_input_generation_latency.observe();
