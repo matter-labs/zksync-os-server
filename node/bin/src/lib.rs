@@ -402,7 +402,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_finalized_executed_batch: l1_state.last_finalized_executed_batch,
     });
 
-    // `starting_block` - the block number to go through the pipeline.
+    // `starting_block` - the first block to go through the pipeline. Invariant: a replay record for
+    // this block must already exist. Note that this holds for `starting_block=0` as genesis is
+    // always present in the system.
     let starting_block = if node_startup_state.l1_state.last_committed_batch > 0 {
         // todo: ideally this should be searched through p2p networking instead of RPC
         //       but too many things depend on this being initialized here right now
@@ -1780,15 +1782,15 @@ fn determine_starting_block(
                 .block_replay_storage_last_block
                 .saturating_sub(config.general_config.min_blocks_to_replay as u64),
             // We need to replay old unexecuted blocks to rebuild and execute the batches they are in
-            node_startup_state.last_l1_executed_block + 1,
+            node_startup_state.last_l1_executed_block,
             // Repositories' persistence may have fallen behind - we need to replay blocks to rebuild it
-            node_startup_state.repositories_persisted_block + 1,
+            node_startup_state.repositories_persisted_block,
             // In the current tree implementation this will always be ahead of `last_l1_executed_block`,
             // but this may change if we make tree persistence async (like elsewhere)
-            node_startup_state.tree_last_block + 1,
+            node_startup_state.tree_last_block,
             // For compacted state, we need to replay all blocks that were not persisted yet.
             // For FullDiffs state (default) - this is always ahead of `last_l1_executed_block`.
-            state.block_range_available().end() + 1,
+            *state.block_range_available().end(),
             // If block rebuild (aka block reversion) is configured, we should ensure we replay
             // all the blocks we are rebuilding
             config
@@ -1801,7 +1803,7 @@ fn determine_starting_block(
         .min()
         .unwrap();
 
-        if last_matching_block + 1 < want_to_start_from {
+        if last_matching_block < want_to_start_from {
             tracing::warn!(
                 last_matching_block,
                 want_to_start_from,
@@ -1809,9 +1811,10 @@ fn determine_starting_block(
             );
         }
 
-        (last_matching_block + 1).min(want_to_start_from)
+        last_matching_block.min(want_to_start_from)
     };
 
+    // Ignore genesis here as we never actually run it in sequencer
     if desired_starting_block > 0
         && desired_starting_block < state.block_range_available().start() + 1
     {
