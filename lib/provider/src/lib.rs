@@ -1,8 +1,8 @@
 //! The node's canonical Ethereum-network provider.
 //!
 //! [`NodeProvider`] is an object-safe, wallet-capable wrapper over
-//! [`alloy::providers::Provider<Ethereum>`] used everywhere the node talks to an L1, Gateway, or L2
-//! RPC. On top of the plain provider it caches per-address contract deployment blocks (see
+//! [`alloy::providers::Provider<N>`] (defaulting to `Ethereum`) used everywhere the node talks to
+//! an L1, Gateway, or L2 RPC. On top of the plain provider it caches per-address contract deployment blocks (see
 //! [`NodeProvider::deployment_block`]), so the many startup binary searches over L1 history can use
 //! a tight lower bound without each rediscovering it.
 
@@ -11,7 +11,7 @@ use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::eips::eip2930::AccessListResult;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::primitives::BlockResponse;
-use alloy::network::{Ethereum, EthereumWallet, Network};
+use alloy::network::{Ethereum, EthereumWallet, Network, NetworkWallet};
 use alloy::primitives::{
     Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, TxHash, U64, U128, U256,
 };
@@ -35,10 +35,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::OnceCell;
 
-/// A version of `Provider<Ethereum> + WalletProvider<Ethereum, Wallet = EthereumWallet>` that is
+/// A version of `Provider<N> + WalletProvider<N, Wallet = EthereumWallet>` that is
 /// object safe. Has a blanket implementation for the aforementioned constraints.
-pub trait EthWalletProvider: Provider<Ethereum> + 'static {
-    fn dyn_clone(&self) -> Box<dyn EthWalletProvider>;
+pub trait EthWalletProvider<N: Network>: Provider<N> + 'static {
+    fn dyn_clone(&self) -> Box<dyn EthWalletProvider<N>>;
 
     /// Get a reference to the underlying wallet.
     fn wallet(&self) -> &EthereumWallet;
@@ -47,20 +47,20 @@ pub trait EthWalletProvider: Provider<Ethereum> + 'static {
     fn wallet_mut(&mut self) -> &mut EthereumWallet;
 }
 
-impl<T> EthWalletProvider for T
+impl<N: Network, T> EthWalletProvider<N> for T
 where
-    T: Provider<Ethereum> + WalletProvider<Ethereum, Wallet = EthereumWallet> + Clone + 'static,
+    T: Provider<N> + WalletProvider<N, Wallet = EthereumWallet> + Clone + 'static,
 {
-    fn dyn_clone(&self) -> Box<dyn EthWalletProvider> {
+    fn dyn_clone(&self) -> Box<dyn EthWalletProvider<N>> {
         Box::new(self.clone())
     }
 
     fn wallet(&self) -> &EthereumWallet {
-        <Self as WalletProvider<Ethereum>>::wallet(self)
+        <Self as WalletProvider<N>>::wallet(self)
     }
 
     fn wallet_mut(&mut self) -> &mut EthereumWallet {
-        <Self as WalletProvider<Ethereum>>::wallet_mut(self)
+        <Self as WalletProvider<N>>::wallet_mut(self)
     }
 }
 
@@ -74,14 +74,14 @@ type DeploymentBlockCache = Arc<Mutex<HashMap<Address, Arc<OnceCell<u64>>>>>;
 /// `EthWalletProvider`. Also uses `Box` instead of `Arc` to make sure the wallets are mutable.
 ///
 /// Carries a shared [`DeploymentBlockCache`]; see [`NodeProvider::deployment_block`].
-pub struct NodeProvider {
-    inner: Box<dyn EthWalletProvider + 'static>,
+pub struct NodeProvider<N: Network = Ethereum> {
+    inner: Box<dyn EthWalletProvider<N> + 'static>,
     deployment_blocks: DeploymentBlockCache,
 }
 
-impl NodeProvider {
+impl<N: Network> NodeProvider<N> {
     /// Creates a new [`NodeProvider`] by erasing the type.
-    pub fn new<P: EthWalletProvider + 'static>(provider: P) -> Self {
+    pub fn new<P: EthWalletProvider<N> + 'static>(provider: P) -> Self {
         Self {
             inner: Box::new(provider),
             deployment_blocks: Arc::new(Mutex::new(HashMap::new())),
@@ -132,7 +132,7 @@ impl NodeProvider {
     }
 }
 
-impl Clone for NodeProvider {
+impl<N: Network> Clone for NodeProvider<N> {
     fn clone(&self) -> Self {
         NodeProvider {
             inner: self.inner.dyn_clone(),
@@ -141,7 +141,7 @@ impl Clone for NodeProvider {
     }
 }
 
-impl std::fmt::Debug for NodeProvider {
+impl<N: Network> std::fmt::Debug for NodeProvider<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("NodeProvider")
             .field(&"<dyn Provider>")
@@ -154,8 +154,8 @@ impl std::fmt::Debug for NodeProvider {
 //
 
 #[async_trait::async_trait]
-impl Provider<Ethereum> for NodeProvider {
-    fn root(&self) -> &RootProvider<Ethereum> {
+impl<N: Network> Provider<N> for NodeProvider<N> {
+    fn root(&self) -> &RootProvider<N> {
         self.inner.root()
     }
 
@@ -200,24 +200,21 @@ impl Provider<Ethereum> for NodeProvider {
         }
     }
 
-    fn call(&self, tx: <Ethereum as Network>::TransactionRequest) -> EthCall<Ethereum, Bytes> {
+    fn call(&self, tx: N::TransactionRequest) -> EthCall<N, Bytes> {
         self.inner.call(tx)
     }
 
     fn call_many<'req>(
         &self,
         bundles: &'req [Bundle],
-    ) -> EthCallMany<'req, Ethereum, Vec<Vec<EthCallResponse>>> {
+    ) -> EthCallMany<'req, N, Vec<Vec<EthCallResponse>>> {
         self.inner.call_many(bundles)
     }
 
     fn simulate<'req>(
         &self,
         payload: &'req SimulatePayload,
-    ) -> RpcWithBlock<
-        &'req SimulatePayload,
-        Vec<SimulatedBlock<<Ethereum as Network>::BlockResponse>>,
-    > {
+    ) -> RpcWithBlock<&'req SimulatePayload, Vec<SimulatedBlock<N::BlockResponse>>> {
         self.inner.simulate(payload)
     }
 
@@ -227,15 +224,12 @@ impl Provider<Ethereum> for NodeProvider {
 
     fn create_access_list<'a>(
         &self,
-        request: &'a <Ethereum as Network>::TransactionRequest,
-    ) -> RpcWithBlock<&'a <Ethereum as Network>::TransactionRequest, AccessListResult> {
+        request: &'a N::TransactionRequest,
+    ) -> RpcWithBlock<&'a N::TransactionRequest, AccessListResult> {
         self.inner.create_access_list(request)
     }
 
-    fn estimate_gas(
-        &self,
-        tx: <Ethereum as Network>::TransactionRequest,
-    ) -> EthCall<Ethereum, U64, u64> {
+    fn estimate_gas(&self, tx: N::TransactionRequest) -> EthCall<N, U64, u64> {
         self.inner.estimate_gas(tx)
     }
 
@@ -277,21 +271,15 @@ impl Provider<Ethereum> for NodeProvider {
         self.inner.get_balance(address)
     }
 
-    fn get_block(&self, block: BlockId) -> EthGetBlock<<Ethereum as Network>::BlockResponse> {
+    fn get_block(&self, block: BlockId) -> EthGetBlock<N::BlockResponse> {
         self.inner.get_block(block)
     }
 
-    fn get_block_by_hash(
-        &self,
-        hash: BlockHash,
-    ) -> EthGetBlock<<Ethereum as Network>::BlockResponse> {
+    fn get_block_by_hash(&self, hash: BlockHash) -> EthGetBlock<N::BlockResponse> {
         self.inner.get_block_by_hash(hash)
     }
 
-    fn get_block_by_number(
-        &self,
-        number: BlockNumberOrTag,
-    ) -> EthGetBlock<<Ethereum as Network>::BlockResponse> {
+    fn get_block_by_number(&self, number: BlockNumberOrTag) -> EthGetBlock<N::BlockResponse> {
         self.inner.get_block_by_number(number)
     }
 
@@ -314,7 +302,7 @@ impl Provider<Ethereum> for NodeProvider {
     fn get_block_receipts(
         &self,
         block: BlockId,
-    ) -> ProviderCall<(BlockId,), Option<Vec<<Ethereum as Network>::ReceiptResponse>>> {
+    ) -> ProviderCall<(BlockId,), Option<Vec<N::ReceiptResponse>>> {
         self.inner.get_block_receipts(block)
     }
 
@@ -336,7 +324,7 @@ impl Provider<Ethereum> for NodeProvider {
 
     async fn watch_full_pending_transactions(
         &self,
-    ) -> TransportResult<FilterPollerBuilder<<Ethereum as Network>::TransactionResponse>> {
+    ) -> TransportResult<FilterPollerBuilder<N::TransactionResponse>> {
         self.inner.watch_full_pending_transactions().await
     }
 
@@ -382,7 +370,7 @@ impl Provider<Ethereum> for NodeProvider {
     fn get_transaction_by_hash(
         &self,
         hash: TxHash,
-    ) -> ProviderCall<(TxHash,), Option<<Ethereum as Network>::TransactionResponse>> {
+    ) -> ProviderCall<(TxHash,), Option<N::TransactionResponse>> {
         self.inner.get_transaction_by_hash(hash)
     }
 
@@ -390,7 +378,7 @@ impl Provider<Ethereum> for NodeProvider {
         &self,
         sender: Address,
         nonce: u64,
-    ) -> ProviderCall<(Address, U64), Option<<Ethereum as Network>::TransactionResponse>> {
+    ) -> ProviderCall<(Address, U64), Option<N::TransactionResponse>> {
         self.inner.get_transaction_by_sender_nonce(sender, nonce)
     }
 
@@ -398,7 +386,7 @@ impl Provider<Ethereum> for NodeProvider {
         &self,
         block_hash: B256,
         index: usize,
-    ) -> ProviderCall<(B256, Index), Option<<Ethereum as Network>::TransactionResponse>> {
+    ) -> ProviderCall<(B256, Index), Option<N::TransactionResponse>> {
         self.inner
             .get_transaction_by_block_hash_and_index(block_hash, index)
     }
@@ -416,8 +404,7 @@ impl Provider<Ethereum> for NodeProvider {
         &self,
         block_number: BlockNumberOrTag,
         index: usize,
-    ) -> ProviderCall<(BlockNumberOrTag, Index), Option<<Ethereum as Network>::TransactionResponse>>
-    {
+    ) -> ProviderCall<(BlockNumberOrTag, Index), Option<N::TransactionResponse>> {
         self.inner
             .get_transaction_by_block_number_and_index(block_number, index)
     }
@@ -445,15 +432,11 @@ impl Provider<Ethereum> for NodeProvider {
     fn get_transaction_receipt(
         &self,
         hash: TxHash,
-    ) -> ProviderCall<(TxHash,), Option<<Ethereum as Network>::ReceiptResponse>> {
+    ) -> ProviderCall<(TxHash,), Option<N::ReceiptResponse>> {
         self.inner.get_transaction_receipt(hash)
     }
 
-    async fn get_uncle(
-        &self,
-        tag: BlockId,
-        idx: u64,
-    ) -> TransportResult<Option<<Ethereum as Network>::BlockResponse>> {
+    async fn get_uncle(&self, tag: BlockId, idx: u64) -> TransportResult<Option<N::BlockResponse>> {
         self.inner.get_uncle(tag, idx).await
     }
 
@@ -480,7 +463,7 @@ impl Provider<Ethereum> for NodeProvider {
     async fn send_raw_transaction(
         &self,
         encoded_tx: &[u8],
-    ) -> TransportResult<PendingTransactionBuilder<Ethereum>> {
+    ) -> TransportResult<PendingTransactionBuilder<N>> {
         self.inner.send_raw_transaction(encoded_tx).await
     }
 
@@ -488,7 +471,7 @@ impl Provider<Ethereum> for NodeProvider {
         &self,
         encoded_tx: &[u8],
         conditional: TransactionConditional,
-    ) -> TransportResult<PendingTransactionBuilder<Ethereum>> {
+    ) -> TransportResult<PendingTransactionBuilder<N>> {
         self.inner
             .send_raw_transaction_conditional(encoded_tx, conditional)
             .await
@@ -496,29 +479,26 @@ impl Provider<Ethereum> for NodeProvider {
 
     async fn send_transaction(
         &self,
-        tx: <Ethereum as Network>::TransactionRequest,
-    ) -> TransportResult<PendingTransactionBuilder<Ethereum>> {
+        tx: N::TransactionRequest,
+    ) -> TransportResult<PendingTransactionBuilder<N>> {
         self.inner.send_transaction(tx).await
     }
 
     async fn send_tx_envelope(
         &self,
-        tx: <Ethereum as Network>::TxEnvelope,
-    ) -> TransportResult<PendingTransactionBuilder<Ethereum>> {
+        tx: N::TxEnvelope,
+    ) -> TransportResult<PendingTransactionBuilder<N>> {
         self.inner.send_tx_envelope(tx).await
     }
 
     async fn send_transaction_internal(
         &self,
-        tx: SendableTx<Ethereum>,
-    ) -> TransportResult<PendingTransactionBuilder<Ethereum>> {
+        tx: SendableTx<N>,
+    ) -> TransportResult<PendingTransactionBuilder<N>> {
         self.inner.send_transaction_internal(tx).await
     }
 
-    async fn sign_transaction(
-        &self,
-        tx: <Ethereum as Network>::TransactionRequest,
-    ) -> TransportResult<Bytes> {
+    async fn sign_transaction(&self, tx: N::TransactionRequest) -> TransportResult<Bytes> {
         self.inner.sign_transaction(tx).await
     }
 
@@ -546,15 +526,16 @@ impl Provider<Ethereum> for NodeProvider {
         self.inner.raw_request_dyn(method, params).await
     }
 
-    fn transaction_request(&self) -> <Ethereum as Network>::TransactionRequest {
+    fn transaction_request(&self) -> N::TransactionRequest {
         self.inner.transaction_request()
     }
 }
 
-impl EthWalletProvider for NodeProvider {
-    fn dyn_clone(&self) -> Box<dyn EthWalletProvider> {
-        self.inner.dyn_clone()
-    }
+impl<N: Network> WalletProvider<N> for NodeProvider<N>
+where
+    EthereumWallet: NetworkWallet<N>,
+{
+    type Wallet = EthereumWallet;
 
     fn wallet(&self) -> &EthereumWallet {
         self.inner.wallet()
