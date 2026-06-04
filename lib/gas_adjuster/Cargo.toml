@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_provider.workspace = true
 zksync_os_types.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["reqwest", "rpc-types", "providers"] }

@@ -9,10 +9,11 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::time::sleep;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
-use zksync_os_contract_interface::ZkChain;
-use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::StoredBatchInfo;
-use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
+use zksync_os_provider::ZkChain;
+use zksync_os_provider::l1_discovery::L1State;
+use zksync_os_provider::network::SettlementLayer;
+use zksync_os_provider::settlement_layer_intervals::SettlementLayerIntervals;
 
 const INIT_MAX_PARALLEL_BATCH_FETCHES: usize = 10;
 const WAIT_FOR_BATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -226,7 +227,7 @@ fn startup_batch_numbers(
 /// Resolves a committed batch from L1 by first finding the block that committed it and then
 /// decoding the corresponding stored batch data.
 async fn fetch_batch(
-    diamond_proxy_sl: &ZkChain,
+    diamond_proxy_sl: &ZkChain<SettlementLayer>,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<DiscoveredCommittedBatch> {

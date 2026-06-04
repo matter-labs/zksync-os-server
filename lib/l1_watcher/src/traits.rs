@@ -1,4 +1,5 @@
 use crate::watcher::L1WatcherError;
+use alloy::network::{Ethereum, Network};
 use alloy::primitives::B256;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
@@ -16,7 +17,7 @@ use zksync_os_provider::NodeProvider;
 ///
 /// This type is object-safe and can be used as a trait object.
 #[async_trait::async_trait]
-pub trait ProcessRawEvents: Send + Sync + 'static {
+pub trait ProcessRawEvents<N: Network = Ethereum>: Send + Sync + 'static {
     /// The name of this processor, used for metrics and logging.
     fn name(&self) -> &'static str;
 
@@ -40,16 +41,16 @@ pub trait ProcessRawEvents: Send + Sync + 'static {
     /// storing a stale provider reference; single-SL processors can ignore it.
     async fn process_raw_event(
         &mut self,
-        provider: &NodeProvider,
+        provider: &NodeProvider<N>,
         event: Log,
     ) -> Result<(), L1WatcherError>;
 }
 
 /// Blanket implementation of `ProcessRawEvents` for any type implementing `ProcessL1Event`.
 #[async_trait::async_trait]
-impl<T> ProcessRawEvents for T
+impl<T, N: Network> ProcessRawEvents<N> for T
 where
-    T: ProcessL1Event + Send + Sync + 'static,
+    T: ProcessL1Event<N> + Send + Sync + 'static,
 {
     fn name(&self) -> &'static str {
         T::NAME
@@ -70,7 +71,7 @@ where
 
     async fn process_raw_event(
         &mut self,
-        provider: &NodeProvider,
+        provider: &NodeProvider<N>,
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let sol_event = T::SolEvent::decode_log(&log.inner)?.data;
@@ -85,7 +86,7 @@ where
 /// Defines a single contract and single event type to process,
 /// and expects the event to be already decoded.
 #[async_trait::async_trait]
-pub trait ProcessL1Event {
+pub trait ProcessL1Event<N: Network = Ethereum> {
     const NAME: &'static str;
 
     /// What kind of Solidity event this processor looks for.
@@ -105,7 +106,7 @@ pub trait ProcessL1Event {
     /// [`ProcessRawEvents::process_raw_event`].
     async fn process_event(
         &mut self,
-        provider: &NodeProvider,
+        provider: &NodeProvider<N>,
         event: Self::WatchedEvent,
         log: Log,
     ) -> Result<(), L1WatcherError>;

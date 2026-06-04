@@ -4,20 +4,21 @@ use anyhow::Context as _;
 use async_trait::async_trait;
 use std::cmp::Ordering;
 use tokio::sync::mpsc;
-use zksync_os_contract_interface::ZkChain;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
+use zksync_os_provider::ZkChain;
+use zksync_os_provider::network::SettlementLayer;
 use zksync_os_types::ProtocolSemanticVersion;
 
 /// Receives Batches with proofs - potentially with incompatible protocol version.
 /// Makes sure that batches are only passed to L1 if batch version matches the current protocol version.
 #[derive(Debug)]
 pub struct UpgradeGatekeeper {
-    zk_chain_sl: ZkChain,
+    zk_chain_sl: ZkChain<SettlementLayer>,
 }
 
 impl UpgradeGatekeeper {
-    pub fn new(zk_chain_sl: ZkChain) -> Self {
+    pub fn new(zk_chain_sl: ZkChain<SettlementLayer>) -> Self {
         Self { zk_chain_sl }
     }
 

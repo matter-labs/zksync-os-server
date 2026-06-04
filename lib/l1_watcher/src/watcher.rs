@@ -1,5 +1,6 @@
 use crate::metrics::METRICS;
 use crate::{BlockBoundary, BlockUpdates, L1WatcherConfig, ProcessRawEvents};
+use alloy::network::{Ethereum, Network};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
@@ -12,8 +13,8 @@ use zksync_os_provider::NodeProvider;
 ///
 /// May be run unbounded (live tail) or bounded by `end_block` (used by
 /// [`SlAwareL1Watcher`](crate::SlAwareL1Watcher) to scan a closed segment to completion).
-pub struct L1Watcher {
-    provider: NodeProvider,
+pub struct L1Watcher<N: Network = Ethereum> {
+    provider: NodeProvider<N>,
     address: ValueOrArray<Address>,
     next_block: BlockNumber,
     /// `Some(eb)` makes the watcher exit `run` once `next_block > eb`. `None` runs forever.
@@ -21,20 +22,20 @@ pub struct L1Watcher {
     max_blocks_to_process: u64,
     block_boundary: BlockBoundary,
     block_updates: watch::Receiver<BlockUpdates>,
-    pub(crate) processor: Box<dyn ProcessRawEvents>,
+    pub(crate) processor: Box<dyn ProcessRawEvents<N>>,
 }
 
-impl L1Watcher {
+impl<N: Network> L1Watcher<N> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         config: L1WatcherConfig,
-        provider: NodeProvider,
+        provider: NodeProvider<N>,
         block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
         end_block: Option<BlockNumber>,
         l1_chain_id: u64,
-        processor: Box<dyn ProcessRawEvents>,
+        processor: Box<dyn ProcessRawEvents<N>>,
     ) -> anyhow::Result<Self> {
         let confirmations = if provider.get_chain_id().await? != l1_chain_id {
             // Gateway case, zero out confirmations.
@@ -57,12 +58,12 @@ impl L1Watcher {
 
     pub(crate) fn new_finalized(
         config: L1WatcherConfig,
-        provider: NodeProvider,
+        provider: NodeProvider<N>,
         block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
         end_block: Option<BlockNumber>,
-        processor: Box<dyn ProcessRawEvents>,
+        processor: Box<dyn ProcessRawEvents<N>>,
     ) -> Self {
         Self {
             provider,
@@ -77,7 +78,7 @@ impl L1Watcher {
     }
 }
 
-impl L1Watcher {
+impl<N: Network> L1Watcher<N> {
     /// Polls for new events.
     ///
     /// For unbounded watchers (`end_block = None`) this never returns; for bounded watchers
@@ -195,7 +196,7 @@ pub enum L1WatcherError {
     #[error(transparent)]
     Convert(anyhow::Error),
     #[error(transparent)]
-    Contract(#[from] zksync_os_contract_interface::Error),
+    Contract(#[from] zksync_os_provider::contracts::Error),
     #[error(transparent)]
     Other(anyhow::Error),
     #[error(

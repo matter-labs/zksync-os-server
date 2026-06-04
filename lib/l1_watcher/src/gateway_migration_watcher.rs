@@ -5,9 +5,10 @@ use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use tokio::sync::watch;
 use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
-use zksync_os_contract_interface::{Bridgehub, ServerNotifier::MigrateToGateway, ZkChain};
+use zksync_os_contract_interface::ServerNotifier::MigrateToGateway;
 use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::{Bridgehub, ZkChain};
 use zksync_os_types::SystemTxEnvelope;
 
 /// Watches for both `MigrateToGateway` and `MigrateFromGateway` events on L1 in a single

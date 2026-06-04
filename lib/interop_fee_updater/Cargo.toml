@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_provider.workspace = true
 alloy = { workspace = true, default-features = false, features = ["eips", "rpc-types", "network", "sol-types"] }
 anyhow.workspace = true
 num.workspace = true

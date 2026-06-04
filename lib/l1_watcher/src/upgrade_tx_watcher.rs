@@ -16,10 +16,11 @@ use zksync_os_contract_interface::IChainTypeManager::{
     NewProtocolVersion, NewUpgradeCutData, ProposedUpgrade,
 };
 use zksync_os_contract_interface::ServerNotifier::UpgradeTimestampUpdated;
-use zksync_os_contract_interface::is_method_missing;
-use zksync_os_contract_interface::{Bridgehub, ZkChain};
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::is_method_missing;
+use zksync_os_provider::network::SettlementLayer;
+use zksync_os_provider::{Bridgehub, ZkChain};
 use zksync_os_types::{
     L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
     UpgradeMetadata,
@@ -46,7 +47,7 @@ const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 pub struct L1UpgradeTxWatcher {
     l2_chain_id: ChainId,
     provider_l1: NodeProvider,
-    provider_sl: NodeProvider,
+    provider_sl: NodeProvider<SettlementLayer>,
     bridgehub_l1: Address,
     /// Address of the bytecode supplier contract on L1 (used to scan EVMBytecodePublished events)
     bytecode_supplier_address: Address,
@@ -68,7 +69,7 @@ impl L1UpgradeTxWatcher {
         l2_chain_id: ChainId,
         bridgehub_l1: Bridgehub,
         zk_chain_l1: ZkChain,
-        zk_chain_sl: ZkChain,
+        zk_chain_sl: ZkChain<SettlementLayer>,
         bytecode_supplier_address: Address,
         current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
@@ -257,15 +258,28 @@ impl L1UpgradeTxWatcher {
             get_upgrade_cut_data_block(&self.provider_sl, self.ctm_sl, raw_protocol_version).await?
         };
 
-        let target = match (l1_block, sl_block) {
-            (Some(b), _) if b != 0 => Some((&self.provider_l1, self.ctm_l1, b)),
-            (_, Some(b)) if b != 0 => Some((&self.provider_sl, self.ctm_sl, b)),
-            _ => None,
-        };
-
-        if let Some((provider, ctm_address, block)) = target {
-            return fetch_upgrade_cut_log_at(provider, ctm_address, raw_protocol_version, block)
+        // The L1 and SL providers have distinct network types, so dispatch per arm instead of
+        // binding a common `(provider, ctm, block)` tuple.
+        match (l1_block, sl_block) {
+            (Some(b), _) if b != 0 => {
+                return fetch_upgrade_cut_log_at(
+                    &self.provider_l1,
+                    self.ctm_l1,
+                    raw_protocol_version,
+                    b,
+                )
                 .await;
+            }
+            (_, Some(b)) if b != 0 => {
+                return fetch_upgrade_cut_log_at(
+                    &self.provider_sl,
+                    self.ctm_sl,
+                    raw_protocol_version,
+                    b,
+                )
+                .await;
+            }
+            _ => {}
         }
 
         // Neither CTM reports a cut data block; either we're on a pre-V31 CTM without this
@@ -733,8 +747,8 @@ pub enum UpgradeTxWatcherError {
 /// Returns `Some(block)` if the CTM exposes `upgradeCutDataBlock` (V31+), where `block == 0`
 /// means the mapping is empty for that version. Returns `None` if the method is missing on the
 /// deployed CTM (pre-V31).
-async fn get_upgrade_cut_data_block(
-    provider: &NodeProvider,
+async fn get_upgrade_cut_data_block<N: alloy::network::Network>(
+    provider: &NodeProvider<N>,
     ctm_address: Address,
     raw_protocol_version: U256,
 ) -> anyhow::Result<Option<u64>> {
@@ -746,8 +760,8 @@ async fn get_upgrade_cut_data_block(
     }
 }
 
-async fn fetch_upgrade_cut_log_at(
-    provider: &NodeProvider,
+async fn fetch_upgrade_cut_log_at<N: alloy::network::Network>(
+    provider: &NodeProvider<N>,
     ctm_address: Address,
     raw_protocol_version: U256,
     block: u64,

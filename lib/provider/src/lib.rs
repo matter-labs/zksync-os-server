@@ -6,6 +6,15 @@
 //! [`NodeProvider::deployment_block`]), so the many startup binary searches over L1 history can use
 //! a tight lower bound without each rediscovering it.
 
+pub mod contracts;
+pub mod l1_discovery;
+mod metrics;
+pub mod network;
+pub mod settlement_layer_intervals;
+
+pub use contracts::{Bridgehub, MessageRoot, MultisigCommitter, ZkChain, is_method_missing};
+
+use crate::network::{SettlementLayer, Zksync};
 use alloy::consensus::{BlockHeader, TrieAccount};
 use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::eips::eip2930::AccessListResult;
@@ -15,13 +24,14 @@ use alloy::network::{Ethereum, EthereumWallet, Network, NetworkWallet};
 use alloy::primitives::{
     Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, TxHash, U64, U128, U256,
 };
+use alloy::providers::fillers::{RecommendedFillers, TxFiller};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{
     EthCall, EthCallMany, EthGetBlock, FilterPollerBuilder, PendingTransaction,
     PendingTransactionBuilder, PendingTransactionConfig, PendingTransactionError, Provider,
-    ProviderCall, RootProvider, RpcWithBlock, SendableTx, WalletProvider,
+    ProviderBuilder, ProviderCall, RootProvider, RpcWithBlock, SendableTx, WalletProvider,
 };
-use alloy::rpc::client::{ClientRef, NoParams, WeakClient};
+use alloy::rpc::client::{ClientRef, NoParams, RpcClient, WeakClient};
 use alloy::rpc::types::erc4337::TransactionConditional;
 use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::{
@@ -77,6 +87,10 @@ type DeploymentBlockCache = Arc<Mutex<HashMap<Address, Arc<OnceCell<u64>>>>>;
 pub struct NodeProvider<N: Network = Ethereum> {
     inner: Box<dyn EthWalletProvider<N> + 'static>,
     deployment_blocks: DeploymentBlockCache,
+    /// [`Zksync`]-typed view of the same connection. Only ever `Some` for
+    /// [`SettlementLayer`]-typed providers created via [`NodeProvider::from_gateway`]; see
+    /// [`NodeProvider::zksync`].
+    zksync_view: Option<Box<NodeProvider<Zksync>>>,
 }
 
 impl<N: Network> NodeProvider<N> {
@@ -85,7 +99,28 @@ impl<N: Network> NodeProvider<N> {
         Self {
             inner: Box::new(provider),
             deployment_blocks: Arc::new(Mutex::new(HashMap::new())),
+            zksync_view: None,
         }
+    }
+
+    /// Re-views this connection under another network `M`: the rebuilt provider shares the
+    /// underlying transport stack (including any retry/latency layers baked into it) and gets a
+    /// fresh recommended fill stack plus a clone of the current wallet.
+    ///
+    /// Note: pubsub frontends are not carried over — node connections are HTTP + polling, which
+    /// is all the rebuilt views need.
+    fn reconnect_as<M>(&self) -> impl EthWalletProvider<M> + Clone
+    where
+        M: Network + RecommendedFillers,
+        M::RecommendedFillers: TxFiller<M>,
+        EthereumWallet: NetworkWallet<M>,
+    {
+        let inner = self.client();
+        let client = RpcClient::new(inner.transport().clone(), false)
+            .with_poll_interval(inner.poll_interval());
+        ProviderBuilder::new_with_network::<M>()
+            .wallet(self.inner.wallet().clone())
+            .connect_client(client)
     }
 
     /// Returns the block at which `address` first had non-empty code, i.e. its deployment block.
@@ -132,11 +167,53 @@ impl<N: Network> NodeProvider<N> {
     }
 }
 
+impl NodeProvider<SettlementLayer> {
+    /// Views an existing L1 connection as a settlement layer. The new provider shares the L1
+    /// connection's transport and deployment-block cache; [`Self::zksync`] returns `None`.
+    pub fn from_l1(l1: &NodeProvider<Ethereum>) -> Self {
+        Self {
+            inner: Box::new(l1.reconnect_as::<SettlementLayer>()),
+            deployment_blocks: l1.deployment_blocks.clone(),
+            zksync_view: None,
+        }
+    }
+
+    /// Views an existing Gateway connection as a settlement layer. The new provider shares the
+    /// Gateway connection's transport and deployment-block cache, and retains the [`Zksync`]-typed
+    /// view so it can be recovered via [`Self::zksync`].
+    pub fn from_gateway(gateway: &NodeProvider<Zksync>) -> Self {
+        Self {
+            inner: Box::new(gateway.reconnect_as::<SettlementLayer>()),
+            deployment_blocks: gateway.deployment_blocks.clone(),
+            zksync_view: Some(Box::new(gateway.clone())),
+        }
+    }
+
+    /// Whether this settlement layer is a ZKsync Gateway chain (as opposed to Ethereum L1).
+    pub fn is_gateway(&self) -> bool {
+        self.zksync_view.is_some()
+    }
+
+    /// [`Zksync`]-typed view of the same connection, available iff the settlement layer is a
+    /// Gateway (i.e. this provider was created via [`Self::from_gateway`]).
+    ///
+    /// The returned provider's wallet is synced with this provider's *current* wallet, so signers
+    /// registered after construction carry over to the ZK-typed view.
+    pub fn zksync(&self) -> Option<NodeProvider<Zksync>> {
+        self.zksync_view.as_deref().map(|view| {
+            let mut view = view.clone();
+            *view.inner.wallet_mut() = self.inner.wallet().clone();
+            view
+        })
+    }
+}
+
 impl<N: Network> Clone for NodeProvider<N> {
     fn clone(&self) -> Self {
         NodeProvider {
             inner: self.inner.dyn_clone(),
             deployment_blocks: self.deployment_blocks.clone(),
+            zksync_view: self.zksync_view.clone(),
         }
     }
 }
@@ -582,5 +659,49 @@ mod tests {
             asserter.read_q().is_empty(),
             "both mock responses should be consumed",
         );
+    }
+
+    #[tokio::test]
+    async fn settlement_layer_from_gateway_retains_zksync_view() {
+        let asserter = Asserter::new();
+        let gateway = NodeProvider::new(
+            ProviderBuilder::new_with_network::<Zksync>()
+                .wallet(EthereumWallet::default())
+                .connect_mocked_client(asserter.clone()),
+        );
+
+        let mut sl = NodeProvider::from_gateway(&gateway);
+        assert!(sl.is_gateway());
+
+        // The settlement-layer view shares the transport: an RPC round-trip through the rebuilt
+        // client consumes the same mock queue.
+        asserter.push_success(&U64::from(42));
+        assert_eq!(sl.get_block_number().await.unwrap(), 42);
+        assert!(asserter.read_q().is_empty());
+
+        // Signers registered on the settlement-layer wallet after construction are visible in
+        // the downcast ZK-typed view.
+        let signer = alloy::signers::local::PrivateKeySigner::random();
+        let signer_address = signer.address();
+        WalletProvider::wallet_mut(&mut sl).register_signer(signer);
+        let zk = sl.zksync().expect("gateway SL must downcast");
+        assert!(NetworkWallet::<Zksync>::has_signer_for(
+            WalletProvider::wallet(&zk),
+            &signer_address
+        ));
+    }
+
+    #[tokio::test]
+    async fn settlement_layer_from_l1_has_no_zksync_view() {
+        let asserter = Asserter::new();
+        let l1 = NodeProvider::new(
+            ProviderBuilder::new()
+                .wallet(EthereumWallet::default())
+                .connect_mocked_client(asserter.clone()),
+        );
+
+        let sl = NodeProvider::from_l1(&l1);
+        assert!(!sl.is_gateway());
+        assert!(sl.zksync().is_none());
     }
 }

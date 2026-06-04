@@ -1,4 +1,5 @@
 use alloy::eips::Encodable2718;
+use alloy::network::Ethereum;
 use alloy::network::{NetworkTransactionBuilder, TransactionBuilder};
 use alloy::primitives::{Address, U128, U256};
 use alloy::providers::Provider;
@@ -174,7 +175,8 @@ async fn low_fee_tx_does_not_hang_block_executor(env: TestEnvironment) -> anyhow
         .with_max_fee_per_gas(7) // Above Reth MIN_PROTOCOL_BASE_FEE, far below actual base fee
         .with_max_priority_fee_per_gas(0)
         .with_chain_id(chain_id);
-    let poison_envelope = poison_tx.build(&tester.l2_wallet).await?;
+    let poison_envelope =
+        NetworkTransactionBuilder::<Ethereum>::build(poison_tx, &tester.l2_wallet).await?;
     let poison_encoded = poison_envelope.encoded_2718();
     let _ = tester
         .l2_provider

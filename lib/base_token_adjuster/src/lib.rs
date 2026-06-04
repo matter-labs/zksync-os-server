@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_contract_interface::{
     IChainAdminOwnable::{self, IChainAdminOwnableInstance},
-    IERC20, ZkChain,
+    IERC20,
 };
 use zksync_os_external_price_api::cmc_api::CmcPriceApiClient;
 use zksync_os_external_price_api::coingecko_api::CoinGeckoPriceAPIClient;
@@ -23,6 +23,7 @@ use zksync_os_external_price_api::{
     APIToken, ExternalPriceApiClientConfig, PriceApiClient, ZK_L1_ADDRESS,
 };
 use zksync_os_operator_signer::SignerConfig;
+use zksync_os_provider::ZkChain;
 use zksync_os_provider::{EthWalletProvider, NodeProvider};
 use zksync_os_types::{TokenApiRatio, TokenPricesForFees};
 

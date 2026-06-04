@@ -5,6 +5,7 @@ use alloy::rpc::types::ValueOrArray;
 use std::collections::VecDeque;
 use tokio::sync::watch;
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::network::SettlementLayer;
 
 /// Description of a single settlement-layer segment that [`SlAwareL1Watcher`] should scan, in
 /// isolation, before advancing to the next one. `end_block = None` marks the open-ended (live)
@@ -14,7 +15,7 @@ use zksync_os_provider::NodeProvider;
 #[derive(Clone, Debug)]
 pub struct SegmentSpec {
     /// Provider for the settlement layer this segment is scanned on.
-    pub provider: NodeProvider,
+    pub provider: NodeProvider<SettlementLayer>,
     /// Block updates for the segment's settlement-layer provider.
     pub block_updates: watch::Receiver<BlockUpdates>,
     /// Contract address(es) whose logs the segment scans (e.g. the chain's diamond proxy or a
@@ -38,14 +39,14 @@ pub struct SegmentSpec {
 pub struct SlAwareL1Watcher {
     config: L1WatcherConfig,
     segments: VecDeque<SegmentSpec>,
-    processor: Box<dyn ProcessRawEvents>,
+    processor: Box<dyn ProcessRawEvents<SettlementLayer>>,
 }
 
 impl SlAwareL1Watcher {
     pub fn new(
         config: L1WatcherConfig,
         segments: Vec<SegmentSpec>,
-        processor: Box<dyn ProcessRawEvents>,
+        processor: Box<dyn ProcessRawEvents<SettlementLayer>>,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             !segments.is_empty(),
@@ -85,8 +86,8 @@ impl SlAwareL1Watcher {
 async fn run_segment(
     config: L1WatcherConfig,
     segment: SegmentSpec,
-    processor: Box<dyn ProcessRawEvents>,
-) -> Box<dyn ProcessRawEvents> {
+    processor: Box<dyn ProcessRawEvents<SettlementLayer>>,
+) -> Box<dyn ProcessRawEvents<SettlementLayer>> {
     tracing::info!(
         "sl-aware watcher activated segment at {:?} for SL blocks=({}-{})",
         segment.address,

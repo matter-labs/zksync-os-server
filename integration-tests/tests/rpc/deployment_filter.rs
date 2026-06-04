@@ -1,4 +1,5 @@
 use alloy::eips::Encodable2718;
+use alloy::network::Ethereum;
 use alloy::network::{NetworkTransactionBuilder, TransactionBuilder};
 use alloy::primitives::{Address, TxKind, U256, utils::parse_ether};
 use alloy::providers::Provider;
@@ -88,7 +89,7 @@ async fn send_raw_transaction_sync_surfaces_filter_rejection() -> Result<()> {
         .with_max_fee_per_gas(fees.max_fee_per_gas)
         .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
         .with_gas_limit(2_000_000);
-    let tx_envelope = tx.build(&wallet).await?;
+    let tx_envelope = NetworkTransactionBuilder::<Ethereum>::build(tx, &wallet).await?;
     let encoded = tx_envelope.encoded_2718();
 
     let error = chain
@@ -124,7 +125,7 @@ async fn en_send_raw_transaction_sync_propagates_filter_rejection() -> Result<()
         .with_max_fee_per_gas(fees.max_fee_per_gas)
         .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
         .with_gas_limit(2_000_000);
-    let tx_envelope = tx.build(&wallet).await?;
+    let tx_envelope = NetworkTransactionBuilder::<Ethereum>::build(tx, &wallet).await?;
     let encoded = tx_envelope.encoded_2718();
 
     let error = en

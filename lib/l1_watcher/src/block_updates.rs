@@ -1,4 +1,5 @@
 use alloy::eips::BlockId;
+use alloy::network::Network;
 use alloy::primitives::BlockNumber;
 use alloy::providers::Provider;
 use reth_tasks::Runtime;
@@ -19,8 +20,8 @@ pub struct BlockUpdates {
     pub finalized_block: BlockNumber,
 }
 
-pub fn run(
-    provider: NodeProvider,
+pub fn run<N: Network>(
+    provider: NodeProvider<N>,
     runtime: &Runtime,
     task_name: &'static str,
     poll_interval: Duration,
@@ -49,8 +50,8 @@ pub fn run(
     receiver
 }
 
-async fn poll_latest(
-    provider: &NodeProvider,
+async fn poll_latest<N: Network>(
+    provider: &NodeProvider<N>,
     l1_head: &watch::Sender<BlockUpdates>,
 ) -> alloy::transports::TransportResult<()> {
     let latest_block = provider.get_block_number().await?;
@@ -65,8 +66,8 @@ async fn poll_latest(
     Ok(())
 }
 
-async fn poll_finalized(
-    provider: &NodeProvider,
+async fn poll_finalized<N: Network>(
+    provider: &NodeProvider<N>,
     l1_head: &watch::Sender<BlockUpdates>,
 ) -> alloy::transports::TransportResult<()> {
     let finalized_block = provider

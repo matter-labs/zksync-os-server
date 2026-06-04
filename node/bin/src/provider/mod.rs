@@ -3,8 +3,9 @@ mod metrics;
 mod retry;
 
 use crate::config::ProviderConfig;
-use alloy::network::EthereumWallet;
+use alloy::network::{EthereumWallet, Network, NetworkWallet};
 use alloy::providers::ProviderBuilder;
+use alloy::providers::fillers::{RecommendedFillers, TxFiller};
 use alloy::rpc::client::RpcClient;
 use alloy::signers::local::PrivateKeySigner;
 use tower::ServiceBuilder;
@@ -18,10 +19,18 @@ pub(crate) enum ProviderKind {
     Gateway,
 }
 
-pub(crate) async fn build_node_provider(
+pub(crate) async fn build_node_provider<N>(
     config: &ProviderConfig,
     provider: ProviderKind,
-) -> NodeProvider {
+) -> NodeProvider<N>
+where
+    N: Network<
+            UnsignedTx = alloy::consensus::TypedTransaction,
+            TxEnvelope = alloy::consensus::TxEnvelope,
+        > + RecommendedFillers,
+    N::RecommendedFillers: TxFiller<N>,
+    EthereumWallet: NetworkWallet<N>,
+{
     let max_retries = config.max_retries;
     let retry_backoff = config.retry_backoff;
     let provider_layers = ServiceBuilder::new()
@@ -39,7 +48,7 @@ pub(crate) async fn build_node_provider(
         .await
         .expect("failed to connect to L1 api")
         .with_poll_interval(config.rpc_poll_interval);
-    let provider = ProviderBuilder::new()
+    let provider = ProviderBuilder::new_with_network::<N>()
         .wallet(EthereumWallet::new(PrivateKeySigner::random()))
         .connect_client(client);
     NodeProvider::new(provider)

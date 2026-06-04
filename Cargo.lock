@@ -15266,8 +15266,8 @@ dependencies = [
  "tokio",
  "tracing",
  "zksync_os_contract_interface",
+ "zksync_os_provider",
  "zksync_os_rpc_api",
- "zksync_os_types",
 ]
 
 [[package]]
@@ -15363,6 +15363,7 @@ dependencies = [
  "zksync_os_network",
  "zksync_os_observability",
  "zksync_os_pipeline",
+ "zksync_os_provider",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -15405,7 +15406,6 @@ dependencies = [
  "thiserror 2.0.17",
  "tracing",
  "vise",
- "zksync_os_provider",
 ]
 
 [[package]]
@@ -15456,6 +15456,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vise",
+ "zksync_os_provider",
  "zksync_os_rpc_api",
  "zksync_os_types",
 ]
@@ -15581,6 +15582,7 @@ dependencies = [
  "tracing",
  "zksync_os_contract_interface",
  "zksync_os_mempool",
+ "zksync_os_provider",
  "zksync_os_rpc",
  "zksync_os_types",
 ]
@@ -15858,10 +15860,16 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
+ "backon",
+ "futures",
  "serde",
  "serde_json",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "vise",
+ "zksync_os_contract_interface",
+ "zksync_os_types",
 ]
 
 [[package]]
@@ -16029,6 +16037,7 @@ dependencies = [
  "zksync_os_metadata",
  "zksync_os_mini_merkle_tree",
  "zksync_os_multivm",
+ "zksync_os_provider",
  "zksync_os_raft",
  "zksync_os_rpc_api",
  "zksync_os_storage",
@@ -16049,6 +16058,7 @@ dependencies = [
  "serde",
  "zksync_os_genesis",
  "zksync_os_merkle_tree_api",
+ "zksync_os_provider",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]

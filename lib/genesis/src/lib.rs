@@ -18,7 +18,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
-use zksync_os_contract_interface::ZkChain;
+use zksync_os_provider::ZkChain;
 use zksync_os_storage_api::BlockContext;
 use zksync_os_types::{ConfigFormat, ExecutionVersion, L1UpgradeEnvelope, ProtocolSemanticVersion};
 
@@ -331,9 +331,7 @@ async fn build_genesis(
     })
 }
 
-async fn load_genesis_upgrade_tx(
-    zk_chain: ZkChain,
-) -> anyhow::Result<GenesisUpgradeTxInfo> {
+async fn load_genesis_upgrade_tx(zk_chain: ZkChain) -> anyhow::Result<GenesisUpgradeTxInfo> {
     let zk_chain_address = *zk_chain.address();
     let provider = zk_chain.provider().clone();
     // The `GenesisUpgrade` event is emitted in the diamond proxy's deployment block, so the search

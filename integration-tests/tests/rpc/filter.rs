@@ -1,4 +1,5 @@
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
+use alloy::network::Ethereum;
 use alloy::network::{NetworkTransactionBuilder, TransactionBuilder, TxSigner};
 use alloy::primitives::{Address, BlockHash, IntoLogData, TxHash, U256};
 use alloy::providers::Provider;
@@ -173,9 +174,9 @@ impl FilterSuite for PendingTxSuite<true> {
             .with_gas_limit(100_000)
             .with_max_fee_per_gas(fees.max_fee_per_gas)
             .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
-            .with_chain_id(tester.l2_provider.get_chain_id().await?)
-            .build(&tester.l2_wallet)
-            .await?;
+            .with_chain_id(tester.l2_provider.get_chain_id().await?);
+        let tx_envelope =
+            NetworkTransactionBuilder::<Ethereum>::build(tx_envelope, &tester.l2_wallet).await?;
         tester
             .l2_provider
             .send_tx_envelope(tx_envelope.clone())

@@ -7,8 +7,8 @@ use zksync_os_batch_types::BatchSignatureSet;
 use zksync_os_batch_types::batcher_model::{BatchSignatureData, FriProof, SignedBatchEnvelope};
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::calldata::encode_commit_batch_data;
-use zksync_os_contract_interface::l1_discovery::BatchVerificationSL;
 use zksync_os_contract_interface::{IExecutor, IMultisigCommitter};
+use zksync_os_provider::l1_discovery::BatchVerificationSL;
 
 #[derive(Debug)]
 pub struct CommitCommand {

@@ -10,16 +10,28 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_contract_interface.workspace = true
+zksync_os_types.workspace = true
+
 alloy = { workspace = true, default-features = false, features = [
     "json-rpc",
     "rpc-types",
     "providers",
     "rpc-client",
     "transports",
+    "contract",
 ] }
 async-trait.workspace = true
 anyhow.workspace = true
+backon.workspace = true
+futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
+vise.workspace = true
+
+[dev-dependencies]
+alloy = { workspace = true, default-features = false, features = ["signer-local"] }
+tokio = { workspace = true, features = ["macros", "rt"] }

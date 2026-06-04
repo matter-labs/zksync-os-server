@@ -6,8 +6,8 @@ use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::LocalSigner;
 use clap::Parser;
 use std::str::FromStr;
-use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
+use zksync_os_provider::Bridgehub;
 use zksync_os_provider::NodeProvider;
 use zksync_os_types::REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE;
 

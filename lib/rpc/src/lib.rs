@@ -58,6 +58,7 @@ use reth_tasks::Runtime;
 use tower_http::cors::{Any, CorsLayer};
 use zksync_os_genesis::GenesisInputSource;
 use zksync_os_mempool::subpools::l2::L2Subpool;
+use zksync_os_provider::network::Zksync;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
@@ -84,7 +85,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     tx_forwarder: Option<TxForwarder>,
-    gateway_provider: Option<DynProvider>,
+    gateway_provider: Option<DynProvider<Zksync>>,
     policy_client: Option<PolicyClient>,
     runtime: &Runtime,
     wait_for_db: impl Future<Output = ()> + Send + 'static,

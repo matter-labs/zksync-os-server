@@ -148,7 +148,7 @@ async fn simulate_state_carries_across_blocks(tester: Tester) -> anyhow::Result<
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 async fn simulate_settlement_sender_tx_shape(tester: Tester) -> anyhow::Result<()> {
     let provider = tester.sl_provider();
-    let settles_on_gateway = tester.gateway_eth_provider().is_some();
+    let settles_on_gateway = tester.gateway_node_provider().is_some();
     let sender = if settles_on_gateway {
         tester
             .config()

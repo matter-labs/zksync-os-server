@@ -1,7 +1,8 @@
+use crate::NodeProvider;
 use crate::metrics::L1_STATE_METRICS;
-use crate::models::BatchDaInputMode;
+use crate::network::{SettlementLayer, Zksync};
 use crate::settlement_layer_intervals::SettlementLayerIntervals;
-use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
+use crate::{Bridgehub, MultisigCommitter, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256, address};
 use alloy::providers::Provider;
@@ -9,7 +10,8 @@ use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
 use std::fmt::Debug;
 use std::time::Duration;
-use zksync_os_provider::NodeProvider;
+use zksync_os_contract_interface::PubdataPricingMode;
+use zksync_os_contract_interface::models::BatchDaInputMode;
 
 /// Standard L2 bridgehub address — present at the same well-known address on every Gateway.
 pub const L2_BRIDGEHUB_ADDRESS: Address = address!("0x0000000000000000000000000000000000010002");
@@ -29,9 +31,9 @@ pub enum BatchVerificationSL {
 #[derive(Clone, Debug)]
 pub struct L1State {
     pub bridgehub_l1: Bridgehub,
-    pub bridgehub_sl: Bridgehub,
+    pub bridgehub_sl: Bridgehub<SettlementLayer>,
     pub diamond_proxy_l1: ZkChain,
-    pub diamond_proxy_sl: ZkChain,
+    pub diamond_proxy_sl: ZkChain<SettlementLayer>,
     pub validator_timelock_sl: Address,
     pub batch_verification: BatchVerificationSL,
     pub last_committed_batch: u64,
@@ -70,12 +72,13 @@ impl L1State {
     /// looked up via [`SettlementLayerIntervals::resolve_proxy`].
     pub async fn fetch(
         l1_provider: NodeProvider,
-        gateway_provider: Option<NodeProvider>,
+        gateway_provider: Option<NodeProvider<Zksync>>,
         bridgehub_address_l1: Address,
         l2_chain_id: u64,
     ) -> anyhow::Result<Self> {
         let l1_chain_id = l1_provider.get_chain_id().await?;
 
+        let sl_provider_l1 = NodeProvider::from_l1(&l1_provider);
         let bridgehub_l1 = Bridgehub::new(bridgehub_address_l1, l1_provider, l2_chain_id);
         let diamond_proxy_l1 = bridgehub_l1.zk_chain().await?;
 
@@ -88,7 +91,8 @@ impl L1State {
 
         let (sl_chain_id, bridgehub_sl) = if settlement_layer_address.is_zero() {
             // Settling on L1: the settlement layer is L1 itself.
-            (l1_chain_id, bridgehub_l1.clone())
+            let bridgehub_sl = Bridgehub::new(*bridgehub_l1.address(), sl_provider_l1, l2_chain_id);
+            (l1_chain_id, bridgehub_sl)
         } else {
             // Settling on Gateway: require a dedicated Gateway RPC provider.
             let gateway_provider = gateway_provider.as_ref().with_context(|| {
@@ -102,8 +106,11 @@ impl L1State {
                 sl_chain_id != l1_chain_id,
                 "settling on Gateway but SL chain ID is identical to L1 chain ID"
             );
-            let bridgehub_sl =
-                Bridgehub::new(L2_BRIDGEHUB_ADDRESS, gateway_provider.clone(), l2_chain_id);
+            let bridgehub_sl = Bridgehub::new(
+                L2_BRIDGEHUB_ADDRESS,
+                NodeProvider::from_gateway(gateway_provider),
+                l2_chain_id,
+            );
             (sl_chain_id, bridgehub_sl)
         };
 
@@ -194,7 +201,7 @@ impl L1State {
 
     async fn validate_chain_ids(
         bridgehub_l1: &Bridgehub,
-        bridgehub_sl: &Bridgehub,
+        bridgehub_sl: &Bridgehub<SettlementLayer>,
         l2_chain_id: u64,
     ) -> anyhow::Result<()> {
         let all_chain_ids_l1 = bridgehub_l1.get_all_zk_chain_chain_ids().await?;
@@ -208,7 +215,7 @@ impl L1State {
             "chain ID {l2_chain_id} is not registered on SL"
         );
 
-        let sl_chain_id = bridgehub_sl.instance.provider().get_chain_id().await?;
+        let sl_chain_id = bridgehub_sl.provider().get_chain_id().await?;
         let is_sl_whitelisted = bridgehub_l1
             .whitelisted_settlement_layers(U256::from(sl_chain_id))
             .await?;
@@ -225,7 +232,7 @@ impl L1State {
     /// are being submitted by the main node.
     pub async fn fetch_finalized(
         l1_provider: NodeProvider,
-        gateway_provider: Option<NodeProvider>,
+        gateway_provider: Option<NodeProvider<Zksync>>,
         bridgehub_address: Address,
         chain_id: u64,
     ) -> anyhow::Result<Self> {
@@ -292,7 +299,7 @@ impl L1State {
 }
 
 async fn fetch_finalized_executed_batch(
-    zk_chain_sl: &ZkChain,
+    zk_chain_sl: &ZkChain<SettlementLayer>,
 ) -> anyhow::Result<(u64, u64)> {
     let finalized_sl_block_number = zk_chain_sl
         .provider()
@@ -316,8 +323,11 @@ async fn fetch_finalized_executed_batch(
 }
 
 /// Waits until the pending SL state matches the latest finalized SL block.
-async fn wait_to_finalize<T: Debug + PartialEq, Fut: Future<Output = crate::Result<T>>>(
-    provider: &NodeProvider,
+async fn wait_to_finalize<
+    T: Debug + PartialEq,
+    Fut: Future<Output = crate::contracts::Result<T>>,
+>(
+    provider: &NodeProvider<SettlementLayer>,
     f: impl Fn(BlockId) -> Fut,
 ) -> anyhow::Result<(u64, T)> {
     /// Ethereum blocks are mined every ~12 seconds on average, but we wait in 1-second intervals

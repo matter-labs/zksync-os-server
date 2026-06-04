@@ -2,7 +2,7 @@ use alloy::eips::BlockId;
 use alloy::primitives::Address;
 use std::time::Duration;
 use tokio::sync::watch;
-use zksync_os_contract_interface::ZkChain;
+use zksync_os_provider::ZkChain;
 
 /// Polls `getSettlementLayer()` on the L1 diamond proxy and terminates the process once all three
 /// conditions are simultaneously satisfied:

@@ -4,15 +4,16 @@ use alloy::sol_types::SolEvent;
 use anyhow::Context;
 use std::collections::HashMap;
 use tokio::sync::watch;
-use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMessageRoot::NewInteropRoot;
 use zksync_os_contract_interface::InteropRoot;
-use zksync_os_contract_interface::l1_discovery::L2_BRIDGEHUB_ADDRESS;
-use zksync_os_contract_interface::settlement_layer_intervals::{
+use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
+use zksync_os_provider::Bridgehub;
+use zksync_os_provider::NodeProvider;
+use zksync_os_provider::l1_discovery::L2_BRIDGEHUB_ADDRESS;
+use zksync_os_provider::network::SettlementLayer;
+use zksync_os_provider::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
-use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
-use zksync_os_provider::NodeProvider;
 use zksync_os_types::IndexedInteropRoot;
 
 use crate::sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};
@@ -137,7 +138,7 @@ impl InteropWatcher {
 }
 
 #[async_trait::async_trait]
-impl ProcessRawEvents for InteropWatcher {
+impl ProcessRawEvents<SettlementLayer> for InteropWatcher {
     fn name(&self) -> &'static str {
         "interop_root"
     }
@@ -166,7 +167,7 @@ impl ProcessRawEvents for InteropWatcher {
 
     async fn process_raw_event(
         &mut self,
-        _provider: &NodeProvider,
+        _provider: &NodeProvider<SettlementLayer>,
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let event = NewInteropRoot::decode_log(&log.inner)?.data;

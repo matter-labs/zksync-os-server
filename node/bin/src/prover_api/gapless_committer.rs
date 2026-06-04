@@ -5,11 +5,11 @@ use std::collections::BTreeMap;
 use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_batcher_metrics::BatchExecutionStage;
-use zksync_os_contract_interface::l1_discovery::BatchVerificationSL;
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
+use zksync_os_provider::l1_discovery::BatchVerificationSL;
 
 /// Receives Batches with proofs - potentially out of order;
 /// * Fixes the order (by filling in the `buffer` field);

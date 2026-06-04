@@ -1,10 +1,12 @@
-use crate::{Bridgehub, IChainAssetHandler, ZkChain, is_method_missing};
+use crate::NodeProvider;
+use crate::network::{SettlementLayer, Zksync};
+use crate::{Bridgehub, ZkChain, is_method_missing};
 use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
 use anyhow::Context;
 use std::fmt;
 use std::sync::Arc;
-use zksync_os_provider::NodeProvider;
+use zksync_os_contract_interface::IChainAssetHandler;
 
 /// Settlement layer that a chain was committing to during a given batch range.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,7 +36,7 @@ pub struct SettlementLayerInterval {
     pub first_batch: u64,
     pub last_batch: Option<u64>,
     /// Diamond proxy on `settlement_layer`.
-    pub proxy: ZkChain,
+    pub proxy: ZkChain<SettlementLayer>,
 }
 
 impl fmt::Display for SettlementLayerInterval {
@@ -77,7 +79,7 @@ impl SettlementLayerIntervals {
     pub async fn discover(
         chain_asset_handler: Address,
         diamond_proxy_l1: ZkChain,
-        gateway_provider: Option<NodeProvider>,
+        gateway_provider: Option<NodeProvider<Zksync>>,
         l2_chain_id: u64,
     ) -> anyhow::Result<Self> {
         let raw_intervals = find_settlement_layer_intervals(
@@ -97,7 +99,7 @@ impl SettlementLayerIntervals {
                 let gw_chain_id = gateway_provider.get_chain_id().await?;
                 let bridgehub_gw = Bridgehub::new(
                     crate::l1_discovery::L2_BRIDGEHUB_ADDRESS,
-                    gateway_provider.clone(),
+                    NodeProvider::from_gateway(gateway_provider),
                     l2_chain_id,
                 );
                 let historical_diamond_proxy_gw = bridgehub_gw
@@ -109,10 +111,15 @@ impl SettlementLayerIntervals {
                 None
             };
 
+        // L1 intervals' proxy: the L1 diamond proxy re-viewed as a settlement layer.
+        let diamond_proxy_l1_as_sl = ZkChain::new(
+            *diamond_proxy_l1.address(),
+            NodeProvider::from_l1(diamond_proxy_l1.provider()),
+        );
         let mut intervals = Vec::with_capacity(raw_intervals.len());
         for raw in raw_intervals {
             let proxy = match raw.settlement_layer {
-                IntervalSettlementLayer::L1 => diamond_proxy_l1.clone(),
+                IntervalSettlementLayer::L1 => diamond_proxy_l1_as_sl.clone(),
                 IntervalSettlementLayer::Gateway(chain_id) => match &diamond_proxy_gw {
                     Some((gw_chain_id, gw)) if *gw_chain_id == chain_id => gw.clone(),
                     Some((gw_chain_id, _)) => anyhow::bail!(

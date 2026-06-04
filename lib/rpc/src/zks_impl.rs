@@ -15,6 +15,7 @@ use zk_ee::common_structs::derive_flat_storage_key;
 use zksync_os_genesis::{GenesisInput, GenesisInputSource};
 use zksync_os_merkle_tree_api::flat::StorageSlotProof;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
+use zksync_os_provider::network::Zksync;
 use zksync_os_rpc_api::{
     types::{
         AddressScopedKey, BatchStorageProof, BlockMetadata, L1VerificationData, L2ToL1LogProof,
@@ -33,7 +34,7 @@ pub struct ZksNamespace<RpcStorage> {
     storage: RpcStorage,
     genesis_input_source: Arc<dyn GenesisInputSource>,
     l2_chain_id: u64,
-    gateway_provider: Option<DynProvider>,
+    gateway_provider: Option<DynProvider<Zksync>>,
 }
 
 impl<RpcStorage> ZksNamespace<RpcStorage> {
@@ -43,7 +44,7 @@ impl<RpcStorage> ZksNamespace<RpcStorage> {
         storage: RpcStorage,
         genesis_input_source: Arc<dyn GenesisInputSource>,
         l2_chain_id: u64,
-        gateway_provider: Option<DynProvider>,
+        gateway_provider: Option<DynProvider<Zksync>>,
     ) -> Self {
         Self {
             bridgehub_address,

@@ -5,8 +5,9 @@ use alloy::rpc::types::Log;
 use tokio::sync::watch;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
-use zksync_os_contract_interface::ZkChain;
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::ZkChain;
+use zksync_os_provider::network::SettlementLayer;
 use zksync_os_storage_api::WriteFinality;
 
 /// Watches settlement-layer commit events and advances the committed finality frontier.
@@ -35,14 +36,14 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
         config: L1WatcherConfig,
-        zk_chain: ZkChain,
+        zk_chain: ZkChain<SettlementLayer>,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         sl_block_initial_finality_init_at: u64,
         l1_chain_id: u64,
         block_updates: watch::Receiver<BlockUpdates>,
         commit_submitted_rx: Option<watch::Receiver<u64>>,
-    ) -> anyhow::Result<L1Watcher> {
+    ) -> anyhow::Result<L1Watcher<SettlementLayer>> {
         let last_committed_batch = finality.get_finality_status().last_committed_batch;
         tracing::info!(
             sl_block_initial_finality_init_at,
@@ -85,7 +86,7 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
 }
 
 #[async_trait::async_trait]
-impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
+impl<Finality: WriteFinality> ProcessL1Event<SettlementLayer> for L1CommitWatcher<Finality> {
     const NAME: &'static str = "block_commit";
 
     type SolEvent = ReportCommittedBatchRangeZKsyncOS;
@@ -93,7 +94,7 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
 
     async fn process_event(
         &mut self,
-        provider: &NodeProvider,
+        provider: &NodeProvider<SettlementLayer>,
         report: ReportCommittedBatchRangeZKsyncOS,
         log: Log,
     ) -> Result<(), L1WatcherError> {

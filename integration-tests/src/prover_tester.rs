@@ -5,13 +5,13 @@ use alloy::rpc::types::Filter;
 use std::time::Duration;
 use zksync_os_alloy_ext::network::Zksync;
 use zksync_os_alloy_ext::provider::ZksyncApi;
-use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::l1_discovery::L1State;
 
 #[derive(Debug)]
 pub struct ProverTester {
     l1_provider: NodeProvider,
-    gateway_provider: Option<NodeProvider>,
+    gateway_provider: Option<NodeProvider<Zksync>>,
     l2_provider: NodeProvider,
     l2_zk_provider: DynProvider<Zksync>,
 }
@@ -20,7 +20,7 @@ impl ProverTester {
     /// Create a new client targeting the given base URL
     pub fn new(
         l1_provider: NodeProvider,
-        gateway_provider: Option<NodeProvider>,
+        gateway_provider: Option<NodeProvider<Zksync>>,
         l2_provider: NodeProvider,
         l2_zk_provider: DynProvider<Zksync>,
     ) -> Self {
@@ -79,8 +79,12 @@ impl ProverTester {
             .address(diamond_proxy_address)
             .from_block(0)
             .to_block(BlockNumberOrTag::Latest);
-        let sl_provider = self.gateway_provider.as_ref().unwrap_or(&self.l1_provider);
-        let logs = sl_provider.get_logs(&filter).await?;
+        // The Gateway and L1 providers have distinct network types; `get_logs` returns the same
+        // `Vec<Log>` for both, so dispatch per arm.
+        let logs = match &self.gateway_provider {
+            Some(gateway_provider) => gateway_provider.get_logs(&filter).await?,
+            None => self.l1_provider.get_logs(&filter).await?,
+        };
         if logs.is_empty() {
             tracing::info!("no `BlocksVerification` events discovered on L1");
             return Ok(false);

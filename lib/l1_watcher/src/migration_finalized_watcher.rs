@@ -4,9 +4,11 @@ use alloy::primitives::{B256, U256};
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use tokio::sync::watch;
-use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
-use zksync_os_contract_interface::{Bridgehub, IChainAssetHandler::MigrationFinalized, ZkChain};
+use zksync_os_contract_interface::IChainAssetHandler::MigrationFinalized;
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::network::SettlementLayer;
+use zksync_os_provider::settlement_layer_intervals::SettlementLayerIntervals;
+use zksync_os_provider::{Bridgehub, ZkChain};
 
 /// Watches for `MigrationFinalized(uint256 indexed chainId, uint256 migrationNumber, ...)` events
 /// emitted by the `IChainAssetHandler` contract on the current settlement layer.
@@ -29,15 +31,15 @@ impl MigrationFinalizedWatcher {
     /// destination's view of finalized migrations) and decides whether to spawn the watcher.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
-        zk_chain: ZkChain,
-        bridgehub_sl: Bridgehub,
+        zk_chain: ZkChain<SettlementLayer>,
+        bridgehub_sl: Bridgehub<SettlementLayer>,
         intervals: &SettlementLayerIntervals,
         l2_chain_id: u64,
         l1_chain_id: u64,
         config: L1WatcherConfig,
         last_finalized_migration: watch::Sender<u64>,
         block_updates: watch::Receiver<BlockUpdates>,
-    ) -> anyhow::Result<Option<L1Watcher>> {
+    ) -> anyhow::Result<Option<L1Watcher<SettlementLayer>>> {
         let active_migration_number = (intervals.intervals().len() - 1) as u64;
         let sl_migration_number: u64 = bridgehub_sl
             .migration_number(l2_chain_id)
@@ -99,7 +101,7 @@ impl MigrationFinalizedWatcher {
 }
 
 #[async_trait::async_trait]
-impl ProcessRawEvents for MigrationFinalizedWatcher {
+impl ProcessRawEvents<SettlementLayer> for MigrationFinalizedWatcher {
     fn name(&self) -> &'static str {
         "migration_finalized"
     }
@@ -119,7 +121,7 @@ impl ProcessRawEvents for MigrationFinalizedWatcher {
 
     async fn process_raw_event(
         &mut self,
-        _provider: &NodeProvider,
+        _provider: &NodeProvider<SettlementLayer>,
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let Some(&topic0) = log.topic0() else {

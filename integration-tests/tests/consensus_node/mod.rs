@@ -1,4 +1,5 @@
 use alloy::eips::{BlockId, Encodable2718};
+use alloy::network::Ethereum;
 use alloy::network::{NetworkTransactionBuilder, ReceiptResponse, TransactionBuilder};
 use alloy::primitives::{Address, TxHash, U256};
 use alloy::providers::Provider;
@@ -91,7 +92,8 @@ async fn send_transfer(
                 .with_nonce(nonce)
                 .with_gas_price(fees.max_fee_per_gas)
                 .with_gas_limit(50_000);
-            let tx_envelope = tx.build(&node.l2_wallet).await?;
+            let tx_envelope =
+                NetworkTransactionBuilder::<Ethereum>::build(tx, &node.l2_wallet).await?;
             let expected_hash = *tx_envelope.tx_hash();
             let encoded = tx_envelope.encoded_2718();
 

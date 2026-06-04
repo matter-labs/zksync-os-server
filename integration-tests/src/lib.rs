@@ -29,11 +29,11 @@ use tokio::task::JoinHandle;
 use tracing::Instrument;
 use zksync_os_alloy_ext::network::Zksync;
 use zksync_os_alloy_ext::provider::ZksyncApi;
-use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
-use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
+use zksync_os_provider::Bridgehub;
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::l1_discovery::L1State;
 use zksync_os_server::config::{Config, ProviderConfig};
 pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::{
@@ -296,6 +296,8 @@ pub struct Tester {
     status_server_url: String,
     gateway_rpc_url: Option<String>,
     sl_provider: NodeProvider,
+    /// `Zksync`-typed connection to the Gateway, present iff a gateway RPC URL is configured.
+    gateway_node_provider: Option<NodeProvider<Zksync>>,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
     owned_supporting_nodes: Vec<SupportingNode>,
@@ -366,10 +368,8 @@ impl Tester {
 
     /// Returns the gateway provider if a gateway RPC URL is configured, `None` otherwise.
     /// Use this when calling [`L1State::fetch`] or [`L1State::fetch_finalized`].
-    pub fn gateway_eth_provider(&self) -> Option<NodeProvider> {
-        self.gateway_rpc_url
-            .as_ref()
-            .map(|_| self.sl_provider.clone())
+    pub fn gateway_node_provider(&self) -> Option<NodeProvider<Zksync>> {
+        self.gateway_node_provider.clone()
     }
 
     pub async fn gateway_provider(&self) -> anyhow::Result<Option<DynProvider<Zksync>>> {
@@ -745,10 +745,18 @@ impl Tester {
         } else {
             l1.provider.clone()
         };
-        let gateway_eth_provider = gateway_rpc_url.as_ref().map(|_| sl_provider.clone());
+        let gateway_node_provider = match &gateway_rpc_url {
+            Some(gateway_rpc_url) => Some(NodeProvider::new(
+                ProviderBuilder::new_with_network::<Zksync>()
+                    .wallet(l2_wallet.clone())
+                    .connect(gateway_rpc_url)
+                    .await?,
+            )),
+            None => None,
+        };
         let prover_tester = ProverTester::new(
             NodeProvider::new(l1.provider.clone()),
-            gateway_eth_provider,
+            gateway_node_provider.clone(),
             NodeProvider::new(l2_provider.clone()),
             DynProvider::new(l2_zk_provider.clone()),
         );
@@ -766,6 +774,7 @@ impl Tester {
             status_server_url,
             gateway_rpc_url,
             sl_provider,
+            gateway_node_provider,
             node_record,
             log_state,
             tempdir: tempdir.clone(),
@@ -1282,7 +1291,7 @@ async fn wait_for_gateway_readiness(
         .context("chain config is missing bridgehub_address")?;
 
     (|| async {
-        let gateway_provider = ProviderBuilder::new()
+        let gateway_provider = ProviderBuilder::new_with_network::<Zksync>()
             .wallet(EthereumWallet::new(PrivateKeySigner::random()))
             .connect(gateway_rpc_url)
             .await

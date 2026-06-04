@@ -11,12 +11,12 @@ use alloy::{
 };
 use anyhow::{Context, Result};
 use zksync_os_alloy_ext::provider::ZksyncApi;
-use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::assert_traits::ProviderAssert;
 use zksync_os_integration_tests::{
     GatewayTester, Tester, assert_traits::ReceiptAssert, contracts::TestERC20,
 };
+use zksync_os_provider::Bridgehub;
 use zksync_os_provider::NodeProvider;
 use zksync_os_rpc_api::types::LogProofTarget;
 use zksync_os_types::{

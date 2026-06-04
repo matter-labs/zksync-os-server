@@ -1,4 +1,5 @@
 use alloy::eips::Encodable2718;
+use alloy::network::Ethereum;
 use alloy::network::{NetworkTransactionBuilder, ReceiptResponse, TxSigner};
 use alloy::primitives::{Address, B256, TxHash, U128, U256, address};
 use alloy::providers::Provider;
@@ -9,7 +10,6 @@ use regex::Regex;
 use std::time::Duration;
 use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::IExecutor::BlockCommit;
-use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::Counter::CounterInstance;
 use zksync_os_integration_tests::contracts::{Counter, EventEmitter};
@@ -17,6 +17,7 @@ use zksync_os_integration_tests::{
     CURRENT_TO_L1, NEXT_TO_GATEWAY, TestEnvironment, Tester, test_multisetup,
 };
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::l1_discovery::L1State;
 use zksync_os_rpc_api::types::BatchStorageProof;
 use zksync_os_server::config::FeeConfig;
 
@@ -160,7 +161,7 @@ async fn send_raw_transaction_sync(tester: Tester) -> anyhow::Result<()> {
         .gas_price(fees.max_fee_per_gas)
         .gas_limit(50_000);
     // Build and sign the transaction to get the envelope
-    let tx_envelope = tx.build(&tester.l2_wallet).await?;
+    let tx_envelope = NetworkTransactionBuilder::<Ethereum>::build(tx, &tester.l2_wallet).await?;
     // Encode the transaction
     let encoded = tx_envelope.encoded_2718();
 
@@ -201,7 +202,7 @@ async fn send_raw_transaction_sync_timeout(tester: Tester) -> anyhow::Result<()>
         .gas_price(fees.max_fee_per_gas)
         .gas_limit(50_000);
     // Build and sign the transaction to get the envelope
-    let tx_envelope = tx.build(&tester.l2_wallet).await?;
+    let tx_envelope = NetworkTransactionBuilder::<Ethereum>::build(tx, &tester.l2_wallet).await?;
     // Encode the transaction
     let encoded = tx_envelope.encoded_2718();
 
@@ -335,7 +336,7 @@ async fn get_storage_proof(tester: Tester) -> anyhow::Result<()> {
     // Get L1 state which contains diamond proxy address
     let l1_state = L1State::fetch(
         tester.l1_provider().clone(),
-        tester.gateway_eth_provider(),
+        tester.gateway_node_provider(),
         bridgehub_address,
         chain_id,
     )

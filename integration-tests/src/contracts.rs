@@ -9,7 +9,7 @@ use alloy::rpc::types::TransactionReceipt;
 use tokio::time::{Duration, Instant};
 use zksync_os_alloy_ext::network::Zksync;
 use zksync_os_alloy_ext::provider::ZksyncApi;
-use zksync_os_contract_interface::Bridgehub;
+use zksync_os_provider::Bridgehub;
 use zksync_os_provider::NodeProvider;
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
 use zksync_os_types::L2_INTEROP_ROOT_STORAGE_ADDRESS;

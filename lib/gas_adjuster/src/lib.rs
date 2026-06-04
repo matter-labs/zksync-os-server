@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::watch;
+use zksync_os_provider::network::SettlementLayer;
 use zksync_os_rpc_api::types::L2FeeHistory;
 use zksync_os_types::PubdataMode;
 
@@ -31,7 +32,7 @@ pub struct GasAdjuster {
     blob_fill_ratio_statistics: Statistics<Ratio<u64>>,
 
     config: GasAdjusterConfig,
-    sl_provider: DynProvider,
+    sl_provider: DynProvider<SettlementLayer>,
     pubdata_price_sender: watch::Sender<Option<U256>>,
     blob_fill_ratio_sender: watch::Sender<Option<Ratio<u64>>>,
     sidecar_receiver: Receiver<BlobTransactionSidecar>,
@@ -50,7 +51,7 @@ pub struct GasAdjusterConfig {
 
 impl GasAdjuster {
     pub async fn new(
-        sl_provider: DynProvider,
+        sl_provider: DynProvider<SettlementLayer>,
         config: GasAdjusterConfig,
         pubdata_price_sender: watch::Sender<Option<U256>>,
         blob_fill_ratio_sender: watch::Sender<Option<Ratio<u64>>>,
@@ -283,7 +284,7 @@ impl GasAdjuster {
     /// Returns 1 value for each block in range, assuming that these blocks exist.
     /// Will return an error if the `upto_block` is beyond the head block.
     async fn base_fee_history(
-        provider: &DynProvider,
+        provider: &DynProvider<SettlementLayer>,
         upto_block: u64,
         block_count: u64,
     ) -> anyhow::Result<Vec<BaseFees>> {

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::ops;
 use zksync_os_contract_interface::IMessageRoot::AppendedChainBatchRoot;
 use zksync_os_contract_interface::{Bytes32PushTree, IMessageRoot};
+use zksync_os_provider::network::Zksync;
 
 const L2_MESSAGE_ROOT_ADDRESS: Address = address!("0x0000000000000000000000000000000000010005");
 
@@ -182,7 +183,7 @@ pub struct ChainAggProof {
 pub async fn get_chain_log_proof(
     l2_chain_id: u64,
     gw_block_number: u64,
-    gw_provider: &DynProvider,
+    gw_provider: &DynProvider<Zksync>,
 ) -> anyhow::Result<ChainAggProof> {
     let message_root = IMessageRoot::new(L2_MESSAGE_ROOT_ADDRESS, gw_provider.clone());
     let merkle_path_builder = message_root
@@ -236,7 +237,7 @@ pub async fn batch_tree_proof(
     gw_block_range: ops::RangeInclusive<u64>,
     l2_chain_id: u64,
     batch_number: u64,
-    gw_provider: &DynProvider,
+    gw_provider: &DynProvider<Zksync>,
 ) -> anyhow::Result<(Vec<B256>, u8)> {
     assert!(*gw_block_range.start() > 0);
 

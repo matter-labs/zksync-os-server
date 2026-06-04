@@ -11,14 +11,14 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use zksync_os_alloy_ext::provider::ZksyncApi;
-use zksync_os_contract_interface::Bridgehub;
-use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL, ReceiptAssert};
 use zksync_os_integration_tests::config::{ChainLayout, load_chain_config};
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
 use zksync_os_integration_tests::{CURRENT_TO_L1, StoppedTester, Tester, test_multisetup};
+use zksync_os_provider::Bridgehub;
 use zksync_os_provider::EthWalletProvider;
+use zksync_os_provider::l1_discovery::L1State;
 use zksync_os_server::INTERNAL_CONFIG_FILE_NAME;
 use zksync_os_server::config::Config;
 
@@ -103,7 +103,7 @@ async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
     let bridgehub_address = tester.l2_zk_provider.get_bridgehub_contract().await?;
     L1State::fetch(
         tester.l1_provider().clone(),
-        tester.gateway_eth_provider(),
+        tester.gateway_node_provider(),
         bridgehub_address,
         chain_id,
     )

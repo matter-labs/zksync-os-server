@@ -12,10 +12,10 @@ use zksync_os_batch_types::batcher_model::{
 };
 use zksync_os_batch_types::{BatchSignatureSet, ValidatedBatchSignature};
 use zksync_os_batcher_metrics::BatchExecutionStage;
-use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_network::{PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
+use zksync_os_provider::l1_discovery::{BatchVerificationSL, L1State};
 
 pub struct BatchVerificationPipelineStep<E> {
     config: BatchVerificationConfig,

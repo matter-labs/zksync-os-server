@@ -7,11 +7,12 @@ use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::network::SettlementLayer;
 
 /// Generic L1 Sender pipeline component
 /// Can be used for commit, prove, or execute operations
 pub struct L1Sender<C> {
-    pub provider: NodeProvider,
+    pub provider: NodeProvider<SettlementLayer>,
     pub config: L1SenderConfig<C>,
     pub to_address: Address,
     pub gateway: bool,

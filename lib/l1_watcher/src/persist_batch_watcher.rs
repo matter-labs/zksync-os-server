@@ -8,11 +8,12 @@ use std::collections::HashMap;
 use tokio::sync::watch;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
-use zksync_os_contract_interface::ZkChain;
-use zksync_os_contract_interface::settlement_layer_intervals::{
+use zksync_os_provider::NodeProvider;
+use zksync_os_provider::ZkChain;
+use zksync_os_provider::network::SettlementLayer;
+use zksync_os_provider::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
-use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
 /// Watches finalized commit and execute events together and persists only irreversibly executed
@@ -153,7 +154,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
     async fn parse_committed_batch(
         &self,
-        provider: &NodeProvider,
+        provider: &NodeProvider<SettlementLayer>,
         report: ReportCommittedBatchRangeZKsyncOS,
         log: Log,
     ) -> Result<DiscoveredCommittedBatch, L1WatcherError> {
@@ -171,7 +172,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
     async fn process_commit(
         &mut self,
-        provider: &NodeProvider,
+        provider: &NodeProvider<SettlementLayer>,
         report: ReportCommittedBatchRangeZKsyncOS,
         log: Log,
     ) -> Result<(), L1WatcherError> {
@@ -239,7 +240,9 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 }
 
 #[async_trait::async_trait]
-impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchStorage> {
+impl<BatchStorage: WriteBatch> ProcessRawEvents<SettlementLayer>
+    for L1PersistBatchWatcher<BatchStorage>
+{
     fn name(&self) -> &'static str {
         "persist_batch"
     }
@@ -256,7 +259,7 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
 
     async fn process_raw_event(
         &mut self,
-        provider: &NodeProvider,
+        provider: &NodeProvider<SettlementLayer>,
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let event_signature = log.topics()[0];

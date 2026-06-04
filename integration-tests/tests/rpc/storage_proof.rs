@@ -4,11 +4,11 @@ use alloy::network::ReceiptResponse;
 use alloy::primitives::{B256, U256};
 use alloy::providers::Provider;
 use zksync_os_alloy_ext::provider::ZksyncApi;
-use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::Counter;
 use zksync_os_integration_tests::contracts::Counter::CounterInstance;
+use zksync_os_provider::l1_discovery::L1State;
 use zksync_os_rpc_api::types::BatchStorageProof;
 use zksync_os_verify_storage_proof::l1::{fetch_stored_batch_hash, resolve_diamond_proxy};
 use zksync_os_verify_storage_proof::{VerificationResult, VerifyParams, verify_storage_proof};
@@ -101,7 +101,7 @@ async fn verify_storage_proof_with_l1_contract() -> anyhow::Result<()> {
     tracing::info!(?bridgehub_address, chain_id, "fetched L1 state");
     let l1_state = L1State::fetch(
         tester.l1_provider().clone(),
-        tester.gateway_eth_provider(),
+        tester.gateway_node_provider(),
         bridgehub_address,
         chain_id,
     )
@@ -248,7 +248,7 @@ async fn verify_storage_proof_empty_slot() -> anyhow::Result<()> {
     tracing::info!(?bridgehub_address, chain_id, "fetched L1 state");
     let l1_state = L1State::fetch(
         tester.l1_provider().clone(),
-        tester.gateway_eth_provider(),
+        tester.gateway_node_provider(),
         bridgehub_address,
         chain_id,
     )

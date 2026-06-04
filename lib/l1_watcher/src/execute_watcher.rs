@@ -4,8 +4,9 @@ use alloy::providers::Provider;
 use alloy::rpc::types::Log;
 use tokio::sync::watch;
 use zksync_os_contract_interface::IExecutor::BlockExecution;
-use zksync_os_contract_interface::ZkChain;
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::ZkChain;
+use zksync_os_provider::network::SettlementLayer;
 use zksync_os_storage_api::WriteFinality;
 
 /// Watches settlement-layer execution events and advances the executed finality frontier.
@@ -38,12 +39,12 @@ struct ExecuteWatcherState<Finality> {
 impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
     pub async fn create_watcher(
         config: L1WatcherConfig,
-        zk_chain: ZkChain,
+        zk_chain: ZkChain<SettlementLayer>,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         l1_chain_id: u64,
         block_updates: watch::Receiver<BlockUpdates>,
-    ) -> anyhow::Result<L1Watcher> {
+    ) -> anyhow::Result<L1Watcher<SettlementLayer>> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_executed_batch = finality.get_finality_status().last_executed_batch;
         tracing::info!(
@@ -85,11 +86,11 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
 impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
     pub async fn create_finalized_watcher(
         config: L1WatcherConfig,
-        zk_chain: ZkChain,
+        zk_chain: ZkChain<SettlementLayer>,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         block_updates: watch::Receiver<BlockUpdates>,
-    ) -> anyhow::Result<L1Watcher> {
+    ) -> anyhow::Result<L1Watcher<SettlementLayer>> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_finalized_executed_batch =
             finality.get_finality_status().last_finalized_executed_batch;
@@ -200,7 +201,7 @@ fn update_finalized_executed_finality<Finality: WriteFinality>(
 }
 
 #[async_trait::async_trait]
-impl<Finality: WriteFinality> ProcessL1Event for L1ExecuteWatcher<Finality> {
+impl<Finality: WriteFinality> ProcessL1Event<SettlementLayer> for L1ExecuteWatcher<Finality> {
     const NAME: &'static str = "block_execution";
 
     type SolEvent = BlockExecution;
@@ -208,7 +209,7 @@ impl<Finality: WriteFinality> ProcessL1Event for L1ExecuteWatcher<Finality> {
 
     async fn process_event(
         &mut self,
-        _provider: &NodeProvider,
+        _provider: &NodeProvider<SettlementLayer>,
         batch_execute: BlockExecution,
         _log: Log,
     ) -> Result<(), L1WatcherError> {
@@ -219,7 +220,9 @@ impl<Finality: WriteFinality> ProcessL1Event for L1ExecuteWatcher<Finality> {
 }
 
 #[async_trait::async_trait]
-impl<Finality: WriteFinality> ProcessL1Event for L1FinalizedExecuteWatcher<Finality> {
+impl<Finality: WriteFinality> ProcessL1Event<SettlementLayer>
+    for L1FinalizedExecuteWatcher<Finality>
+{
     const NAME: &'static str = "finalized_block_execution";
 
     type SolEvent = BlockExecution;
@@ -227,7 +230,7 @@ impl<Finality: WriteFinality> ProcessL1Event for L1FinalizedExecuteWatcher<Final
 
     async fn process_event(
         &mut self,
-        _provider: &NodeProvider,
+        _provider: &NodeProvider<SettlementLayer>,
         batch_execute: BlockExecution,
         _log: Log,
     ) -> Result<(), L1WatcherError> {

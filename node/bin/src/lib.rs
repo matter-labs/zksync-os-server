@@ -62,7 +62,6 @@ use zksync_os_batch_verification::{
     BatchVerificationConfig as BatchVerificationPolicyConfig, BatchVerificationPipelineStep,
     BatchVerificationResponder, effective_verification_policy,
 };
-use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
@@ -99,6 +98,8 @@ use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::l1_discovery::{BatchVerificationSL, L1State};
+use zksync_os_provider::network::{Ethereum, SettlementLayer, Zksync};
 use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, init_consensus,
     loopback_consensus,
@@ -195,9 +196,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         };
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
-    let l1_provider = build_node_provider(&config.l1_provider_config, ProviderKind::L1).await;
+    let l1_provider =
+        build_node_provider::<Ethereum>(&config.l1_provider_config, ProviderKind::L1).await;
     let gateway_provider = if let Some(config) = &config.gateway_provider_config {
-        Some(build_node_provider(config, ProviderKind::Gateway).await)
+        Some(build_node_provider::<Zksync>(config, ProviderKind::Gateway).await)
     } else {
         None
     };
@@ -245,9 +247,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
     });
     let (sl_provider, sl_block_updates) = if l1_state.l1_chain_id == l1_state.sl_chain_id {
-        (l1_provider.clone(), l1_block_updates.clone())
+        (
+            NodeProvider::from_l1(&l1_provider),
+            l1_block_updates.clone(),
+        )
     } else {
-        let sl_provider = gateway_provider.clone().unwrap();
+        let sl_provider = NodeProvider::from_gateway(gateway_provider.as_ref().unwrap());
         let sl_block_updates = gateway_block_updates
             .clone()
             .expect("gateway block updates must be initialized when SL is Gateway");
@@ -1171,7 +1176,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: &Config,
-    sl_provider: NodeProvider,
+    sl_provider: NodeProvider<SettlementLayer>,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     runtime: &Runtime,
@@ -1960,9 +1965,7 @@ mod tests {
     use super::check_batch_verification_mismatch;
     use crate::config::BatchVerificationConfig;
     use alloy::primitives::address;
-    use zksync_os_contract_interface::l1_discovery::{
-        BatchVerificationSL, BatchVerificationSLConfig,
-    };
+    use zksync_os_provider::l1_discovery::{BatchVerificationSL, BatchVerificationSLConfig};
 
     #[test]
     fn test_batch_verification_is_disabled_on_server() {

@@ -1,5 +1,5 @@
 use std::ops::RangeInclusive;
-use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_provider::l1_discovery::L1State;
 use zksync_os_types::NodeRole;
 
 #[allow(dead_code)] // some fields are only used for logging (`Debug`)

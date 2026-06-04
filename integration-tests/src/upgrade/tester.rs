@@ -20,8 +20,8 @@ use alloy::rpc::types::{TransactionInput, TransactionReceipt, TransactionRequest
 use anyhow::Context;
 use zksync_os_alloy_ext::provider::ZksyncApi as _;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
-use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::l1_discovery::L1State;
 use zksync_os_server::config::Config;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, ProtocolSemanticVersion, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
@@ -35,7 +35,7 @@ use zksync_os_types::{
 pub struct UpgradeTester<'a> {
     pub tester: &'a Tester,
     // Bridgehub contract on L1
-    pub bridgehub_l1: zksync_os_contract_interface::Bridgehub,
+    pub bridgehub_l1: zksync_os_provider::Bridgehub,
     // Bridgehub contract on SL
     pub bridgehub_sl: interfaces::Bridgehub::BridgehubInstance<NodeProvider>,
     // Bridgehub owner address on SL
@@ -192,7 +192,7 @@ impl<'a> UpgradeTester<'a> {
         let bridgehub_address_l1 = tester.l2_zk_provider.get_bridgehub_contract().await?;
         let l1_state = L1State::fetch(
             tester.l1_provider().clone(),
-            tester.gateway_eth_provider(),
+            tester.gateway_node_provider(),
             bridgehub_address_l1,
             chain_id,
         )
@@ -232,7 +232,7 @@ impl<'a> UpgradeTester<'a> {
 
         let settles_to_gateway = l1_state.l1_chain_id != l1_state.sl_chain_id;
         let l1_chain_admin_gateway = if settles_to_gateway {
-            let bridgehub_l1_for_gw = zksync_os_contract_interface::Bridgehub::new(
+            let bridgehub_l1_for_gw = zksync_os_provider::Bridgehub::new(
                 *l1_state.bridgehub_l1.address(),
                 tester.l1_provider().clone(),
                 l1_state.sl_chain_id,
@@ -669,7 +669,7 @@ impl<'a> UpgradeTester<'a> {
         tx_input: impl Into<TransactionInput>,
     ) -> anyhow::Result<()> {
         let tx_input = tx_input.into();
-        let bridgehub_l1_for_gw = zksync_os_contract_interface::Bridgehub::new(
+        let bridgehub_l1_for_gw = zksync_os_provider::Bridgehub::new(
             *self.bridgehub_l1.address(),
             self.bridgehub_l1.provider().clone(),
             self.tester.sl_provider.get_chain_id().await?,

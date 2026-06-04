@@ -8,12 +8,12 @@ use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
 use zksync_os_batch_types::{BatchSignature, ExtendedCommitBatchInfo};
-use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
 };
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_provider::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
 use zksync_os_storage_api::{StateError, TreeBlock, read_multichain_root};
 

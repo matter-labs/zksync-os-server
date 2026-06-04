@@ -8,9 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
-use zksync_os_contract_interface::ZkChain;
 use zksync_os_mempool::subpools::l1::L1Subpool;
 use zksync_os_provider::NodeProvider;
+use zksync_os_provider::ZkChain;
+use zksync_os_provider::network::SettlementLayer;
 use zksync_os_types::L1PriorityEnvelope;
 
 /// Watches L1 priority transaction events and feeds them into the L1 transaction subpool.
@@ -20,7 +21,7 @@ use zksync_os_types::L1PriorityEnvelope;
 /// `L1PriorityEnvelope` into `L1Subpool`.
 pub struct L1TxWatcher {
     next_l1_priority_id: u64,
-    zk_chain_sl: ZkChain,
+    zk_chain_sl: ZkChain<SettlementLayer>,
     cached_total_priority_ops_resp: Option<u64>,
     l1_subpool: L1Subpool,
 }
@@ -29,7 +30,7 @@ impl L1TxWatcher {
     pub async fn create_watcher(
         config: L1WatcherConfig,
         zk_chain_l1: ZkChain,
-        zk_chain_sl: ZkChain,
+        zk_chain_sl: ZkChain<SettlementLayer>,
         l1_subpool: L1Subpool,
         next_l1_priority_id: u64,
         block_updates: watch::Receiver<BlockUpdates>,
