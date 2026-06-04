@@ -1,6 +1,5 @@
 use crate::NativeBatchRunOutput;
 use alloy::primitives::{B256, ruint::aliases::B160};
-use alloy_0_4_0::{Address as AddressV8, B256 as B256V8};
 use anyhow::Context as _;
 use std::collections::{HashMap, VecDeque};
 use zk_ee_0_4_0::common_structs::{ProofData, da_commitment_scheme::DACommitmentScheme};
@@ -8,19 +7,17 @@ use zk_ee_0_4_0::system::metadata::zk_metadata::{BlockHashes, BlockMetadataFromO
 use zk_ee_0_4_0::utils::Bytes32;
 use zk_os_basic_system_0_4_0::system_implementation::flat_storage_model::FlatStorageLeaf;
 use zk_os_forward_system_0_4_0::run::{
-    BatchBlockInput, BatchState as ForwardBatchState, LeafProof, StorageCommitment,
-    generate_batch_proof_input,
+    BatchBlockInput, BatchState as ForwardBatchState, LeafProof, ReadStorageTree,
+    StorageCommitment, generate_batch_proof_input,
 };
-use zksync_os_interface::traits::EncodedTx as EncodedTxLocal;
-use zksync_os_interface_0_4_0::traits::{
-    EncodedTx as EncodedTxV8, PreimageSource as PreimageSourceV8, ReadStorage as ReadStorageV8,
-    TxListSource as TxListSourceV8,
+use zksync_os_interface::traits::{
+    PreimageSource as InterfacePreimageSource, ReadStorage as InterfaceReadStorage, TxListSource,
 };
 use zksync_os_merkle_tree::{
     Blake2Hasher, MerkleTree, MerkleTreeProver, RocksDBWrapper, api::flat,
 };
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, ViewState};
-use zksync_os_types::{PubdataMode, ZkTransaction, ZksyncOsEncode};
+use zksync_os_types::{PubdataMode, ZksyncOsEncode};
 
 const TREE_DEPTH: u8 = 64;
 
@@ -124,7 +121,7 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
     })
 }
 
-fn batch_block_input(replay_record: &ReplayRecord) -> BatchBlockInput<TxListSourceV8> {
+fn batch_block_input(replay_record: &ReplayRecord) -> BatchBlockInput<TxListSource> {
     BatchBlockInput {
         block_context: BlockMetadataFromOracle {
             chain_id: replay_record.block_context.chain_id,
@@ -141,23 +138,14 @@ fn batch_block_input(replay_record: &ReplayRecord) -> BatchBlockInput<TxListSour
             blob_fee: replay_record.block_context.blob_fee,
             is_gateway: false,
         },
-        tx_source: TxListSourceV8 {
+        tx_source: TxListSource {
             transactions: replay_record
                 .transactions
                 .iter()
                 .cloned()
-                .map(encode_tx_v8)
+                .map(|tx| tx.encode())
                 .collect::<VecDeque<_>>(),
         },
-    }
-}
-
-fn encode_tx_v8(tx: ZkTransaction) -> EncodedTxV8 {
-    match tx.encode() {
-        EncodedTxLocal::Abi(bytes) => EncodedTxV8::Abi(bytes),
-        EncodedTxLocal::Rlp(bytes, signer) => {
-            EncodedTxV8::Rlp(bytes, AddressV8::from(signer.into_array()))
-        }
     }
 }
 
@@ -184,14 +172,6 @@ fn b256_from_bytes32(value: Bytes32) -> B256 {
     B256::from(value.as_u8_array())
 }
 
-fn local_b256_from_v8(value: B256V8) -> B256 {
-    B256::from_slice(value.as_slice())
-}
-
-fn v8_b256_from_local(value: B256) -> B256V8 {
-    B256V8::from_slice(value.as_slice())
-}
-
 #[derive(Debug)]
 struct HistoricalBatchState<SV> {
     state_views: Vec<SV>,
@@ -210,21 +190,19 @@ impl<SV> HistoricalBatchState<SV> {
     }
 }
 
-impl<SV: ViewState> ReadStorageV8 for HistoricalBatchState<SV> {
-    fn read(&mut self, key: B256V8) -> Option<B256V8> {
-        self.state_views[self.cursor]
-            .read(local_b256_from_v8(key))
-            .map(v8_b256_from_local)
+impl<SV: ViewState> InterfaceReadStorage for HistoricalBatchState<SV> {
+    fn read(&mut self, key: B256) -> Option<B256> {
+        self.state_views[self.cursor].read(key)
     }
 }
 
-impl<SV: ViewState> PreimageSourceV8 for HistoricalBatchState<SV> {
-    fn get_preimage(&mut self, hash: B256V8) -> Option<Vec<u8>> {
-        self.state_views[self.cursor].get_preimage(local_b256_from_v8(hash))
+impl<SV: ViewState> InterfacePreimageSource for HistoricalBatchState<SV> {
+    fn get_preimage(&mut self, hash: B256) -> Option<Vec<u8>> {
+        self.state_views[self.cursor].get_preimage(hash)
     }
 }
 
-impl<SV: ViewState> zk_os_forward_system_0_4_0::run::ReadStorageTree for HistoricalBatchState<SV> {
+impl<SV: ViewState> ReadStorageTree for HistoricalBatchState<SV> {
     fn tree_index(&mut self, key: Bytes32) -> Option<u64> {
         self.trees[self.cursor].tree_index(b256_from_bytes32(key))
     }
@@ -241,7 +219,7 @@ impl<SV: ViewState> zk_os_forward_system_0_4_0::run::ReadStorageTree for Histori
 impl<SV: ViewState> ForwardBatchState for HistoricalBatchState<SV> {
     fn apply_block_output(
         &mut self,
-        _block_output: &zksync_os_interface_0_4_0::types::BlockOutput,
+        _block_output: &zk_os_forward_system_0_4_0::run::output::BlockOutput,
     ) {
         if self.cursor + 1 < self.state_views.len() {
             self.cursor += 1;

@@ -364,21 +364,6 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alloy"
-version = "1.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4973038846323e4e69a433916522195dce2947770076c03078fc21c80ea0f1c4"
-dependencies = [
- "alloy-consensus 1.7.3",
- "alloy-core",
- "alloy-eips 1.7.3",
- "alloy-provider 1.7.3",
- "alloy-rpc-types 1.7.3",
- "alloy-serde 1.7.3",
- "alloy-trie",
-]
-
-[[package]]
-name = "alloy"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8010fc7e9e8643ef4e758cdccf3eef26734594aedf88a9d5ed35e51837d42ef"
@@ -388,21 +373,21 @@ dependencies = [
  "alloy-core",
  "alloy-eips 2.0.4",
  "alloy-genesis",
- "alloy-json-rpc 2.0.4",
- "alloy-network 2.0.4",
+ "alloy-json-rpc",
+ "alloy-network",
  "alloy-node-bindings",
- "alloy-provider 2.0.4",
+ "alloy-provider",
  "alloy-pubsub",
- "alloy-rpc-client 2.0.4",
- "alloy-rpc-types 2.0.4",
+ "alloy-rpc-client",
+ "alloy-rpc-types",
  "alloy-serde 2.0.4",
- "alloy-signer 2.0.4",
+ "alloy-signer",
  "alloy-signer-aws",
  "alloy-signer-gcp",
  "alloy-signer-ledger",
  "alloy-signer-local",
  "alloy-signer-turnkey",
- "alloy-transport 2.0.4",
+ "alloy-transport",
  "alloy-transport-http",
  "alloy-transport-ws",
  "alloy-trie",
@@ -440,7 +425,6 @@ dependencies = [
  "either",
  "k256",
  "once_cell",
- "rand 0.8.5",
  "secp256k1 0.30.0",
  "serde",
  "serde_json",
@@ -478,20 +462,6 @@ dependencies = [
 
 [[package]]
 name = "alloy-consensus-any"
-version = "1.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba4cdb42df3871cd6b346d6a938ec2ba69a9a0f49d1f82714bc5c48349268434"
-dependencies = [
- "alloy-consensus 1.7.3",
- "alloy-eips 1.7.3",
- "alloy-primitives",
- "alloy-rlp",
- "alloy-serde 1.7.3",
- "serde",
-]
-
-[[package]]
-name = "alloy-consensus-any"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd98696ca3617d3a9ba1a6f2011880cbfd5618228dab6400c9f8bca457859a8"
@@ -514,14 +484,14 @@ dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-dyn-abi",
  "alloy-json-abi",
- "alloy-network 2.0.4",
- "alloy-network-primitives 2.0.4",
+ "alloy-network",
+ "alloy-network-primitives",
  "alloy-primitives",
- "alloy-provider 2.0.4",
+ "alloy-provider",
  "alloy-pubsub",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-eth",
  "alloy-sol-types",
- "alloy-transport 2.0.4",
+ "alloy-transport",
  "futures",
  "futures-util",
  "serde_json",
@@ -679,7 +649,7 @@ dependencies = [
  "alloy-hardforks 0.4.7",
  "alloy-primitives",
  "alloy-rpc-types-engine",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-eth",
  "alloy-sol-types",
  "auto_impl",
  "derive_more 2.1.1",
@@ -744,21 +714,6 @@ dependencies = [
 
 [[package]]
 name = "alloy-json-rpc"
-version = "1.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "422d110f1c40f1f8d0e5562b0b649c35f345fccb7093d9f02729943dcd1eef71"
-dependencies = [
- "alloy-primitives",
- "alloy-sol-types",
- "http 1.3.1",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tracing",
-]
-
-[[package]]
-name = "alloy-json-rpc"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19e352478b756bad5d7203148e4b461861282ea2ded3da406ba24868b52cd098"
@@ -774,46 +729,20 @@ dependencies = [
 
 [[package]]
 name = "alloy-network"
-version = "1.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cbca04f9b410fdc51aaaf88433cbac761213905a65fe832058bcf6690585762"
-dependencies = [
- "alloy-consensus 1.7.3",
- "alloy-consensus-any 1.7.3",
- "alloy-eips 1.7.3",
- "alloy-json-rpc 1.8.3",
- "alloy-network-primitives 1.7.3",
- "alloy-primitives",
- "alloy-rpc-types-any 1.7.3",
- "alloy-rpc-types-eth 1.7.3",
- "alloy-serde 1.7.3",
- "alloy-signer 1.8.3",
- "alloy-sol-types",
- "async-trait",
- "auto_impl",
- "derive_more 2.1.1",
- "futures-utils-wasm",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
-]
-
-[[package]]
-name = "alloy-network"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed08ae169869e08370ed121612e0d3dadac33d1a256e9f2465926b23f0bd7d95"
 dependencies = [
  "alloy-consensus 2.0.4",
- "alloy-consensus-any 2.0.4",
+ "alloy-consensus-any",
  "alloy-eips 2.0.4",
- "alloy-json-rpc 2.0.4",
- "alloy-network-primitives 2.0.4",
+ "alloy-json-rpc",
+ "alloy-network-primitives",
  "alloy-primitives",
- "alloy-rpc-types-any 2.0.4",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-any",
+ "alloy-rpc-types-eth",
  "alloy-serde 2.0.4",
- "alloy-signer 2.0.4",
+ "alloy-signer",
  "alloy-sol-types",
  "async-trait",
  "auto_impl",
@@ -822,19 +751,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.17",
-]
-
-[[package]]
-name = "alloy-network-primitives"
-version = "1.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42d6d15e069a8b11f56bef2eccbad2a873c6dd4d4c81d04dda29710f5ea52f04"
-dependencies = [
- "alloy-consensus 1.7.3",
- "alloy-eips 1.7.3",
- "alloy-primitives",
- "alloy-serde 1.7.3",
- "serde",
 ]
 
 [[package]]
@@ -858,9 +774,9 @@ checksum = "5a29998ddc1f3a7658b82de0784566c65e2f116917a349de7fdd0b765e539d0c"
 dependencies = [
  "alloy-genesis",
  "alloy-hardforks 0.2.12",
- "alloy-network 2.0.4",
+ "alloy-network",
  "alloy-primitives",
- "alloy-signer 2.0.4",
+ "alloy-signer",
  "alloy-signer-local",
  "k256",
  "libc",
@@ -905,43 +821,6 @@ dependencies = [
 
 [[package]]
 name = "alloy-provider"
-version = "1.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d181c8cc7cf4805d7e589bf4074d56d55064fa1a979f005a45a62b047616d870"
-dependencies = [
- "alloy-chains",
- "alloy-consensus 1.7.3",
- "alloy-eips 1.7.3",
- "alloy-json-rpc 1.8.3",
- "alloy-network 1.7.3",
- "alloy-network-primitives 1.7.3",
- "alloy-primitives",
- "alloy-rpc-client 1.8.3",
- "alloy-rpc-types-eth 1.7.3",
- "alloy-rpc-types-trace 1.7.3",
- "alloy-signer 1.8.3",
- "alloy-sol-types",
- "alloy-transport 1.8.3",
- "async-stream",
- "async-trait",
- "auto_impl",
- "dashmap 6.1.0",
- "either",
- "futures",
- "futures-utils-wasm",
- "lru",
- "parking_lot",
- "pin-project",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "wasmtimer",
-]
-
-[[package]]
-name = "alloy-provider"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93a7c17472b55482d4734154c2f5ed13f72e03f6752cebb927f6a2d8b52e646c"
@@ -949,21 +828,21 @@ dependencies = [
  "alloy-chains",
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
- "alloy-json-rpc 2.0.4",
- "alloy-network 2.0.4",
- "alloy-network-primitives 2.0.4",
+ "alloy-json-rpc",
+ "alloy-network",
+ "alloy-network-primitives",
  "alloy-node-bindings",
  "alloy-primitives",
  "alloy-pubsub",
- "alloy-rpc-client 2.0.4",
+ "alloy-rpc-client",
  "alloy-rpc-types-anvil",
  "alloy-rpc-types-debug",
- "alloy-rpc-types-eth 2.0.4",
- "alloy-rpc-types-trace 2.0.4",
+ "alloy-rpc-types-eth",
+ "alloy-rpc-types-trace",
  "alloy-rpc-types-txpool",
- "alloy-signer 2.0.4",
+ "alloy-signer",
  "alloy-sol-types",
- "alloy-transport 2.0.4",
+ "alloy-transport",
  "alloy-transport-http",
  "alloy-transport-ws",
  "async-stream",
@@ -992,9 +871,9 @@ version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8d86958b02bca85103d64fa60d7b364a8b017c6e40f2b02c3f50ca22964a738"
 dependencies = [
- "alloy-json-rpc 2.0.4",
+ "alloy-json-rpc",
  "alloy-primitives",
- "alloy-transport 2.0.4",
+ "alloy-transport",
  "auto_impl",
  "bimap",
  "futures",
@@ -1032,34 +911,14 @@ dependencies = [
 
 [[package]]
 name = "alloy-rpc-client"
-version = "1.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94fcc9604042ca80bd37aa5e232ea1cd851f337e31e2babbbb345bc0b1c30de3"
-dependencies = [
- "alloy-json-rpc 1.8.3",
- "alloy-primitives",
- "alloy-transport 1.8.3",
- "futures",
- "pin-project",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tower",
- "tracing",
- "wasmtimer",
-]
-
-[[package]]
-name = "alloy-rpc-client"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5beb5c2fe6b960c8e8b038e69fd502a90a2e930afa4770efb748b163b0767729"
 dependencies = [
- "alloy-json-rpc 2.0.4",
+ "alloy-json-rpc",
  "alloy-primitives",
  "alloy-pubsub",
- "alloy-transport 2.0.4",
+ "alloy-transport",
  "alloy-transport-http",
  "alloy-transport-ws",
  "futures",
@@ -1077,19 +936,6 @@ dependencies = [
 
 [[package]]
 name = "alloy-rpc-types"
-version = "1.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bdcbf9dfd5eea8bfeb078b1d906da8cd3a39c4d4dbe7a628025648e323611f6"
-dependencies = [
- "alloy-primitives",
- "alloy-rpc-types-eth 1.7.3",
- "alloy-rpc-types-trace 1.7.3",
- "alloy-serde 1.7.3",
- "serde",
-]
-
-[[package]]
-name = "alloy-rpc-types"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ee1257a278f6d293e05c5162c5940a1561b1aa85ded0028b464c81de37ebfa5"
@@ -1098,8 +944,8 @@ dependencies = [
  "alloy-rpc-types-anvil",
  "alloy-rpc-types-debug",
  "alloy-rpc-types-engine",
- "alloy-rpc-types-eth 2.0.4",
- "alloy-rpc-types-trace 2.0.4",
+ "alloy-rpc-types-eth",
+ "alloy-rpc-types-trace",
  "alloy-rpc-types-txpool",
  "alloy-serde 2.0.4",
  "serde",
@@ -1124,20 +970,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df32156f085e74eac942b6103744be49b817c302341aaa8cb0c1c88dc29228d9"
 dependencies = [
  "alloy-primitives",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-eth",
  "alloy-serde 2.0.4",
  "serde",
-]
-
-[[package]]
-name = "alloy-rpc-types-any"
-version = "1.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd720b63f82b457610f2eaaf1f32edf44efffe03ae25d537632e7d23e7929e1a"
-dependencies = [
- "alloy-consensus-any 1.7.3",
- "alloy-rpc-types-eth 1.7.3",
- "alloy-serde 1.7.3",
 ]
 
 [[package]]
@@ -1146,10 +981,10 @@ version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a234bfbdf7a76c3d13808f729af5321852de3dedcaa6fc6d5f54787aaf54c6a"
 dependencies = [
- "alloy-consensus-any 2.0.4",
- "alloy-network-primitives 2.0.4",
+ "alloy-consensus-any",
+ "alloy-network-primitives",
  "alloy-primitives",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-eth",
  "alloy-serde 2.0.4",
  "serde",
  "serde_json",
@@ -1187,35 +1022,14 @@ dependencies = [
 
 [[package]]
 name = "alloy-rpc-types-eth"
-version = "1.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b2dc411f13092f237d2bf6918caf80977fc2f51485f9b90cb2a2f956912c8c9"
-dependencies = [
- "alloy-consensus 1.7.3",
- "alloy-consensus-any 1.7.3",
- "alloy-eips 1.7.3",
- "alloy-network-primitives 1.7.3",
- "alloy-primitives",
- "alloy-rlp",
- "alloy-serde 1.7.3",
- "alloy-sol-types",
- "itertools 0.13.0",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror 2.0.17",
-]
-
-[[package]]
-name = "alloy-rpc-types-eth"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56a282daf869eeb7383d3d5c2deb35b0b3fb45ecb329513af4090fc61245ee18"
 dependencies = [
  "alloy-consensus 2.0.4",
- "alloy-consensus-any 2.0.4",
+ "alloy-consensus-any",
  "alloy-eips 2.0.4",
- "alloy-network-primitives 2.0.4",
+ "alloy-network-primitives",
  "alloy-primitives",
  "alloy-rlp",
  "alloy-serde 2.0.4",
@@ -1230,26 +1044,12 @@ dependencies = [
 
 [[package]]
 name = "alloy-rpc-types-trace"
-version = "1.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ad79f1e27e161943b5a4f99fe5534ef0849876214be411e0032c12f38e94daa"
-dependencies = [
- "alloy-primitives",
- "alloy-rpc-types-eth 1.7.3",
- "alloy-serde 1.7.3",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
-]
-
-[[package]]
-name = "alloy-rpc-types-trace"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6184b5d14152b68b0bb8beb621339d94f0b761a37958bb365fbf7c00922125c2"
 dependencies = [
  "alloy-primitives",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-eth",
  "alloy-serde 2.0.4",
  "serde",
  "serde_json",
@@ -1263,7 +1063,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f00b631c361e7c7baaf4f1f5a9877730f3507fed2acb9d4b34841b8184b2ec28"
 dependencies = [
  "alloy-primitives",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-eth",
  "alloy-serde 2.0.4",
  "serde",
 ]
@@ -1293,21 +1093,6 @@ dependencies = [
 
 [[package]]
 name = "alloy-signer"
-version = "1.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43f447aefab0f1c0649f71edc33f590992d4e122bc35fb9cdbbf67d4421ace85"
-dependencies = [
- "alloy-primitives",
- "async-trait",
- "auto_impl",
- "either",
- "elliptic-curve",
- "k256",
- "thiserror 2.0.17",
-]
-
-[[package]]
-name = "alloy-signer"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41eb29f7a8adcd8941fbb8e134022a133e6f8dfd345f2e3b7109599f8a7dca08"
@@ -1330,9 +1115,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1258987fbc82716b5153ec7bb95a8a295e7640871b8f03d8ec7c4000dc80c215"
 dependencies = [
  "alloy-consensus 2.0.4",
- "alloy-network 2.0.4",
+ "alloy-network",
  "alloy-primitives",
- "alloy-signer 2.0.4",
+ "alloy-signer",
  "async-trait",
  "aws-config",
  "aws-sdk-kms",
@@ -1349,9 +1134,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ffc2a49bca5b73c6964711b57452f6c36a6bcb7f845ab7e9ad05b5a828d0161"
 dependencies = [
  "alloy-consensus 2.0.4",
- "alloy-network 2.0.4",
+ "alloy-network",
  "alloy-primitives",
- "alloy-signer 2.0.4",
+ "alloy-signer",
  "async-trait",
  "gcloud-sdk",
  "k256",
@@ -1368,9 +1153,9 @@ checksum = "94e11ddaddfb98c1ddce737dc440225565b0ae0987ac9ad5e59a85db5904878c"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-dyn-abi",
- "alloy-network 2.0.4",
+ "alloy-network",
  "alloy-primitives",
- "alloy-signer 2.0.4",
+ "alloy-signer",
  "alloy-sol-types",
  "async-trait",
  "coins-ledger",
@@ -1387,9 +1172,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef839e7ce9b59aa60fa9a175e97986c6145c888d643b0f1fb0a3e7b8e56a2e2"
 dependencies = [
  "alloy-consensus 2.0.4",
- "alloy-network 2.0.4",
+ "alloy-network",
  "alloy-primitives",
- "alloy-signer 2.0.4",
+ "alloy-signer",
  "async-trait",
  "k256",
  "rand 0.8.5",
@@ -1403,9 +1188,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82ff16b4166fb90bbe79bd1e49244824fb3cadc6b8cd11e9c8a002c1f8c07492"
 dependencies = [
  "alloy-consensus 2.0.4",
- "alloy-network 2.0.4",
+ "alloy-network",
  "alloy-primitives",
- "alloy-signer 2.0.4",
+ "alloy-signer",
  "async-trait",
  "thiserror 2.0.17",
  "tracing",
@@ -1487,34 +1272,11 @@ dependencies = [
 
 [[package]]
 name = "alloy-transport"
-version = "1.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8098f965442a9feb620965ba4b4be5e2b320f4ec5a3fff6bfa9e1ff7ef42bed1"
-dependencies = [
- "alloy-json-rpc 1.8.3",
- "auto_impl",
- "base64 0.22.1",
- "derive_more 2.1.1",
- "futures",
- "futures-utils-wasm",
- "parking_lot",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tower",
- "tracing",
- "url",
- "wasmtimer",
-]
-
-[[package]]
-name = "alloy-transport"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ac7a80c0bac3e44559d53d002e34c461dc2f23262b42cafec019bc70551abbe"
 dependencies = [
- "alloy-json-rpc 2.0.4",
+ "alloy-json-rpc",
  "auto_impl",
  "base64 0.22.1",
  "derive_more 2.1.1",
@@ -1537,8 +1299,8 @@ version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eed3ed3300a998f88639ed619fdbbd88bd82865e00c6a8ecb796c99eb12358f6"
 dependencies = [
- "alloy-json-rpc 2.0.4",
- "alloy-transport 2.0.4",
+ "alloy-json-rpc",
+ "alloy-transport",
  "itertools 0.14.0",
  "reqwest 0.13.3",
  "serde_json",
@@ -1554,7 +1316,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e3bff84b2b2a46eb34cc522dc3f889a2867c70be90a377421429b662b3ec4ce"
 dependencies = [
  "alloy-pubsub",
- "alloy-transport 2.0.4",
+ "alloy-transport",
  "futures",
  "http 1.3.1",
  "rustls",
@@ -2888,7 +2650,7 @@ dependencies = [
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 dependencies = [
  "airbender-crypto",
  "arrayvec",
@@ -3027,7 +2789,7 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 dependencies = [
  "airbender-crypto",
  "arrayvec",
@@ -3734,7 +3496,7 @@ dependencies = [
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 dependencies = [
  "airbender-crypto",
  "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
@@ -3840,7 +3602,7 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1
 [[package]]
 name = "cc-traits"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 
 [[package]]
 name = "cesu8"
@@ -4756,7 +4518,7 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1
 [[package]]
 name = "cycle_marker"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 
 [[package]]
 name = "darling"
@@ -4812,7 +4574,6 @@ dependencies = [
  "ident_case",
  "proc-macro2",
  "quote",
- "serde",
  "strsim",
  "syn 2.0.117",
 ]
@@ -4943,7 +4704,7 @@ dependencies = [
 [[package]]
 name = "delegated_u256"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 dependencies = [
  "ruint",
  "serde",
@@ -5440,7 +5201,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5477,7 +5238,7 @@ dependencies = [
  "ruint",
  "strum_macros",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3)",
- "zksync_os_evm_errors 0.1.3",
+ "zksync_os_evm_errors",
 ]
 
 [[package]]
@@ -5493,7 +5254,7 @@ dependencies = [
  "ruint",
  "strum_macros",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3)",
- "zksync_os_evm_errors 0.1.3",
+ "zksync_os_evm_errors",
 ]
 
 [[package]]
@@ -5509,7 +5270,7 @@ dependencies = [
  "ruint",
  "strum_macros",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3)",
- "zksync_os_evm_errors 0.1.3",
+ "zksync_os_evm_errors",
 ]
 
 [[package]]
@@ -5525,7 +5286,7 @@ dependencies = [
  "ruint",
  "strum_macros",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3)",
- "zksync_os_evm_errors 0.1.3",
+ "zksync_os_evm_errors",
 ]
 
 [[package]]
@@ -5546,7 +5307,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 dependencies = [
  "airbender-crypto",
  "arrayvec",
@@ -5598,7 +5359,7 @@ dependencies = [
  "serde",
  "serde_json",
  "setups 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
- "sha3 0.10.8",
+ "sha3 0.11.0",
  "trace_and_split 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
  "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
 ]
@@ -5962,7 +5723,7 @@ name = "forward_system"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3#2f65982d788f651c8504c7805eab6b17813226c6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "arrayvec",
  "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3)",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3)",
@@ -5976,8 +5737,8 @@ dependencies = [
  "serde",
  "strum_macros",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3)",
- "zksync_os_evm_errors 0.1.3",
- "zksync_os_interface 0.1.3",
+ "zksync_os_evm_errors",
+ "zksync_os_interface",
  "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3)",
 ]
 
@@ -5986,7 +5747,7 @@ name = "forward_system"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3#bb085de0891157b2295ffbd1329ebf5cc2944c0e"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "arrayvec",
  "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3)",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3)",
@@ -6001,8 +5762,8 @@ dependencies = [
  "strum_macros",
  "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3)",
- "zksync_os_evm_errors 0.1.3",
- "zksync_os_interface 0.1.3",
+ "zksync_os_evm_errors",
+ "zksync_os_interface",
  "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3)",
 ]
 
@@ -6011,7 +5772,7 @@ name = "forward_system"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3#9d82156e85c6430ba53d1a186c23828c1dff05fd"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "arrayvec",
  "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3)",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3)",
@@ -6026,8 +5787,8 @@ dependencies = [
  "strum_macros",
  "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3)",
- "zksync_os_evm_errors 0.1.3",
- "zksync_os_interface 0.1.3",
+ "zksync_os_evm_errors",
+ "zksync_os_interface",
  "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3)",
 ]
 
@@ -6036,7 +5797,7 @@ name = "forward_system"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3#d5492542870c39b4c262f613d76ae9ddf5036900"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "arrayvec",
  "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3)",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3)",
@@ -6051,8 +5812,8 @@ dependencies = [
  "strum_macros",
  "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3)",
- "zksync_os_evm_errors 0.1.3",
- "zksync_os_interface 0.1.3",
+ "zksync_os_evm_errors",
+ "zksync_os_interface",
  "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3)",
 ]
 
@@ -6061,7 +5822,7 @@ name = "forward_system"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3#b4193659af83b6c71419ddda3f57e0302c61eb8d"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "bincode 1.3.3",
@@ -6076,18 +5837,18 @@ dependencies = [
  "strum_macros",
  "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
- "zksync_os_evm_errors 0.1.3",
- "zksync_os_interface 0.1.3",
+ "zksync_os_evm_errors",
+ "zksync_os_interface",
  "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
 ]
 
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 dependencies = [
  "airbender-crypto",
- "alloy 1.7.3",
+ "alloy",
  "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
  "bincode 1.3.3",
@@ -6104,8 +5865,8 @@ dependencies = [
  "strum_macros",
  "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "zksync_os_evm_errors 0.1.1",
- "zksync_os_interface 0.1.1",
+ "zksync_os_evm_errors",
+ "zksync_os_interface",
 ]
 
 [[package]]
@@ -7006,7 +6767,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -8004,7 +7765,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.53.5",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -8443,7 +8204,7 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 
 [[package]]
 name = "modular-bitfield"
@@ -9128,7 +8889,7 @@ dependencies = [
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 dependencies = [
  "riscv_transpiler",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
@@ -9964,7 +9725,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -10002,9 +9763,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10424,7 +10185,7 @@ dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
  "alloy-primitives",
- "alloy-signer 2.0.4",
+ "alloy-signer",
  "alloy-signer-local",
  "derive_more 2.1.1",
  "metrics",
@@ -10803,7 +10564,7 @@ dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
  "alloy-primitives",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-eth",
  "reth-codecs",
  "reth-primitives-traits",
  "serde",
@@ -11020,7 +10781,7 @@ dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-primitives",
  "alloy-rpc-types-admin",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-eth",
  "auto_impl",
  "derive_more 2.1.1",
  "enr",
@@ -11164,7 +10925,7 @@ dependencies = [
  "alloy-genesis",
  "alloy-primitives",
  "alloy-rlp",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-eth",
  "alloy-trie",
  "arbitrary",
  "byteorder",
@@ -11268,10 +11029,10 @@ source = "git+https://github.com/itegulov/reth.git?rev=ff8afdc5dbc253019df5b68f4
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-evm",
- "alloy-json-rpc 2.0.4",
- "alloy-network 2.0.4",
+ "alloy-json-rpc",
+ "alloy-network",
  "alloy-primitives",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-eth",
  "auto_impl",
  "dyn-clone",
  "jsonrpsee-types",
@@ -11289,12 +11050,12 @@ dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
  "alloy-evm",
- "alloy-network 2.0.4",
+ "alloy-network",
  "alloy-primitives",
- "alloy-rpc-client 2.0.4",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-client",
+ "alloy-rpc-types-eth",
  "alloy-sol-types",
- "alloy-transport 2.0.4",
+ "alloy-transport",
  "derive_more 2.1.1",
  "futures",
  "itertools 0.14.0",
@@ -11352,10 +11113,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "860fe223501a76ff14aa3bf164f739f31008c2a2905ac85708bfd88f042e6151"
 dependencies = [
  "alloy-consensus 2.0.4",
- "alloy-network 2.0.4",
+ "alloy-network",
  "alloy-primitives",
- "alloy-rpc-types-eth 2.0.4",
- "alloy-signer 2.0.4",
+ "alloy-rpc-types-eth",
+ "alloy-signer",
  "reth-primitives-traits",
  "thiserror 2.0.17",
 ]
@@ -11556,7 +11317,7 @@ dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-primitives",
  "alloy-rlp",
- "alloy-rpc-types-eth 2.0.4",
+ "alloy-rpc-types-eth",
  "alloy-serde 2.0.4",
  "alloy-trie",
  "arbitrary",
@@ -11759,8 +11520,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "731b682530a732ef9c189ef831589128e2ce34d4a306c956322ae2dffe009715"
 dependencies = [
  "alloy-primitives",
- "alloy-rpc-types-eth 2.0.4",
- "alloy-rpc-types-trace 2.0.4",
+ "alloy-rpc-types-eth",
+ "alloy-rpc-types-trace",
  "alloy-sol-types",
  "anstyle",
  "colorchoice",
@@ -12007,7 +11768,7 @@ dependencies = [
  "cs 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
  "dynasmrt",
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
- "keccak 0.1.6",
+ "keccak 0.2.0",
  "riscv-decode",
  "ruint",
  "seq-macro",
@@ -12250,7 +12011,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -12318,7 +12079,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -12339,7 +12100,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs 1.0.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -13053,7 +12814,7 @@ dependencies = [
  "serde",
  "serde-big-array",
  "serde_json",
- "sha3 0.10.8",
+ "sha3 0.11.0",
  "shift_binary_csr",
  "syn 2.0.117",
  "unified_reduced_machine",
@@ -13275,7 +13036,7 @@ version = "0.4.0-pre.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fb95162a1c608d4e018e81a46ed73ec5e105fb9b8a36bda8bd175ac7b56e3530"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "compile-fmt",
  "primitive-types",
@@ -13450,7 +13211,7 @@ dependencies = [
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 dependencies = [
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
 ]
@@ -13694,7 +13455,7 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 dependencies = [
  "arrayvec",
  "cycle_marker 0.1.0",
@@ -13753,7 +13514,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -14623,7 +14384,7 @@ checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 [[package]]
 name = "u256"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 dependencies = [
  "delegated_u256",
  "ruint",
@@ -15342,7 +15103,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -16207,7 +15968,7 @@ dependencies = [
  "ruint",
  "serde",
  "strum_macros",
- "zksync_os_evm_errors 0.1.3",
+ "zksync_os_evm_errors",
 ]
 
 [[package]]
@@ -16224,7 +15985,7 @@ dependencies = [
  "ruint",
  "serde",
  "strum_macros",
- "zksync_os_evm_errors 0.1.3",
+ "zksync_os_evm_errors",
 ]
 
 [[package]]
@@ -16241,7 +16002,7 @@ dependencies = [
  "ruint",
  "serde",
  "strum_macros",
- "zksync_os_evm_errors 0.1.3",
+ "zksync_os_evm_errors",
 ]
 
 [[package]]
@@ -16257,7 +16018,7 @@ dependencies = [
  "paste",
  "ruint",
  "strum_macros",
- "zksync_os_evm_errors 0.1.3",
+ "zksync_os_evm_errors",
 ]
 
 [[package]]
@@ -16279,7 +16040,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#153a5e46a3b42e0fe229d10b9e4100d094bfdf9a"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
 dependencies = [
  "airbender-crypto",
  "arrayvec",
@@ -16306,7 +16067,7 @@ dependencies = [
 name = "zksync_os_alloy_ext"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "serde",
  "tokio",
  "tracing",
@@ -16320,7 +16081,7 @@ name = "zksync_os_api"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3#b4193659af83b6c71419ddda3f57e0302c61eb8d"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "alloy-sol-types",
  "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
@@ -16330,7 +16091,7 @@ dependencies = [
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "ruint",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
 ]
 
@@ -16353,7 +16114,7 @@ dependencies = [
 name = "zksync_os_base_token_adjuster"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "num",
  "secrecy",
@@ -16372,7 +16133,7 @@ dependencies = [
 name = "zksync_os_batch_types"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "blake2",
  "serde",
@@ -16381,7 +16142,7 @@ dependencies = [
  "time",
  "zksync_os_batcher_metrics",
  "zksync_os_contract_interface",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_merkle_tree_api",
  "zksync_os_mini_merkle_tree",
  "zksync_os_observability",
@@ -16393,7 +16154,7 @@ dependencies = [
 name = "zksync_os_batch_verification"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "secrecy",
@@ -16404,7 +16165,7 @@ dependencies = [
  "zksync_os_batch_types",
  "zksync_os_batcher_metrics",
  "zksync_os_contract_interface",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_merkle_tree",
  "zksync_os_native_pig",
  "zksync_os_network",
@@ -16443,7 +16204,7 @@ dependencies = [
 name = "zksync_os_contract_interface"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "backon",
  "futures",
@@ -16459,15 +16220,10 @@ dependencies = [
 name = "zksync_os_crypto"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "blake2",
  "sha2 0.10.9",
 ]
-
-[[package]]
-name = "zksync_os_evm_errors"
-version = "0.1.1"
-source = "git+https://github.com/matter-labs/zksync-os-interface.git?rev=48d02758ad42684abb9180588e4c14a46be63475#48d02758ad42684abb9180588e4c14a46be63475"
 
 [[package]]
 name = "zksync_os_evm_errors"
@@ -16479,7 +16235,7 @@ checksum = "d9dfbba34ae7617db056b0e3a74a67c9cab1c93457f6b1cfbf7cee3ff34db01e"
 name = "zksync_os_external_price_api"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "assert_matches",
  "async-trait",
@@ -16501,7 +16257,7 @@ dependencies = [
 name = "zksync_os_gas_adjuster"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "num",
@@ -16516,7 +16272,7 @@ dependencies = [
 name = "zksync_os_generate_deposit"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "clap",
  "tokio",
@@ -16528,7 +16284,7 @@ dependencies = [
 name = "zksync_os_genesis"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
@@ -16549,7 +16305,7 @@ dependencies = [
 name = "zksync_os_integration_tests"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "backon",
@@ -16601,31 +16357,20 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_interface"
-version = "0.1.1"
-source = "git+https://github.com/matter-labs/zksync-os-interface.git?rev=48d02758ad42684abb9180588e4c14a46be63475#48d02758ad42684abb9180588e4c14a46be63475"
-dependencies = [
- "alloy-consensus 1.7.3",
- "alloy-primitives",
- "serde",
- "zksync_os_evm_errors 0.1.1",
-]
-
-[[package]]
-name = "zksync_os_interface"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "406fe883d5aafc4e6e5ad434c0e73273334d196845ddad4fba2002e802e95906"
 dependencies = [
  "alloy-primitives",
  "serde",
- "zksync_os_evm_errors 0.1.3",
+ "zksync_os_evm_errors",
 ]
 
 [[package]]
 name = "zksync_os_internal_config"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "serde",
  "serde_json",
@@ -16636,7 +16381,7 @@ dependencies = [
 name = "zksync_os_interop_fee_updater"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "num",
  "tokio",
@@ -16651,7 +16396,7 @@ dependencies = [
 name = "zksync_os_l1_sender"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "futures",
@@ -16675,7 +16420,7 @@ dependencies = [
 name = "zksync_os_l1_watcher"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "backon",
@@ -16701,7 +16446,7 @@ dependencies = [
 name = "zksync_os_mempool"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "auto_impl",
  "futures",
  "metrics",
@@ -16716,7 +16461,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "vise",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_reth_compat",
  "zksync_os_storage_api",
  "zksync_os_types",
@@ -16726,7 +16471,7 @@ dependencies = [
 name = "zksync_os_merkle_tree"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "clap",
  "insta",
@@ -16750,7 +16495,7 @@ dependencies = [
 name = "zksync_os_merkle_tree_api"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "assert_matches",
  "insta",
@@ -16770,7 +16515,7 @@ dependencies = [
 name = "zksync_os_mini_merkle_tree"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "criterion",
  "once_cell",
  "zksync_os_crypto",
@@ -16781,7 +16526,7 @@ dependencies = [
 name = "zksync_os_multivm"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "cargo_metadata",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3)",
@@ -16793,7 +16538,7 @@ dependencies = [
  "tempfile",
  "test-casing",
  "url",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_types",
 ]
 
@@ -16801,14 +16546,12 @@ dependencies = [
 name = "zksync_os_native_pig"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
- "alloy-primitives",
+ "alloy",
  "anyhow",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "zksync_os_interface 0.1.1",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_merkle_tree",
  "zksync_os_storage_api",
  "zksync_os_types",
@@ -16818,7 +16561,7 @@ dependencies = [
 name = "zksync_os_network"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "alloy-rlp",
  "assert_matches",
  "async-trait",
@@ -16846,7 +16589,7 @@ dependencies = [
  "tracing",
  "vise",
  "zksync_os_consensus_types",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_metadata",
  "zksync_os_reth_compat",
  "zksync_os_storage_api",
@@ -16886,7 +16629,7 @@ dependencies = [
 name = "zksync_os_operator_signer"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "tokio",
  "tracing",
@@ -16910,7 +16653,7 @@ dependencies = [
 name = "zksync_os_priority_tree"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "bincode 2.0.1",
  "tokio",
@@ -16932,7 +16675,7 @@ dependencies = [
 name = "zksync_os_provider"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "serde",
@@ -16972,7 +16715,7 @@ name = "zksync_os_replay_archive"
 version = "0.20.6"
 dependencies = [
  "age",
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "aws-config",
@@ -16988,7 +16731,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "vise",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_l1_sender",
  "zksync_os_observability",
  "zksync_os_pipeline",
@@ -17000,7 +16743,7 @@ dependencies = [
 name = "zksync_os_reth_compat"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "reth-chainspec",
  "reth-db-models",
  "reth-ethereum-primitives",
@@ -17016,7 +16759,7 @@ dependencies = [
 name = "zksync_os_revm_consistency_checker"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
@@ -17037,7 +16780,7 @@ dependencies = [
  "zksync-os-revm",
  "zksync_os_api",
  "zksync_os_genesis",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_internal_config",
  "zksync_os_mempool",
  "zksync_os_multivm",
@@ -17065,7 +16808,7 @@ dependencies = [
 name = "zksync_os_rpc"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
@@ -17097,9 +16840,9 @@ dependencies = [
  "zksync_os_api",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
- "zksync_os_evm_errors 0.1.3",
+ "zksync_os_evm_errors",
  "zksync_os_genesis",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
  "zksync_os_merkle_tree_api",
@@ -17118,7 +16861,7 @@ dependencies = [
 name = "zksync_os_rpc_api"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "alloy-rlp",
  "anyhow",
  "blake2",
@@ -17189,7 +16932,7 @@ dependencies = [
 name = "zksync_os_sequencer"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
@@ -17207,7 +16950,7 @@ dependencies = [
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "zksync_os_gas_adjuster",
  "zksync_os_genesis",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_mempool",
  "zksync_os_metadata",
  "zksync_os_multivm",
@@ -17222,7 +16965,7 @@ dependencies = [
 name = "zksync_os_server"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "async-trait",
  "axum",
@@ -17279,7 +17022,7 @@ dependencies = [
  "zksync_os_external_price_api",
  "zksync_os_gas_adjuster",
  "zksync_os_genesis",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_internal_config",
  "zksync_os_interop_fee_updater",
  "zksync_os_l1_sender",
@@ -17316,7 +17059,7 @@ dependencies = [
 name = "zksync_os_state"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "dashmap 6.1.0",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
@@ -17326,7 +17069,7 @@ dependencies = [
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "zksync_os_genesis",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_rocksdb",
  "zksync_os_storage_api",
 ]
@@ -17335,7 +17078,7 @@ dependencies = [
 name = "zksync_os_state_full_diffs"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "ruint",
@@ -17344,7 +17087,7 @@ dependencies = [
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "zksync_os_genesis",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_rocksdb",
  "zksync_os_storage_api",
 ]
@@ -17366,7 +17109,7 @@ dependencies = [
 name = "zksync_os_storage"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "bincode 2.0.1",
  "dashmap 6.1.0",
@@ -17378,7 +17121,7 @@ dependencies = [
  "vise",
  "zksync_os_batch_types",
  "zksync_os_genesis",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_metadata",
  "zksync_os_rocksdb",
  "zksync_os_storage_api",
@@ -17389,7 +17132,7 @@ dependencies = [
 name = "zksync_os_storage_api"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "alloy-rlp",
  "anyhow",
  "auto_impl",
@@ -17406,7 +17149,7 @@ dependencies = [
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "zksync_os_api",
  "zksync_os_batch_types",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
  "zksync_os_observability",
  "zksync_os_pipeline",
  "zksync_os_rocksdb",
@@ -17417,7 +17160,7 @@ dependencies = [
 name = "zksync_os_tx_validators"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "httpmock",
  "reqwest 0.12.28",
@@ -17429,15 +17172,15 @@ dependencies = [
  "tracing",
  "url",
  "vise",
- "zksync_os_evm_errors 0.1.3",
- "zksync_os_interface 0.1.3",
+ "zksync_os_evm_errors",
+ "zksync_os_interface",
 ]
 
 [[package]]
 name = "zksync_os_types"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "alloy-rlp",
  "bincode 2.0.1",
  "chrono",
@@ -17449,14 +17192,14 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "zksync_os_contract_interface",
- "zksync_os_interface 0.1.3",
+ "zksync_os_interface",
 ]
 
 [[package]]
 name = "zksync_os_verify_storage_proof"
 version = "0.20.6"
 dependencies = [
- "alloy 2.0.4",
+ "alloy",
  "anyhow",
  "clap",
  "tokio",
