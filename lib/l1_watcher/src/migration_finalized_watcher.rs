@@ -29,8 +29,8 @@ impl MigrationFinalizedWatcher {
     /// destination's view of finalized migrations) and decides whether to spawn the watcher.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
-        zk_chain: ZkChain<NodeProvider>,
-        bridgehub_sl: Bridgehub<NodeProvider>,
+        zk_chain: ZkChain,
+        bridgehub_sl: Bridgehub,
         intervals: &SettlementLayerIntervals,
         l2_chain_id: u64,
         l1_chain_id: u64,

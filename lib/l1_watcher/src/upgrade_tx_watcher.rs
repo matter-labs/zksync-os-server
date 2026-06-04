@@ -66,9 +66,9 @@ impl L1UpgradeTxWatcher {
     pub async fn create_watcher(
         config: L1WatcherConfig,
         l2_chain_id: ChainId,
-        bridgehub_l1: Bridgehub<NodeProvider>,
-        zk_chain_l1: ZkChain<NodeProvider>,
-        zk_chain_sl: ZkChain<NodeProvider>,
+        bridgehub_l1: Bridgehub,
+        zk_chain_l1: ZkChain,
+        zk_chain_sl: ZkChain,
         bytecode_supplier_address: Address,
         current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
@@ -768,7 +768,7 @@ async fn fetch_upgrade_cut_log_at(
 }
 
 async fn find_l1_block_by_protocol_version(
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: ZkChain,
     protocol_version: ProtocolSemanticVersion,
 ) -> anyhow::Result<BlockNumber> {
     let protocol_version = protocol_version.packed()?;

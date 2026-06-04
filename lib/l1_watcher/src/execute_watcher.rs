@@ -38,7 +38,7 @@ struct ExecuteWatcherState<Finality> {
 impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
     pub async fn create_watcher(
         config: L1WatcherConfig,
-        zk_chain: ZkChain<NodeProvider>,
+        zk_chain: ZkChain,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         l1_chain_id: u64,
@@ -85,7 +85,7 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
 impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
     pub async fn create_finalized_watcher(
         config: L1WatcherConfig,
-        zk_chain: ZkChain<NodeProvider>,
+        zk_chain: ZkChain,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         block_updates: watch::Receiver<BlockUpdates>,

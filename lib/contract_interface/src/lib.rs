@@ -13,7 +13,7 @@ use crate::IMultisigCommitter::IMultisigCommitterInstance;
 use crate::IZKChain::IZKChainInstance;
 use alloy::contract::SolCallBuilder;
 use alloy::eips::BlockId;
-use alloy::network::Ethereum;
+use alloy::network::{Ethereum, Network};
 use alloy::primitives::{Address, B256, TxHash, U256};
 use alloy::providers::Provider;
 use zksync_os_provider::NodeProvider;
@@ -481,13 +481,13 @@ alloy::sol! {
     }
 }
 
-pub struct MessageRoot<P: Provider> {
-    instance: IMessageRootInstance<P, Ethereum>,
+pub struct MessageRoot<N: Network = Ethereum> {
+    instance: IMessageRootInstance<NodeProvider<N>, N>,
     address: Address,
 }
 
-impl<P: Provider> MessageRoot<P> {
-    pub fn new(address: Address, provider: P) -> Self {
+impl<N: Network> MessageRoot<N> {
+    pub fn new(address: Address, provider: NodeProvider<N>) -> Self {
         let instance = IMessageRoot::new(address, provider);
         Self { instance, address }
     }
@@ -496,7 +496,7 @@ impl<P: Provider> MessageRoot<P> {
         &self.address
     }
 
-    pub fn provider(&self) -> &P {
+    pub fn provider(&self) -> &NodeProvider<N> {
         self.instance.provider()
     }
 
@@ -509,25 +509,23 @@ impl<P: Provider> MessageRoot<P> {
             .map(|n| n.saturating_to())
             .enrich("interopRootLogId", Some(block_id))
     }
-}
 
-impl MessageRoot<NodeProvider> {
-    /// L1 block at which this message root contract was deployed, used as the lower bound for
-    /// binary searches over L1 history. Convenience over [`NodeProvider::deployment_block`] that
-    /// the provider caches per address.
+    /// Block at which this message root contract was deployed, used as the lower bound for
+    /// binary searches over chain history. Convenience over [`NodeProvider::deployment_block`]
+    /// that the provider caches per address.
     pub async fn deployment_block(&self) -> anyhow::Result<u64> {
         self.provider().deployment_block(self.address).await
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Bridgehub<P: Provider> {
-    instance: IBridgehubInstance<P, Ethereum>,
+pub struct Bridgehub<N: Network = Ethereum> {
+    instance: IBridgehubInstance<NodeProvider<N>, N>,
     l2_chain_id: u64,
 }
 
-impl<P: Provider + Clone> Bridgehub<P> {
-    pub fn new(address: Address, provider: P, l2_chain_id: u64) -> Self {
+impl<N: Network> Bridgehub<N> {
+    pub fn new(address: Address, provider: NodeProvider<N>, l2_chain_id: u64) -> Self {
         let instance = IBridgehub::new(address, provider);
         Self {
             instance,
@@ -539,7 +537,7 @@ impl<P: Provider + Clone> Bridgehub<P> {
         self.instance.address()
     }
 
-    pub fn provider(&self) -> &P {
+    pub fn provider(&self) -> &NodeProvider<N> {
         self.instance.provider()
     }
 
@@ -576,7 +574,7 @@ impl<P: Provider + Clone> Bridgehub<P> {
         l2_gas_limit: u64,
         l2_gas_per_pubdata_byte_limit: u64,
         refund_recipient: Address,
-    ) -> SolCallBuilder<&P, requestL2TransactionDirectCall> {
+    ) -> SolCallBuilder<&NodeProvider<N>, requestL2TransactionDirectCall, N> {
         self.instance
             .requestL2TransactionDirect(L2TransactionRequestDirect {
                 chainId: U256::try_from(self.l2_chain_id).unwrap(),
@@ -602,7 +600,7 @@ impl<P: Provider + Clone> Bridgehub<P> {
         second_bridge_address: Address,
         second_bridge_value: U256,
         second_bridge_calldata: Vec<u8>,
-    ) -> SolCallBuilder<&P, requestL2TransactionTwoBridgesCall> {
+    ) -> SolCallBuilder<&NodeProvider<N>, requestL2TransactionTwoBridgesCall, N> {
         self.instance
             .requestL2TransactionTwoBridges(L2TransactionRequestTwoBridgesOuter {
                 chainId: U256::try_from(self.l2_chain_id).unwrap(),
@@ -634,11 +632,11 @@ impl<P: Provider + Clone> Bridgehub<P> {
             .await
     }
 
-    pub async fn zk_chain(&self) -> alloy::contract::Result<ZkChain<P>> {
+    pub async fn zk_chain(&self) -> alloy::contract::Result<ZkChain<N>> {
         self.zk_chain_by_chain_id(self.l2_chain_id).await
     }
 
-    pub async fn zk_chain_by_chain_id(&self, chain_id: u64) -> alloy::contract::Result<ZkChain<P>> {
+    pub async fn zk_chain_by_chain_id(&self, chain_id: u64) -> alloy::contract::Result<ZkChain<N>> {
         let zk_chain_address = self
             .instance
             .getZKChain(U256::from(chain_id))
@@ -680,13 +678,13 @@ impl<P: Provider + Clone> Bridgehub<P> {
 }
 
 #[derive(Clone, Debug)]
-pub struct MultisigCommitter<P: Provider> {
-    instance: IMultisigCommitterInstance<P, Ethereum>,
+pub struct MultisigCommitter<N: Network = Ethereum> {
+    instance: IMultisigCommitterInstance<NodeProvider<N>, N>,
     chain_address: Address,
 }
 
-impl<P: Provider> MultisigCommitter<P> {
-    pub fn new(address: Address, provider: P, chain_address: Address) -> Self {
+impl<N: Network> MultisigCommitter<N> {
+    pub fn new(address: Address, provider: NodeProvider<N>, chain_address: Address) -> Self {
         let instance = IMultisigCommitter::new(address, provider);
         Self {
             instance,
@@ -700,7 +698,7 @@ impl<P: Provider> MultisigCommitter<P> {
     /// failures (e.g., network errors).
     pub async fn try_new(
         address: Address,
-        provider: P,
+        provider: NodeProvider<N>,
         chain_address: Address,
     ) -> core::result::Result<Option<Self>, alloy::contract::Error> {
         let instance = IMultisigCommitter::new(address, provider);
@@ -761,21 +759,12 @@ impl<P: Provider> MultisigCommitter<P> {
 }
 
 #[derive(Clone, Debug)]
-pub struct ZkChain<P: Provider> {
-    instance: IZKChainInstance<P, Ethereum>,
+pub struct ZkChain<N: Network = Ethereum> {
+    instance: IZKChainInstance<NodeProvider<N>, N>,
 }
 
-impl ZkChain<NodeProvider> {
-    /// L1 block at which this diamond proxy was deployed, used as the lower bound for binary
-    /// searches over L1 history. Convenience over [`NodeProvider::deployment_block`] that the
-    /// provider caches per address.
-    pub async fn deployment_block(&self) -> anyhow::Result<u64> {
-        self.provider().deployment_block(*self.address()).await
-    }
-}
-
-impl<P: Provider> ZkChain<P> {
-    pub fn new(address: Address, provider: P) -> Self {
+impl<N: Network> ZkChain<N> {
+    pub fn new(address: Address, provider: NodeProvider<N>) -> Self {
         let instance = IZKChainInstance::new(address, provider);
         Self { instance }
     }
@@ -784,8 +773,15 @@ impl<P: Provider> ZkChain<P> {
         self.instance.address()
     }
 
-    pub fn provider(&self) -> &P {
+    pub fn provider(&self) -> &NodeProvider<N> {
         self.instance.provider()
+    }
+
+    /// Block at which this diamond proxy was deployed, used as the lower bound for binary
+    /// searches over chain history. Convenience over [`NodeProvider::deployment_block`] that the
+    /// provider caches per address.
+    pub async fn deployment_block(&self) -> anyhow::Result<u64> {
+        self.provider().deployment_block(*self.address()).await
     }
 
     pub async fn stored_batch_hash(&self, batch_number: u64) -> Result<B256> {

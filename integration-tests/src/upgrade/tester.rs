@@ -35,7 +35,7 @@ use zksync_os_types::{
 pub struct UpgradeTester<'a> {
     pub tester: &'a Tester,
     // Bridgehub contract on L1
-    pub bridgehub_l1: zksync_os_contract_interface::Bridgehub<NodeProvider>,
+    pub bridgehub_l1: zksync_os_contract_interface::Bridgehub,
     // Bridgehub contract on SL
     pub bridgehub_sl: interfaces::Bridgehub::BridgehubInstance<NodeProvider>,
     // Bridgehub owner address on SL

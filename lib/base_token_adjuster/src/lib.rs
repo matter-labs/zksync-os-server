@@ -110,8 +110,8 @@ async fn register_operator(
 
 impl BaseTokenPriceUpdater {
     pub async fn new(
-        zk_chain_l1: ZkChain<NodeProvider>,
-        zk_chain_gateway: Option<ZkChain<NodeProvider>>,
+        zk_chain_l1: ZkChain,
+        zk_chain_gateway: Option<ZkChain>,
         mut l1_provider: NodeProvider,
         base_token_adjuster_config: BaseTokenPriceUpdaterConfig,
         external_price_api_client_config: ExternalPriceApiClientConfig,

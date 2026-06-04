@@ -27,7 +27,7 @@ pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
 /// [`MigrationCompleteWatcher`][crate::MigrationCompleteWatcher] (on the current settlement layer)
 /// to determine the block from which to start scanning for migration events.
 pub async fn find_block_by_migration_number(
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: ZkChain,
     chain_asset_handler: Address,
     chain_id: u64,
     migration_number: u64,
@@ -87,9 +87,9 @@ const MAX_L1_BLOCKS_TO_SCAN_LINEARLY: u64 = 6_000_000;
 /// invoked without a code-presence guard, so calling it at blocks where the contract is not yet
 /// deployed will produce undefined results (typically an RPC error or a `false`-returning revert).
 pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool>>>(
-    zk_chain: Arc<ZkChain<NodeProvider>>,
+    zk_chain: Arc<ZkChain>,
     start_block_number: BlockNumber,
-    predicate: impl Fn(Arc<ZkChain<NodeProvider>>, u64) -> Fut,
+    predicate: impl Fn(Arc<ZkChain>, u64) -> Fut,
 ) -> anyhow::Result<BlockNumber> {
     let latest = zk_chain.provider().get_block_number().await?;
 
@@ -191,7 +191,7 @@ async fn find_last_matching_event<E: SolEvent + Debug>(
 ///
 /// Batch `batch_number` MUST have been committed before `start_block_number`.
 async fn find_latest_l1_revert(
-    zk_chain: &ZkChain<NodeProvider>,
+    zk_chain: &ZkChain,
     batch_number: u64,
     start_block_number: BlockNumber,
     max_blocks_to_scan: u64,
@@ -215,11 +215,11 @@ async fn find_latest_l1_revert(
 /// `b` CAN contain commit event for `B` that happened either before `T` or after `T` but MUST NOT
 /// contain both. See comments inside the implementation for more details.
 pub async fn find_l1_commit_block_by_batch_number(
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: ZkChain,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<BlockNumber> {
-    let is_batch_committed = move |zk: Arc<ZkChain<NodeProvider>>, block: BlockNumber| async move {
+    let is_batch_committed = move |zk: Arc<ZkChain>, block: BlockNumber| async move {
         let res = zk.get_total_batches_committed(block.into()).await?;
         Ok(res >= batch_number)
     };
@@ -293,7 +293,7 @@ pub async fn find_l1_commit_block_by_batch_number(
 ///
 /// Returns latest L1 block is there is none.
 pub async fn find_l1_execute_block_by_batch_number(
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: ZkChain,
     batch_number: u64,
 ) -> anyhow::Result<BlockNumber> {
     // Execution cannot be reverted, so unlike in `find_l1_commit_block_by_batch_number`, we do not need
@@ -313,7 +313,7 @@ pub async fn find_l1_execute_block_by_batch_number(
 /// Finds the first L1 block where `interopRootLogId >= next_interop_root_id`.
 /// Uses binary search for efficiency.
 pub async fn find_l1_block_by_interop_root_id(
-    bridgehub: Bridgehub<NodeProvider>,
+    bridgehub: Bridgehub,
     next_interop_root_id: u64,
 ) -> anyhow::Result<BlockNumber> {
     if next_interop_root_id == 0 {
@@ -332,7 +332,7 @@ pub async fn find_l1_block_by_interop_root_id(
     let deployment_block = message_root.deployment_block().await?;
 
     let predicate =
-        async |message_root: Arc<MessageRoot<NodeProvider>>, block: u64| -> anyhow::Result<bool> {
+        async |message_root: Arc<MessageRoot>, block: u64| -> anyhow::Result<bool> {
             let res = message_root.interop_root_log_id(block.into()).await?;
             Ok(res >= next_interop_root_id)
         };
@@ -361,7 +361,7 @@ pub async fn find_l1_block_by_interop_root_id(
 /// committed in `l1_block_number`. Returns `None` if requested batch has not been committed in
 /// the given L1 block.
 pub async fn fetch_stored_batch_data(
-    zk_chain: &ZkChain<NodeProvider>,
+    zk_chain: &ZkChain,
     l1_block_number: BlockNumber,
     batch_number: u64,
 ) -> anyhow::Result<Option<DiscoveredCommittedBatch>> {
@@ -402,7 +402,7 @@ pub async fn fetch_stored_batch_data(
 /// Fetches batch commit transaction and extra data from L1 required to construct `CommitedBatch`.
 /// Retries if the transaction is pending (exists but has no block number yet) or not yet visible.
 pub async fn fetch_committed_batch_data(
-    zk_chain: &ZkChain<NodeProvider>,
+    zk_chain: &ZkChain,
     tx_hash: TxHash,
 ) -> Result<ExtendedCommitBatchInfo, L1WatcherError> {
     let tx = (|| async {

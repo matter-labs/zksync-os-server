@@ -32,8 +32,8 @@ pub struct GatewayMigrationWatcher {
 impl GatewayMigrationWatcher {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
-        zk_chain: ZkChain<NodeProvider>,
-        bridgehub: Bridgehub<NodeProvider>,
+        zk_chain: ZkChain,
+        bridgehub: Bridgehub,
         l2_chain_id: ChainId,
         l1_chain_id: ChainId,
         gw_chain_id: ChainId,

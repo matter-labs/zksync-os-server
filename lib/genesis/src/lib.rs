@@ -19,7 +19,6 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::BlockContext;
 use zksync_os_types::{ConfigFormat, ExecutionVersion, L1UpgradeEnvelope, ProtocolSemanticVersion};
 
@@ -124,7 +123,7 @@ pub struct GenesisUpgradeTxInfo {
 #[derive(Clone)]
 pub struct Genesis {
     input_source: Arc<dyn GenesisInputSource>,
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: ZkChain,
     state: OnceCell<GenesisState>,
     genesis_upgrade_tx: OnceCell<GenesisUpgradeTxInfo>,
     chain_id: u64,
@@ -144,7 +143,7 @@ impl Debug for Genesis {
 impl Genesis {
     pub fn new(
         input_source: Arc<dyn GenesisInputSource>,
-        zk_chain: ZkChain<NodeProvider>,
+        zk_chain: ZkChain,
         chain_id: u64,
     ) -> Self {
         Self {
@@ -333,7 +332,7 @@ async fn build_genesis(
 }
 
 async fn load_genesis_upgrade_tx(
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: ZkChain,
 ) -> anyhow::Result<GenesisUpgradeTxInfo> {
     let zk_chain_address = *zk_chain.address();
     let provider = zk_chain.provider().clone();

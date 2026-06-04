@@ -28,10 +28,10 @@ pub enum BatchVerificationSL {
 
 #[derive(Clone, Debug)]
 pub struct L1State {
-    pub bridgehub_l1: Bridgehub<NodeProvider>,
-    pub bridgehub_sl: Bridgehub<NodeProvider>,
-    pub diamond_proxy_l1: ZkChain<NodeProvider>,
-    pub diamond_proxy_sl: ZkChain<NodeProvider>,
+    pub bridgehub_l1: Bridgehub,
+    pub bridgehub_sl: Bridgehub,
+    pub diamond_proxy_l1: ZkChain,
+    pub diamond_proxy_sl: ZkChain,
     pub validator_timelock_sl: Address,
     pub batch_verification: BatchVerificationSL,
     pub last_committed_batch: u64,
@@ -193,8 +193,8 @@ impl L1State {
     }
 
     async fn validate_chain_ids(
-        bridgehub_l1: &Bridgehub<NodeProvider>,
-        bridgehub_sl: &Bridgehub<NodeProvider>,
+        bridgehub_l1: &Bridgehub,
+        bridgehub_sl: &Bridgehub,
         l2_chain_id: u64,
     ) -> anyhow::Result<()> {
         let all_chain_ids_l1 = bridgehub_l1.get_all_zk_chain_chain_ids().await?;
@@ -292,7 +292,7 @@ impl L1State {
 }
 
 async fn fetch_finalized_executed_batch(
-    zk_chain_sl: &ZkChain<NodeProvider>,
+    zk_chain_sl: &ZkChain,
 ) -> anyhow::Result<(u64, u64)> {
     let finalized_sl_block_number = zk_chain_sl
         .provider()

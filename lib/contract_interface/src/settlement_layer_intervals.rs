@@ -34,7 +34,7 @@ pub struct SettlementLayerInterval {
     pub first_batch: u64,
     pub last_batch: Option<u64>,
     /// Diamond proxy on `settlement_layer`.
-    pub proxy: ZkChain<NodeProvider>,
+    pub proxy: ZkChain,
 }
 
 impl fmt::Display for SettlementLayerInterval {
@@ -76,7 +76,7 @@ impl SettlementLayerIntervals {
     /// chain that the configured `gateway_provider` cannot serve.
     pub async fn discover(
         chain_asset_handler: Address,
-        diamond_proxy_l1: ZkChain<NodeProvider>,
+        diamond_proxy_l1: ZkChain,
         gateway_provider: Option<NodeProvider>,
         l2_chain_id: u64,
     ) -> anyhow::Result<Self> {

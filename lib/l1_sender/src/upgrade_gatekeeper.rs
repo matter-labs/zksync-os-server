@@ -7,18 +7,17 @@ use tokio::sync::mpsc;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
-use zksync_os_provider::NodeProvider;
 use zksync_os_types::ProtocolSemanticVersion;
 
 /// Receives Batches with proofs - potentially with incompatible protocol version.
 /// Makes sure that batches are only passed to L1 if batch version matches the current protocol version.
 #[derive(Debug)]
 pub struct UpgradeGatekeeper {
-    zk_chain_sl: ZkChain<NodeProvider>,
+    zk_chain_sl: ZkChain,
 }
 
 impl UpgradeGatekeeper {
-    pub fn new(zk_chain_sl: ZkChain<NodeProvider>) -> Self {
+    pub fn new(zk_chain_sl: ZkChain) -> Self {
         Self { zk_chain_sl }
     }
 

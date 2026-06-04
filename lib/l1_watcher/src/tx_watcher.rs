@@ -20,7 +20,7 @@ use zksync_os_types::L1PriorityEnvelope;
 /// `L1PriorityEnvelope` into `L1Subpool`.
 pub struct L1TxWatcher {
     next_l1_priority_id: u64,
-    zk_chain_sl: ZkChain<NodeProvider>,
+    zk_chain_sl: ZkChain,
     cached_total_priority_ops_resp: Option<u64>,
     l1_subpool: L1Subpool,
 }
@@ -28,8 +28,8 @@ pub struct L1TxWatcher {
 impl L1TxWatcher {
     pub async fn create_watcher(
         config: L1WatcherConfig,
-        zk_chain_l1: ZkChain<NodeProvider>,
-        zk_chain_sl: ZkChain<NodeProvider>,
+        zk_chain_l1: ZkChain,
+        zk_chain_sl: ZkChain,
         l1_subpool: L1Subpool,
         next_l1_priority_id: u64,
         block_updates: watch::Receiver<BlockUpdates>,
@@ -68,7 +68,7 @@ impl L1TxWatcher {
 }
 
 async fn find_l1_block_by_priority_id(
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: ZkChain,
     next_l1_priority_id: u64,
 ) -> anyhow::Result<BlockNumber> {
     let deployment_block = zk_chain.deployment_block().await?;

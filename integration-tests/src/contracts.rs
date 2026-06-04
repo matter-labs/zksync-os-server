@@ -10,6 +10,7 @@ use tokio::time::{Duration, Instant};
 use zksync_os_alloy_ext::network::Zksync;
 use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
+use zksync_os_provider::NodeProvider;
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
 use zksync_os_types::L2_INTEROP_ROOT_STORAGE_ADDRESS;
 
@@ -129,17 +130,17 @@ impl<P: Provider<Zksync>> L2BaseToken<P> {
     }
 }
 
-pub struct L1AssetRouter<P1: Provider, P2: Provider<Zksync>> {
-    instance: IL1AssetRouter::IL1AssetRouterInstance<P1>,
+pub struct L1AssetRouter<P2: Provider<Zksync>> {
+    instance: IL1AssetRouter::IL1AssetRouterInstance<NodeProvider>,
     l2_provider: P2,
 }
 
-impl<P1: Provider + Clone, P2: Provider<Zksync> + Clone> L1AssetRouter<P1, P2> {
-    pub async fn new(l1_provider: P1, l2_provider: P2) -> anyhow::Result<Self> {
+impl<P2: Provider<Zksync> + Clone> L1AssetRouter<P2> {
+    pub async fn new(l1_provider: NodeProvider, l2_provider: P2) -> anyhow::Result<Self> {
         let bridgehub_address = l2_provider.get_bridgehub_contract().await.unwrap();
         let bridgehub = Bridgehub::new(
             bridgehub_address,
-            &l1_provider,
+            l1_provider.clone(),
             l2_provider.get_chain_id().await?,
         );
         bridgehub.shared_bridge_address().await?;
@@ -153,7 +154,7 @@ impl<P1: Provider + Clone, P2: Provider<Zksync> + Clone> L1AssetRouter<P1, P2> {
         self.instance.address()
     }
 
-    pub async fn l1_nullifier(&self) -> anyhow::Result<L1Nullifier<P1, P2>> {
+    pub async fn l1_nullifier(&self) -> anyhow::Result<L1Nullifier<P2>> {
         let l1_nullifier_address = self.instance.L1_NULLIFIER().call().await?;
         Ok(L1Nullifier::new(
             l1_nullifier_address,
@@ -163,13 +164,13 @@ impl<P1: Provider + Clone, P2: Provider<Zksync> + Clone> L1AssetRouter<P1, P2> {
     }
 }
 
-pub struct L1Nullifier<P1: Provider, P2: Provider<Zksync>> {
-    instance: IL1Nullifier::IL1NullifierInstance<P1>,
+pub struct L1Nullifier<P2: Provider<Zksync>> {
+    instance: IL1Nullifier::IL1NullifierInstance<NodeProvider>,
     l2_provider: P2,
 }
 
-impl<P1: Provider, P2: Provider<Zksync>> L1Nullifier<P1, P2> {
-    pub fn new(address: Address, l1_provider: P1, l2_provider: P2) -> Self {
+impl<P2: Provider<Zksync>> L1Nullifier<P2> {
+    pub fn new(address: Address, l1_provider: NodeProvider, l2_provider: P2) -> Self {
         Self {
             instance: IL1Nullifier::new(address, l1_provider),
             l2_provider,

@@ -35,7 +35,7 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
         config: L1WatcherConfig,
-        zk_chain: ZkChain<NodeProvider>,
+        zk_chain: ZkChain,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         sl_block_initial_finality_init_at: u64,
