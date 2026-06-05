@@ -7,7 +7,10 @@ use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert};
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
-use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
+use zksync_os_integration_tests::{
+    CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup,
+    upgrade::prepare_gateway_chain_at_v32_1,
+};
 
 const TRANSACTIONS_TO_SEND_BEFORE_RESTART: usize = 5;
 
@@ -21,6 +24,27 @@ async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
         chain_id,
     )
     .await
+}
+
+async fn wait_for_l1_state(
+    tester: &Tester,
+    description: &str,
+    predicate: impl Fn(&L1State) -> bool,
+) -> anyhow::Result<L1State> {
+    let mut retries = DEFAULT_TIMEOUT
+        .div_duration_f64(Duration::from_millis(100))
+        .floor() as u64;
+    while retries > 0 {
+        let state = fetch_l1_state(tester).await?;
+        if predicate(&state) {
+            return Ok(state);
+        }
+        retries -= 1;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err(anyhow::anyhow!(
+        "timed out waiting for L1 state: {description}"
+    ))
 }
 
 /// Verifies that a node running with the batcher disabled can be restarted in normal mode and
@@ -86,6 +110,43 @@ async fn uncommitted_blocks_are_settled_after_batcher_reenabled(
         "expected new batches to be committed after re-enabling the batcher, \
          but committed batch count did not increase ({initial_committed} -> {})",
         l1_state_after.last_committed_batch,
+    );
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn v32_1_main_node_creates_and_commits_batch() -> anyhow::Result<()> {
+    let tester = prepare_gateway_chain_at_v32_1().await?;
+    let initial_committed_batch = fetch_l1_state(&tester).await?.last_committed_batch;
+
+    let receipt = tester
+        .l2_provider
+        .send_transaction(
+            TransactionRequest::default()
+                .with_to(Address::random())
+                .with_value(U256::from(1u64)),
+        )
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    let batch_number = tester
+        .l2_zk_provider
+        .wait_batch_number_by_block_number(receipt.block_number.unwrap())
+        .await?;
+
+    let l1_state = wait_for_l1_state(
+        &tester,
+        "the V32.1 test batch to be committed on L1",
+        |state| state.last_committed_batch >= batch_number,
+    )
+    .await?;
+
+    assert!(
+        l1_state.last_committed_batch > initial_committed_batch,
+        "expected committed batch count to advance after producing a V32.1 batch \
+         ({initial_committed_batch} -> {})",
+        l1_state.last_committed_batch,
     );
 
     Ok(())
