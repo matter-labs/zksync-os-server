@@ -447,11 +447,8 @@ pub async fn fetch_committed_batch_data(
             .await
             .map_err(|e| L1WatcherError::Other(e.into()))
     };
-    let (tx, upgrade_batch_number, packed_protocol_version) = tokio::try_join!(
-        tx_fut,
-        upgrade_fut,
-        packed_protocol_version_fut,
-    )?;
+    let (tx, upgrade_batch_number, packed_protocol_version) =
+        tokio::try_join!(tx_fut, upgrade_fut, packed_protocol_version_fut,)?;
 
     let CommitCalldata {
         commit_batch_info, ..
