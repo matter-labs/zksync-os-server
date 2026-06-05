@@ -147,12 +147,10 @@ impl LocalBatchDataCacheWriter {
         };
 
         let mut result = Ok(());
-        let mut data = Some(data);
         self.inner.send_if_modified(|cache| {
             match cache.insert(
                 block_number,
-                data.take()
-                    .expect("watch::Sender::send_if_modified must call closure once"),
+                data
             ) {
                 Ok(()) => true,
                 Err(err) => {
