@@ -7,11 +7,13 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::{network::ReceiptResponse, primitives::Address};
 use backon::{ConstantBuilder, Retryable};
+use zksync_os_alloy_ext::provider::ZksyncApi;
+use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::BATCH_VERIFICATION_KEYS;
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::{
     CURRENT_TO_L1, NEXT_TO_GATEWAY, TestEnvironment, Tester, assert_traits::ReceiptAssert,
-    contracts::EventEmitter, test_multisetup,
+    contracts::EventEmitter, test_multisetup, upgrade::prepare_gateway_chain_at_v32_1,
 };
 use zksync_os_server::config::Config;
 
@@ -24,18 +26,30 @@ async fn launch_en(
     main_node.launch_from_config(config).await
 }
 
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-async fn batch_verification_works(env: TestEnvironment) -> anyhow::Result<()> {
-    let mut config = env.default_config().await?;
-    config.batch_verification_config.server_enabled = true;
-    config.batch_verification_config.threshold = 1;
-    let main_node = env.launch(config).await?;
+async fn wait_for_en_to_catch_up(main_node: &Tester, en: &Tester) -> anyhow::Result<()> {
+    let target_block = main_node.l2_provider.get_block_number().await?;
+    tokio::time::timeout(
+        zksync_os_integration_tests::assert_traits::DEFAULT_TIMEOUT,
+        async {
+            loop {
+                if en.l2_provider.get_block_number().await? >= target_block {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        },
+    )
+    .await??;
+    Ok(())
+}
 
-    let _en1 = launch_en(&main_node, |config: &mut Config| {
+async fn assert_batch_verification_works(main_node: &Tester) -> anyhow::Result<()> {
+    let en1 = launch_en(main_node, |config: &mut Config| {
         let bv_config = &mut config.batch_verification_config;
         bv_config.client_enabled = true;
     })
     .await?;
+    wait_for_en_to_catch_up(main_node, &en1).await?;
 
     let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
         .send()
@@ -43,7 +57,6 @@ async fn batch_verification_works(env: TestEnvironment) -> anyhow::Result<()> {
         .expect_successful_receipt()
         .await?;
 
-    // Check batch is eventually finalized
     main_node
         .l2_zk_provider
         .wait_finalized_with_timeout(
@@ -52,6 +65,107 @@ async fn batch_verification_works(env: TestEnvironment) -> anyhow::Result<()> {
         )
         .await?;
     Ok(())
+}
+
+async fn fetch_l1_state(main_node: &Tester) -> anyhow::Result<L1State> {
+    let chain_id = main_node.l2_provider.get_chain_id().await?;
+    let bridgehub_address = main_node.l2_zk_provider.get_bridgehub_contract().await?;
+    L1State::fetch(
+        main_node.l1_provider().clone(),
+        main_node.gateway_eth_provider(),
+        bridgehub_address,
+        chain_id,
+    )
+    .await
+}
+
+async fn wait_for_l1_state(
+    main_node: &Tester,
+    description: &str,
+    predicate: impl Fn(&L1State) -> bool,
+) -> anyhow::Result<L1State> {
+    let mut retries = zksync_os_integration_tests::assert_traits::DEFAULT_TIMEOUT
+        .div_duration_f64(Duration::from_millis(100))
+        .floor() as u64;
+    while retries > 0 {
+        let state = fetch_l1_state(main_node).await?;
+        if predicate(&state) {
+            return Ok(state);
+        }
+        retries -= 1;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err(anyhow::anyhow!(
+        "timed out waiting for L1 state: {description}"
+    ))
+}
+
+async fn assert_batch_verification_works_on_v32_1(main_node: &Tester) -> anyhow::Result<()> {
+    let en1 = launch_en(main_node, |config: &mut Config| {
+        let bv_config = &mut config.batch_verification_config;
+        bv_config.client_enabled = true;
+    })
+    .await?;
+    wait_for_en_to_catch_up(main_node, &en1).await?;
+
+    let executed_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+        .send()
+        .await?
+        .expect_to_execute()
+        .await?;
+    let executed_batch = main_node
+        .l2_zk_provider
+        .wait_batch_number_by_block_number(executed_receipt.block_number.unwrap())
+        .await?;
+    wait_for_l1_state(
+        main_node,
+        "the V32.1 test batch to be executed on the settlement layer",
+        |state| state.last_executed_batch >= executed_batch,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn assert_transaction_replay(main_node: &Tester) -> anyhow::Result<()> {
+    let en1 = launch_en(main_node, |_| {}).await?;
+
+    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    let contract_address = deploy_tx_receipt
+        .contract_address()
+        .expect("no contract deployed");
+
+    check_contract_present(&en1, contract_address).await?;
+
+    let en2 = launch_en(main_node, |_| {}).await?;
+
+    check_contract_present(&en2, contract_address).await?;
+
+    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    let contract_address = deploy_tx_receipt
+        .contract_address()
+        .expect("no contract deployed");
+
+    check_contract_present(&en1, contract_address).await?;
+    check_contract_present(&en2, contract_address).await?;
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+async fn batch_verification_works(env: TestEnvironment) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    config.batch_verification_config.server_enabled = true;
+    config.batch_verification_config.threshold = 1;
+    let main_node = env.launch(config).await?;
+    assert_batch_verification_works(&main_node).await
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
@@ -131,36 +245,20 @@ async fn batch_verification_with_2_ens(env: TestEnvironment) -> anyhow::Result<(
 
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 async fn transaction_replay(main_node: Tester) -> anyhow::Result<()> {
-    let en1 = launch_en(&main_node, |_| {}).await?;
+    assert_transaction_replay(&main_node).await
+}
 
-    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
-        .send()
-        .await?
-        .expect_successful_receipt()
+#[test_log::test(tokio::test)]
+async fn batch_verification_works_on_v32_1() -> anyhow::Result<()> {
+    let main_node = prepare_gateway_chain_at_v32_1().await?;
+    let main_node = main_node
+        .restart_with_overrides(|config| {
+            config.batch_verification_config.server_enabled = true;
+            config.batch_verification_config.threshold = 1;
+        })
         .await?;
-    let contract_address = deploy_tx_receipt
-        .contract_address()
-        .expect("no contract deployed");
 
-    check_contract_present(&en1, contract_address).await?;
-
-    let en2 = launch_en(&main_node, |_| {}).await?;
-
-    check_contract_present(&en2, contract_address).await?;
-
-    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
-        .send()
-        .await?
-        .expect_successful_receipt()
-        .await?;
-    let contract_address = deploy_tx_receipt
-        .contract_address()
-        .expect("no contract deployed");
-
-    check_contract_present(&en1, contract_address).await?;
-    check_contract_present(&en2, contract_address).await?;
-
-    Ok(())
+    assert_batch_verification_works_on_v32_1(&main_node).await
 }
 
 /// It is easy to write to a channel that the EN doesn't need
