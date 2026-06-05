@@ -2,10 +2,11 @@ use alloy::primitives::{Address, B256, U256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
 use zksync_os_batch_types::BlockMerkleTreeData;
-use zksync_os_interface::types::{BlockHashes, BlockOutput};
+use zksync_os_interface::traits::AnyBlockContext;
 use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_types::{
-    BlockStartCursors, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction,
+    BlockOutput, BlockStartCursors, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope,
+    ZkTransaction,
 };
 
 #[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
@@ -165,24 +166,92 @@ pub struct BlockContext {
     pub blob_fee: U256,
 }
 
-impl BlockContext {
-    // todo: this will not be needed in the future once zksync-os-interface accepts a trait instead
-    //       of concrete BlockContext struct
-    pub fn to_interface(self) -> zksync_os_interface::types::BlockContext {
-        zksync_os_interface::types::BlockContext {
-            chain_id: self.chain_id,
-            block_number: self.block_number,
-            block_hashes: self.block_hashes,
-            timestamp: self.timestamp,
-            eip1559_basefee: self.eip1559_basefee,
-            pubdata_price: self.pubdata_price,
-            native_price: self.native_price,
-            coinbase: self.coinbase,
-            gas_limit: self.gas_limit,
-            pubdata_limit: self.pubdata_limit,
-            mix_hash: self.mix_hash,
-            execution_version: self.execution_version,
-            blob_fee: self.blob_fee,
-        }
+/// Array of previous block hashes.
+/// Hash for block number N will be at index [256 - (current_block_number - N)]
+/// (most recent will be at the end) if N is one of the most recent
+/// 256 blocks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlockHashes(pub [U256; 256]);
+
+impl Default for BlockHashes {
+    fn default() -> Self {
+        Self([U256::ZERO; 256])
+    }
+}
+
+impl serde::Serialize for BlockHashes {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.to_vec().serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BlockHashes {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let vec: Vec<U256> = Vec::deserialize(deserializer)?;
+        let array: [U256; 256] = vec
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("Expected array of length 256"))?;
+        Ok(Self(array))
+    }
+}
+
+impl AnyBlockContext for BlockContext {
+    fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    fn block_number(&self) -> u64 {
+        self.block_number
+    }
+
+    fn block_hashes(&self) -> &[U256; 256] {
+        &self.block_hashes.0
+    }
+
+    fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+
+    fn eip1559_basefee(&self) -> U256 {
+        self.eip1559_basefee
+    }
+
+    fn pubdata_price(&self) -> U256 {
+        self.pubdata_price
+    }
+
+    fn native_price(&self) -> U256 {
+        self.native_price
+    }
+
+    fn coinbase(&self) -> Address {
+        self.coinbase
+    }
+
+    fn gas_limit(&self) -> u64 {
+        self.gas_limit
+    }
+
+    fn pubdata_limit(&self) -> u64 {
+        self.pubdata_limit
+    }
+
+    fn mix_hash(&self) -> U256 {
+        self.mix_hash
+    }
+
+    fn blob_fee(&self) -> U256 {
+        self.blob_fee
+    }
+
+    fn is_gateway(&self) -> bool {
+        // todo: source from a new optional field?
+        false
     }
 }

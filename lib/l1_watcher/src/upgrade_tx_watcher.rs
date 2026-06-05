@@ -3,13 +3,14 @@ use std::sync::Arc;
 
 use crate::util::ANVIL_L1_CHAIN_ID;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, ProcessL1Event, util};
+use crate::{BlockUpdates, L1WatcherConfig, LogsCache, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
 use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use blake2::{Blake2s256, Digest};
+use tokio::sync::watch;
 use zksync_os_contract_interface::IBytecodeSupplier::EVMBytecodePublished;
 use zksync_os_contract_interface::IChainTypeManager::{
     NewProtocolVersion, NewUpgradeCutData, ProposedUpgrade,
@@ -18,6 +19,7 @@ use zksync_os_contract_interface::ServerNotifier::UpgradeTimestampUpdated;
 use zksync_os_contract_interface::is_method_missing;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::{
     L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
     UpgradeMetadata,
@@ -43,8 +45,8 @@ const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 ///   `EVMBytecodePublished` events — these live on L1 regardless of settlement layer.
 pub struct L1UpgradeTxWatcher {
     l2_chain_id: ChainId,
-    provider_l1: DynProvider,
-    provider_sl: DynProvider,
+    provider_l1: NodeProvider,
+    provider_sl: NodeProvider,
     bridgehub_l1: Address,
     /// Address of the bytecode supplier contract on L1 (used to scan EVMBytecodePublished events)
     bytecode_supplier_address: Address,
@@ -64,12 +66,14 @@ impl L1UpgradeTxWatcher {
     pub async fn create_watcher(
         config: L1WatcherConfig,
         l2_chain_id: ChainId,
-        bridgehub_l1: Bridgehub<DynProvider>,
-        zk_chain_l1: ZkChain<DynProvider>,
-        zk_chain_sl: ZkChain<DynProvider>,
+        bridgehub_l1: Bridgehub<NodeProvider>,
+        zk_chain_l1: ZkChain<NodeProvider>,
+        zk_chain_sl: ZkChain<NodeProvider>,
         bytecode_supplier_address: Address,
         current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
+        block_updates: watch::Receiver<BlockUpdates>,
+        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             config.max_blocks_to_process,
@@ -122,6 +126,8 @@ impl L1UpgradeTxWatcher {
         L1Watcher::new(
             config,
             zk_chain_l1.provider().clone(),
+            logs_cache,
+            block_updates,
             server_notifier_l1.into(),
             last_l1_block,
             None,
@@ -618,10 +624,18 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
 
     async fn process_event(
         &mut self,
-        _provider: &DynProvider,
+        _provider: &NodeProvider,
         request: L1UpgradeRequest,
         _log: Log,
     ) -> Result<(), L1WatcherError> {
+        // Since we don't have the old events, current_version might be wrong
+        // Update it here to pass related sanity checks
+        if self.current_protocol_version
+            < ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS
+        {
+            self.current_protocol_version = request.old_protocol_version.clone();
+        }
+
         if request.old_protocol_version < self.current_protocol_version {
             tracing::info!(
                 ?request.old_protocol_version,
@@ -722,7 +736,7 @@ pub enum UpgradeTxWatcherError {
 /// means the mapping is empty for that version. Returns `None` if the method is missing on the
 /// deployed CTM (pre-V31).
 async fn get_upgrade_cut_data_block(
-    provider: &DynProvider,
+    provider: &NodeProvider,
     ctm_address: Address,
     raw_protocol_version: U256,
 ) -> anyhow::Result<Option<u64>> {
@@ -735,7 +749,7 @@ async fn get_upgrade_cut_data_block(
 }
 
 async fn fetch_upgrade_cut_log_at(
-    provider: &DynProvider,
+    provider: &NodeProvider,
     ctm_address: Address,
     raw_protocol_version: U256,
     block: u64,
@@ -756,15 +770,20 @@ async fn fetch_upgrade_cut_log_at(
 }
 
 async fn find_l1_block_by_protocol_version(
-    zk_chain: ZkChain<DynProvider>,
+    zk_chain: ZkChain<NodeProvider>,
     protocol_version: ProtocolSemanticVersion,
 ) -> anyhow::Result<BlockNumber> {
     let protocol_version = protocol_version.packed()?;
 
-    util::find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| async move {
-        let res = zk.get_raw_protocol_version(block.into()).await?;
-        Ok(res >= protocol_version)
-    })
+    let deployment_block = zk_chain.deployment_block().await?;
+    util::find_l1_block_by_predicate(
+        Arc::new(zk_chain),
+        deployment_block,
+        move |zk, block| async move {
+            let res = zk.get_raw_protocol_version(block.into()).await?;
+            Ok(res >= protocol_version)
+        },
+    )
     .await
 }
 

@@ -673,6 +673,10 @@ pub struct ConsensusConfig {
         "must not be empty when `consensus.enabled=true`"
     ))]
     pub peer_ids: Vec<PeerId>,
+    /// TEMPORARY WORKAROUND - forward txs via RPC until network-based propagation is added.
+    /// Entries use `<peer_id>@<host>:<rpc_port>`; every peer must have a record.
+    #[config(default, with = Serde![*])]
+    pub tx_forwarding_rpc_urls: Vec<String>,
     /// WARNING: Assumes all configured consensus nodes are already caught up to the same
     /// canonical L2 state. Bootstrap does not catch up stale nodes before admitting them
     /// to the cluster.
@@ -1198,9 +1202,19 @@ pub struct L1WatcherConfig {
     #[config(default_t = 2)]
     pub confirmations: u64,
 
-    /// How often to poll L1 for new priority requests.
+    /// How often to poll L1 for the latest block.
     #[config(default_t = 1 * TimeUnit::Seconds)]
     pub poll_interval: Duration,
+
+    /// How often to poll L1 for the latest finalized block.
+    /// Note: Finalization advances at epoch boundaries. Which is every ~6.4 minutes on L1.
+    #[config(default_t = 1 * TimeUnit::Minutes)]
+    pub finalized_poll_interval: Duration,
+
+    /// Number of recent blocks retained in the shared logs cache.
+    /// The value should be based on the depth at which blocks are finalized. Which could be >60 on L1.
+    #[config(default_t = 128)]
+    pub logs_cache_capacity: usize,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1410,6 +1424,18 @@ pub enum ReplayArchiveConfig {
         #[config(nest, default)]
         encryption: ReplayArchiveEncryptionConfig,
     },
+    S3WithCredentialFile {
+        /// Name or URL of the bucket.
+        bucket_base_url: String,
+        /// Path to the credentials file.
+        s3_credential_file_path: PathBuf,
+        /// Allows overriding AWS S3 API endpoint, e.g. to use another S3-compatible store provider.
+        endpoint: Option<String>,
+        /// Allows specifying bucket region (inferred from the env by default).
+        region: Option<String>,
+        #[config(nest, default)]
+        encryption: ReplayArchiveEncryptionConfig,
+    },
 }
 
 /// Replay archive encryption applied before data is written to cold storage.
@@ -1433,6 +1459,24 @@ impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig
                 encryption,
             } => zksync_os_replay_archive::ReplayArchiveConfig::FileSystem {
                 root_path,
+                encryption: encryption.into(),
+            },
+            ReplayArchiveConfig::S3WithCredentialFile {
+                bucket_base_url,
+                s3_credential_file_path,
+                endpoint,
+                region,
+                encryption,
+            } => zksync_os_replay_archive::ReplayArchiveConfig::S3 {
+                config: zksync_os_replay_archive::S3ReplayArchiveConfig {
+                    bucket_base_url,
+                    auth_mode:
+                        zksync_os_replay_archive::S3ReplayArchiveAuthMode::AuthenticatedWithCredentialFile(
+                            s3_credential_file_path,
+                        ),
+                    endpoint,
+                    region,
+                },
                 encryption: encryption.into(),
             },
         }
@@ -2001,6 +2045,8 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
             max_blocks_to_process: c.max_blocks_to_process,
             confirmations: c.confirmations,
             poll_interval: c.poll_interval,
+            finalized_poll_interval: c.finalized_poll_interval,
+            logs_cache_capacity: c.logs_cache_capacity,
         }
     }
 }
@@ -2207,6 +2253,45 @@ mod tests {
                 assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
             ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
+            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
+                panic!("expected file system replay archive config")
+            }
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_s3_backend() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "S3WithCredentialFile"),
+            ("REPLAY_ARCHIVE_BUCKET_BASE_URL", "replay-archive"),
+            (
+                "REPLAY_ARCHIVE_S3_CREDENTIAL_FILE_PATH",
+                "/path/to/credentials.json",
+            ),
+            ("REPLAY_ARCHIVE_ENDPOINT", "http://localhost:9000"),
+            ("REPLAY_ARCHIVE_REGION", "us-east-2"),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::S3WithCredentialFile {
+                bucket_base_url,
+                s3_credential_file_path,
+                endpoint,
+                region,
+                encryption,
+            } => {
+                assert_eq!(bucket_base_url, "replay-archive");
+                assert_eq!(
+                    s3_credential_file_path,
+                    PathBuf::from("/path/to/credentials.json")
+                );
+                assert_eq!(endpoint.as_deref(), Some("http://localhost:9000"));
+                assert_eq!(region.as_deref(), Some("us-east-2"));
+                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
+            }
+            ReplayArchiveConfig::Noop | ReplayArchiveConfig::FileSystem { .. } => {
+                panic!("expected S3 replay archive config")
+            }
         }
     }
 
@@ -2229,6 +2314,9 @@ mod tests {
                 }
             },
             ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
+            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
+                panic!("expected file system replay archive config")
+            }
         }
     }
 

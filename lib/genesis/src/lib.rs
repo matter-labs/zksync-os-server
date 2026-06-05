@@ -2,7 +2,7 @@ use alloy::consensus::{EMPTY_OMMER_ROOT_HASH, Header};
 use alloy::eips::eip1559::INITIAL_BASE_FEE;
 use alloy::hex;
 use alloy::primitives::{Address, B64, B256, Bloom, Sealable, Sealed, U256};
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::Provider;
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
@@ -19,6 +19,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
+use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::BlockContext;
 use zksync_os_types::{ConfigFormat, ExecutionVersion, L1UpgradeEnvelope, ProtocolSemanticVersion};
 
@@ -123,7 +124,7 @@ pub struct GenesisUpgradeTxInfo {
 #[derive(Clone)]
 pub struct Genesis {
     input_source: Arc<dyn GenesisInputSource>,
-    zk_chain: ZkChain<DynProvider>,
+    zk_chain: ZkChain<NodeProvider>,
     state: OnceCell<GenesisState>,
     genesis_upgrade_tx: OnceCell<GenesisUpgradeTxInfo>,
     chain_id: u64,
@@ -143,7 +144,7 @@ impl Debug for Genesis {
 impl Genesis {
     pub fn new(
         input_source: Arc<dyn GenesisInputSource>,
-        zk_chain: ZkChain<DynProvider>,
+        zk_chain: ZkChain<NodeProvider>,
         chain_id: u64,
     ) -> Self {
         Self {
@@ -332,27 +333,17 @@ async fn build_genesis(
 }
 
 async fn load_genesis_upgrade_tx(
-    zk_chain: ZkChain<DynProvider>,
+    zk_chain: ZkChain<NodeProvider>,
 ) -> anyhow::Result<GenesisUpgradeTxInfo> {
     let zk_chain_address = *zk_chain.address();
     let provider = zk_chain.provider().clone();
-    let current_l1_block = zk_chain.provider().get_block_number().await?;
-    // Find the block when the zk chain was deployed or fallback to [0; latest_block] in localhost case.
-    let from_block = zksync_os_l1_watcher::util::find_l1_block_by_predicate(
-        Arc::new(zk_chain),
-        0,
-        |_zk, _block| async { Ok(true) },
-    )
-    .await?;
-    let to_block = if from_block == 0 {
-        current_l1_block
-    } else {
-        from_block
-    };
+    // The `GenesisUpgrade` event is emitted in the diamond proxy's deployment block, so the search
+    // collapses to that single block (`0` when undeployed, e.g. localhost — scans the genesis block).
+    let deployment_block = zk_chain.deployment_block().await?;
     let event_sig = GenesisUpgrade::SIGNATURE_HASH;
     let filter = Filter::new()
-        .from_block(from_block)
-        .to_block(to_block)
+        .from_block(deployment_block)
+        .to_block(deployment_block)
         .event_signature(event_sig)
         .address(zk_chain_address);
     let logs = provider.get_logs(&filter).await?;

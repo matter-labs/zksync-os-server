@@ -1,9 +1,7 @@
 use crate::config::{ChainLayout, load_chain_config};
-use crate::dyn_wallet_provider::EthDynProvider;
-use crate::network::Zksync;
 use crate::node_log::NodeLogState;
 use crate::prover_tester::ProverTester;
-use crate::provider::{ZksyncApi, ZksyncTestingProvider};
+use crate::provider::ZksyncTestingProvider;
 use crate::rpc_recorder::{HttpRpcRecorder, RpcRecordConfig};
 use crate::test_config::{
     TEST_PROVIDER_POLL_INTERVAL, build_node_config, disable_prover_input_generation,
@@ -29,10 +27,13 @@ use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
+use zksync_os_alloy_ext::network::Zksync;
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
+use zksync_os_provider::NodeProvider;
 use zksync_os_server::config::{Config, ProviderConfig};
 pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::{
@@ -47,9 +48,7 @@ use zksync_os_types::{
 pub mod assert_traits;
 pub mod config;
 pub mod contracts;
-pub mod dyn_wallet_provider;
 pub mod multi_node;
-mod network;
 mod node_log;
 mod prover_tester;
 pub mod provider;
@@ -274,7 +273,7 @@ impl TestEnvironment {
 #[derive(Debug)]
 pub struct Tester {
     l1: AnvilL1,
-    pub l2_provider: EthDynProvider,
+    pub l2_provider: NodeProvider,
     /// ZKsync OS-specific provider. Generally prefer to use `l2_provider` as we strive for the
     /// system to be Ethereum-compatible. But this can be useful if you need to assert custom fields
     /// that are only present in ZKsync OS response types (`l2ToL1Logs`, `commitTx`, etc).
@@ -296,7 +295,7 @@ pub struct Tester {
     l2_rpc_address: String,
     status_server_url: String,
     gateway_rpc_url: Option<String>,
-    sl_provider: EthDynProvider,
+    sl_provider: NodeProvider,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
     owned_supporting_nodes: Vec<SupportingNode>,
@@ -326,11 +325,11 @@ pub struct SupportingNode {
 }
 
 #[derive(Debug)]
-struct Ports {
-    l2_rpc: LockedPort,
-    prover_api: LockedPort,
-    network: LockedPort,
-    status: LockedPort,
+pub(crate) struct Ports {
+    pub(crate) l2_rpc: LockedPort,
+    pub(crate) prover_api: LockedPort,
+    pub(crate) network: LockedPort,
+    pub(crate) status: LockedPort,
 }
 
 impl Tester {
@@ -353,7 +352,7 @@ impl Tester {
         config.l1_sender_config.pubdata_mode = None;
     }
 
-    pub fn l1_provider(&self) -> &EthDynProvider {
+    pub fn l1_provider(&self) -> &NodeProvider {
         &self.l1.provider
     }
 
@@ -361,16 +360,16 @@ impl Tester {
         &self.l1.wallet
     }
 
-    pub fn sl_provider(&self) -> &EthDynProvider {
+    pub fn sl_provider(&self) -> &NodeProvider {
         &self.sl_provider
     }
 
     /// Returns the gateway provider if a gateway RPC URL is configured, `None` otherwise.
     /// Use this when calling [`L1State::fetch`] or [`L1State::fetch_finalized`].
-    pub fn gateway_eth_provider(&self) -> Option<DynProvider> {
+    pub fn gateway_eth_provider(&self) -> Option<NodeProvider> {
         self.gateway_rpc_url
             .as_ref()
-            .map(|_| self.sl_provider.clone().erased())
+            .map(|_| self.sl_provider.clone())
     }
 
     pub async fn gateway_provider(&self) -> anyhow::Result<Option<DynProvider<Zksync>>> {
@@ -575,15 +574,14 @@ impl Tester {
         Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, Some(ports)).await
     }
 
-    pub(crate) async fn launch_node_with_network_port(
+    pub(crate) async fn launch_node_with_ports(
         l1: AnvilL1,
         enable_prover: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
         chain_layout: ChainLayout<'static>,
-        network: LockedPort,
+        ports: Ports,
         wait_for_initial_deposit: bool,
     ) -> anyhow::Result<Self> {
-        let ports = Ports::acquire_unused_with_network(network).await?;
         let tempdir = Arc::new(tempfile::tempdir()?);
         let mut config = build_node_config(&l1, chain_layout, false).await?;
         if enable_prover {
@@ -743,20 +741,20 @@ impl Tester {
                 tracing::info!(%err, ?dur, "retrying connection to L2 node");
             })
             .await?;
-            EthDynProvider::new(sl_provider)
+            NodeProvider::new(sl_provider)
         } else {
             l1.provider.clone()
         };
         let gateway_eth_provider = gateway_rpc_url.as_ref().map(|_| sl_provider.clone());
         let prover_tester = ProverTester::new(
-            EthDynProvider::new(l1.provider.clone()),
+            NodeProvider::new(l1.provider.clone()),
             gateway_eth_provider,
-            EthDynProvider::new(l2_provider.clone()),
+            NodeProvider::new(l2_provider.clone()),
             DynProvider::new(l2_zk_provider.clone()),
         );
         let tester = Tester {
             l1,
-            l2_provider: EthDynProvider::new(l2_provider.clone()),
+            l2_provider: NodeProvider::new(l2_provider.clone()),
             l2_zk_provider: DynProvider::new(l2_zk_provider.clone()),
             l2_wallet,
             prover_tester,
@@ -792,7 +790,7 @@ impl StoppedTester {
         &self.config
     }
 
-    pub fn l1_provider(&self) -> &EthDynProvider {
+    pub fn l1_provider(&self) -> &NodeProvider {
         &self.l1.provider
     }
 
@@ -890,20 +888,11 @@ impl Drop for SupportingNode {
 }
 
 impl Ports {
-    async fn acquire_unused() -> anyhow::Result<Self> {
+    pub(crate) async fn acquire_unused() -> anyhow::Result<Self> {
         Ok(Self {
             l2_rpc: LockedPort::acquire_unused().await?,
             prover_api: LockedPort::acquire_unused().await?,
             network: LockedPort::acquire_unused().await?,
-            status: LockedPort::acquire_unused().await?,
-        })
-    }
-
-    async fn acquire_unused_with_network(network: LockedPort) -> anyhow::Result<Self> {
-        Ok(Self {
-            l2_rpc: LockedPort::acquire_unused().await?,
-            prover_api: LockedPort::acquire_unused().await?,
-            network,
             status: LockedPort::acquire_unused().await?,
         })
     }
@@ -1039,7 +1028,7 @@ async fn shutdown_runtime(runtime: Runtime) -> anyhow::Result<()> {
 
 async fn ensure_test_wallet_funded(
     l1: &AnvilL1,
-    l2_provider: &EthDynProvider,
+    l2_provider: &NodeProvider,
     l2_zk_provider: &DynProvider<Zksync>,
     l2_wallet: &EthereumWallet,
 ) -> anyhow::Result<()> {
@@ -1294,13 +1283,14 @@ async fn wait_for_gateway_readiness(
 
     (|| async {
         let gateway_provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::new(PrivateKeySigner::random()))
             .connect(gateway_rpc_url)
             .await
             .with_context(|| format!("failed to connect to gateway RPC at {gateway_rpc_url}"))?;
 
         L1State::fetch_finalized(
-            DynProvider::new(l1.provider.clone()),
-            Some(DynProvider::new(gateway_provider)),
+            l1.provider.clone(),
+            Some(NodeProvider::new(gateway_provider)),
             bridgehub_address,
             chain_id,
         )
@@ -1322,7 +1312,7 @@ async fn wait_for_gateway_readiness(
 #[derive(Debug, Clone)]
 pub struct AnvilL1 {
     pub address: String,
-    pub provider: EthDynProvider,
+    pub provider: NodeProvider,
     pub wallet: EthereumWallet,
 
     // Temporary directory that holds uncompressed l1-state.json used to initialize Anvil's state.
@@ -1377,7 +1367,7 @@ impl AnvilL1 {
 
         Ok(Self {
             address,
-            provider: EthDynProvider::new(provider),
+            provider: NodeProvider::new(provider),
             wallet,
             _tempdir: Arc::new(tempdir),
         })

@@ -18,13 +18,14 @@ use serde_json::Value as JsonValue;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zk_os_api::helpers::get_nonce;
-use zksync_os_interface::types::{BlockHashes, ExecutionOutput};
+use zksync_os_interface::types::ExecutionOutput;
 use zksync_os_interface::{
     error::InvalidTransaction,
     types::{ExecutionResult, TxOutput},
 };
 use zksync_os_storage_api::{
-    BlockContext, RepositoryError, StateError, ViewState, state_override_view::OverriddenStateView,
+    BlockContext, BlockHashes, RepositoryError, StateError, ViewState,
+    state_override_view::OverriddenStateView,
 };
 use zksync_os_tx_validators::policy_client::{AccessType, PolicyClient, PolicySession};
 use zksync_os_types::ZksyncOsEncode;
@@ -115,7 +116,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         &self,
         request: TransactionRequest,
         block_context: &BlockContext,
-        for_estimate_gas: bool,
+        relax_fee_validation: bool,
     ) -> Result<ZkTransaction, EthCallError> {
         let tx_type = request.minimal_tx_type();
 
@@ -161,7 +162,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             block_context.eip1559_basefee.saturating_to(),
-            for_estimate_gas,
+            relax_fee_validation,
         )?;
         let chain_id = chain_id.unwrap_or(self.chain_id);
         let from = from.unwrap_or_default();

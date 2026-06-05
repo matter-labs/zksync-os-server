@@ -1,12 +1,12 @@
 use crate::eth_call_handler::build_pending_block_context;
 use crate::eth_impl::build_api_receipt;
 use crate::metrics::{TX_SUBMISSION, TxRejectionReason};
+use crate::tx_forwarder::{TxForwardError, TxForwarder};
 use crate::{ReadRpcStorage, RpcConfig};
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
 use alloy::primitives::{B256, Bytes, U256};
-use alloy::providers::{DynProvider, Provider};
-use alloy::transports::{RpcError, TransportErrorKind};
+use alloy::transports::RpcError;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_interface::error::InvalidTransaction;
@@ -34,7 +34,7 @@ pub struct TxHandler<RpcStorage, Mempool> {
     chain_id: u64,
     mempool: Mempool,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
-    tx_forwarder: Option<DynProvider>,
+    tx_forwarder: Option<TxForwarder>,
     /// Optional policy client. When set, each incoming tx is simulated
     /// once with the validator wired in (admit + judge inline). Spares
     /// clients a `pending → no receipt` poll loop on a stable deny.
@@ -54,7 +54,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         chain_id: u64,
         mempool: Mempool,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
-        tx_forwarder: Option<DynProvider>,
+        tx_forwarder: Option<TxForwarder>,
         policy_client: Option<PolicyClient>,
         last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     ) -> Self {
@@ -156,11 +156,11 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             let mut local_cleanup = RemoveOnDrop::new(&self.mempool, hash);
             let forwarding_result = {
                 let _guard = ForwardingLatencyGuard::new();
-                tx_forwarder.send_raw_transaction(&tx_bytes).await
+                tx_forwarder.forward_raw_transaction(hash, &tx_bytes).await
             };
             // We do not need to wait for pending transaction here, so it's safe to forget about it
             if let Err(err) = forwarding_result {
-                tracing::debug!(%err, "forwarding error from main node back to user");
+                tracing::debug!(%err, "transaction forwarding error back to user");
                 // `local_cleanup` removes the local mirror as it drops.
                 return Err(err.into());
             }
@@ -215,20 +215,23 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             // keep the local mirror: forward succeeded, or main reported an
             // EIP-7966 timeout (tx still pending on main).
             let mut local_cleanup = RemoveOnDrop::new(&self.mempool, tx_hash);
-            let forwarding_result: Result<ZkTransactionReceipt, _> = {
+            let forwarding_result = {
                 let _guard = ForwardingLatencyGuard::new();
                 forwarder
-                    .raw_request("eth_sendRawTransactionSync".into(), (bytes,))
+                    .forward_raw_transaction_sync(tx_hash, &bytes)
                     .await
             };
-            return match forwarding_result {
-                Ok(receipt) => {
+            match forwarding_result {
+                Ok(Some(receipt)) => {
                     local_cleanup.disarm();
-                    Ok(receipt)
+                    return Ok(receipt);
+                }
+                Ok(None) => {
+                    local_cleanup.disarm();
                 }
                 Err(err) => {
-                    tracing::debug!(%err, "sync forwarding error from main node back to user");
-                    if let RpcError::ErrorResp(payload) = &err
+                    tracing::debug!(%err, "sync transaction forwarding error back to user");
+                    if let Some(RpcError::ErrorResp(payload)) = err.as_rpc_error()
                         && payload.code == EIP_7966_TIMEOUT_CODE
                     {
                         local_cleanup.disarm();
@@ -236,9 +239,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
                     }
                     // Real rejection or transport failure. Let `local_cleanup`
                     // remove the local mirror as it drops.
-                    Err(EthSendRawTransactionError::ForwardError(err).into())
+                    return Err(EthSendRawTransactionError::ForwardError(err).into());
                 }
-            };
+            }
         }
 
         // Main node: wait for the tx to land in a locally-applied block.
@@ -286,9 +289,9 @@ pub enum EthSendRawTransactionError {
     /// Errors related to the transaction pool
     #[error(transparent)]
     PoolError(#[from] PoolError),
-    /// Error forwarded from main node
+    /// Error while forwarding transaction
     #[error(transparent)]
-    ForwardError(#[from] RpcError<TransportErrorKind>),
+    ForwardError(#[from] TxForwardError),
     #[error("Signer is blacklisted")]
     BlacklistedSigner,
     /// Policy service rejected the transaction.
@@ -308,8 +311,8 @@ impl From<&EthSendRawTransactionError> for TxRejectionReason {
             EthSendRawTransactionError::InvalidTransactionSignature => Self::InvalidSignature,
             EthSendRawTransactionError::NotAcceptingTransactions(_) => Self::NotAccepting,
             EthSendRawTransactionError::BlacklistedSigner => Self::BlacklistedSigner,
-            EthSendRawTransactionError::ForwardError(rpc_err) => match rpc_err {
-                RpcError::ErrorResp(_) => Self::ForwardRejected,
+            EthSendRawTransactionError::ForwardError(err) => match err {
+                TxForwardError::Rpc(RpcError::ErrorResp(_)) => Self::ForwardRejected,
                 _ => Self::ForwardTransportError,
             },
             EthSendRawTransactionError::PoolError(pool_err) => Self::from(&pool_err.kind),
