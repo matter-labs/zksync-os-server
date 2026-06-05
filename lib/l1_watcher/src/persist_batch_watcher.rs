@@ -12,7 +12,7 @@ use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
-use zksync_os_l1_consistency_checker::{L1CommittedBatch, L1ConsistencyCheckEvent};
+use zksync_os_l1_consistency_checker::L1CommittedBatch;
 use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
@@ -31,7 +31,7 @@ use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 ///   proof-related requests;
 pub struct L1PersistBatchWatcher<BatchStorage> {
     batch_storage: BatchStorage,
-    consistency_checker_tx: Option<mpsc::Sender<L1ConsistencyCheckEvent>>,
+    consistency_checker_tx: Option<mpsc::Sender<L1CommittedBatch>>,
     committed_batches: HashMap<u64, DiscoveredCommittedBatch>,
     last_processed_commit_batch: u64,
     last_persisted_batch_on_start: u64,
