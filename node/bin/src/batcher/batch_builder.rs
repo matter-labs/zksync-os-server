@@ -50,6 +50,21 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         )?),
         _ => None,
     };
+    if let Some(native_batch_run) = &native_batch_run {
+        tracing::info!(
+            batch_number,
+            block_number_from,
+            block_number_to,
+            block_count = blocks.len(),
+            ?protocol_version,
+            ?proving_version,
+            pubdata_mode = ?pubdata_mode,
+            prover_input_words = native_batch_run.prover_input.len(),
+            canonical_pubdata_bytes = native_batch_run.pubdata.len(),
+            "Using native batch PIG for batch sealing",
+        );
+    }
+
     let (batch_info, blob_sidecar) = if let Some(native_batch_run) = &native_batch_run {
         ExtendedCommitBatchInfo::build_from_canonical_output(
             batch_number,

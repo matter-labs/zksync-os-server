@@ -133,6 +133,19 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                 request.pubdata_mode,
             )
             .map_err(anyhow::Error::from)?;
+            tracing::info!(
+                batch_number = request.batch_number,
+                request_id = request.request_id,
+                first_block_number = request.first_block_number,
+                last_block_number = request.last_block_number,
+                block_count = blocks.len(),
+                ?protocol_version,
+                ?proving_version,
+                pubdata_mode = ?request.pubdata_mode,
+                prover_input_words = native_batch_run.prover_input.len(),
+                canonical_pubdata_bytes = native_batch_run.pubdata.len(),
+                "Using native batch PIG for batch verification",
+            );
             ExtendedCommitBatchInfo::build_from_canonical_output(
                 request.batch_number,
                 request.pubdata_mode,
