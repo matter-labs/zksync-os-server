@@ -55,7 +55,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         gateway_block_updates: Option<watch::Receiver<BlockUpdates>>,
         l1_logs_cache: LogsCache,
         gateway_logs_cache: Option<LogsCache>,
-        consistency_checker_tx: Option<mpsc::Sender<L1ConsistencyCheckEvent>>,
+        consistency_checker_tx: Option<mpsc::Sender<L1CommittedBatch>>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(
@@ -245,15 +245,13 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             if let Some(tx) = &self.consistency_checker_tx {
                 let l1_commit = L1CommittedBatch {
                     batch_info,
-                    block_range: committed_batch.block_range.clone(),
+                    range: committed_batch.block_range.clone(),
                 };
-                tx.send(L1ConsistencyCheckEvent::BatchCommitted(l1_commit))
-                    .await
-                    .map_err(|_| {
-                        L1WatcherError::Other(anyhow::anyhow!(
-                            "L1 consistency checker event channel closed"
-                        ))
-                    })?;
+                tx.send(l1_commit).await.map_err(|_| {
+                    L1WatcherError::Other(anyhow::anyhow!(
+                        "L1 consistency checker event channel closed"
+                    ))
+                })?;
             }
 
             self.committed_batches.insert(batch_number, committed_batch);

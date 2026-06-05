@@ -1,20 +1,16 @@
 use crate::cache::LocalBatchDataCache;
 use async_trait::async_trait;
-use std::collections::VecDeque;
-use std::ops::RangeInclusive;
+use std::{collections::VecDeque, ops::RangeInclusive};
 use tokio::sync::mpsc;
 use zksync_os_batch_types::ExtendedCommitBatchInfo;
-use zksync_os_contract_interface::models::DACommitmentScheme;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, TreeBlock, read_multichain_root};
 use zksync_os_types::PubdataMode;
 
-/// L1 data discovered by the persistence watcher and checked against locally replayed blocks.
-#[derive(Clone, Debug)]
 pub struct L1CommittedBatch {
     pub batch_info: ExtendedCommitBatchInfo,
-    pub block_range: RangeInclusive<u64>,
+    pub range: RangeInclusive<u64>,
 }
 
 impl L1CommittedBatch {
@@ -22,14 +18,12 @@ impl L1CommittedBatch {
         self.batch_info.batch_number
     }
 
-    fn last_block_number(&self) -> u64 {
-        *self.block_range.end()
+    pub fn last_block_number(&self) -> u64 {
+        self.range
+            .clone()
+            .last()
+            .expect("last block number of batch should exist in range")
     }
-}
-
-#[derive(Clone, Debug)]
-pub enum L1ConsistencyCheckEvent {
-    BatchCommitted(L1CommittedBatch),
 }
 
 /// Terminal EN pipeline component that owns local batch data caching and L1 consistency checks.
@@ -39,7 +33,7 @@ pub struct L1ConsistencyChecker<ReadState> {
     first_unpersisted_block: u64,
     read_state: ReadState,
     cache: LocalBatchDataCache,
-    l1_events_rx: mpsc::Receiver<L1ConsistencyCheckEvent>,
+    l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
     pending_commits: VecDeque<L1CommittedBatch>,
 }
 
@@ -50,7 +44,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
         first_unpersisted_block: u64,
         read_state: ReadState,
         cache: LocalBatchDataCache,
-        l1_events_rx: mpsc::Receiver<L1ConsistencyCheckEvent>,
+        l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
     ) -> Self {
         Self {
             chain_id,
@@ -80,11 +74,11 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         while let Some(commit) = self.pending_commits.pop_front() {
             if self.verify_commit_if_available(&commit)? {
                 tracing::info!(
-                    batch_number = commit.batch_number(),
-                    block_from = *commit.block_range.start(),
-                    block_to = *commit.block_range.end(),
-                    "verified L1 committed batch against locally replayed blocks"
+                    "verified L1 committed batch #{} against locally replayed blocks {:?}",
+                    commit.batch_info.batch_number,
+                    commit.range,
                 );
+
                 self.cache
                     .remove_lower_than(commit.last_block_number().saturating_add(1));
             } else {
@@ -99,7 +93,7 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         if commit.last_block_number() < self.first_unpersisted_block {
             return Ok(true);
         }
-        let Some(blocks) = self.cache.get_range(commit.block_range.clone())? else {
+        let Some(blocks) = self.cache.get_range(commit.range.clone())? else {
             return Ok(false);
         };
         let first_block = blocks
@@ -109,7 +103,6 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
             .last()
             .expect("L1 committed batch block range cannot be empty");
 
-        let pubdata_mode = pubdata_mode_for_l1_commit(&commit.batch_info)?;
         let (local_batch_info, _) = ExtendedCommitBatchInfo::build(
             blocks
                 .iter()
@@ -123,7 +116,7 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
                 .collect(),
             self.chain_id,
             commit.batch_number(),
-            pubdata_mode,
+            PubdataMode::from_da_commitment_scheme(commit.batch_info.l2_da_commitment_scheme),
             self.sl_chain_id,
             last_block.multichain_root,
             &first_block.record.protocol_version,
@@ -187,12 +180,12 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
                 }
                 event = self.l1_events_rx.recv(), if !l1_events_closed => {
                     match event {
-                        Some(L1ConsistencyCheckEvent::BatchCommitted(commit)) => {
+                        Some(commit) => {
                             state_reporter.enter_state(GenericComponentState::Active);
                             tracing::debug!(
                                 batch_number = commit.batch_number(),
-                                block_from = *commit.block_range.start(),
-                                block_to = *commit.block_range.end(),
+                                block_from = *commit.range.start(),
+                                block_to = *commit.range.end(),
                                 "received L1 committed batch for consistency checking"
                             );
                             self.pending_commits.push_back(commit);
@@ -204,20 +197,6 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
                     }
                 }
             }
-        }
-    }
-}
-
-fn pubdata_mode_for_l1_commit(commit: &ExtendedCommitBatchInfo) -> anyhow::Result<PubdataMode> {
-    match commit.l2_da_commitment_scheme {
-        DACommitmentScheme::BlobsZKsyncOS => Ok(PubdataMode::Blobs),
-        DACommitmentScheme::BlobsAndPubdataKeccak256 => Ok(PubdataMode::Calldata),
-        DACommitmentScheme::EmptyNoDA => Ok(PubdataMode::Validium),
-        DACommitmentScheme::None | DACommitmentScheme::PubdataKeccak256 => {
-            anyhow::bail!(
-                "unsupported DA commitment scheme for L1 consistency check: {:?}",
-                commit.l2_da_commitment_scheme
-            )
         }
     }
 }
