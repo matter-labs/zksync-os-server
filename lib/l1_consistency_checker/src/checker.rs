@@ -1,7 +1,7 @@
 use crate::cache::{LocalBatchDataCacheReader, LocalBatchDataCacheWriter};
 use async_trait::async_trait;
 use std::{collections::VecDeque, ops::RangeInclusive};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, watch};
 use zksync_os_batch_types::ExtendedCommitBatchInfo;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
@@ -26,11 +26,9 @@ impl L1CommittedBatch {
     }
 }
 
-pub type L1ConsistencyCheckResult = Result<(), String>;
-
+/// Request to verify that L1 committed batch data matches locally executed blocks.
 pub struct L1ConsistencyCheckRequest {
     pub commit: L1CommittedBatch,
-    pub result_tx: oneshot::Sender<L1ConsistencyCheckResult>,
 }
 
 /// Terminal EN pipeline component that owns local batch data caching and L1 consistency checks.
@@ -41,6 +39,7 @@ pub struct L1ConsistencyChecker<ReadState> {
     read_state: ReadState,
     cache_writer: LocalBatchDataCacheWriter,
     cache_reader: LocalBatchDataCacheReader,
+    latest_verified_batch_tx: watch::Sender<u64>,
     l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
     pending_requests: VecDeque<L1ConsistencyCheckRequest>,
 }
@@ -52,6 +51,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
         last_persisted_block_on_start: u64,
         read_state: ReadState,
         cache_writer: LocalBatchDataCacheWriter,
+        latest_verified_batch_tx: watch::Sender<u64>,
         l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
     ) -> Self {
         let cache_reader = cache_writer.subscribe();
@@ -62,6 +62,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
             read_state,
             cache_writer,
             cache_reader,
+            latest_verified_batch_tx,
             l1_events_rx,
             pending_requests: VecDeque::new(),
         }
@@ -85,14 +86,15 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         while let Some(pending) = self.pending_requests.pop_front() {
             match self.verify_commit_if_available(&pending.commit) {
                 Ok(true) => {
+                    let batch_number = pending.commit.batch_number();
                     tracing::info!(
                         "verified L1 committed batch #{} against locally replayed blocks {:?}",
-                        pending.commit.batch_number(),
+                        batch_number,
                         pending.commit.range
                     );
                     self.cache_writer
                         .remove_lower_than(pending.commit.last_block_number().saturating_add(1));
-                    let _ = pending.result_tx.send(Ok(()));
+                    self.mark_batch_verified(batch_number);
                 }
                 Ok(false) => {
                     // blocks required for consistency check are not available from cache yet, waiting for the next iteration
@@ -100,13 +102,22 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
                     break;
                 }
                 Err(err) => {
-                    let message = err.to_string();
-                    let _ = pending.result_tx.send(Err(message));
                     return Err(err);
                 }
             }
         }
         Ok(())
+    }
+
+    fn mark_batch_verified(&self, batch_number: u64) {
+        self.latest_verified_batch_tx.send_if_modified(|latest| {
+            if batch_number > *latest {
+                *latest = batch_number;
+                true
+            } else {
+                false
+            }
+        });
     }
 
     /// Verifies whether data received from verification request is consistent with locally replayed data

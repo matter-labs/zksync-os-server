@@ -5,16 +5,14 @@ use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::{Context, anyhow};
 use std::collections::HashMap;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, watch};
 use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
-use zksync_os_l1_consistency_checker::{
-    L1CommittedBatch, L1ConsistencyCheckRequest, L1ConsistencyCheckResult,
-};
+use zksync_os_l1_consistency_checker::{L1CommittedBatch, L1ConsistencyCheckRequest};
 use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
@@ -34,6 +32,7 @@ use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 pub struct L1PersistBatchWatcher<BatchStorage> {
     batch_storage: BatchStorage,
     consistency_checker_tx: Option<mpsc::Sender<L1ConsistencyCheckRequest>>,
+    latest_verified_batch_rx: Option<watch::Receiver<u64>>,
     committed_batches: HashMap<u64, PendingCommittedBatch>,
     last_processed_commit_batch: u64,
     last_persisted_batch_on_start: u64,
@@ -41,7 +40,6 @@ pub struct L1PersistBatchWatcher<BatchStorage> {
 
 struct PendingCommittedBatch {
     committed_batch: DiscoveredCommittedBatch,
-    consistency_check_rx: Option<oneshot::Receiver<L1ConsistencyCheckResult>>,
 }
 
 impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
@@ -63,8 +61,13 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         l1_logs_cache: LogsCache,
         gateway_logs_cache: Option<LogsCache>,
         consistency_checker_tx: Option<mpsc::Sender<L1ConsistencyCheckRequest>>,
+        latest_verified_batch_rx: Option<watch::Receiver<u64>>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
+        anyhow::ensure!(
+            consistency_checker_tx.is_some() == latest_verified_batch_rx.is_some(),
+            "L1 consistency checker sender and latest verified batch receiver must be configured together"
+        );
         tracing::info!(
             last_persisted_batch,
             num_intervals = intervals.intervals().len(),
@@ -161,6 +164,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         let this = Self {
             batch_storage,
             consistency_checker_tx,
+            latest_verified_batch_rx,
             committed_batches: HashMap::new(),
             last_processed_commit_batch: last_persisted_batch,
             last_persisted_batch_on_start: last_persisted_batch,
@@ -249,57 +253,49 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             tracing::debug!(batch_number, "discovered committed batch");
             let (batch_info, committed_batch) =
                 self.parse_committed_batch(provider, report, &log).await?;
-            let consistency_check_rx = if let Some(tx) = &self.consistency_checker_tx {
-                let (result_tx, result_rx) = oneshot::channel();
+
+            // Send the L1 commit data to the EN consistency checker. Main nodes do not run it.
+            if let Some(tx) = &self.consistency_checker_tx {
                 let l1_commit = L1CommittedBatch {
                     batch_info,
                     range: committed_batch.block_range.clone(),
                 };
-                tx.send(L1ConsistencyCheckRequest {
-                    commit: l1_commit,
-                    result_tx,
-                })
-                .await
-                .map_err(|_| {
-                    L1WatcherError::Other(anyhow::anyhow!(
-                        "L1 consistency checker event channel closed"
-                    ))
-                })?;
-                Some(result_rx)
-            } else {
-                None
-            };
 
-            self.committed_batches.insert(
-                batch_number,
-                PendingCommittedBatch {
-                    committed_batch,
-                    consistency_check_rx,
-                },
-            );
+                tx.send(L1ConsistencyCheckRequest { commit: l1_commit })
+                    .await
+                    .map_err(|_| {
+                        L1WatcherError::Other(anyhow::anyhow!(
+                            "L1 consistency checker event channel closed"
+                        ))
+                    })?;
+            }
+
+            self.committed_batches
+                .insert(batch_number, PendingCommittedBatch { committed_batch });
             self.last_processed_commit_batch = batch_number;
         }
         Ok(())
     }
 }
 
-async fn wait_for_consistency_check(
+async fn wait_until_batch_verified(
     batch_number: u64,
-    consistency_check_rx: Option<oneshot::Receiver<L1ConsistencyCheckResult>>,
+    latest_verified_batch_rx: Option<&mut watch::Receiver<u64>>,
 ) -> Result<(), L1WatcherError> {
-    let Some(consistency_check_rx) = consistency_check_rx else {
+    let Some(latest_verified_batch_rx) = latest_verified_batch_rx else {
         // if there's no receiver, it means that consistency checker was turned off(so this is a main node) - return positive result
         return Ok(());
     };
 
-    match consistency_check_rx.await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(message)) => Err(L1WatcherError::Other(anyhow::anyhow!(
-            "L1 consistency check failed for batch #{batch_number}: {message}"
-        ))),
-        Err(_) => Err(L1WatcherError::Other(anyhow::anyhow!(
-            "L1 consistency checker stopped before verifying batch #{batch_number}"
-        ))),
+    loop {
+        if *latest_verified_batch_rx.borrow_and_update() >= batch_number {
+            return Ok(());
+        }
+        latest_verified_batch_rx.changed().await.map_err(|_| {
+            L1WatcherError::Other(anyhow::anyhow!(
+                "L1 consistency checker stopped before verifying batch #{batch_number}"
+            ))
+        })?;
     }
 }
 
@@ -343,8 +339,11 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                         );
 
                         // we don't want to persist a batch that wasn't verified for consistency against L1
-                        wait_for_consistency_check(batch_number, batch.consistency_check_rx)
-                            .await?;
+                        wait_until_batch_verified(
+                            batch_number,
+                            self.latest_verified_batch_rx.as_mut(),
+                        )
+                        .await?;
 
                         if execute.commitment != batch.committed_batch.batch_info.commitment {
                             return Err(L1WatcherError::Other(anyhow!(

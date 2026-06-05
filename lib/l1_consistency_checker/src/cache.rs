@@ -110,7 +110,7 @@ impl TreeBlockCache {
     }
 }
 
-/// Shared cache used by EN batch verification and L1 batch persistence.
+/// Writer to the shared cache of blocks
 #[derive(Clone, Debug)]
 pub struct LocalBatchDataCacheWriter {
     inner: Arc<watch::Sender<TreeBlockCache>>,
@@ -148,18 +148,14 @@ impl LocalBatchDataCacheWriter {
         };
 
         let mut result = Ok(());
-        self.inner.send_if_modified(|cache| {
-            match cache.insert(
-                block_number,
-                data
-            ) {
+        self.inner
+            .send_if_modified(|cache| match cache.insert(block_number, data) {
                 Ok(()) => true,
                 Err(err) => {
                     result = Err(err);
                     false
                 }
-            }
-        });
+            });
         result
     }
 
