@@ -320,8 +320,8 @@ dependencies = [
 
 [[package]]
 name = "airbender-crypto"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/airbender-platform?branch=antonio%2Fnative-pig-host-bigint-delegation#98de3cc6e12be9311544d4112c94b95cbdafaad2"
+version = "0.2.2"
+source = "git+https://github.com/matter-labs/airbender-platform?rev=2418efaafd96139723b51c6ba51ae48ffce5e06c#2418efaafd96139723b51c6ba51ae48ffce5e06c"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -2557,26 +2557,6 @@ dependencies = [
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
-dependencies = [
- "airbender-crypto",
- "arrayvec",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "cfg-if",
- "cycle_marker 0.1.0",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "full_statement_verifier 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
- "paste",
- "ruint",
- "serde-big-array",
- "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
-]
-
-[[package]]
-name = "basic_bootloader"
-version = "0.1.0"
 source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
 dependencies = [
  "arrayvec",
@@ -2668,28 +2648,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "basic_system"
+name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
 dependencies = [
  "airbender-crypto",
  "arrayvec",
- "cc-traits 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "const-hex",
+ "basic_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "cfg-if",
  "cycle_marker 0.1.0",
- "either",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "num-bigint",
- "num-traits",
+ "evm_interpreter 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "full_statement_verifier 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
  "paste",
- "rand 0.9.2",
  "ruint",
- "serde",
- "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
+ "serde-big-array",
  "strum_macros",
- "u256",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
+ "system_hooks 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
 ]
 
 [[package]]
@@ -2809,6 +2784,31 @@ dependencies = [
  "storage_models 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3)",
  "strum_macros",
  "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3)",
+]
+
+[[package]]
+name = "basic_system"
+version = "0.1.0"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
+dependencies = [
+ "airbender-crypto",
+ "arrayvec",
+ "cc-traits 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "const-hex",
+ "cycle_marker 0.1.0",
+ "either",
+ "evm_interpreter 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "modexp 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "num-bigint",
+ "num-traits",
+ "paste",
+ "rand 0.9.2",
+ "ruint",
+ "serde",
+ "storage_models 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "strum_macros",
+ "u256",
+ "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
 ]
 
 [[package]]
@@ -3418,20 +3418,6 @@ dependencies = [
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
-dependencies = [
- "airbender-crypto",
- "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "c-kzg",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "ruint",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
-]
-
-[[package]]
-name = "callable_oracles"
-version = "0.1.0"
 source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
 dependencies = [
  "crypto 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3)",
@@ -3505,6 +3491,20 @@ dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
  "ruint",
  "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3)",
+]
+
+[[package]]
+name = "callable_oracles"
+version = "0.1.0"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
+dependencies = [
+ "airbender-crypto",
+ "basic_bootloader 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "basic_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "c-kzg",
+ "oracle_provider 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "ruint",
+ "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
 ]
 
 [[package]]
@@ -3597,12 +3597,12 @@ dependencies = [
 [[package]]
 name = "cc-traits"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3#49095d336c991427f074afefbf50ff7c53a15007"
 
 [[package]]
 name = "cc-traits"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
 
 [[package]]
 name = "cesu8"
@@ -4520,7 +4520,7 @@ source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antoni
 [[package]]
 name = "cycle_marker"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
 
 [[package]]
 name = "darling"
@@ -4706,7 +4706,7 @@ dependencies = [
 [[package]]
 name = "delegated_u256"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
 dependencies = [
  "ruint",
  "serde",
@@ -5230,22 +5230,6 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
-dependencies = [
- "airbender-crypto",
- "arrayvec",
- "cycle_marker 0.1.0",
- "either",
- "paste",
- "ruint",
- "strum_macros",
- "u256",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
-]
-
-[[package]]
-name = "evm_interpreter"
-version = "0.1.0"
 source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
 dependencies = [
  "arrayvec",
@@ -5320,6 +5304,22 @@ dependencies = [
  "ruint",
  "strum_macros",
  "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3)",
+]
+
+[[package]]
+name = "evm_interpreter"
+version = "0.1.0"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
+dependencies = [
+ "airbender-crypto",
+ "arrayvec",
+ "cycle_marker 0.1.0",
+ "either",
+ "paste",
+ "ruint",
+ "strum_macros",
+ "u256",
+ "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
 ]
 
 [[package]]
@@ -5723,33 +5723,6 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
-dependencies = [
- "airbender-crypto",
- "alloy",
- "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "bincode 1.3.3",
- "bincode 2.0.1",
- "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
- "hex",
- "log",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "paste",
- "ruint",
- "serde",
- "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "zksync_os_evm_errors",
- "zksync_os_interface",
-]
-
-[[package]]
-name = "forward_system"
-version = "0.1.0"
 source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
 dependencies = [
  "alloy",
@@ -5869,6 +5842,33 @@ dependencies = [
  "zksync_os_evm_errors",
  "zksync_os_interface",
  "zksync_os_runner 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3)",
+]
+
+[[package]]
+name = "forward_system"
+version = "0.1.0"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
+dependencies = [
+ "airbender-crypto",
+ "alloy",
+ "basic_bootloader 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "basic_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "bincode 1.3.3",
+ "bincode 2.0.1",
+ "callable_oracles 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "evm_interpreter 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
+ "hex",
+ "log",
+ "oracle_provider 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "paste",
+ "ruint",
+ "serde",
+ "strum_macros",
+ "system_hooks 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "zksync_os_evm_errors",
+ "zksync_os_interface",
 ]
 
 [[package]]
@@ -8181,11 +8181,6 @@ dependencies = [
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
-
-[[package]]
-name = "modexp"
-version = "0.1.0"
 source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
 
 [[package]]
@@ -8207,6 +8202,11 @@ source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antoni
 name = "modexp"
 version = "0.1.0"
 source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3#49095d336c991427f074afefbf50ff7c53a15007"
+
+[[package]]
+name = "modexp"
+version = "0.1.0"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
 
 [[package]]
 name = "modular-bitfield"
@@ -8846,15 +8846,6 @@ dependencies = [
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
-dependencies = [
- "riscv_transpiler",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
-]
-
-[[package]]
-name = "oracle_provider"
-version = "0.1.0"
 source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
 dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
@@ -8895,6 +8886,15 @@ source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antoni
 dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
  "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3)",
+]
+
+[[package]]
+name = "oracle_provider"
+version = "0.1.0"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
+dependencies = [
+ "riscv_transpiler",
+ "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
 ]
 
 [[package]]
@@ -13169,14 +13169,6 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
-dependencies = [
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
-]
-
-[[package]]
-name = "storage_models"
-version = "0.1.0"
 source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
 dependencies = [
  "crypto 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3)",
@@ -13216,6 +13208,14 @@ version = "0.1.0"
 source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3#49095d336c991427f074afefbf50ff7c53a15007"
 dependencies = [
  "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3)",
+]
+
+[[package]]
+name = "storage_models"
+version = "0.1.0"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
+dependencies = [
+ "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
 ]
 
 [[package]]
@@ -13387,20 +13387,6 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
-dependencies = [
- "arrayvec",
- "cycle_marker 0.1.0",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "paste",
- "ruint",
- "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
-]
-
-[[package]]
-name = "system_hooks"
-version = "0.1.0"
 source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
 dependencies = [
  "arrayvec",
@@ -13466,6 +13452,20 @@ dependencies = [
  "ruint",
  "strum_macros",
  "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3)",
+]
+
+[[package]]
+name = "system_hooks"
+version = "0.1.0"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
+dependencies = [
+ "arrayvec",
+ "cycle_marker 0.1.0",
+ "evm_interpreter 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "paste",
+ "ruint",
+ "strum_macros",
+ "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
 ]
 
 [[package]]
@@ -14386,7 +14386,7 @@ checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 [[package]]
 name = "u256"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
 dependencies = [
  "delegated_u256",
  "ruint",
@@ -15959,22 +15959,6 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run#5c695d7761947a8637cfd9cbd6b012d70c0d24f2"
-dependencies = [
- "airbender-crypto",
- "arrayvec",
- "cfg-if",
- "cycle_marker 0.1.0",
- "paste",
- "ruint",
- "serde",
- "strum_macros",
- "u256",
-]
-
-[[package]]
-name = "zk_ee"
-version = "0.1.0"
 source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
 dependencies = [
  "arrayvec",
@@ -16053,6 +16037,22 @@ dependencies = [
  "ruint",
  "serde",
  "strum_macros",
+]
+
+[[package]]
+name = "zk_ee"
+version = "0.1.0"
+source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa#6a1d8749e162259af304745e5271f249667e9366"
+dependencies = [
+ "airbender-crypto",
+ "arrayvec",
+ "cfg-if",
+ "cycle_marker 0.1.0",
+ "paste",
+ "ruint",
+ "serde",
+ "strum_macros",
+ "u256",
 ]
 
 [[package]]
@@ -16531,12 +16531,12 @@ dependencies = [
  "alloy",
  "anyhow",
  "cargo_metadata",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
  "forward_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.0.29-interface-v0.1.3)",
  "forward_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.1.2-interface-v0.1.3)",
  "forward_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.2.10-interface-v0.1.3)",
  "forward_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.2.10-simulation-only-interface-v0.1.3)",
  "forward_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.3.1-interface-v0.1.3)",
+ "forward_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
  "reqwest 0.12.28",
  "tempfile",
  "test-casing",
@@ -16552,9 +16552,9 @@ version = "0.20.6"
 dependencies = [
  "alloy",
  "anyhow",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-batch-prover-input-run)",
+ "basic_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "forward_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
  "zksync_os_interface",
  "zksync_os_merkle_tree",
  "zksync_os_storage_api",
