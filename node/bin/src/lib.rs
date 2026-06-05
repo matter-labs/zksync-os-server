@@ -69,7 +69,7 @@ use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
 use zksync_os_l1_consistency_checker::{
-    L1CommittedBatch, L1ConsistencyChecker, LocalBatchDataCache,
+    L1ConsistencyCheckRequest, L1ConsistencyChecker, LocalBatchDataCache,
 };
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
@@ -979,7 +979,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
     let local_batch_data_cache = LocalBatchDataCache::new();
     let (l1_consistency_event_tx, l1_consistency_event_rx) =
-        tokio::sync::mpsc::channel::<L1CommittedBatch>(4096);
+        tokio::sync::mpsc::channel::<L1ConsistencyCheckRequest>(4096);
     let l1_consistency_event_tx = (!node_role.is_main()).then_some(l1_consistency_event_tx);
     runtime.spawn_critical_task("l1 batch persist watcher", {
         let config = config.l1_watcher_config.clone();
@@ -1524,7 +1524,7 @@ async fn run_en_pipeline(
     chain_id: u64,
     first_unpersisted_block: u64,
     local_batch_data_cache: LocalBatchDataCache,
-    l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1CommittedBatch>,
+    l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1ConsistencyCheckRequest>,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
 ) -> watch::Receiver<TransactionAcceptanceState> {
