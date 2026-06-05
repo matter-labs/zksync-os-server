@@ -69,7 +69,7 @@ use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
 use zksync_os_l1_consistency_checker::{
-    L1ConsistencyCheckRequest, L1ConsistencyChecker, LocalBatchDataCache,
+    L1ConsistencyCheckRequest, L1ConsistencyChecker, LocalBatchDataCacheWriter,
 };
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
@@ -978,7 +978,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
         tree_for_rpc,
     );
-    let local_batch_data_cache = LocalBatchDataCache::new();
+    let local_batch_data_cache = LocalBatchDataCacheWriter::new();
     let (l1_consistency_event_tx, l1_consistency_event_rx) =
         tokio::sync::mpsc::channel::<L1ConsistencyCheckRequest>(4096);
     let l1_consistency_event_tx = (!node_role.is_main()).then_some(l1_consistency_event_tx);
@@ -1524,7 +1524,7 @@ async fn run_en_pipeline(
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
     last_persisted_block_on_start: u64,
-    local_batch_data_cache: LocalBatchDataCache,
+    local_batch_data_cache: LocalBatchDataCacheWriter,
     l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1ConsistencyCheckRequest>,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
@@ -1547,7 +1547,7 @@ async fn run_en_pipeline(
             node_state_on_startup.l1_state.diamond_proxy_address_sl(),
             config.batch_verification_config.signing_key.clone(),
             node_state_on_startup.l1_state.clone(),
-            local_batch_data_cache.clone(),
+            local_batch_data_cache.subscribe(),
             verify_batch_rx,
             outgoing_verify_results,
         );

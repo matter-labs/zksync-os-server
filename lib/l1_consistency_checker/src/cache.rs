@@ -1,23 +1,32 @@
 use alloy::primitives::B256;
 use std::collections::VecDeque;
 use std::ops::RangeInclusive;
-use std::sync::{Arc, Mutex};
-use tokio::sync::Notify;
+use std::sync::Arc;
+use tokio::sync::watch;
 use zksync_os_merkle_tree_api::TreeBatchOutput;
 use zksync_os_storage_api::{ReplayRecord, TreeBlock};
 use zksync_os_types::BlockOutput;
+
+/// Local data needed to reconstruct batch commitments from replayed blocks.
+#[derive(Clone, Debug)]
+pub struct LocalBatchBlockData {
+    pub output: BlockOutput,
+    pub record: ReplayRecord,
+    pub tree_output: TreeBatchOutput,
+    pub multichain_root: B256,
+}
 
 /// Ordered cache of per-block data keyed by block number.
 ///
 /// Blocks must be inserted in strictly ascending order. Eviction is the
 /// caller's responsibility; they decide when to call [`TreeBlockCache::remove_lower_than`]
-#[derive(Debug)]
-pub struct TreeBlockCache<Data> {
-    data: VecDeque<Data>,
+#[derive(Debug, Default)]
+pub struct TreeBlockCache {
+    data: VecDeque<LocalBatchBlockData>,
     first_block: Option<u64>,
 }
 
-impl<Data> TreeBlockCache<Data> {
+impl TreeBlockCache {
     pub fn new() -> Self {
         Self {
             data: VecDeque::new(),
@@ -26,7 +35,7 @@ impl<Data> TreeBlockCache<Data> {
     }
 
     /// Insert a block into the cache. Blocks must arrive in strictly ascending order.
-    pub fn insert(&mut self, block_number: u64, block: Data) -> anyhow::Result<()> {
+    pub fn insert(&mut self, block_number: u64, block: LocalBatchBlockData) -> anyhow::Result<()> {
         if let Some((_, last_block)) = self.range() {
             if block_number != last_block + 1 {
                 anyhow::bail!("Out of order block received. This should never happen");
@@ -39,7 +48,7 @@ impl<Data> TreeBlockCache<Data> {
     }
 
     /// Returns cached data for a block, if it is still retained.
-    pub fn get(&self, block_number: u64) -> Option<&Data> {
+    pub fn get(&self, block_number: u64) -> Option<&LocalBatchBlockData> {
         if let Some((first_block, last_block)) = self.range()
             && first_block <= block_number
             && block_number <= last_block
@@ -77,81 +86,13 @@ impl<Data> TreeBlockCache<Data> {
             }
         }
     }
-}
-
-impl<Data> Default for TreeBlockCache<Data> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Local data needed to reconstruct batch commitments from replayed blocks.
-#[derive(Clone, Debug)]
-pub struct LocalBatchBlockData {
-    pub output: BlockOutput,
-    pub record: ReplayRecord,
-    pub tree_output: TreeBatchOutput,
-    pub multichain_root: B256,
-}
-
-/// Shared cache used by EN batch verification and L1 batch persistence.
-#[derive(Clone, Debug, Default)]
-pub struct LocalBatchDataCache {
-    inner: Arc<Mutex<TreeBlockCache<LocalBatchBlockData>>>,
-    notify: Arc<Notify>,
-}
-
-impl LocalBatchDataCache {
-    /// Creates an empty shared local batch data cache.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Stores replayed block data and wakes waiters for newly available ranges.
-    pub fn insert(&self, tree_block: TreeBlock, multichain_root: B256) -> anyhow::Result<()> {
-        let block_number = tree_block.record.block_context.block_number;
-        let data = LocalBatchBlockData {
-            output: tree_block.output,
-            record: tree_block.record,
-            tree_output: tree_block.tree.output,
-            multichain_root,
-        };
-
-        self.inner
-            .lock()
-            .expect("local batch data cache mutex poisoned")
-            .insert(block_number, data)?;
-        self.notify.notify_waiters();
-        Ok(())
-    }
-
-    /// Returns the retained block-number range, if any.
-    pub fn range(&self) -> Option<(u64, u64)> {
-        self.inner
-            .lock()
-            .expect("local batch data cache mutex poisoned")
-            .range()
-    }
-
-    /// Evicts cached blocks below `block_number`.
-    pub fn remove_lower_than(&self, block_number: u64) {
-        self.inner
-            .lock()
-            .expect("local batch data cache mutex poisoned")
-            .remove_lower_than(block_number);
-    }
 
     /// Returns a complete cached block range, or `None` if it is not fully available yet.
     pub fn get_range(
         &self,
         range: RangeInclusive<u64>,
     ) -> anyhow::Result<Option<Vec<LocalBatchBlockData>>> {
-        let guard = self
-            .inner
-            .lock()
-            .expect("local batch data cache mutex poisoned");
-
-        let Some((first_block, last_block)) = guard.range() else {
+        let Some((first_block, last_block)) = self.range() else {
             return Ok(None);
         };
         if *range.start() < first_block {
@@ -169,7 +110,7 @@ impl LocalBatchDataCache {
 
         let mut result = Vec::with_capacity(range.clone().count());
         for block_number in range {
-            let Some(block) = guard.get(block_number) else {
+            let Some(block) = self.get(block_number) else {
                 anyhow::bail!(
                     "missing local batch data for block {block_number} inside cached range {first_block}..={last_block}"
                 );
@@ -178,37 +119,155 @@ impl LocalBatchDataCache {
         }
         Ok(Some(result))
     }
+}
 
+/// Shared cache used by EN batch verification and L1 batch persistence.
+#[derive(Clone, Debug)]
+pub struct LocalBatchDataCacheWriter {
+    inner: Arc<watch::Sender<TreeBlockCache>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalBatchDataCacheReader {
+    inner: watch::Receiver<TreeBlockCache>,
+}
+
+impl LocalBatchDataCacheWriter {
+    /// Creates an empty shared local batch data cache.
+    pub fn new() -> Self {
+        let (sender, _) = watch::channel(TreeBlockCache::new());
+        Self {
+            inner: Arc::new(sender),
+        }
+    }
+
+    /// Creates a read-only cache subscription.
+    pub fn subscribe(&self) -> LocalBatchDataCacheReader {
+        LocalBatchDataCacheReader {
+            inner: self.inner.subscribe(),
+        }
+    }
+
+    /// Stores replayed block data and wakes waiters for newly available ranges.
+    pub fn insert(&self, tree_block: TreeBlock, multichain_root: B256) -> anyhow::Result<()> {
+        let block_number = tree_block.record.block_context.block_number;
+        let data = LocalBatchBlockData {
+            output: tree_block.output,
+            record: tree_block.record,
+            tree_output: tree_block.tree.output,
+            multichain_root,
+        };
+
+        let mut result = Ok(());
+        let mut data = Some(data);
+        self.inner.send_if_modified(|cache| {
+            match cache.insert(
+                block_number,
+                data.take()
+                    .expect("watch::Sender::send_if_modified must call closure once"),
+            ) {
+                Ok(()) => true,
+                Err(err) => {
+                    result = Err(err);
+                    false
+                }
+            }
+        });
+        result
+    }
+
+    /// Returns a complete cached block range, or `None` if it is not fully available yet.
+    pub fn get_range(
+        &self,
+        range: RangeInclusive<u64>,
+    ) -> anyhow::Result<Option<Vec<LocalBatchBlockData>>> {
+        self.inner.borrow().get_range(range)
+    }
+
+    /// Evicts cached blocks below `block_number`.
+    pub fn remove_lower_than(&self, block_number: u64) {
+        self.inner
+            .send_modify(|cache| cache.remove_lower_than(block_number));
+    }
+}
+
+impl LocalBatchDataCacheReader {
     /// Waits until a complete block range is available in the cache.
     pub async fn wait_for_range(
         &self,
         range: RangeInclusive<u64>,
     ) -> anyhow::Result<Vec<LocalBatchBlockData>> {
+        let mut cache_rx = self.inner.clone();
         loop {
-            // Subscribe before checking the cache to avoid missing a concurrent insert.
-            let notified = self.notify.notified();
-            if let Some(blocks) = self.get_range(range.clone())? {
-                return Ok(blocks);
+            {
+                let cache = cache_rx.borrow_and_update();
+                if let Some(blocks) = cache.get_range(range.clone())? {
+                    return Ok(blocks);
+                }
             }
-            notified.await;
+            cache_rx.changed().await?;
         }
+    }
+}
+
+impl Default for LocalBatchDataCacheWriter {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TreeBlockCache;
+    use super::{LocalBatchBlockData, TreeBlockCache};
+    use alloy::consensus::Header;
+    use alloy::primitives::B256;
+    use alloy::primitives::Sealable;
+    use zksync_os_merkle_tree_api::TreeBatchOutput;
+    use zksync_os_storage_api::{BlockContext, ReplayRecord};
+    use zksync_os_types::BlockOutput;
 
     #[test]
     fn removing_all_blocks_resets_cache_range() {
         let mut cache = TreeBlockCache::new();
-        cache.insert(1, "block 1").unwrap();
+        cache.insert(1, block_data(1)).unwrap();
 
         cache.remove_lower_than(2);
 
         assert_eq!(cache.range(), None);
-        cache.insert(2, "block 2").unwrap();
+        cache.insert(2, block_data(2)).unwrap();
         assert_eq!(cache.range(), Some((2, 2)));
-        assert_eq!(cache.get(2), Some(&"block 2"));
+        assert!(cache.get(2).is_some());
+    }
+
+    fn block_data(block_number: u64) -> LocalBatchBlockData {
+        LocalBatchBlockData {
+            output: BlockOutput {
+                header: Header::default().seal_slow(),
+                tx_results: vec![],
+                storage_writes: vec![],
+                account_diffs: vec![],
+                published_preimages: vec![],
+                pubdata: vec![],
+                computational_native_used: 0,
+            },
+            record: ReplayRecord {
+                block_context: BlockContext {
+                    block_number,
+                    ..Default::default()
+                },
+                transactions: vec![],
+                previous_block_timestamp: 0,
+                node_version: "0.0.0".parse().unwrap(),
+                protocol_version: "0.29.1".parse().unwrap(),
+                block_output_hash: B256::ZERO,
+                force_preimages: vec![],
+                starting_cursors: Default::default(),
+            },
+            tree_output: TreeBatchOutput {
+                root_hash: B256::ZERO,
+                leaf_count: 0,
+            },
+            multichain_root: B256::ZERO,
+        }
     }
 }

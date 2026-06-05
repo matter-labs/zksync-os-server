@@ -7,7 +7,7 @@ use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
 use zksync_os_batch_types::{BatchSignature, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
-use zksync_os_l1_consistency_checker::LocalBatchDataCache;
+use zksync_os_l1_consistency_checker::LocalBatchDataCacheReader;
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
 };
@@ -20,7 +20,7 @@ pub struct BatchVerificationResponder {
     diamond_proxy_sl: Address,
     l1_state: L1State,
     signer: PrivateKeySigner,
-    block_cache: LocalBatchDataCache,
+    block_cache: LocalBatchDataCacheReader,
     verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
 }
@@ -40,7 +40,7 @@ impl BatchVerificationResponder {
         diamond_proxy_sl: Address,
         private_key: SecretString,
         l1_state: L1State,
-        block_cache: LocalBatchDataCache,
+        block_cache: LocalBatchDataCacheReader,
         verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
         outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
     ) -> Self {
@@ -50,8 +50,8 @@ impl BatchVerificationResponder {
             && !l1_config.validators.contains(&signer.address())
         {
             tracing::warn!(
-                address = %signer.address(),
-                "Your address is not authorized to verify batches on L1",
+                "Your address {} is not authorized to verify batches on L1",
+                signer.address()
             );
         }
 
@@ -71,9 +71,9 @@ impl BatchVerificationResponder {
         request: VerificationRequest,
     ) -> Result<BatchSignature, BatchVerificationError> {
         tracing::info!(
-            batch_number = request.batch_number,
-            request_id = request.request_id,
-            "Handling batch verification request (blocks {}-{})",
+            "Handling batch verification request {} for batch #{} (blocks {}-{})",
+            request.request_id,
+            request.batch_number,
             request.first_block_number,
             request.last_block_number,
         );
@@ -84,9 +84,9 @@ impl BatchVerificationResponder {
             .await
             .map_err(|err| {
                 tracing::warn!(
-                    batch_number = request.batch_number,
-                    request_id = request.request_id,
-                    "failed to load local batch data for verification request: {err}"
+                    "failed to load local batch data for verification request {} for batch #{}: {err}",
+                    request.request_id,
+                    request.batch_number
                 );
                 BatchVerificationError::MissingBlock(request.first_block_number)
             })?;
@@ -171,7 +171,12 @@ impl BatchVerificationResponder {
             let request_id = request.message.request_id;
             let batch_number = request.message.batch_number;
             let result = self.handle_verification_message(request.message).await?;
-            tracing::info!(%peer_id, request_id, batch_number, "handled batch verification request");
+            tracing::info!(
+                "handled batch verification request {} for batch #{} from peer {}",
+                request_id,
+                batch_number,
+                peer_id
+            );
             let _ = self.outgoing_verify_results.send(PeerVerifyBatchResult {
                 peer_id,
                 message: result,

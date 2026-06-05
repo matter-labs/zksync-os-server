@@ -1,4 +1,4 @@
-use crate::cache::LocalBatchDataCache;
+use crate::cache::LocalBatchDataCacheWriter;
 use async_trait::async_trait;
 use std::{collections::VecDeque, ops::RangeInclusive};
 use tokio::sync::{mpsc, oneshot};
@@ -39,7 +39,7 @@ pub struct L1ConsistencyChecker<ReadState> {
     sl_chain_id: u64,
     last_persisted_block_on_start: u64,
     read_state: ReadState,
-    cache: LocalBatchDataCache,
+    cache: LocalBatchDataCacheWriter,
     l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
     pending_requests: VecDeque<L1ConsistencyCheckRequest>,
 }
@@ -50,7 +50,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
         sl_chain_id: u64,
         last_persisted_block_on_start: u64,
         read_state: ReadState,
-        cache: LocalBatchDataCache,
+        cache: LocalBatchDataCacheWriter,
         l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
     ) -> Self {
         Self {
