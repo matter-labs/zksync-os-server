@@ -1,4 +1,4 @@
-use crate::cache::{LocalBatchDataCacheReader, LocalBatchDataCacheWriter};
+use crate::cache::{LocalBatchBlockData, TreeBlockCache, TreeBlockCacheReceiverExt};
 use async_trait::async_trait;
 use std::{collections::VecDeque, ops::RangeInclusive};
 use tokio::sync::{mpsc, watch};
@@ -37,8 +37,8 @@ pub struct L1ConsistencyChecker<ReadState> {
     sl_chain_id: u64,
     last_persisted_block_on_start: u64,
     read_state: ReadState,
-    cache_writer: LocalBatchDataCacheWriter,
-    cache_reader: LocalBatchDataCacheReader,
+    cache_writer: watch::Sender<TreeBlockCache>,
+    cache_reader: watch::Receiver<TreeBlockCache>,
     latest_verified_batch_tx: watch::Sender<u64>,
     l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
     pending_requests: VecDeque<L1ConsistencyCheckRequest>,
@@ -50,7 +50,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
         sl_chain_id: u64,
         last_persisted_block_on_start: u64,
         read_state: ReadState,
-        cache_writer: LocalBatchDataCacheWriter,
+        cache_writer: watch::Sender<TreeBlockCache>,
         latest_verified_batch_tx: watch::Sender<u64>,
         l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
     ) -> Self {
@@ -78,7 +78,23 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         }
         let state_view = self.read_state.state_view_at(block_number)?;
         let multichain_root = read_multichain_root(state_view);
-        self.cache_writer.insert(tree_block, multichain_root)
+        let data = LocalBatchBlockData {
+            output: tree_block.output,
+            record: tree_block.record,
+            tree_output: tree_block.tree.output,
+            multichain_root,
+        };
+
+        let mut result = Ok(());
+        self.cache_writer
+            .send_if_modified(|cache| match cache.insert(block_number, data) {
+                Ok(()) => true,
+                Err(err) => {
+                    result = Err(err);
+                    false
+                }
+            });
+        result
     }
 
     /// Checks for pending requests and verifies earliest ones if possible
@@ -92,8 +108,10 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
                         batch_number,
                         pending.commit.range
                     );
-                    self.cache_writer
-                        .remove_lower_than(pending.commit.last_block_number().saturating_add(1));
+                    self.cache_writer.send_modify(|cache| {
+                        cache
+                            .remove_lower_than(pending.commit.last_block_number().saturating_add(1))
+                    });
                     self.mark_batch_verified(batch_number);
                 }
                 Ok(false) => {

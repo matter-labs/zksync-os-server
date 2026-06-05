@@ -4,10 +4,10 @@ use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
 use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use zksync_os_batch_types::{BatchSignature, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
-use zksync_os_l1_consistency_checker::LocalBatchDataCacheReader;
+use zksync_os_l1_consistency_checker::{TreeBlockCache, TreeBlockCacheReceiverExt};
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
 };
@@ -20,7 +20,7 @@ pub struct BatchVerificationResponder {
     diamond_proxy_sl: Address,
     l1_state: L1State,
     signer: PrivateKeySigner,
-    block_cache: LocalBatchDataCacheReader,
+    block_cache: watch::Receiver<TreeBlockCache>,
     verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
 }
@@ -40,7 +40,7 @@ impl BatchVerificationResponder {
         diamond_proxy_sl: Address,
         private_key: SecretString,
         l1_state: L1State,
-        block_cache: LocalBatchDataCacheReader,
+        block_cache: watch::Receiver<TreeBlockCache>,
         verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
         outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
     ) -> Self {

@@ -1,10 +1,10 @@
 use alloy::primitives::B256;
+use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::ops::RangeInclusive;
-use std::sync::Arc;
 use tokio::sync::watch;
 use zksync_os_merkle_tree_api::TreeBatchOutput;
-use zksync_os_storage_api::{ReplayRecord, TreeBlock};
+use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::BlockOutput;
 
 /// Local data needed to reconstruct batch commitments from replayed blocks.
@@ -110,78 +110,35 @@ impl TreeBlockCache {
     }
 }
 
-/// Writer to the shared cache of blocks
-/// We are using watch::Sender here, so it acts as both storage and notifier when the cache is updated here
-#[derive(Clone, Debug)]
-pub struct LocalBatchDataCacheWriter {
-    inner: Arc<watch::Sender<TreeBlockCache>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct LocalBatchDataCacheReader {
-    inner: watch::Receiver<TreeBlockCache>,
-}
-
-impl LocalBatchDataCacheWriter {
-    /// Creates an empty shared local batch data cache.
-    pub fn new() -> Self {
-        let (sender, _) = watch::channel(TreeBlockCache::new());
-        Self {
-            inner: Arc::new(sender),
-        }
-    }
-
-    /// Creates a read-only cache subscription.
-    pub fn subscribe(&self) -> LocalBatchDataCacheReader {
-        LocalBatchDataCacheReader {
-            inner: self.inner.subscribe(),
-        }
-    }
-
-    /// Stores replayed block data and wakes waiters for newly available ranges.
-    pub fn insert(&self, tree_block: TreeBlock, multichain_root: B256) -> anyhow::Result<()> {
-        let block_number = tree_block.record.block_context.block_number;
-        let data = LocalBatchBlockData {
-            output: tree_block.output,
-            record: tree_block.record,
-            tree_output: tree_block.tree.output,
-            multichain_root,
-        };
-
-        let mut result = Ok(());
-        self.inner
-            .send_if_modified(|cache| match cache.insert(block_number, data) {
-                Ok(()) => true,
-                Err(err) => {
-                    result = Err(err);
-                    false
-                }
-            });
-        result
-    }
-
-    /// Evicts cached blocks below `block_number`.
-    pub fn remove_lower_than(&self, block_number: u64) {
-        self.inner
-            .send_modify(|cache| cache.remove_lower_than(block_number));
-    }
-}
-
-impl LocalBatchDataCacheReader {
+#[async_trait]
+pub trait TreeBlockCacheReceiverExt {
     /// Returns a complete cached block range, or `None` if it is not fully available yet.
-    pub fn get_range(
+    fn get_range(
+        &self,
+        range: RangeInclusive<u64>,
+    ) -> anyhow::Result<Option<Vec<LocalBatchBlockData>>>;
+
+    /// Waits until a complete block range is available in the cache.
+    async fn wait_for_range(
+        &self,
+        range: RangeInclusive<u64>,
+    ) -> anyhow::Result<Vec<LocalBatchBlockData>>;
+}
+
+#[async_trait]
+impl TreeBlockCacheReceiverExt for watch::Receiver<TreeBlockCache> {
+    fn get_range(
         &self,
         range: RangeInclusive<u64>,
     ) -> anyhow::Result<Option<Vec<LocalBatchBlockData>>> {
-        self.inner.borrow().get_range(range)
+        self.borrow().get_range(range)
     }
 
-    /// Waits until a complete block range is available in the cache.
-    pub async fn wait_for_range(
+    async fn wait_for_range(
         &self,
         range: RangeInclusive<u64>,
     ) -> anyhow::Result<Vec<LocalBatchBlockData>> {
-        let mut cache_rx = self.inner.clone();
+        let mut cache_rx = self.clone();
         loop {
             {
                 // if block range is available already - return it. If not - wait until the cache is updated and check again
@@ -192,11 +149,5 @@ impl LocalBatchDataCacheReader {
             }
             cache_rx.changed().await?;
         }
-    }
-}
-
-impl Default for LocalBatchDataCacheWriter {
-    fn default() -> Self {
-        Self::new()
     }
 }
