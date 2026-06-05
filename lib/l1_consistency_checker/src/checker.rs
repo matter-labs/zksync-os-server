@@ -42,7 +42,7 @@ struct PendingCommit {
 pub struct L1ConsistencyChecker<ReadState> {
     chain_id: u64,
     sl_chain_id: u64,
-    first_unpersisted_block: u64,
+    last_persisted_block_on_start: u64,
     read_state: ReadState,
     cache: LocalBatchDataCache,
     l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
@@ -53,7 +53,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
     pub fn new(
         chain_id: u64,
         sl_chain_id: u64,
-        first_unpersisted_block: u64,
+        last_persisted_block_on_start: u64,
         read_state: ReadState,
         cache: LocalBatchDataCache,
         l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
@@ -61,7 +61,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
         Self {
             chain_id,
             sl_chain_id,
-            first_unpersisted_block,
+            last_persisted_block_on_start,
             read_state,
             cache,
             l1_events_rx,
@@ -73,7 +73,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
 impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
     fn insert_tree_block(&self, tree_block: TreeBlock) -> anyhow::Result<()> {
         let block_number = tree_block.record.block_context.block_number;
-        if block_number < self.first_unpersisted_block {
+        if block_number <= self.last_persisted_block_on_start {
             return Ok(());
         }
         let state_view = self.read_state.state_view_at(block_number)?;
@@ -109,7 +109,7 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
     }
 
     fn verify_commit_if_available(&self, commit: &L1CommittedBatch) -> anyhow::Result<bool> {
-        if commit.last_block_number() < self.first_unpersisted_block {
+        if commit.last_block_number() <= self.last_persisted_block_on_start {
             return Ok(true);
         }
         let Some(blocks) = self.cache.get_range(commit.range.clone())? else {

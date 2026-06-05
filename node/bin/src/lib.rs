@@ -430,7 +430,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     });
     let persistent_batch_storage =
         ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
-    let first_unpersisted_block = first_unpersisted_block(&persistent_batch_storage);
+    let last_persisted_block_on_start =
+        read_last_persisted_block_on_start(&persistent_batch_storage);
 
     // `starting_block` - the block number to go through the pipeline.
     let mut starting_block = if node_startup_state.l1_state.last_committed_batch > 0 {
@@ -452,11 +453,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         1
     };
     if !node_role.is_main() {
-        starting_block = starting_block.min(first_unpersisted_block);
+        starting_block = starting_block.min(last_persisted_block_on_start.saturating_add(1));
         if starting_block < state.block_range_available().start() + 1 {
             panic!(
-                "Cannot start: first_unpersisted_block < state.block_range_available().start() + 1: {} < {}",
-                first_unpersisted_block,
+                "Cannot start: last_persisted_block_on_start + 1 < state.block_range_available().start() + 1: {} < {}",
+                last_persisted_block_on_start.saturating_add(1),
                 state.block_range_available().start() + 1
             );
         }
@@ -465,7 +466,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!(
         config.general_config.min_blocks_to_replay,
         config.general_config.force_starting_block_number,
-        first_unpersisted_block,
+        last_persisted_block_on_start,
         ?node_startup_state,
         starting_block,
         blocks_to_replay = node_startup_state.block_replay_storage_last_block + 1 - starting_block,
@@ -1155,7 +1156,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             stop_receiver.clone(),
             tx_acceptance_state_sender,
             chain_id,
-            first_unpersisted_block,
+            last_persisted_block_on_start,
             local_batch_data_cache,
             l1_consistency_event_rx,
             verify_batch_rx,
@@ -1522,7 +1523,7 @@ async fn run_en_pipeline(
     stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
-    first_unpersisted_block: u64,
+    last_persisted_block_on_start: u64,
     local_batch_data_cache: LocalBatchDataCache,
     l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1ConsistencyCheckRequest>,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
@@ -1603,7 +1604,7 @@ async fn run_en_pipeline(
         .pipe(L1ConsistencyChecker::new(
             chain_id,
             node_state_on_startup.l1_state.sl_chain_id,
-            first_unpersisted_block,
+            last_persisted_block_on_start,
             state.clone(),
             local_batch_data_cache,
             l1_consistency_event_rx,
@@ -1658,13 +1659,13 @@ fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashe
     block_hashes
 }
 
-fn first_unpersisted_block(batch_storage: &impl ReadBatch) -> u64 {
+fn read_last_persisted_block_on_start(batch_storage: &impl ReadBatch) -> u64 {
     let latest_batch = batch_storage.latest_batch();
     batch_storage
         .get_batch_by_number(latest_batch)
         .expect("failed to read latest persisted batch")
-        .map(|batch| batch.last_block_number().saturating_add(1))
-        .unwrap_or(1)
+        .map(|batch| batch.last_block_number())
+        .unwrap_or(0)
 }
 
 fn init_and_report_internal_config_manager(
