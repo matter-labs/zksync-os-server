@@ -96,14 +96,15 @@ impl TreeBlockCache {
         if *range.end() > last_block {
             return Ok(None);
         }
-
-        let range_start = *range.start();
-        let range_end = *range.end();
-        let start = (range_start - first_block) as usize;
-        let count = (range_end - range_start + 1) as usize;
+        let start = (*range.start() - first_block) as usize;
 
         Ok(Some(
-            self.data.iter().skip(start).take(count).cloned().collect(),
+            self.data
+                .iter()
+                .skip(start)
+                .take(range.count())
+                .cloned()
+                .collect(),
         ))
     }
 }
@@ -163,14 +164,6 @@ impl LocalBatchDataCacheWriter {
         result
     }
 
-    /// Returns a complete cached block range, or `None` if it is not fully available yet.
-    pub fn get_range(
-        &self,
-        range: RangeInclusive<u64>,
-    ) -> anyhow::Result<Option<Vec<LocalBatchBlockData>>> {
-        self.inner.borrow().get_range(range)
-    }
-
     /// Evicts cached blocks below `block_number`.
     pub fn remove_lower_than(&self, block_number: u64) {
         self.inner
@@ -179,6 +172,14 @@ impl LocalBatchDataCacheWriter {
 }
 
 impl LocalBatchDataCacheReader {
+    /// Returns a complete cached block range, or `None` if it is not fully available yet.
+    pub fn get_range(
+        &self,
+        range: RangeInclusive<u64>,
+    ) -> anyhow::Result<Option<Vec<LocalBatchBlockData>>> {
+        self.inner.borrow().get_range(range)
+    }
+
     /// Waits until a complete block range is available in the cache.
     pub async fn wait_for_range(
         &self,
