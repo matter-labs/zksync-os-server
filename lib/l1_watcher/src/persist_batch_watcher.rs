@@ -276,26 +276,23 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         }
         Ok(())
     }
-}
 
-async fn wait_until_batch_verified(
-    batch_number: u64,
-    latest_verified_batch_rx: Option<&mut watch::Receiver<u64>>,
-) -> Result<(), L1WatcherError> {
-    let Some(latest_verified_batch_rx) = latest_verified_batch_rx else {
-        // if there's no receiver, it means that consistency checker was turned off(so this is a main node) - return positive result
-        return Ok(());
-    };
-
-    loop {
-        if *latest_verified_batch_rx.borrow_and_update() >= batch_number {
+    async fn wait_until_batch_verified(&mut self, batch_number: u64) -> Result<(), L1WatcherError> {
+        let Some(latest_verified_batch_rx) = self.latest_verified_batch_rx.as_mut() else {
+            // if there's no receiver, it means that consistency checker was turned off(so this is a main node) - return positive result
             return Ok(());
+        };
+
+        loop {
+            if *latest_verified_batch_rx.borrow_and_update() >= batch_number {
+                return Ok(());
+            }
+            latest_verified_batch_rx.changed().await.map_err(|_| {
+                L1WatcherError::Other(anyhow::anyhow!(
+                    "L1 consistency checker stopped before verifying batch #{batch_number}"
+                ))
+            })?;
         }
-        latest_verified_batch_rx.changed().await.map_err(|_| {
-            L1WatcherError::Other(anyhow::anyhow!(
-                "L1 consistency checker stopped before verifying batch #{batch_number}"
-            ))
-        })?;
     }
 }
 
@@ -339,11 +336,7 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                         );
 
                         // we don't want to persist a batch that wasn't verified for consistency against L1
-                        wait_until_batch_verified(
-                            batch_number,
-                            self.latest_verified_batch_rx.as_mut(),
-                        )
-                        .await?;
+                        self.wait_until_batch_verified(batch_number).await?;
 
                         if execute.commitment != batch.committed_batch.batch_info.commitment {
                             return Err(L1WatcherError::Other(anyhow!(
