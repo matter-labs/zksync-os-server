@@ -33,11 +33,6 @@ pub struct L1ConsistencyCheckRequest {
     pub result_tx: oneshot::Sender<L1ConsistencyCheckResult>,
 }
 
-struct PendingCommit {
-    commit: L1CommittedBatch,
-    result_tx: oneshot::Sender<L1ConsistencyCheckResult>,
-}
-
 /// Terminal EN pipeline component that owns local batch data caching and L1 consistency checks.
 pub struct L1ConsistencyChecker<ReadState> {
     chain_id: u64,
@@ -46,7 +41,7 @@ pub struct L1ConsistencyChecker<ReadState> {
     read_state: ReadState,
     cache: LocalBatchDataCache,
     l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
-    pending_commits: VecDeque<PendingCommit>,
+    pending_requests: VecDeque<L1ConsistencyCheckRequest>,
 }
 
 impl<ReadState> L1ConsistencyChecker<ReadState> {
@@ -65,7 +60,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
             read_state,
             cache,
             l1_events_rx,
-            pending_commits: VecDeque::new(),
+            pending_requests: VecDeque::new(),
         }
     }
 }
@@ -82,20 +77,21 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
     }
 
     fn verify_pending_commits(&mut self) -> anyhow::Result<()> {
-        while let Some(pending) = self.pending_commits.pop_front() {
+        while let Some(pending) = self.pending_requests.pop_front() {
             match self.verify_commit_if_available(&pending.commit) {
                 Ok(true) => {
                     tracing::info!(
-                        batch_number = pending.commit.batch_number(),
-                        range = ?pending.commit.range,
-                        "verified L1 committed batch against locally replayed blocks"
+                        "verified L1 committed batch #{} against locally replayed blocks {:?}",
+                        pending.commit.batch_number(),
+                        pending.commit.range
                     );
                     self.cache
                         .remove_lower_than(pending.commit.last_block_number().saturating_add(1));
                     let _ = pending.result_tx.send(Ok(()));
                 }
                 Ok(false) => {
-                    self.pending_commits.push_front(pending);
+                    // blocks required for consistency check are not available from cache yet, waiting for the next iteration
+                    self.pending_requests.push_front(pending);
                     break;
                 }
                 Err(err) => {
@@ -109,12 +105,16 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
     }
 
     fn verify_commit_if_available(&self, commit: &L1CommittedBatch) -> anyhow::Result<bool> {
+        // In case we received request for batch that was already persisted, we trust that it was verified previously
         if commit.last_block_number() <= self.last_persisted_block_on_start {
             return Ok(true);
         }
+
         let Some(blocks) = self.cache.get_range(commit.range.clone())? else {
+            // blocks required for consistency check are not available from cache yet
             return Ok(false);
         };
+
         let first_block = blocks
             .first()
             .expect("L1 committed batch block range cannot be empty");
@@ -146,10 +146,10 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         let l1_stored = commit.batch_info.clone().into_stored();
         if local_stored != l1_stored {
             tracing::error!(
-                batch_number = commit.batch_number(),
-                ?local_stored,
-                ?l1_stored,
-                "L1 committed batch is inconsistent with locally replayed blocks"
+                "L1 committed batch #{} is inconsistent with locally replayed blocks, expected: {:?}, received: {:?}",
+                commit.batch_number(),
+                local_stored,
+                l1_stored,
             );
             anyhow::bail!(
                 "L1 committed batch #{} is inconsistent with locally replayed blocks",
@@ -182,10 +182,10 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
             tokio::select! {
                 tree_block = input.recv() => {
                     let Some(tree_block) = tree_block else {
-                        if !self.pending_commits.is_empty() {
+                        if !self.pending_requests.is_empty() {
                             anyhow::bail!(
                                 "tree block channel closed with {} pending L1 consistency checks",
-                                self.pending_commits.len()
+                                self.pending_requests.len()
                             );
                         }
                         return Ok(());
@@ -194,6 +194,8 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
                     let block_number = tree_block.record.block_context.block_number;
                     let block_timestamp = tree_block.record.block_context.timestamp;
                     self.insert_tree_block(tree_block)?;
+
+                    // if there is a pending request for verification, it might be waiting for the received block
                     self.verify_pending_commits()?;
                     state_reporter.record_processed(block_number, Some(block_timestamp), None);
                 }
@@ -206,10 +208,7 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
                                 request.commit.batch_number(),
                                 request.commit.range,
                             );
-                            self.pending_commits.push_back(PendingCommit {
-                                commit: request.commit,
-                                result_tx: request.result_tx,
-                            });
+                            self.pending_requests.push_back(request);
                             self.verify_pending_commits()?;
                         }
                         None => {

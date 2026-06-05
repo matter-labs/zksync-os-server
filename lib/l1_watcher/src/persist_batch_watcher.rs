@@ -3,7 +3,7 @@ use crate::watcher::L1WatcherError;
 use crate::{BlockUpdates, L1WatcherConfig, LogsCache, SegmentSpec, SlAwareL1Watcher, util};
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot, watch};
 use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
@@ -288,6 +288,7 @@ async fn wait_for_consistency_check(
     consistency_check_rx: Option<oneshot::Receiver<L1ConsistencyCheckResult>>,
 ) -> Result<(), L1WatcherError> {
     let Some(consistency_check_rx) = consistency_check_rx else {
+        // if there's no receiver, it means that consistency checker was turned off(so this is a main node) - return positive result
         return Ok(());
     };
 
@@ -334,24 +335,42 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                 let batch_number = execute.batchNumber.to::<u64>();
                 if batch_number > self.last_persisted_batch_on_start {
                     let batch_hash = execute.batchHash;
-                    if let Some(committed_batch) = self.committed_batches.remove(&batch_number) {
+                    if let Some(batch) = self.committed_batches.remove(&batch_number) {
                         tracing::debug!(
                             batch_number,
                             ?batch_hash,
                             "discovered executed batch, waiting for consistency check"
                         );
-                        wait_for_consistency_check(
-                            batch_number,
-                            committed_batch.consistency_check_rx,
-                        )
-                        .await?;
+
+                        // we don't want to persist a batch that wasn't verified for consistency against L1
+                        wait_for_consistency_check(batch_number, batch.consistency_check_rx)
+                            .await?;
+
+                        if execute.commitment != batch.committed_batch.batch_info.commitment {
+                            return Err(L1WatcherError::Other(anyhow!(
+                                "Commitment is not matching for batch #{}, commit: {:?}, execute: {:?}",
+                                batch_number,
+                                batch.committed_batch.batch_info.commitment,
+                                execute.commitment
+                            )));
+                        }
+
+                        // batchHash from execute event is effectively a state commitment
+                        if execute.batchHash != batch.committed_batch.batch_info.state_commitment {
+                            return Err(L1WatcherError::Other(anyhow!(
+                                "State commitment is not matching for batch #{}, commit: {:?}, execute: {:?}",
+                                batch_number,
+                                batch.committed_batch.batch_info.state_commitment,
+                                execute.batchHash
+                            )));
+                        }
+
                         tracing::debug!(
-                            batch_number,
-                            ?batch_hash,
-                            "consistency check completed, persisting executed batch"
+                            "consistency check completed, persisting executed batch #{}",
+                            batch_number
                         );
                         self.batch_storage.write(PersistedBatch {
-                            committed_batch: committed_batch.committed_batch,
+                            committed_batch: batch.committed_batch,
                             execute_sl_block_number: Some(
                                 log.block_number.expect("Missing block number in log"),
                             ),
