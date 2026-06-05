@@ -47,17 +47,6 @@ impl TreeBlockCache {
         Ok(())
     }
 
-    /// Returns cached data for a block, if it is still retained.
-    pub fn get(&self, block_number: u64) -> Option<&LocalBatchBlockData> {
-        if let Some((first_block, last_block)) = self.range()
-            && first_block <= block_number
-            && block_number <= last_block
-        {
-            return self.data.get((block_number - first_block) as usize);
-        }
-        None
-    }
-
     /// Currently cached block-number range (inclusive bounds), or `None` if empty.
     pub fn range(&self) -> Option<(u64, u64)> {
         if self.data.is_empty() {
@@ -108,16 +97,14 @@ impl TreeBlockCache {
             return Ok(None);
         }
 
-        let mut result = Vec::with_capacity(range.clone().count());
-        for block_number in range {
-            let Some(block) = self.get(block_number) else {
-                anyhow::bail!(
-                    "missing local batch data for block {block_number} inside cached range {first_block}..={last_block}"
-                );
-            };
-            result.push(block.clone());
-        }
-        Ok(Some(result))
+        let range_start = *range.start();
+        let range_end = *range.end();
+        let start = (range_start - first_block) as usize;
+        let count = (range_end - range_start + 1) as usize;
+
+        Ok(Some(
+            self.data.iter().skip(start).take(count).cloned().collect(),
+        ))
     }
 }
 
@@ -236,7 +223,6 @@ mod tests {
         assert_eq!(cache.range(), None);
         cache.insert(2, block_data(2)).unwrap();
         assert_eq!(cache.range(), Some((2, 2)));
-        assert!(cache.get(2).is_some());
     }
 
     fn block_data(block_number: u64) -> LocalBatchBlockData {
