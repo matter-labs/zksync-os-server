@@ -110,9 +110,7 @@ use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{EthCallHandler, RpcStorage};
 use zksync_os_rpc_api::eth::EthApiClient;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
-use zksync_os_sequencer::execution::{
-    BlockApplier, BlockCanonizer, BlockExecutor, FeeParams, FeeProvider,
-};
+use zksync_os_sequencer::execution::{BlockApplier, BlockCanonizer, BlockExecutor, FeeProvider};
 use zksync_os_status_server::run_status_server;
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
@@ -832,29 +830,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let (token_price_sender, token_price_receiver) = watch::channel(None);
     let interop_fee_token_price_receiver = token_price_receiver.clone();
-    let previous_block_fee_params = if starting_block == 0 {
-        None
-    } else {
-        let prev_record = block_replay_storage
-            .get_replay_record(starting_block)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Missing replay record for block `starting_block` = {}",
-                    starting_block
-                )
-            });
-        Some(FeeParams {
-            eip1559_basefee: prev_record.block_context.eip1559_basefee,
-            native_price: prev_record.block_context.native_price,
-            pubdata_price: prev_record.block_context.pubdata_price,
-        })
-    };
 
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`
     let fee_provider = FeeProvider::new(
         config.fee_config.clone().into(),
-        previous_block_fee_params,
         pubdata_price_receiver,
         blob_fill_ratio_receiver,
         token_price_receiver,
