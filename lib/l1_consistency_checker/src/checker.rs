@@ -69,6 +69,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
 }
 
 impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
+    /// Inserts a block into the shared cache
     fn insert_tree_block(&self, tree_block: TreeBlock) -> anyhow::Result<()> {
         let block_number = tree_block.record.block_context.block_number;
         if block_number <= self.last_persisted_block_on_start {
@@ -79,6 +80,7 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         self.cache_writer.insert(tree_block, multichain_root)
     }
 
+    /// Checks for pending requests and verifies earliest ones if possible
     fn verify_pending_commits(&mut self) -> anyhow::Result<()> {
         while let Some(pending) = self.pending_requests.pop_front() {
             match self.verify_commit_if_available(&pending.commit) {
@@ -107,6 +109,7 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         Ok(())
     }
 
+    /// Verifies whether data received from verification request is consistent with locally replayed data
     fn verify_commit_if_available(&self, commit: &L1CommittedBatch) -> anyhow::Result<bool> {
         // In case we received request for batch that was already persisted, we trust that it was verified previously
         if commit.last_block_number() <= self.last_persisted_block_on_start {

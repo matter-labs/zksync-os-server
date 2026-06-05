@@ -64,6 +64,7 @@ impl TreeBlockCache {
                 return;
             }
 
+            // Basically range is first_block..=min(requested_block_number - 1, last block)
             let amount_to_remove = ((block_number - 1).min(last_block) - first_block + 1) as usize;
             self.data.drain(0..amount_to_remove);
 
