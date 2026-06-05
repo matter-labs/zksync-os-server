@@ -68,6 +68,9 @@ use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
+use zksync_os_l1_consistency_checker::{
+    L1ConsistencyCheckEvent, L1ConsistencyChecker, LocalBatchDataCache,
+};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -962,6 +965,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
         tree_for_rpc,
     );
+    let local_batch_data_cache = LocalBatchDataCache::new();
+    let (l1_consistency_event_tx, l1_consistency_event_rx) =
+        tokio::sync::mpsc::channel::<L1ConsistencyCheckEvent>(4096);
+    let l1_consistency_event_tx = (!node_role.is_main()).then_some(l1_consistency_event_tx);
     runtime.spawn_critical_task("l1 batch persist watcher", {
         let config = config.l1_watcher_config.clone();
         let settlement_layer_intervals = node_startup_state
@@ -973,6 +980,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let gateway_block_updates = gateway_block_updates.clone();
         let l1_logs_cache = l1_logs_cache.clone();
         let gateway_logs_cache = gateway_logs_cache.clone();
+        let l1_consistency_event_tx = l1_consistency_event_tx.clone();
         async move {
             L1PersistBatchWatcher::create_watcher(
                 config.into(),
@@ -982,6 +990,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 gateway_block_updates,
                 l1_logs_cache,
                 gateway_logs_cache,
+                l1_consistency_event_tx,
             )
             .await
             .expect("failed to start L1 batch persist watcher")
@@ -1134,6 +1143,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             stop_receiver.clone(),
             tx_acceptance_state_sender,
             chain_id,
+            local_batch_data_cache,
+            l1_consistency_event_rx,
             verify_batch_rx,
             outgoing_verify_results.clone(),
         )
@@ -1498,6 +1509,8 @@ async fn run_en_pipeline(
     stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
+    local_batch_data_cache: LocalBatchDataCache,
+    l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1ConsistencyCheckEvent>,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
 ) -> watch::Receiver<TransactionAcceptanceState> {
@@ -1512,6 +1525,32 @@ async fn run_en_pipeline(
 
     let monitor =
         BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver.clone());
+
+    if config.batch_verification_config.client_enabled {
+        let responder = BatchVerificationResponder::new(
+            chain_id,
+            node_state_on_startup.l1_state.diamond_proxy_address_sl(),
+            config.batch_verification_config.signing_key.clone(),
+            node_state_on_startup.l1_state.clone(),
+            local_batch_data_cache.clone(),
+            verify_batch_rx,
+            outgoing_verify_results,
+        );
+        runtime.spawn_critical_with_graceful_shutdown_signal(
+            "batch verification responder",
+            |shutdown| async move {
+                tokio::select! {
+                    result = responder.run() => {
+                        result.expect("batch verification responder failed");
+                    }
+                    _guard = shutdown => {}
+                }
+            },
+        );
+    } else {
+        drop(verify_batch_rx);
+        drop(outgoing_verify_results);
+    }
 
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
@@ -1547,20 +1586,13 @@ async fn run_en_pipeline(
                 }),
         )
         .pipe(TreeManager { tree: tree.clone() })
-        .pipe_if(
-            config.batch_verification_config.client_enabled,
-            BatchVerificationResponder::new(
-                chain_id,
-                node_state_on_startup.l1_state.diamond_proxy_address_sl(),
-                config.batch_verification_config.signing_key.clone(),
-                finality.clone(),
-                node_state_on_startup.l1_state.clone(),
-                state.clone(),
-                verify_batch_rx,
-                outgoing_verify_results,
-            ),
-            NoOpSink::new(),
-        );
+        .pipe(L1ConsistencyChecker::new(
+            chain_id,
+            node_state_on_startup.l1_state.sl_chain_id,
+            state.clone(),
+            local_batch_data_cache,
+            l1_consistency_event_rx,
+        ));
 
     let components = pipeline.components();
     pipeline.spawn();

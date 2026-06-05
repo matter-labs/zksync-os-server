@@ -15360,6 +15360,7 @@ dependencies = [
  "zksync_os_batcher_metrics",
  "zksync_os_contract_interface",
  "zksync_os_interface",
+ "zksync_os_l1_consistency_checker",
  "zksync_os_network",
  "zksync_os_observability",
  "zksync_os_pipeline",
@@ -15585,6 +15586,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_l1_consistency_checker"
+version = "0.20.6"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "tokio",
+ "tracing",
+ "zksync_os_batch_types",
+ "zksync_os_contract_interface",
+ "zksync_os_merkle_tree_api",
+ "zksync_os_observability",
+ "zksync_os_pipeline",
+ "zksync_os_storage_api",
+ "zksync_os_types",
+]
+
+[[package]]
 name = "zksync_os_l1_sender"
 version = "0.20.6"
 dependencies = [
@@ -15628,6 +15647,7 @@ dependencies = [
  "zksync_os_api",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
+ "zksync_os_l1_consistency_checker",
  "zksync_os_mempool",
  "zksync_os_provider",
  "zksync_os_storage_api",
@@ -16204,6 +16224,7 @@ dependencies = [
  "zksync_os_interface",
  "zksync_os_internal_config",
  "zksync_os_interop_fee_updater",
+ "zksync_os_l1_consistency_checker",
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",

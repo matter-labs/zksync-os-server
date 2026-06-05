@@ -5,13 +5,14 @@ use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
 use std::collections::HashMap;
-use tokio::sync::watch;
-use zksync_os_batch_types::DiscoveredCommittedBatch;
+use tokio::sync::{mpsc, watch};
+use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
+use zksync_os_l1_consistency_checker::{L1CommittedBatch, L1ConsistencyCheckEvent};
 use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
@@ -30,6 +31,7 @@ use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 ///   proof-related requests;
 pub struct L1PersistBatchWatcher<BatchStorage> {
     batch_storage: BatchStorage,
+    consistency_checker_tx: Option<mpsc::Sender<L1ConsistencyCheckEvent>>,
     committed_batches: HashMap<u64, DiscoveredCommittedBatch>,
     last_processed_commit_batch: u64,
     last_persisted_batch_on_start: u64,
@@ -44,6 +46,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     /// chain can migrate off an SL (`Migrator.sol`), so each closed interval is self-contained:
     /// every commit on that SL has a matching execute on the same SL, and the in-memory
     /// `committed_batches` map is empty at interval boundaries.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
         config: L1WatcherConfig,
         intervals: SettlementLayerIntervals,
@@ -52,6 +55,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         gateway_block_updates: Option<watch::Receiver<BlockUpdates>>,
         l1_logs_cache: LogsCache,
         gateway_logs_cache: Option<LogsCache>,
+        consistency_checker_tx: Option<mpsc::Sender<L1ConsistencyCheckEvent>>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(
@@ -149,6 +153,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
         let this = Self {
             batch_storage,
+            consistency_checker_tx,
             committed_batches: HashMap::new(),
             last_processed_commit_batch: last_persisted_batch,
             last_persisted_batch_on_start: last_persisted_batch,
@@ -161,18 +166,18 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         &self,
         provider: &NodeProvider,
         report: ReportCommittedBatchRangeZKsyncOS,
-        log: Log,
-    ) -> Result<DiscoveredCommittedBatch, L1WatcherError> {
+        log: &Log,
+    ) -> Result<(ExtendedCommitBatchInfo, DiscoveredCommittedBatch), L1WatcherError> {
         let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
         let zk_chain = ZkChain::new(log.address(), provider.clone());
-        let batch_info = util::fetch_committed_batch_data(&zk_chain, tx_hash)
-            .await?
-            .into_stored();
+        let batch_info = util::fetch_committed_batch_data(&zk_chain, tx_hash).await?;
 
-        Ok(DiscoveredCommittedBatch {
-            batch_info,
+        let committed_batch = DiscoveredCommittedBatch {
+            batch_info: batch_info.clone().into_stored(),
             block_range: report.firstBlockNumber..=report.lastBlockNumber,
-        })
+        };
+
+        Ok((batch_info, committed_batch))
     }
 
     async fn process_commit(
@@ -194,7 +199,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 batch_number,
                 "discovered already processed batch, validating"
             );
-            let committed_batch = self.parse_committed_batch(provider, report, log).await?;
+            let (_, committed_batch) = self.parse_committed_batch(provider, report, &log).await?;
             if stored_batch.committed_batch != committed_batch {
                 tracing::error!(
                     ?stored_batch,
@@ -235,7 +240,21 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 );
             }
             tracing::debug!(batch_number, "discovered committed batch");
-            let committed_batch = self.parse_committed_batch(provider, report, log).await?;
+            let (batch_info, committed_batch) =
+                self.parse_committed_batch(provider, report, &log).await?;
+            if let Some(tx) = &self.consistency_checker_tx {
+                let l1_commit = L1CommittedBatch {
+                    batch_info,
+                    block_range: committed_batch.block_range.clone(),
+                };
+                tx.send(L1ConsistencyCheckEvent::BatchCommitted(l1_commit))
+                    .await
+                    .map_err(|_| {
+                        L1WatcherError::Other(anyhow::anyhow!(
+                            "L1 consistency checker event channel closed"
+                        ))
+                    })?;
+            }
 
             self.committed_batches.insert(batch_number, committed_batch);
             self.last_processed_commit_batch = batch_number;
