@@ -408,3 +408,91 @@ impl DiscoveredCommittedBatch {
         self.block_range.end() - self.block_range.start() + 1
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CanonicalBatchCommitData, ExtendedCommitBatchInfo, calculate_da_fields};
+    use alloy::primitives::B256;
+    use zksync_os_types::{ProtocolSemanticVersion, PubdataMode};
+
+    fn canonical_batch_data(pubdata_mode: PubdataMode) -> CanonicalBatchCommitData {
+        let pubdata = vec![1, 2, 3, 4, 5, 6];
+        let da_fields = calculate_da_fields(&pubdata, pubdata_mode);
+        CanonicalBatchCommitData {
+            first_block_number: 11,
+            last_block_number: 13,
+            first_block_timestamp: 100,
+            last_block_timestamp: 120,
+            new_state_commitment: B256::repeat_byte(0x11),
+            da_commitment: da_fields.da_commitment,
+            number_of_layer1_txs: 3,
+            number_of_layer2_txs: 8,
+            priority_operations_hash: B256::repeat_byte(0x22),
+            dependency_roots_rolling_hash: B256::repeat_byte(0x33),
+            l2_to_l1_logs_root_hash: B256::repeat_byte(0x44),
+            upgrade_tx_hash: Some(B256::repeat_byte(0x55)),
+            chain_id: 270,
+            sl_chain_id: 123,
+            pubdata,
+        }
+    }
+
+    #[test]
+    fn builds_commit_info_from_canonical_batch_output() {
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 1);
+        let batch = canonical_batch_data(PubdataMode::Calldata);
+        let expected_da_fields = calculate_da_fields(&batch.pubdata, PubdataMode::Calldata);
+
+        let (batch_info, blob_sidecar) = ExtendedCommitBatchInfo::build_from_canonical_output(
+            42,
+            PubdataMode::Calldata,
+            &protocol_version,
+            batch,
+        )
+        .unwrap();
+
+        assert_eq!(batch_info.batch_number, 42);
+        assert_eq!(batch_info.new_state_commitment, B256::repeat_byte(0x11));
+        assert_eq!(batch_info.number_of_layer1_txs, 3);
+        assert_eq!(batch_info.number_of_layer2_txs, 8);
+        assert_eq!(batch_info.priority_operations_hash, B256::repeat_byte(0x22));
+        assert_eq!(
+            batch_info.dependency_roots_rolling_hash,
+            B256::repeat_byte(0x33)
+        );
+        assert_eq!(batch_info.l2_to_l1_logs_root_hash, B256::repeat_byte(0x44));
+        assert_eq!(batch_info.upgrade_tx_hash, Some(B256::repeat_byte(0x55)));
+        assert_eq!(batch_info.first_block_number, Some(11));
+        assert_eq!(batch_info.last_block_number, Some(13));
+        assert_eq!(batch_info.first_block_timestamp, 100);
+        assert_eq!(batch_info.last_block_timestamp, 120);
+        assert_eq!(batch_info.chain_id, 270);
+        assert_eq!(batch_info.sl_chain_id, 123);
+        assert_eq!(batch_info.da_commitment, expected_da_fields.da_commitment);
+        assert_eq!(
+            batch_info.operator_da_input,
+            expected_da_fields.operator_da_input
+        );
+        assert!(blob_sidecar.is_none());
+    }
+
+    #[test]
+    fn detects_canonical_da_commitment_mismatch() {
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 1);
+        let mut batch = canonical_batch_data(PubdataMode::Blobs);
+        batch.da_commitment = B256::ZERO;
+
+        let err = ExtendedCommitBatchInfo::build_from_canonical_output(
+            42,
+            PubdataMode::Blobs,
+            &protocol_version,
+            batch,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("canonical batch DA commitment mismatch")
+        );
+    }
+}

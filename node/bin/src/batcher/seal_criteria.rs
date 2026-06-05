@@ -181,3 +181,80 @@ impl BatchInfoAccumulator {
             .observe(self.pubdata_bytes);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::BatchInfoAccumulator;
+    use alloy::consensus::{Header, Sealed};
+    use alloy::primitives::{Address, B256, U256};
+    use semver::Version;
+    use zksync_os_storage_api::{BlockContext, BlockHashes, ReplayRecord};
+    use zksync_os_types::{
+        BlockOutput, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion,
+    };
+
+    fn dummy_block_output(pubdata_len: usize, pubdata_used: u64) -> BlockOutput {
+        let header = Header {
+            number: 1,
+            timestamp: 11,
+            ..Default::default()
+        };
+        BlockOutput {
+            header: Sealed::new_unchecked(header, B256::ZERO),
+            tx_results: vec![],
+            storage_writes: vec![],
+            account_diffs: vec![],
+            published_preimages: vec![],
+            pubdata: vec![0_u8; pubdata_len],
+            pubdata_used,
+            computational_native_used: 0,
+        }
+    }
+
+    fn dummy_replay_record() -> ReplayRecord {
+        ReplayRecord::new(
+            BlockContext {
+                chain_id: 270,
+                block_number: 1,
+                block_hashes: BlockHashes::default(),
+                timestamp: 11,
+                eip1559_basefee: U256::ZERO,
+                pubdata_price: U256::ZERO,
+                native_price: U256::ZERO,
+                coinbase: Address::ZERO,
+                gas_limit: 0,
+                pubdata_limit: 0,
+                mix_hash: U256::ZERO,
+                execution_version: ExecutionVersion::V7 as u32,
+                blob_fee: U256::ZERO,
+            },
+            vec![],
+            10,
+            Version::new(0, 0, 0),
+            ProtocolSemanticVersion::new(0, 32, 1),
+            B256::ZERO,
+            vec![],
+            BlockStartCursors::default(),
+        )
+    }
+
+    #[test]
+    fn accumulator_tracks_pubdata_used_not_pubdata_length() {
+        let mut accumulator = BatchInfoAccumulator::new(100, 20, 100);
+
+        accumulator.add(&dummy_block_output(64, 7), &dummy_replay_record());
+
+        assert_eq!(accumulator.pubdata_bytes, 7);
+        assert!(!accumulator.should_seal());
+    }
+
+    #[test]
+    fn pubdata_seal_limit_uses_pubdata_used() {
+        let mut accumulator = BatchInfoAccumulator::new(100, 20, 100);
+
+        accumulator.add(&dummy_block_output(1, 21), &dummy_replay_record());
+        accumulator.add(&dummy_block_output(0, 0), &dummy_replay_record());
+
+        assert!(accumulator.should_seal());
+    }
+}

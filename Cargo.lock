@@ -16555,6 +16555,7 @@ dependencies = [
  "basic_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
  "forward_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
  "zk_ee 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?branch=antonio%2Fuse-airbender-platform-2418efa)",
+ "zksync_os_batch_types",
  "zksync_os_interface",
  "zksync_os_merkle_tree",
  "zksync_os_storage_api",

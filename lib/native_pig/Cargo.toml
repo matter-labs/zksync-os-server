@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_batch_types.workspace = true
 zksync_os_interface.workspace = true
 zksync_os_merkle_tree.workspace = true
 zksync_os_storage_api.workspace = true

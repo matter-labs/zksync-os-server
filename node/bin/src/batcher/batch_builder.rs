@@ -1,8 +1,8 @@
 use alloy::primitives::Address;
+use zksync_os_batch_types::ExtendedCommitBatchInfo;
 use zksync_os_batch_types::batcher_model::{
     BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
 };
-use zksync_os_batch_types::{CanonicalBatchCommitData, ExtendedCommitBatchInfo};
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
@@ -55,23 +55,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             batch_number,
             pubdata_mode,
             &protocol_version,
-            CanonicalBatchCommitData {
-                first_block_number: block_number_from,
-                last_block_number: block_number_to,
-                first_block_timestamp: native_batch_run.first_block_timestamp,
-                last_block_timestamp: native_batch_run.last_block_timestamp,
-                new_state_commitment: native_batch_run.new_state_commitment,
-                da_commitment: native_batch_run.da_commitment,
-                number_of_layer1_txs: native_batch_run.number_of_layer1_txs,
-                number_of_layer2_txs: native_batch_run.number_of_layer2_txs,
-                priority_operations_hash: native_batch_run.priority_operations_hash,
-                dependency_roots_rolling_hash: native_batch_run.dependency_roots_rolling_hash,
-                l2_to_l1_logs_root_hash: native_batch_run.l2_to_l1_logs_root_hash,
-                upgrade_tx_hash: native_batch_run.upgrade_tx_hash,
-                chain_id: native_batch_run.chain_id,
-                sl_chain_id: native_batch_run.sl_chain_id,
-                pubdata: native_batch_run.pubdata.clone(),
-            },
+            native_batch_run.canonical_commit_data(block_number_from, block_number_to),
         )?
     } else {
         ExtendedCommitBatchInfo::build(
@@ -175,6 +159,118 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     .with_stage(BatchExecutionStage::BatchSealed);
 
     Ok(batch_envelope)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_batch_prover_input;
+    use alloy::consensus::{Header, Sealed};
+    use alloy::primitives::{Address, B256, U256};
+    use semver::Version;
+    use zksync_os_batch_types::batcher_model::ProverInput;
+    use zksync_os_merkle_tree::TreeBatchOutput;
+    use zksync_os_native_pig::NativeBatchRunOutput;
+    use zksync_os_storage_api::{BlockContext, BlockHashes, ReplayRecord};
+    use zksync_os_types::{
+        BlockOutput, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, ProvingVersion,
+        PubdataMode,
+    };
+
+    fn dummy_block_output() -> BlockOutput {
+        let header = Header {
+            number: 1,
+            timestamp: 11,
+            ..Default::default()
+        };
+        BlockOutput {
+            header: Sealed::new_unchecked(header, B256::ZERO),
+            tx_results: vec![],
+            storage_writes: vec![],
+            account_diffs: vec![],
+            published_preimages: vec![],
+            pubdata: vec![],
+            pubdata_used: 0,
+            computational_native_used: 0,
+        }
+    }
+
+    fn dummy_replay_record() -> ReplayRecord {
+        ReplayRecord::new(
+            BlockContext {
+                chain_id: 270,
+                block_number: 1,
+                block_hashes: BlockHashes::default(),
+                timestamp: 11,
+                eip1559_basefee: U256::ZERO,
+                pubdata_price: U256::ZERO,
+                native_price: U256::ZERO,
+                coinbase: Address::ZERO,
+                gas_limit: 0,
+                pubdata_limit: 0,
+                mix_hash: U256::ZERO,
+                execution_version: ExecutionVersion::V7 as u32,
+                blob_fee: U256::ZERO,
+            },
+            vec![],
+            10,
+            Version::new(0, 0, 0),
+            ProtocolSemanticVersion::new(0, 32, 1),
+            B256::ZERO,
+            vec![],
+            BlockStartCursors::default(),
+        )
+    }
+
+    fn dummy_tree_output() -> TreeBatchOutput {
+        TreeBatchOutput {
+            root_hash: B256::ZERO,
+            leaf_count: 2,
+        }
+    }
+
+    #[test]
+    fn v8_batch_prover_input_comes_from_native_batch_run() {
+        let prover_input = compute_batch_prover_input(
+            &[],
+            ProvingVersion::V8,
+            PubdataMode::Calldata,
+            Some(NativeBatchRunOutput {
+                prover_input: vec![7, 8, 9],
+                pubdata: vec![],
+                new_state_commitment: B256::ZERO,
+                da_commitment: B256::ZERO,
+                number_of_layer1_txs: 0,
+                number_of_layer2_txs: 0,
+                priority_operations_hash: B256::ZERO,
+                dependency_roots_rolling_hash: B256::ZERO,
+                l2_to_l1_logs_root_hash: B256::ZERO,
+                first_block_timestamp: 0,
+                last_block_timestamp: 0,
+                chain_id: 0,
+                sl_chain_id: 0,
+                upgrade_tx_hash: None,
+            }),
+        )
+        .unwrap();
+
+        assert!(matches!(prover_input, ProverInput::Real(ref words) if words == &[7, 8, 9]));
+    }
+
+    #[test]
+    fn pre_v8_batch_with_fake_block_input_stays_fake() {
+        let block = (
+            dummy_block_output(),
+            dummy_replay_record(),
+            dummy_tree_output(),
+            ProverInput::Fake,
+        );
+
+        let prover_input =
+            compute_batch_prover_input(&[block], ProvingVersion::V7, PubdataMode::Calldata, None)
+                .unwrap();
+
+        assert!(matches!(prover_input, ProverInput::Fake));
+    }
 }
 
 fn compute_batch_prover_input(

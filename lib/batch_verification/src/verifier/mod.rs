@@ -7,7 +7,7 @@ use block_cache::BlockCache;
 use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
-use zksync_os_batch_types::{BatchSignature, CanonicalBatchCommitData, ExtendedCommitBatchInfo};
+use zksync_os_batch_types::{BatchSignature, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_native_pig::generate_batch_run;
@@ -137,23 +137,8 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                 request.batch_number,
                 request.pubdata_mode,
                 &protocol_version,
-                CanonicalBatchCommitData {
-                    first_block_number: request.first_block_number,
-                    last_block_number: request.last_block_number,
-                    first_block_timestamp: native_batch_run.first_block_timestamp,
-                    last_block_timestamp: native_batch_run.last_block_timestamp,
-                    new_state_commitment: native_batch_run.new_state_commitment,
-                    da_commitment: native_batch_run.da_commitment,
-                    number_of_layer1_txs: native_batch_run.number_of_layer1_txs,
-                    number_of_layer2_txs: native_batch_run.number_of_layer2_txs,
-                    priority_operations_hash: native_batch_run.priority_operations_hash,
-                    dependency_roots_rolling_hash: native_batch_run.dependency_roots_rolling_hash,
-                    l2_to_l1_logs_root_hash: native_batch_run.l2_to_l1_logs_root_hash,
-                    upgrade_tx_hash: native_batch_run.upgrade_tx_hash,
-                    chain_id: native_batch_run.chain_id,
-                    sl_chain_id: native_batch_run.sl_chain_id,
-                    pubdata: native_batch_run.pubdata,
-                },
+                native_batch_run
+                    .canonical_commit_data(request.first_block_number, request.last_block_number),
             )
             .map_err(anyhow::Error::from)?
         } else {
