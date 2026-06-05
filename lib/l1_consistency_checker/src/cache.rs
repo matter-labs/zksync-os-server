@@ -184,6 +184,7 @@ impl LocalBatchDataCacheReader {
         let mut cache_rx = self.inner.clone();
         loop {
             {
+                // if block range is available already - return it. If not - wait until the cache is updated and check again
                 let cache = cache_rx.borrow_and_update();
                 if let Some(blocks) = cache.get_range(range.clone())? {
                     return Ok(blocks);
