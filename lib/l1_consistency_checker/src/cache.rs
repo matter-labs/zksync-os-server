@@ -111,6 +111,7 @@ impl TreeBlockCache {
 }
 
 /// Writer to the shared cache of blocks
+/// We are using watch::Sender here, so it acts as both storage and notifier when the cache is updated here
 #[derive(Clone, Debug)]
 pub struct LocalBatchDataCacheWriter {
     inner: Arc<watch::Sender<TreeBlockCache>>,
