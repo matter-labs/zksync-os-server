@@ -10,7 +10,7 @@ use zksync_os_types::BlockOutput;
 /// Ordered cache of per-block data keyed by block number.
 ///
 /// Blocks must be inserted in strictly ascending order. Eviction is the
-/// caller's responsibility; they decide when to call [`TreeBlockCache::remove_lower_then`]
+/// caller's responsibility; they decide when to call [`TreeBlockCache::remove_lower_than`]
 #[derive(Debug)]
 pub struct TreeBlockCache<Data> {
     data: VecDeque<Data>,
@@ -60,15 +60,14 @@ impl<Data> TreeBlockCache<Data> {
     }
 
     /// Removes all blocks lower than the given block number.
-    pub fn remove_lower_then(&mut self, block_number: u64) {
+    pub fn remove_lower_than(&mut self, block_number: u64) {
         if let Some((first_block, last_block)) = self.range() {
             if block_number <= first_block {
                 return;
             }
 
-            for _ in first_block..=(block_number - 1).min(last_block) {
-                self.data.pop_front();
-            }
+            let amount_to_remove = ((block_number - 1).min(last_block) - first_block + 1) as usize;
+            self.data.drain(0..amount_to_remove);
 
             // Keep `first_block` aligned with the deque; an empty cache has no valid range.
             if self.data.is_empty() {
@@ -86,24 +85,6 @@ impl<Data> Default for TreeBlockCache<Data> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::TreeBlockCache;
-
-    #[test]
-    fn removing_all_blocks_resets_cache_range() {
-        let mut cache = TreeBlockCache::new();
-        cache.insert(1, "block 1").unwrap();
-
-        cache.remove_lower_then(2);
-
-        assert_eq!(cache.range(), None);
-        cache.insert(2, "block 2").unwrap();
-        assert_eq!(cache.range(), Some((2, 2)));
-        assert_eq!(cache.get(2), Some(&"block 2"));
-    }
-}
-
 /// Local data needed to reconstruct batch commitments from replayed blocks.
 #[derive(Clone, Debug)]
 pub struct LocalBatchBlockData {
@@ -113,15 +94,10 @@ pub struct LocalBatchBlockData {
     pub multichain_root: B256,
 }
 
-#[derive(Debug, Default)]
-struct LocalBatchDataCacheInner {
-    cache: TreeBlockCache<LocalBatchBlockData>,
-}
-
 /// Shared cache used by EN batch verification and L1 batch persistence.
 #[derive(Clone, Debug, Default)]
 pub struct LocalBatchDataCache {
-    inner: Arc<Mutex<LocalBatchDataCacheInner>>,
+    inner: Arc<Mutex<TreeBlockCache<LocalBatchBlockData>>>,
     notify: Arc<Notify>,
 }
 
@@ -144,7 +120,6 @@ impl LocalBatchDataCache {
         self.inner
             .lock()
             .expect("local batch data cache mutex poisoned")
-            .cache
             .insert(block_number, data)?;
         self.notify.notify_waiters();
         Ok(())
@@ -155,7 +130,6 @@ impl LocalBatchDataCache {
         self.inner
             .lock()
             .expect("local batch data cache mutex poisoned")
-            .cache
             .range()
     }
 
@@ -164,8 +138,7 @@ impl LocalBatchDataCache {
         self.inner
             .lock()
             .expect("local batch data cache mutex poisoned")
-            .cache
-            .remove_lower_then(block_number);
+            .remove_lower_than(block_number);
     }
 
     /// Returns a complete cached block range, or `None` if it is not fully available yet.
@@ -173,28 +146,30 @@ impl LocalBatchDataCache {
         &self,
         range: RangeInclusive<u64>,
     ) -> anyhow::Result<Option<Vec<LocalBatchBlockData>>> {
-        let start = *range.start();
-        let end = *range.end();
         let guard = self
             .inner
             .lock()
             .expect("local batch data cache mutex poisoned");
 
-        let Some((first_block, last_block)) = guard.cache.range() else {
+        let Some((first_block, last_block)) = guard.range() else {
             return Ok(None);
         };
-        if start < first_block {
+        if *range.start() < first_block {
             anyhow::bail!(
-                "requested local batch data range {start}..={end} was already evicted; cached range is {first_block}..={last_block}"
+                "requested local batch data range {}..={} was already evicted; cached range is {}..={}",
+                range.start(),
+                range.end(),
+                first_block,
+                last_block
             );
         }
-        if end > last_block {
+        if *range.end() > last_block {
             return Ok(None);
         }
 
-        let mut result = Vec::with_capacity((end - start + 1) as usize);
-        for block_number in start..=end {
-            let Some(block) = guard.cache.get(block_number) else {
+        let mut result = Vec::with_capacity(range.clone().count());
+        for block_number in range {
+            let Some(block) = guard.get(block_number) else {
                 anyhow::bail!(
                     "missing local batch data for block {block_number} inside cached range {first_block}..={last_block}"
                 );
@@ -217,5 +192,23 @@ impl LocalBatchDataCache {
             }
             notified.await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TreeBlockCache;
+
+    #[test]
+    fn removing_all_blocks_resets_cache_range() {
+        let mut cache = TreeBlockCache::new();
+        cache.insert(1, "block 1").unwrap();
+
+        cache.remove_lower_than(2);
+
+        assert_eq!(cache.range(), None);
+        cache.insert(2, "block 2").unwrap();
+        assert_eq!(cache.range(), Some((2, 2)));
+        assert_eq!(cache.get(2), Some(&"block 2"));
     }
 }
