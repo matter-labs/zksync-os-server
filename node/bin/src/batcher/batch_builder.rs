@@ -172,8 +172,8 @@ mod tests {
     use zksync_os_native_pig::NativeBatchRunOutput;
     use zksync_os_storage_api::{BlockContext, BlockHashes, ReplayRecord};
     use zksync_os_types::{
-        BlockOutput, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, ProvingVersion,
-        PubdataMode,
+        BlockOutput, BlockPubdata, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion,
+        ProvingVersion, PubdataMode,
     };
 
     fn dummy_block_output() -> BlockOutput {
@@ -188,8 +188,7 @@ mod tests {
             storage_writes: vec![],
             account_diffs: vec![],
             published_preimages: vec![],
-            pubdata: vec![],
-            pubdata_used: 0,
+            pubdata: BlockPubdata::Length(0),
             computational_native_used: 0,
         }
     }
@@ -315,7 +314,7 @@ fn compute_batch_prover_input(
                     .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
                 blocks
                     .iter()
-                    .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
+                    .map(|(block_output, _, _, _)| block_output.expect_pubdata_bytes())
                     .collect(),
             ))
         }
@@ -331,7 +330,7 @@ fn compute_batch_prover_input(
                     .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
                 blocks
                     .iter()
-                    .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
+                    .map(|(block_output, _, _, _)| block_output.expect_pubdata_bytes())
                     .collect(),
             ))
         }

@@ -41,7 +41,7 @@ impl BatchInfoAccumulator {
 
     pub fn add(&mut self, block_output: &BlockOutput, replay_record: &ReplayRecord) -> &Self {
         self.native_cycles += block_output.computational_native_used;
-        self.pubdata_bytes += block_output.pubdata_used;
+        self.pubdata_bytes += block_output.pubdata_used();
         self.l2_to_l1_logs_count += block_output
             .tx_results
             .iter()
@@ -190,10 +190,10 @@ mod tests {
     use semver::Version;
     use zksync_os_storage_api::{BlockContext, BlockHashes, ReplayRecord};
     use zksync_os_types::{
-        BlockOutput, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion,
+        BlockOutput, BlockPubdata, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion,
     };
 
-    fn dummy_block_output(pubdata_len: usize, pubdata_used: u64) -> BlockOutput {
+    fn dummy_block_output(pubdata: BlockPubdata) -> BlockOutput {
         let header = Header {
             number: 1,
             timestamp: 11,
@@ -205,8 +205,7 @@ mod tests {
             storage_writes: vec![],
             account_diffs: vec![],
             published_preimages: vec![],
-            pubdata: vec![0_u8; pubdata_len],
-            pubdata_used,
+            pubdata,
             computational_native_used: 0,
         }
     }
@@ -242,7 +241,10 @@ mod tests {
     fn accumulator_tracks_pubdata_used_not_pubdata_length() {
         let mut accumulator = BatchInfoAccumulator::new(100, 20, 100);
 
-        accumulator.add(&dummy_block_output(64, 7), &dummy_replay_record());
+        accumulator.add(
+            &dummy_block_output(BlockPubdata::Length(7)),
+            &dummy_replay_record(),
+        );
 
         assert_eq!(accumulator.pubdata_bytes, 7);
         assert!(!accumulator.should_seal());
@@ -252,8 +254,14 @@ mod tests {
     fn pubdata_seal_limit_uses_pubdata_used() {
         let mut accumulator = BatchInfoAccumulator::new(100, 20, 100);
 
-        accumulator.add(&dummy_block_output(1, 21), &dummy_replay_record());
-        accumulator.add(&dummy_block_output(0, 0), &dummy_replay_record());
+        accumulator.add(
+            &dummy_block_output(BlockPubdata::Length(21)),
+            &dummy_replay_record(),
+        );
+        accumulator.add(
+            &dummy_block_output(BlockPubdata::Length(0)),
+            &dummy_replay_record(),
+        );
 
         assert!(accumulator.should_seal());
     }

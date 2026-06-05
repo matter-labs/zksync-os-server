@@ -21,19 +21,17 @@ mod adapter;
 pub mod apps;
 
 pub use adapter::AbiTxSource;
-use zksync_os_types::{BlockOutput, ExecutionVersion};
+use zksync_os_types::{BlockOutput, BlockPubdata, ExecutionVersion};
 macro_rules! into_legacy_block_output {
     ($o:expr) => {{
         let output = $o;
-        let pubdata_used = output.pubdata.len() as u64;
         BlockOutput {
             header: output.header,
             tx_results: output.tx_results,
             storage_writes: output.storage_writes,
             account_diffs: output.account_diffs,
             published_preimages: output.published_preimages,
-            pubdata: output.pubdata,
-            pubdata_used,
+            pubdata: BlockPubdata::Bytes(output.pubdata),
             computational_native_used: output.computational_native_used,
         }
     }};
@@ -48,8 +46,7 @@ macro_rules! into_pubdata_used_block_output {
             storage_writes: output.storage_writes,
             account_diffs: output.account_diffs,
             published_preimages: output.published_preimages,
-            pubdata: Vec::new(),
-            pubdata_used: output.pubdata_used,
+            pubdata: BlockPubdata::Length(output.pubdata_used),
             computational_native_used: output.computational_native_used,
         }
     }};
@@ -75,7 +72,7 @@ pub fn run_block<
         .execution_version
         .try_into()
         .expect("Unsupported ZKsync OS execution version");
-    match execution_version {
+    let output = match execution_version {
         ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
             let object = RunBlockForwardV3 {};
             object
@@ -169,7 +166,9 @@ pub fn run_block<
                 .map_err(|err| anyhow::anyhow!(err))
                 .map(|o| into_pubdata_used_block_output!(o))
         }
-    }
+    }?;
+    output.assert_pubdata_form_for_execution(execution_version);
+    Ok(output)
 }
 
 pub fn simulate_tx<

@@ -74,7 +74,7 @@ impl ExtendedCommitBatchInfo {
         let mut dependency_roots_rolling_hash = B256::ZERO;
 
         for (block_output, transactions, _) in blocks {
-            total_pubdata.extend(block_output.pubdata.clone());
+            total_pubdata.extend_from_slice(block_output.expect_pubdata_bytes());
 
             for tx in transactions {
                 match tx.envelope() {

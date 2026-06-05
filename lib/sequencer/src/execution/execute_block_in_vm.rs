@@ -379,7 +379,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     EXECUTION_METRICS.gas_per_block.observe(cumulative_gas_used);
     EXECUTION_METRICS
         .pubdata_per_block
-        .observe(output.pubdata_used);
+        .observe(output.pubdata_used());
     EXECUTION_METRICS
         .transactions_per_block
         .observe(executed_txs.len() as u64);
@@ -402,7 +402,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         canonical_hash = output.header.hash(),
         write_count = output.storage_writes.len(),
         preimages_count = output.published_preimages.len(),
-        pubdata_used = output.pubdata_used,
+        pubdata_used = output.pubdata_used(),
     );
 
     tracing::debug!(
