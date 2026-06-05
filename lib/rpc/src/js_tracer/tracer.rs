@@ -7,9 +7,8 @@ use crate::js_tracer::{
     },
     utils::{extract_js_source_and_config, gas_used_from_resources, wrap_js_invocation},
 };
-use crate::sandbox::{
-    ERGS_PER_GAS, fmt_error_msg, is_asset_tracker_root_call, maybe_revert_reason,
-};
+use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
+use crate::trace_filter::{is_asset_tracker_root_call, without_ignored_roots};
 use alloy::hex::ToHexExt;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use boa_engine::{Context as BoaContext, Source};
@@ -26,59 +25,10 @@ use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
 const MAX_JS_TRACER_PAYLOAD_BYTES: usize = 512 * 1024;
 
-fn multi_root_context(
-    input_transactions: &[ZkTransaction],
-    result_index: usize,
-    roots: Vec<TxContext>,
-) -> TxContext {
-    debug_assert!(roots.len() > 1);
-
-    let tx = input_transactions.get(result_index);
-    let first_root = roots.first().expect("multi-root trace is non-empty");
-    let last_root = roots.last().expect("multi-root trace is non-empty");
-    let first_error = roots.iter().find_map(|ctx| ctx.error.clone());
-
-    TxContext {
-        typ: if tx.is_some_and(|tx| tx.to().is_none()) {
-            "CREATE".to_string()
-        } else {
-            "CALL".to_string()
-        },
-        from: tx.map_or(first_root.from, ZkTransaction::signer),
-        to: tx.and_then(ZkTransaction::to).unwrap_or(first_root.to),
-        input: tx.map_or_else(|| first_root.input.clone(), |tx| tx.input().clone()),
-        gas: tx.map_or_else(
-            || roots.iter().map(|ctx| ctx.gas).sum(),
-            |tx| U256::from(tx.gas_limit()),
-        ),
-        value: tx.map_or(first_root.value, ZkTransaction::value),
-        gas_used: Some(
-            roots
-                .iter()
-                .map(|ctx| ctx.gas_used.unwrap_or_default())
-                .sum(),
-        ),
-        output: last_root.output.clone(),
-        error: first_error,
-    }
-}
-
 fn without_asset_tracker_root_contexts(roots: Vec<TxContext>) -> Vec<TxContext> {
-    if roots.len() <= 1 {
-        return roots;
-    }
-
-    let mut kept = Vec::with_capacity(roots.len());
-    let mut ignored = Vec::new();
-    for root in roots {
-        if is_asset_tracker_root_call(Some(root.to), root.input.as_ref()) {
-            ignored.push(root);
-        } else {
-            kept.push(root);
-        }
-    }
-
-    if kept.is_empty() { ignored } else { kept }
+    without_ignored_roots(roots, |root| {
+        is_asset_tracker_root_call(root.from, Some(root.to), root.input.as_ref())
+    })
 }
 
 /// JS tracer implementation
@@ -126,7 +76,6 @@ pub struct JsTracer {
 
     frame_stack: Vec<FrameState>,
     finished_root_frames: Vec<TxContext>,
-    input_transactions: Vec<ZkTransaction>,
     tx_failed: bool,
 
     error: Option<anyhow::Error>,
@@ -134,14 +83,6 @@ pub struct JsTracer {
 
 impl JsTracer {
     pub fn new(state_view: impl ViewState + 'static, js_cfg: String) -> anyhow::Result<Self> {
-        Self::new_with_transactions(state_view, js_cfg, vec![])
-    }
-
-    pub fn new_with_transactions(
-        state_view: impl ViewState + 'static,
-        js_cfg: String,
-        input_transactions: Vec<ZkTransaction>,
-    ) -> anyhow::Result<Self> {
         if js_cfg.len() > MAX_JS_TRACER_PAYLOAD_BYTES {
             return Err(anyhow::anyhow!(format!(
                 "JS tracer payload exceeds limit of {} bytes",
@@ -181,7 +122,6 @@ impl JsTracer {
             error: None,
             frame_stack: Vec::new(),
             finished_root_frames: Vec::new(),
-            input_transactions,
             tx_failed: false,
         })
     }
@@ -533,15 +473,17 @@ impl JsTracer {
     }
 
     fn tx_result_context(&self, roots: Vec<TxContext>) -> anyhow::Result<TxContext> {
-        match roots.len() {
-            0 => anyhow::bail!("No finished frame found at transaction end"),
-            1 => Ok(roots.into_iter().next().expect("one root frame")),
-            _ => Ok(multi_root_context(
-                &self.input_transactions,
-                self.results.len(),
-                roots,
-            )),
-        }
+        // A transaction always produces exactly one genuine root frame; the bootloader's
+        // asset-tracker root (the only other depth-1 frame) is filtered out before this call.
+        anyhow::ensure!(
+            roots.len() <= 1,
+            "unexpected multi-root trace: {} roots remain after stripping asset-tracker roots",
+            roots.len()
+        );
+        roots
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No finished frame found at transaction end"))
     }
 
     /// `call_result` is called at the end of the transaction to get the final result from the tracer.
@@ -1089,8 +1031,7 @@ pub fn trace_block<V: ViewState + 'static>(
     state_view: V,
     js_tracer_config: String,
 ) -> anyhow::Result<Vec<JsonValue>> {
-    let mut tracer =
-        JsTracer::new_with_transactions(state_view.clone(), js_tracer_config, txs.clone())?;
+    let mut tracer = JsTracer::new(state_view.clone(), js_tracer_config)?;
 
     let tx_source = zksync_os_interface::traits::TxListSource {
         transactions: txs.into_iter().map(|tx| tx.encode()).collect(),
@@ -1115,7 +1056,8 @@ pub fn trace_block<V: ViewState + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sandbox::{ASSET_TRACKER_ADDRESS, ASSET_TRACKER_ROOT_SELECTOR};
+    use crate::trace_filter::{ASSET_TRACKER_ADDRESS, ASSET_TRACKER_ROOT_SELECTOR};
+    use zksync_os_types::BOOTLOADER_FORMAL_ADDRESS;
 
     fn tx_context(to: Address, gas: u64, gas_used: u64) -> TxContext {
         TxContext {
@@ -1129,22 +1071,6 @@ mod tests {
             output: None,
             error: None,
         }
-    }
-
-    #[test]
-    fn multi_root_context_preserves_all_root_accounting_for_result() {
-        let first = tx_context(Address::from([0x11; 20]), 10, 3);
-        let mut second = tx_context(Address::from([0x22; 20]), 20, 7);
-        second.output = Some(Bytes::from(vec![0xcd]));
-
-        let ctx = multi_root_context(&[], 0, vec![first, second]);
-
-        assert_eq!(ctx.typ, "CALL");
-        assert_eq!(ctx.to, Address::from([0x11; 20]));
-        assert_eq!(ctx.gas, U256::from(30));
-        assert_eq!(ctx.gas_used, Some(U256::from(10)));
-        assert_eq!(ctx.output, Some(Bytes::from(vec![0xcd])));
-        assert_eq!(ctx.error, None);
     }
 
     #[test]
@@ -1162,12 +1088,12 @@ mod tests {
             pending_create_type: None,
             frame_stack: vec![],
             finished_root_frames: vec![],
-            input_transactions: vec![],
             tx_failed: false,
             error: None,
         };
         let actual = tx_context(Address::from([0x11; 20]), 10, 3);
         let mut asset_tracker = tx_context(ASSET_TRACKER_ADDRESS, 20, 7);
+        asset_tracker.from = BOOTLOADER_FORMAL_ADDRESS;
         asset_tracker.input = Bytes::copy_from_slice(&ASSET_TRACKER_ROOT_SELECTOR);
 
         let roots = without_asset_tracker_root_contexts(vec![actual, asset_tracker]);

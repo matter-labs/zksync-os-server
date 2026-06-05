@@ -25,6 +25,7 @@ mod monitoring_middleware;
 mod net_impl;
 mod rate_limit_middleware;
 mod sandbox;
+mod trace_filter;
 mod tx_handler;
 mod txpool_impl;
 mod types;
