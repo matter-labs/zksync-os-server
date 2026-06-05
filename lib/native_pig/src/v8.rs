@@ -7,14 +7,13 @@ use zk_ee_0_4_0::system::metadata::zk_metadata::{BlockHashes, BlockMetadataFromO
 use zk_ee_0_4_0::utils::Bytes32;
 use zk_os_basic_system_0_4_0::system_implementation::flat_storage_model::FlatStorageLeaf;
 use zk_os_forward_system_0_4_0::run::{
-    BatchBlockInput, BatchState as ForwardBatchState, LeafProof, ReadStorageTree,
+    BatchBlockInput, BatchState as ForwardBatchState, LeafProof,
+    PreimageSource as ForwardPreimageSource, ReadStorage as ForwardReadStorage, ReadStorageTree,
     StorageCommitment, generate_batch_proof_input,
 };
-use zksync_os_interface::traits::{
-    PreimageSource as InterfacePreimageSource, ReadStorage as InterfaceReadStorage, TxListSource,
-};
+use zksync_os_interface::traits::TxListSource;
 use zksync_os_merkle_tree::{
-    Blake2Hasher, MerkleTree, MerkleTreeProver, RocksDBWrapper, api::flat,
+    Blake2Hasher, HashTree, MerkleTree, MerkleTreeProver, RocksDBWrapper, api::flat,
 };
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, ViewState};
 use zksync_os_types::{PubdataMode, ZksyncOsEncode};
@@ -87,7 +86,7 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
         blocks,
         da_commitment_scheme(pubdata_mode)?,
     )
-    .map_err(anyhow::Error::from)?;
+    .map_err(|err| anyhow::anyhow!("native batch run failed: {err:?}"))?;
 
     let batch_output = batch_run.batch_output;
     let batch_public_input = batch_run.batch_public_input;
@@ -190,15 +189,17 @@ impl<SV> HistoricalBatchState<SV> {
     }
 }
 
-impl<SV: ViewState> InterfaceReadStorage for HistoricalBatchState<SV> {
-    fn read(&mut self, key: B256) -> Option<B256> {
-        self.state_views[self.cursor].read(key)
+impl<SV: ViewState> ForwardReadStorage for HistoricalBatchState<SV> {
+    fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
+        self.state_views[self.cursor]
+            .read(b256_from_bytes32(key))
+            .map(bytes32_from_b256)
     }
 }
 
-impl<SV: ViewState> InterfacePreimageSource for HistoricalBatchState<SV> {
-    fn get_preimage(&mut self, hash: B256) -> Option<Vec<u8>> {
-        self.state_views[self.cursor].get_preimage(hash)
+impl<SV: ViewState> ForwardPreimageSource for HistoricalBatchState<SV> {
+    fn get_preimage(&mut self, hash: Bytes32) -> Option<Vec<u8>> {
+        self.state_views[self.cursor].get_preimage(b256_from_bytes32(hash))
     }
 }
 
@@ -331,13 +332,12 @@ impl VersionedMerkleTree {
             value: bytes32_from_b256(proof.inner.value),
             next: proof.inner.next_index,
         };
-        let mut merkle_path = Box::new([Bytes32::default(); usize::from(TREE_DEPTH)]);
+        let mut merkle_path = Box::new([Bytes32::default(); TREE_DEPTH as usize]);
         for (i, hash) in proof.inner.siblings.iter().enumerate() {
             merkle_path[i] = bytes32_from_b256(*hash);
         }
         for level in proof.inner.siblings.len() as u8..TREE_DEPTH {
-            merkle_path[usize::from(level)] =
-                bytes32_from_b256(Blake2Hasher.empty_subtree_hash(level));
+            merkle_path[level as usize] = bytes32_from_b256(Blake2Hasher.empty_subtree_hash(level));
         }
 
         LeafProof::new(proof.inner.index, leaf, merkle_path)

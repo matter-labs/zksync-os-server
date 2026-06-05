@@ -23,33 +23,36 @@ pub mod apps;
 pub use adapter::AbiTxSource;
 use zksync_os_types::{BlockOutput, ExecutionVersion};
 macro_rules! into_legacy_block_output {
-    ($o:expr) => {
+    ($o:expr) => {{
+        let output = $o;
+        let pubdata_used = output.pubdata.len() as u64;
         BlockOutput {
-            header: $o.header,
-            tx_results: $o.tx_results,
-            storage_writes: $o.storage_writes,
-            account_diffs: $o.account_diffs,
-            published_preimages: $o.published_preimages,
-            pubdata: $o.pubdata,
-            pubdata_used: $o.pubdata.len() as u64,
-            computational_native_used: $o.computational_native_used,
+            header: output.header,
+            tx_results: output.tx_results,
+            storage_writes: output.storage_writes,
+            account_diffs: output.account_diffs,
+            published_preimages: output.published_preimages,
+            pubdata: output.pubdata,
+            pubdata_used,
+            computational_native_used: output.computational_native_used,
         }
-    };
+    }};
 }
 
 macro_rules! into_pubdata_used_block_output {
-    ($o:expr) => {
+    ($o:expr) => {{
+        let output = $o;
         BlockOutput {
-            header: $o.header,
-            tx_results: $o.tx_results,
-            storage_writes: $o.storage_writes,
-            account_diffs: $o.account_diffs,
-            published_preimages: $o.published_preimages,
+            header: output.header,
+            tx_results: output.tx_results,
+            storage_writes: output.storage_writes,
+            account_diffs: output.account_diffs,
+            published_preimages: output.published_preimages,
             pubdata: Vec::new(),
-            pubdata_used: $o.pubdata_used,
-            computational_native_used: $o.computational_native_used,
+            pubdata_used: output.pubdata_used,
+            computational_native_used: output.computational_native_used,
         }
-    };
+    }};
 }
 
 pub fn run_block<
@@ -148,7 +151,9 @@ pub fn run_block<
                 .map(|o| into_legacy_block_output!(o))
         }
         ExecutionVersion::V7 => {
-            let object = RunBlockForwardV7 {};
+            let object = RunBlockForwardV7 {
+                fri_verifier_artifacts: None,
+            };
             object
                 .run_block(
                     (),
@@ -248,7 +253,9 @@ pub fn simulate_tx<
                 .map_err(|err| anyhow::anyhow!(err))
         }
         ExecutionVersion::V7 => {
-            let object = RunBlockForwardV7 {};
+            let object = RunBlockForwardV7 {
+                fri_verifier_artifacts: None,
+            };
             object
                 .simulate_tx(
                     (),
