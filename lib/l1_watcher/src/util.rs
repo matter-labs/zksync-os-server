@@ -389,7 +389,7 @@ pub async fn fetch_stored_batch_data(
     }) else {
         return Ok(None);
     };
-    let batch_info = fetch_committed_batch_data(zk_chain, tx_hash)
+    let batch_info = fetch_committed_batch_data(zk_chain, tx_hash, l1_block_number)
         .await?
         .into_stored();
 
@@ -404,39 +404,55 @@ pub async fn fetch_stored_batch_data(
 pub async fn fetch_committed_batch_data(
     zk_chain: &ZkChain<NodeProvider>,
     tx_hash: TxHash,
+    l1_block_number: BlockNumber,
 ) -> Result<ExtendedCommitBatchInfo, L1WatcherError> {
-    let tx = (|| async {
-        let tx = zk_chain
-            .provider()
-            .get_transaction_by_hash(tx_hash)
-            .await
-            .map_err(|e| L1WatcherError::Other(e.into()))?
-            .ok_or_else(|| {
-                L1WatcherError::Other(anyhow::anyhow!("commit tx {tx_hash} not found"))
+    // L1 block where this batch got committed.
+    let l1_block_id = BlockId::number(l1_block_number);
+    let tx_fut = async {
+        (|| async {
+            let tx = zk_chain
+                .provider()
+                .get_transaction_by_hash(tx_hash)
+                .await
+                .map_err(|e| L1WatcherError::Other(e.into()))?
+                .ok_or_else(|| {
+                    L1WatcherError::Other(anyhow::anyhow!("commit tx {tx_hash} not found"))
+                })?;
+            tx.block_number.ok_or_else(|| {
+                L1WatcherError::Other(anyhow::anyhow!(
+                    "commit tx {tx_hash} has no block number (still pending)"
+                ))
             })?;
-        tx.block_number.ok_or_else(|| {
-            L1WatcherError::Other(anyhow::anyhow!(
-                "commit tx {tx_hash} has no block number (still pending)"
-            ))
-        })?;
-        Ok::<_, L1WatcherError>(tx)
-    })
-    .retry(
-        ConstantBuilder::default()
-            .with_delay(Duration::from_millis(200))
-            .with_max_times(50),
-    )
-    .await?;
+            Ok::<_, L1WatcherError>(tx)
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_millis(200))
+                .with_max_times(50),
+        )
+        .await
+    };
+    let upgrade_fut = async {
+        zk_chain
+            .get_upgrade_batch_number(l1_block_id)
+            .await
+            .map_err(|e| L1WatcherError::Other(e.into()))
+    };
+    // Fetch active protocol version at the moment the batch got committed. This should work
+    // for the vast majority of cases except when upgrade gets applied in the same L1 block
+    // but after batch was committed.
+    let packed_protocol_version_fut = async {
+        zk_chain
+            .get_raw_protocol_version(l1_block_id)
+            .await
+            .map_err(|e| L1WatcherError::Other(e.into()))
+    };
+    let (tx, upgrade_batch_number, packed_protocol_version) =
+        tokio::try_join!(tx_fut, upgrade_fut, packed_protocol_version_fut,)?;
 
     let CommitCalldata {
         commit_batch_info, ..
     } = CommitCalldata::decode(tx.input()).map_err(L1WatcherError::Other)?;
-
-    // L1 block where this batch got committed.
-    let l1_block_id = BlockId::number(
-        tx.block_number
-            .expect("mined transaction has no block number"),
-    );
 
     // To recreate batch's commitment (and hence it's `StoredBatchInfo` form) we need to
     // know any potential upgrade transaction hash that was applied in this batch.
@@ -447,7 +463,6 @@ pub async fn fetch_committed_batch_data(
     // except when the batch got committed and executed in the same L1 block (which should
     // never happen in current implementation as commit->prove->execute operations are submitted
     // sequentially after at least 1 block confirmation).
-    let upgrade_batch_number = zk_chain.get_upgrade_batch_number(l1_block_id).await?;
     let upgrade_tx_hash = if upgrade_batch_number == commit_batch_info.batch_number {
         // If the latest upgrade transaction belongs to this batch then current upgrade tx
         // hash must also be present on L1. Thus, we fetch it.
@@ -458,11 +473,6 @@ pub async fn fetch_committed_batch_data(
         // to the currently inspected batch as genesis does not get committed via this flow.
         None
     };
-    // Fetch active protocol version at the moment the batch got committed. This should work
-    // for the vast majority of cases except when upgrade gets applied in the same L1 block
-    // but after batch was committed.
-    let packed_protocol_version = zk_chain.get_raw_protocol_version(l1_block_id).await?;
-
     Ok(ExtendedCommitBatchInfo {
         commit_info: commit_batch_info,
         upgrade_tx_hash,

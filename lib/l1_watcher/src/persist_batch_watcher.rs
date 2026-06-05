@@ -180,8 +180,10 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         log: &Log,
     ) -> Result<(ExtendedCommitBatchInfo, DiscoveredCommittedBatch), L1WatcherError> {
         let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
+        let l1_block_number = log.block_number.expect("indexed log without block number");
         let zk_chain = ZkChain::new(log.address(), provider.clone());
-        let batch_info = util::fetch_committed_batch_data(&zk_chain, tx_hash).await?;
+        let batch_info =
+            util::fetch_committed_batch_data(&zk_chain, tx_hash, l1_block_number).await?;
 
         let committed_batch = DiscoveredCommittedBatch {
             batch_info: batch_info.clone().into_stored(),
