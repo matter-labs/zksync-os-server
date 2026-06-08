@@ -66,7 +66,7 @@ pub struct BackpressureMonitor {
 impl BackpressureMonitor {
     pub fn new(config: BackpressureConfig, stop_receiver: watch::Receiver<bool>) -> Self {
         let (acceptance_tx, _) = watch::channel(TransactionAcceptanceState::Accepting);
-        let (pipeline_gate, _) = PipelineAdmissionGate::open();
+        let pipeline_gate = PipelineAdmissionGate::new();
         Self {
             config,
             acceptance_tx,

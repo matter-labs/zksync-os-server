@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
@@ -125,12 +126,14 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
             let gate_open = self.pipeline_gate.is_open();
             // Drain any already-queued canonized replays while the gate is open.
             for _ in 0..Self::MAX_REPLAYS_TO_DRAIN_PER_LOOP {
-                if !gate_open {
+                if !self.pipeline_gate.is_open() {
                     break;
                 }
                 match self.replays_to_execute.try_recv() {
                     Ok(record) => {
-                        Self::forward_replay(record, &output, &state_reporter).await?;
+                        if !Self::forward_replay(record, &output, &state_reporter).await? {
+                            return Ok(());
+                        }
                     }
                     Err(mpsc::error::TryRecvError::Empty) => break,
                     Err(mpsc::error::TryRecvError::Disconnected) => {
@@ -160,7 +163,9 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                         tracing::info!("inbound channel closed");
                         return Ok(());
                     };
-                    Self::forward_replay(record, &output, &state_reporter).await?;
+                    if !Self::forward_replay(record, &output, &state_reporter).await? {
+                        return Ok(());
+                    }
                 }
                 _ = self.pipeline_gate.wait_until_open(), if !gate_open => {}
                 send_res = output.send(BlockCommand::Produce(ProduceCommand)), if can_produce => {
@@ -191,20 +196,25 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
             let record = self
                 .block_replay_storage
                 .get_replay_record(block_num)
-                .ok_or_else(|| anyhow::anyhow!("missing replay record for block {block_num}"))?;
-            output
+                .with_context(|| format!("missing replay record for block {block_num}"))?;
+            if output
                 .send(BlockCommand::Replay(Box::new(record)))
                 .await
-                .map_err(|_| anyhow::anyhow!("command output channel closed"))?;
+                .is_err()
+            {
+                tracing::info!("Command output channel closed, stopping WAL replay");
+                return Ok(());
+            }
         }
         Ok(())
     }
 
+    /// Returns `false` if the output channel has closed (caller should stop).
     async fn forward_replay(
         record: ReplayRecord,
         output: &mpsc::Sender<BlockCommand>,
         state_reporter: &ComponentStateReporter,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let block_number = record.block_context.block_number;
         let timestamp = record.block_context.timestamp;
         tracing::info!(block_number, "Received canonized block from consensus");
@@ -213,10 +223,11 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
             .await
             .is_err()
         {
-            anyhow::bail!("command output channel closed");
+            tracing::info!("Command output channel closed, stopping source");
+            return Ok(false);
         }
         state_reporter.record_processed(block_number, Some(timestamp), None);
-        Ok(())
+        Ok(true)
     }
 
     async fn send_block_rebuilds(

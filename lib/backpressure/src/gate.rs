@@ -15,24 +15,22 @@ pub struct PipelineAdmissionReceiver {
     rx: watch::Receiver<bool>,
 }
 
+impl Default for PipelineAdmissionGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PipelineAdmissionGate {
-    pub fn open() -> (Self, PipelineAdmissionReceiver) {
-        let (tx, rx) = watch::channel(true);
-        (Self { tx }, PipelineAdmissionReceiver { rx })
+    pub fn new() -> Self {
+        let (tx, _) = watch::channel(true);
+        Self { tx }
     }
 
     pub fn subscribe(&self) -> PipelineAdmissionReceiver {
         PipelineAdmissionReceiver {
             rx: self.tx.subscribe(),
         }
-    }
-
-    pub fn set_open(&self) {
-        self.set(true);
-    }
-
-    pub fn set_closed(&self) {
-        self.set(false);
     }
 
     pub fn set(&self, open: bool) {
