@@ -2,6 +2,7 @@ mod call_fees;
 
 mod config;
 
+use crate::config::rpc_limit_policy;
 pub use config::{RpcConfig, RpcRateLimit};
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -41,7 +42,7 @@ use crate::eth_pubsub_impl::EthPubsubNamespace;
 use crate::monitoring_middleware::Monitoring;
 use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
-use crate::rate_limit_middleware::{RateLimiting, build_limiters};
+use crate::rate_limit_middleware::RateLimiting;
 use crate::txpool_impl::TxpoolNamespace;
 use crate::unstable_impl::UnstableNamespace;
 use crate::web3_impl::Web3Namespace;
@@ -68,6 +69,7 @@ use zksync_os_rpc_api::txpool::TxpoolApiServer;
 use zksync_os_rpc_api::unstable::UnstableApiServer;
 use zksync_os_rpc_api::web3::Web3ApiServer;
 use zksync_os_rpc_api::zks::ZksApiServer;
+use zksync_os_rpc_limits::Limiter;
 use zksync_os_storage_api::BlockContext;
 use zksync_os_tx_validators::policy_client::PolicyClient;
 use zksync_os_types::TransactionAcceptanceState;
@@ -150,12 +152,11 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     let middleware = tower::ServiceBuilder::new().layer(cors);
 
     let max_response_size_bytes = config.max_response_size_bytes();
-    // Build once so all connections share the same token-bucket state.
-    let limiters = build_limiters(&config.rate_limits);
+    let limiter = Limiter::new(rpc_limit_policy(&config.rate_limits));
     let rpc_middleware = RpcServiceBuilder::new()
         // Monitoring is outermost so rate-limited responses still appear in error metrics.
         .layer_fn(move |service| Monitoring::new(service, max_response_size_bytes))
-        .layer_fn(move |service| RateLimiting::new(service, limiters.clone()));
+        .layer_fn(move |service| RateLimiting::new(service, limiter.clone()));
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)

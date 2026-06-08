@@ -1,7 +1,9 @@
 use alloy::primitives::Address;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
+use std::sync::Arc;
 use std::time::Duration;
+use zksync_os_rpc_limits::{PerMethod, Policy};
 
 /// A per-method rate limit entry.
 #[derive(Clone, Debug)]
@@ -82,4 +84,17 @@ impl RpcConfig {
     pub fn max_response_size_bytes(&self) -> u32 {
         self.max_response_size.saturating_mul(1024 * 1024)
     }
+}
+
+pub fn rpc_limit_policy(rate_limits: &[RpcRateLimit]) -> Arc<dyn Policy> {
+    let mut global = None;
+    let mut per_method = HashMap::new();
+    for limit in rate_limits {
+        if limit.method == "*" {
+            global = Some(limit.requests_per_second);
+        } else {
+            per_method.insert(limit.method.clone(), limit.requests_per_second);
+        }
+    }
+    Arc::new(PerMethod::new(global, per_method))
 }
