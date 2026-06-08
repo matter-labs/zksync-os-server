@@ -10,8 +10,8 @@ use serde_json::Value;
 use std::env;
 use std::str::FromStr;
 use tracing::info;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use zksync_os_integration_tests::contracts::{TracingPrimary, TracingSecondary};
+use zksync_os_provider::NodeProvider;
 
 const ZKSYNC_URL_ENV: &str = "JS_TRACER_ZKSYNC_RPC_URL";
 const RETH_URL_ENV: &str = "JS_TRACER_RETH_RPC_URL";
@@ -47,8 +47,8 @@ async fn compare_js_tracer_outputs_between_nodes() -> anyhow::Result<()> {
         .connect(&reth_url)
         .await?;
 
-    let zksync_provider = EthDynProvider::new(zksync_provider);
-    let reth_provider = EthDynProvider::new(reth_provider);
+    let zksync_provider = NodeProvider::new(zksync_provider);
+    let reth_provider = NodeProvider::new(reth_provider);
 
     // Deploy helper contracts on both nodes.
     let secondary_init_value = U256::from(7);
@@ -213,7 +213,7 @@ fn configure_call_request(req: &mut TransactionRequest, from: alloy::primitives:
 }
 
 async fn trace_with_js(
-    provider: &EthDynProvider,
+    provider: &NodeProvider,
     request: TransactionRequest,
     tracer_code: &str,
 ) -> anyhow::Result<Value> {

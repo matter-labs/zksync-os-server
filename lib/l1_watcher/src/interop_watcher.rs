@@ -1,5 +1,4 @@
 use alloy::primitives::ruint::FromUintError;
-use alloy::providers::DynProvider;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
@@ -13,12 +12,13 @@ use zksync_os_contract_interface::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
 use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::IndexedInteropRoot;
 
 use crate::sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};
 use crate::util::{find_l1_block_by_interop_root_id, find_l1_execute_block_by_batch_number};
 use crate::watcher::L1WatcherError;
-use crate::{BlockUpdates, L1WatcherConfig, ProcessRawEvents};
+use crate::{BlockUpdates, L1WatcherConfig, LogsCache, ProcessRawEvents};
 
 /// Watches interop root updates emitted by Gateway settlement layers and feeds them into the
 /// interop subpool.
@@ -45,6 +45,7 @@ impl InteropWatcher {
         starting_interop_root_id: u64,
         interop_roots_subpool: InteropRootsSubpool,
         gateway_block_updates: Option<watch::Receiver<BlockUpdates>>,
+        gateway_logs_cache: Option<LogsCache>,
     ) -> anyhow::Result<Option<SlAwareL1Watcher>> {
         let mut segments = Vec::new();
         for interval in intervals.intervals() {
@@ -63,6 +64,9 @@ impl InteropWatcher {
 
             let block_updates = gateway_block_updates.clone().with_context(|| {
                 format!("Gateway block updates are missing for interval {interval}")
+            })?;
+            let logs_cache = gateway_logs_cache.clone().with_context(|| {
+                format!("Gateway logs cache is missing for interval {interval}")
             })?;
             let gw_zk_chain = &interval.proxy;
             let bridgehub = Bridgehub::new(
@@ -118,6 +122,7 @@ impl InteropWatcher {
             segments.push(SegmentSpec {
                 provider: gw_zk_chain.provider().clone(),
                 block_updates,
+                logs_cache,
                 address: message_root.into(),
                 start_block,
                 end_block,
@@ -166,7 +171,7 @@ impl ProcessRawEvents for InteropWatcher {
 
     async fn process_raw_event(
         &mut self,
-        _provider: &DynProvider,
+        _provider: &NodeProvider,
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let event = NewInteropRoot::decode_log(&log.inner)?.data;

@@ -4,18 +4,18 @@ use alloy::{
 };
 
 use crate::upgrade::interfaces::{self, FacetCut, ProposedUpgrade};
-use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
+use zksync_os_provider::NodeProvider;
 
 #[derive(Debug)]
 pub struct DefaultUpgrade {
-    instance: interfaces::DefaultUpgrade::DefaultUpgradeInstance<EthDynProvider>,
+    instance: interfaces::DefaultUpgrade::DefaultUpgradeInstance<NodeProvider>,
     proposed_upgrade: ProposedUpgrade,
 }
 
 impl DefaultUpgrade {
     /// Deploys the DefaultUpgrade contract on L1.
     pub async fn deploy(
-        l1_provider: &EthDynProvider,
+        l1_provider: &NodeProvider,
         proposed_upgrade: &ProposedUpgrade,
     ) -> anyhow::Result<Self> {
         let instance = interfaces::DefaultUpgrade::deploy(l1_provider.clone()).await?;

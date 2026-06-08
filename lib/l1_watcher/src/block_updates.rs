@@ -1,9 +1,10 @@
 use alloy::eips::BlockId;
 use alloy::primitives::BlockNumber;
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::Provider;
 use reth_tasks::Runtime;
 use std::time::Duration;
 use tokio::sync::watch;
+use zksync_os_provider::NodeProvider;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockBoundary {
@@ -19,7 +20,7 @@ pub struct BlockUpdates {
 }
 
 pub fn run(
-    provider: DynProvider,
+    provider: NodeProvider,
     runtime: &Runtime,
     task_name: &'static str,
     poll_interval: Duration,
@@ -49,7 +50,7 @@ pub fn run(
 }
 
 async fn poll_latest(
-    provider: &DynProvider,
+    provider: &NodeProvider,
     l1_head: &watch::Sender<BlockUpdates>,
 ) -> alloy::transports::TransportResult<()> {
     let latest_block = provider.get_block_number().await?;
@@ -65,7 +66,7 @@ async fn poll_latest(
 }
 
 async fn poll_finalized(
-    provider: &DynProvider,
+    provider: &NodeProvider,
     l1_head: &watch::Sender<BlockUpdates>,
 ) -> alloy::transports::TransportResult<()> {
     let finalized_block = provider

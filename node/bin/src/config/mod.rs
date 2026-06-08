@@ -1219,6 +1219,11 @@ pub struct L1WatcherConfig {
     /// Max time to wait for a priority op to appear on the settlement layer.
     #[config(default_t = 300 * TimeUnit::Seconds)]
     pub sl_wait_timeout: Duration,
+
+    /// Number of recent blocks retained in the shared logs cache.
+    /// The value should be based on the depth at which blocks are finalized. Which could be >60 on L1.
+    #[config(default_t = 128)]
+    pub logs_cache_capacity: usize,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -2052,6 +2057,7 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
             finalized_poll_interval: c.finalized_poll_interval,
             poll_iteration_timeout: c.poll_iteration_timeout,
             sl_wait_timeout: c.sl_wait_timeout,
+            logs_cache_capacity: c.logs_cache_capacity,
         }
     }
 }

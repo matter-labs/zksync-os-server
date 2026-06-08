@@ -3,25 +3,25 @@ use alloy::primitives::{U256, keccak256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use std::time::Duration;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use zksync_os_alloy_ext::network::Zksync;
 use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_provider::NodeProvider;
 
 #[derive(Debug)]
 pub struct ProverTester {
-    l1_provider: EthDynProvider,
-    gateway_provider: Option<EthDynProvider>,
-    l2_provider: EthDynProvider,
+    l1_provider: NodeProvider,
+    gateway_provider: Option<NodeProvider>,
+    l2_provider: NodeProvider,
     l2_zk_provider: DynProvider<Zksync>,
 }
 
 impl ProverTester {
     /// Create a new client targeting the given base URL
     pub fn new(
-        l1_provider: EthDynProvider,
-        gateway_provider: Option<EthDynProvider>,
-        l2_provider: EthDynProvider,
+        l1_provider: NodeProvider,
+        gateway_provider: Option<NodeProvider>,
+        l2_provider: NodeProvider,
         l2_zk_provider: DynProvider<Zksync>,
     ) -> Self {
         Self {
@@ -38,8 +38,8 @@ impl ProverTester {
 
         // Get L1/SL state which contains diamond proxy address
         let l1_state = L1State::fetch(
-            self.l1_provider.clone().erased(),
-            self.gateway_provider.as_ref().map(|p| p.clone().erased()),
+            self.l1_provider.clone(),
+            self.gateway_provider.clone(),
             bridgehub_address,
             chain_id,
         )
@@ -60,8 +60,8 @@ impl ProverTester {
 
         // Get L1/SL state which contains diamond proxy address
         let l1_state = L1State::fetch(
-            self.l1_provider.clone().erased(),
-            self.gateway_provider.as_ref().map(|p| p.clone().erased()),
+            self.l1_provider.clone(),
+            self.gateway_provider.clone(),
             bridgehub_address,
             chain_id,
         )

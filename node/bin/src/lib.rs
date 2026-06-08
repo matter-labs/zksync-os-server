@@ -56,7 +56,6 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{
@@ -76,8 +75,8 @@ use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
-    L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, MigrationFinalizedWatcher,
-    SettlementLayerWatcher, block_updates,
+    L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, LogsCache,
+    MigrationFinalizedWatcher, SettlementLayerWatcher, block_updates,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
@@ -99,6 +98,7 @@ use zksync_os_network::service::{NetworkService, PeerVerifyBatch, PeerVerifyBatc
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
+use zksync_os_provider::NodeProvider;
 use zksync_os_raft::{
     BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, init_consensus,
     loopback_consensus,
@@ -210,8 +210,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // wait: calling fetch_finalized on them would spuriously fail when a concurrently
         // running batcher node keeps submitting new batch transactions.
         L1State::fetch_finalized(
-            l1_provider.clone().erased(),
-            gateway_provider.as_ref().map(|p| p.clone().erased()),
+            l1_provider.clone(),
+            gateway_provider.clone(),
             bridgehub_address,
             chain_id,
         )
@@ -219,8 +219,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to fetch finalized L1 state")
     } else {
         L1State::fetch(
-            l1_provider.clone().erased(),
-            gateway_provider.as_ref().map(|p| p.clone().erased()),
+            l1_provider.clone(),
+            gateway_provider.clone(),
             bridgehub_address,
             chain_id,
         )
@@ -229,7 +229,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
     let settles_on_gateway = l1_state.settles_on_gateway();
     let l1_block_updates = block_updates::run(
-        l1_provider.clone().erased(),
+        l1_provider.clone(),
         runtime,
         "l1 block updates",
         config.l1_watcher_config.poll_interval,
@@ -237,7 +237,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
     let gateway_block_updates = gateway_provider.as_ref().map(|provider| {
         block_updates::run(
-            provider.clone().erased(),
+            provider.clone(),
             runtime,
             "gateway block updates",
             config.l1_watcher_config.poll_interval,
@@ -252,6 +252,29 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .clone()
             .expect("gateway block updates must be initialized when SL is Gateway");
         (sl_provider, sl_block_updates)
+    };
+    let l1_logs_cache = LogsCache::new(
+        l1_provider.clone(),
+        l1_block_updates.clone(),
+        config.l1_watcher_config.logs_cache_capacity,
+        l1_state.l1_chain_id,
+    );
+    let gateway_logs_cache = gateway_provider.as_ref().map(|provider| {
+        LogsCache::new(
+            provider.clone(),
+            gateway_block_updates
+                .clone()
+                .expect("gateway block updates must be initialized when gateway provider exists"),
+            config.l1_watcher_config.logs_cache_capacity,
+            l1_state.sl_chain_id,
+        )
+    });
+    let sl_logs_cache = if l1_state.l1_chain_id == l1_state.sl_chain_id {
+        l1_logs_cache.clone()
+    } else {
+        gateway_logs_cache
+            .clone()
+            .expect("gateway logs cache must be initialized when SL is Gateway")
     };
     tracing::info!(?l1_state, settles_on_gateway, "L1 state");
     l1_state.report_metrics();
@@ -568,6 +591,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             l1_state.sl_block_number,
             node_startup_state.l1_state.l1_chain_id,
             sl_block_updates.clone(),
+            sl_logs_cache.clone(),
             // Only nodes that actually submit commit txs locally should arm the
             // `UnexpectedCommit` guard — otherwise consensus followers configured with
             // `batcher_config.enabled = false` panic the moment the leader's commit lands on L1.
@@ -587,6 +611,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             finality_storage.clone(),
             node_startup_state.l1_state.l1_chain_id,
             sl_block_updates.clone(),
+            sl_logs_cache.clone(),
         )
         .await
         .expect("failed to start L1 execute watcher")
@@ -601,6 +626,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_batch_provider.clone(),
             finality_storage.clone(),
             sl_block_updates.clone(),
+            sl_logs_cache.clone(),
         )
         .await
         .expect("failed to start finalized L1 execute watcher")
@@ -700,6 +726,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 config.l1_watcher_config.clone().into(),
                 sl_chain_id_subpool.clone(),
                 l1_block_updates.clone(),
+                l1_logs_cache.clone(),
             )
             .await
             .expect("failed to start gateway migration watcher")
@@ -719,6 +746,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.l1_watcher_config.clone().into(),
             last_finalized_migration_sender,
             sl_block_updates.clone(),
+            sl_logs_cache.clone(),
         )
         .await
         .expect("failed to start migration finalized watcher");
@@ -749,6 +777,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             next_cursors.interop_root_id,
             interop_roots_subpool.clone(),
             gateway_block_updates.clone(),
+            gateway_logs_cache.clone(),
         )
         .await
         .expect("failed to start L1 interop roots watcher")
@@ -767,6 +796,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             l1_subpool.clone(),
             next_cursors.l1_priority_id,
             l1_block_updates.clone(),
+            l1_logs_cache.clone(),
         )
         .await
         .expect("failed to start L1 transaction watcher")
@@ -913,6 +943,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             current_protocol_version.clone(),
             upgrade_subpool,
             l1_block_updates.clone(),
+            l1_logs_cache.clone(),
         )
         .await
         .expect("failed to start L1 upgrade transaction watcher")
@@ -940,6 +971,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let persistent_batch_storage = persistent_batch_storage.clone();
         let l1_block_updates = l1_block_updates.clone();
         let gateway_block_updates = gateway_block_updates.clone();
+        let l1_logs_cache = l1_logs_cache.clone();
+        let gateway_logs_cache = gateway_logs_cache.clone();
         async move {
             L1PersistBatchWatcher::create_watcher(
                 config.into(),
@@ -947,6 +980,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 persistent_batch_storage,
                 l1_block_updates,
                 gateway_block_updates,
+                l1_logs_cache,
+                gateway_logs_cache,
             )
             .await
             .expect("failed to start L1 batch persist watcher")
@@ -1171,7 +1206,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: &Config,
-    sl_provider: EthDynProvider,
+    sl_provider: NodeProvider,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     runtime: &Runtime,

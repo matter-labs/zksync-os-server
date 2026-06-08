@@ -15,13 +15,13 @@ use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
 use alloy::providers::ext::AnvilApi;
 use alloy::providers::utils::Eip1559Estimator;
-use alloy::providers::{DynProvider, PendingTransactionBuilder, Provider};
+use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::{TransactionInput, TransactionReceipt, TransactionRequest};
 use anyhow::Context;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use zksync_os_alloy_ext::provider::ZksyncApi as _;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_provider::NodeProvider;
 use zksync_os_server::config::Config;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, ProtocolSemanticVersion, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
@@ -35,33 +35,33 @@ use zksync_os_types::{
 pub struct UpgradeTester<'a> {
     pub tester: &'a Tester,
     // Bridgehub contract on L1
-    pub bridgehub_l1: zksync_os_contract_interface::Bridgehub<DynProvider>,
+    pub bridgehub_l1: zksync_os_contract_interface::Bridgehub<NodeProvider>,
     // Bridgehub contract on SL
-    pub bridgehub_sl: interfaces::Bridgehub::BridgehubInstance<EthDynProvider>,
+    pub bridgehub_sl: interfaces::Bridgehub::BridgehubInstance<NodeProvider>,
     // Bridgehub owner address on SL
     pub bridgehub_owner_sl: Address,
     // CTM contract on SL
-    pub ctm_sl: interfaces::ChainTypeManager::ChainTypeManagerInstance<EthDynProvider>,
+    pub ctm_sl: interfaces::ChainTypeManager::ChainTypeManagerInstance<NodeProvider>,
     // CTM owner address on SL
     pub ctm_owner_sl: Address,
     // CTM contract on L1
-    pub ctm_l1: interfaces::ChainTypeManager::ChainTypeManagerInstance<EthDynProvider>,
+    pub ctm_l1: interfaces::ChainTypeManager::ChainTypeManagerInstance<NodeProvider>,
     // CTM owner address on L1
     pub ctm_owner_l1: Address,
     // L1 chain admin contract
-    pub l1_chain_admin: interfaces::ChainAdmin::ChainAdminInstance<EthDynProvider>,
+    pub l1_chain_admin: interfaces::ChainAdmin::ChainAdminInstance<NodeProvider>,
     // L1 chain admin owner address
     pub l1_chain_admin_owner: Address,
     // Server notifier contract on L1
-    pub l1_server_notifier: interfaces::ServerNotifier::ServerNotifierInstance<EthDynProvider>,
+    pub l1_server_notifier: interfaces::ServerNotifier::ServerNotifierInstance<NodeProvider>,
     // L1 chain admin for gateway contract address
     pub l1_chain_admin_gateway: Option<Address>,
     // Diamond proxy on the settlement layer
-    pub diamond_proxy_sl: interfaces::ZkChain::ZkChainInstance<EthDynProvider>,
+    pub diamond_proxy_sl: interfaces::ZkChain::ZkChainInstance<NodeProvider>,
     // Diamond proxy owner address
     pub diamond_proxy_admin_sl: Address,
     // Bytecode supplier contract
-    pub bytecode_supplier: interfaces::BytecodesSupplier::BytecodesSupplierInstance<EthDynProvider>,
+    pub bytecode_supplier: interfaces::BytecodesSupplier::BytecodesSupplierInstance<NodeProvider>,
     // L2 chain id
     pub chain_id: u64,
     // Current protocol version
@@ -191,7 +191,7 @@ impl<'a> UpgradeTester<'a> {
 
         let bridgehub_address_l1 = tester.l2_zk_provider.get_bridgehub_contract().await?;
         let l1_state = L1State::fetch(
-            tester.l1_provider().clone().erased(),
+            tester.l1_provider().clone(),
             tester.gateway_eth_provider(),
             bridgehub_address_l1,
             chain_id,

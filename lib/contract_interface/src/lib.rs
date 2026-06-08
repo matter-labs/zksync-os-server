@@ -16,6 +16,7 @@ use alloy::eips::BlockId;
 use alloy::network::Ethereum;
 use alloy::primitives::{Address, B256, TxHash, U256};
 use alloy::providers::Provider;
+use zksync_os_provider::NodeProvider;
 
 alloy::sol! {
     // `Messaging.sol`
@@ -508,15 +509,14 @@ impl<P: Provider> MessageRoot<P> {
             .map(|n| n.saturating_to())
             .enrich("interopRootLogId", Some(block_id))
     }
+}
 
-    pub async fn code_exists_at_block(&self, block_id: BlockId) -> alloy::contract::Result<bool> {
-        let code = self
-            .provider()
-            .get_code_at(*self.address())
-            .block_id(block_id)
-            .await?;
-
-        Ok(!code.0.is_empty())
+impl MessageRoot<NodeProvider> {
+    /// L1 block at which this message root contract was deployed, used as the lower bound for
+    /// binary searches over L1 history. Convenience over [`NodeProvider::deployment_block`] that
+    /// the provider caches per address.
+    pub async fn deployment_block(&self) -> anyhow::Result<u64> {
+        self.provider().deployment_block(self.address).await
     }
 }
 
@@ -763,6 +763,15 @@ impl<P: Provider> MultisigCommitter<P> {
 #[derive(Clone, Debug)]
 pub struct ZkChain<P: Provider> {
     instance: IZKChainInstance<P, Ethereum>,
+}
+
+impl ZkChain<NodeProvider> {
+    /// L1 block at which this diamond proxy was deployed, used as the lower bound for binary
+    /// searches over L1 history. Convenience over [`NodeProvider::deployment_block`] that the
+    /// provider caches per address.
+    pub async fn deployment_block(&self) -> anyhow::Result<u64> {
+        self.provider().deployment_block(*self.address()).await
+    }
 }
 
 impl<P: Provider> ZkChain<P> {

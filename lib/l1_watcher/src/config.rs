@@ -22,4 +22,7 @@ pub struct L1WatcherConfig {
 
     /// Max time to wait for a priority op to appear on the settlement layer.
     pub sl_wait_timeout: Duration,
+
+    /// Number of recent blocks retained in the shared logs cache.
+    pub logs_cache_capacity: usize,
 }
