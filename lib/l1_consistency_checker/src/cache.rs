@@ -7,6 +7,8 @@ use zksync_os_merkle_tree_api::TreeBatchOutput;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::BlockOutput;
 
+pub const DEFAULT_MAX_CACHED_TREE_BLOCKS: usize = 4096;
+
 /// Local data needed to reconstruct batch commitments from replayed blocks.
 #[derive(Clone, Debug)]
 pub struct LocalBatchBlockData {
@@ -21,17 +23,29 @@ pub struct LocalBatchBlockData {
 /// Blocks must be inserted in strictly ascending order. Eviction is the
 /// caller's responsibility; they decide when to call
 /// [`TreeBlockCache::remove_lower_or_equal_than`]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TreeBlockCache {
     data: VecDeque<LocalBatchBlockData>,
     first_block: Option<u64>,
+    max_blocks: usize,
+}
+
+impl Default for TreeBlockCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TreeBlockCache {
     pub fn new() -> Self {
+        Self::with_max_blocks(DEFAULT_MAX_CACHED_TREE_BLOCKS)
+    }
+
+    pub fn with_max_blocks(max_blocks: usize) -> Self {
         Self {
             data: VecDeque::new(),
             first_block: None,
+            max_blocks,
         }
     }
 
@@ -46,6 +60,15 @@ impl TreeBlockCache {
         }
         self.data.push_back(block);
         Ok(())
+    }
+
+    /// Whether the cache is still below its soft bound.
+    ///
+    /// The bound is *soft*: the sole writer (the L1 consistency checker) is allowed to
+    /// overshoot it to finish caching the blocks an oversized pending batch needs. See
+    /// [`L1ConsistencyChecker::can_accept_tree_block`](crate::checker::L1ConsistencyChecker).
+    pub fn has_capacity(&self) -> bool {
+        self.data.len() < self.max_blocks
     }
 
     /// Currently cached block-number range (inclusive bounds), or `None` if empty.

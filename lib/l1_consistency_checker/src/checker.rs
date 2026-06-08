@@ -64,6 +64,23 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
 }
 
 impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
+    /// Our backpressure signal: whether to pull another tree block from the input.
+    ///
+    /// We normally stop accepting once the cache reaches its soft bound. The one exception
+    /// is a pending batch larger than that bound: we must keep caching its blocks, otherwise
+    /// it could never be verified and evicted and the pipeline would deadlock. Once its full
+    /// range is cached it is verified and evicted at the top of the loop, restoring backpressure.
+    fn can_accept_tree_block(&self, pending: Option<&L1CommittedBatch>) -> bool {
+        let cache = self.cache.borrow();
+        if cache.has_capacity() {
+            return true;
+        }
+        match (pending, cache.range()) {
+            (Some(commit), Some((_, last_cached))) => last_cached < commit.last_block_number(),
+            _ => false,
+        }
+    }
+
     /// Inserts a block into the shared cache
     fn insert_tree_block(&self, tree_block: TreeBlock) -> anyhow::Result<()> {
         let block_number = tree_block.record.block_context.block_number;
@@ -192,8 +209,9 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
             }
 
             state_reporter.enter_state(GenericComponentState::Idle);
+            let can_accept_tree_block = self.can_accept_tree_block(pending.as_ref());
             tokio::select! {
-                tree_block = input.recv() => {
+                tree_block = input.recv(), if can_accept_tree_block => {
                     let Some(tree_block) = tree_block else {
                         if pending.is_some() {
                             anyhow::bail!("tree block channel closed with pending L1 consistency check");
