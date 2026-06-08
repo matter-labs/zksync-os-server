@@ -3,19 +3,21 @@ use async_trait::async_trait;
 use std::ops::RangeInclusive;
 use tokio::sync::{mpsc, watch};
 use zksync_os_batch_types::ExtendedCommitBatchInfo;
+use zksync_os_contract_interface::models::{DACommitmentScheme, StoredBatchInfo};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, TreeBlock, read_multichain_root};
 use zksync_os_types::PubdataMode;
 
 pub struct L1CommittedBatch {
-    pub batch_info: ExtendedCommitBatchInfo,
+    pub stored_batch_info: StoredBatchInfo,
+    pub l2_da_commitment_scheme: DACommitmentScheme,
     pub range: RangeInclusive<u64>,
 }
 
 impl L1CommittedBatch {
     pub fn batch_number(&self) -> u64 {
-        self.batch_info.batch_number
+        self.stored_batch_info.batch_number
     }
 
     pub fn last_block_number(&self) -> u64 {
@@ -121,7 +123,7 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
                 .collect(),
             self.chain_id,
             commit.batch_number(),
-            PubdataMode::from_da_commitment_scheme(commit.batch_info.l2_da_commitment_scheme),
+            PubdataMode::from_da_commitment_scheme(commit.l2_da_commitment_scheme),
             self.sl_chain_id,
             last_block.multichain_root,
             &first_block.record.protocol_version,
@@ -129,8 +131,8 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         );
 
         let local_stored = local_batch_info.into_stored();
-        let l1_stored = commit.batch_info.clone().into_stored();
-        if local_stored != l1_stored {
+        let l1_stored = &commit.stored_batch_info;
+        if &local_stored != l1_stored {
             tracing::error!(
                 "L1 committed batch #{} is inconsistent with locally replayed blocks, expected: {:?}, received: {:?}",
                 commit.batch_number(),
@@ -178,15 +180,14 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
                 let batch_number = commit.batch_number();
                 self.cache
                     .send_modify(|cache| cache.remove_lower_or_equal_than(last_block_number));
-                self.latest_verified_batch_tx
-                    .send_if_modified(|latest| {
-                        if batch_number > *latest {
-                            *latest = batch_number;
-                            true
-                        } else {
-                            false
-                        }
-                    });
+                self.latest_verified_batch_tx.send_if_modified(|latest| {
+                    if batch_number > *latest {
+                        *latest = batch_number;
+                        true
+                    } else {
+                        false
+                    }
+                });
                 pending = None;
             }
 

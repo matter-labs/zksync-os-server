@@ -259,7 +259,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             // Send the L1 commit data to the EN consistency checker. Main nodes do not run it.
             if let Some(tx) = &self.consistency_checker_tx {
                 let l1_commit = L1CommittedBatch {
-                    batch_info,
+                    stored_batch_info: committed_batch.batch_info.clone(),
+                    l2_da_commitment_scheme: batch_info.l2_da_commitment_scheme,
                     range: committed_batch.block_range.clone(),
                 };
 
