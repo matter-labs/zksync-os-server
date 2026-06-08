@@ -47,6 +47,7 @@ serde.workspace = true
 regex = "1.11.1"
 smart-config.workspace = true
 serde_yaml.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 # Needed for upgrade functionality tests
 zk_os_api.workspace = true

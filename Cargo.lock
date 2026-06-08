@@ -16338,6 +16338,7 @@ dependencies = [
  "test-log",
  "tokio",
  "tracing",
+ "tracing-subscriber 0.3.22",
  "zksync_os_alloy_ext",
  "zksync_os_api",
  "zksync_os_contract_interface",

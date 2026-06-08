@@ -73,7 +73,7 @@ impl ProvingVersion {
 
     /// TODO: replace with the actual V8 VK hash for the zksync-os v0.4.0 native batch prover.
     const V8_VK_HASH: &'static str =
-        "0x0000000000000000000000000000000000000000000000000000000000000000";
+        "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337";
 
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
