@@ -112,12 +112,6 @@ impl TreeBlockCache {
 
 #[async_trait]
 pub trait TreeBlockCacheReceiverExt {
-    /// Returns a complete cached block range, or `None` if it is not fully available yet.
-    fn get_range(
-        &self,
-        range: RangeInclusive<u64>,
-    ) -> anyhow::Result<Option<Vec<LocalBatchBlockData>>>;
-
     /// Waits until a complete block range is available in the cache.
     async fn wait_for_range(
         &self,
@@ -127,13 +121,6 @@ pub trait TreeBlockCacheReceiverExt {
 
 #[async_trait]
 impl TreeBlockCacheReceiverExt for watch::Receiver<TreeBlockCache> {
-    fn get_range(
-        &self,
-        range: RangeInclusive<u64>,
-    ) -> anyhow::Result<Option<Vec<LocalBatchBlockData>>> {
-        self.borrow().get_range(range)
-    }
-
     async fn wait_for_range(
         &self,
         range: RangeInclusive<u64>,

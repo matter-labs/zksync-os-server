@@ -1,4 +1,4 @@
-use crate::cache::{LocalBatchBlockData, TreeBlockCache, TreeBlockCacheReceiverExt};
+use crate::cache::{LocalBatchBlockData, TreeBlockCache};
 use async_trait::async_trait;
 use std::{collections::VecDeque, ops::RangeInclusive};
 use tokio::sync::{mpsc, watch};
@@ -37,8 +37,7 @@ pub struct L1ConsistencyChecker<ReadState> {
     sl_chain_id: u64,
     last_persisted_block_on_start: u64,
     read_state: ReadState,
-    cache_writer: watch::Sender<TreeBlockCache>,
-    cache_reader: watch::Receiver<TreeBlockCache>,
+    cache: watch::Sender<TreeBlockCache>,
     latest_verified_batch_tx: watch::Sender<u64>,
     l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
     pending_requests: VecDeque<L1ConsistencyCheckRequest>,
@@ -50,18 +49,16 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
         sl_chain_id: u64,
         last_persisted_block_on_start: u64,
         read_state: ReadState,
-        cache_writer: watch::Sender<TreeBlockCache>,
+        cache: watch::Sender<TreeBlockCache>,
         latest_verified_batch_tx: watch::Sender<u64>,
         l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
     ) -> Self {
-        let cache_reader = cache_writer.subscribe();
         Self {
             chain_id,
             sl_chain_id,
             last_persisted_block_on_start,
             read_state,
-            cache_writer,
-            cache_reader,
+            cache,
             latest_verified_batch_tx,
             l1_events_rx,
             pending_requests: VecDeque::new(),
@@ -86,7 +83,7 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         };
 
         let mut result = Ok(());
-        self.cache_writer
+        self.cache
             .send_if_modified(|cache| match cache.insert(block_number, data) {
                 Ok(()) => true,
                 Err(err) => {
@@ -108,7 +105,7 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
                         batch_number,
                         pending.commit.range
                     );
-                    self.cache_writer.send_modify(|cache| {
+                    self.cache.send_modify(|cache| {
                         cache
                             .remove_lower_than(pending.commit.last_block_number().saturating_add(1))
                     });
@@ -145,7 +142,7 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
             return Ok(true);
         }
 
-        let Some(blocks) = self.cache_reader.get_range(commit.range.clone())? else {
+        let Some(blocks) = self.cache.borrow().get_range(commit.range.clone())? else {
             // blocks required for consistency check are not available from cache yet
             return Ok(false);
         };
