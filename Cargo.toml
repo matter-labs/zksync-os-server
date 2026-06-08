@@ -282,7 +282,7 @@ reth-provider = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5d
 reth-rpc-eth-types = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
 reth-tasks = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00" }
 
-zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", branch = "use-prague-for-atlasv3" }
+zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", branch = "cancun-7702-no-pectra" }
 revm = { version = "=38.0.0", features = ["optional_balance_check"] }
 
 # "Local" dependencies
