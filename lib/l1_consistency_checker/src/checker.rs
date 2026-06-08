@@ -1,6 +1,6 @@
 use crate::cache::{LocalBatchBlockData, TreeBlockCache};
 use async_trait::async_trait;
-use std::{collections::VecDeque, ops::RangeInclusive};
+use std::ops::RangeInclusive;
 use tokio::sync::{mpsc, watch};
 use zksync_os_batch_types::ExtendedCommitBatchInfo;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
@@ -39,8 +39,13 @@ pub struct L1ConsistencyChecker<ReadState> {
     read_state: ReadState,
     cache: watch::Sender<TreeBlockCache>,
     latest_verified_batch_tx: watch::Sender<u64>,
-    l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
-    pending_requests: VecDeque<L1ConsistencyCheckRequest>,
+    l1_events_rx: PeekableReceiver<L1ConsistencyCheckRequest>,
+}
+
+enum PendingRequestStatus {
+    NoRequest,
+    WaitingForCache,
+    Verified,
 }
 
 impl<ReadState> L1ConsistencyChecker<ReadState> {
@@ -60,8 +65,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
             read_state,
             cache,
             latest_verified_batch_tx,
-            l1_events_rx,
-            pending_requests: VecDeque::new(),
+            l1_events_rx: PeekableReceiver::new(l1_events_rx),
         }
     }
 }
@@ -94,34 +98,60 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         result
     }
 
-    /// Checks for pending requests and verifies earliest ones if possible
-    fn verify_pending_commits(&mut self) -> anyhow::Result<()> {
-        while let Some(pending) = self.pending_requests.pop_front() {
-            match self.verify_commit_if_available(&pending.commit) {
-                Ok(true) => {
-                    let batch_number = pending.commit.batch_number();
-                    tracing::info!(
-                        "verified L1 committed batch #{} against locally replayed blocks {:?}",
-                        batch_number,
-                        pending.commit.range
-                    );
-                    self.cache.send_modify(|cache| {
-                        cache
-                            .remove_lower_than(pending.commit.last_block_number().saturating_add(1))
-                    });
-                    self.mark_batch_verified(batch_number);
-                }
-                Ok(false) => {
-                    // blocks required for consistency check are not available from cache yet, waiting for the next iteration
-                    self.pending_requests.push_front(pending);
-                    break;
-                }
-                Err(err) => {
-                    return Err(err);
-                }
+    fn try_verify_pending_request(&mut self) -> anyhow::Result<PendingRequestStatus> {
+        let chain_id = self.chain_id;
+        let sl_chain_id = self.sl_chain_id;
+        let last_persisted_block_on_start = self.last_persisted_block_on_start;
+        let cache = self.cache.clone();
+
+        let Some(verified) = self
+            .l1_events_rx
+            .peek_with(|pending| -> anyhow::Result<bool> {
+                Self::verify_commit_if_available(
+                    chain_id,
+                    sl_chain_id,
+                    last_persisted_block_on_start,
+                    &cache,
+                    &pending.commit,
+                )
+            })
+        else {
+            return Ok(PendingRequestStatus::NoRequest);
+        };
+        if !verified? {
+            return Ok(PendingRequestStatus::WaitingForCache);
+        }
+
+        let request = self
+            .l1_events_rx
+            .pop_buffer()
+            .expect("verified L1 consistency check request should remain buffered");
+        let batch_number = request.commit.batch_number();
+        tracing::info!(
+            "verified L1 committed batch #{} against locally replayed blocks {:?}",
+            batch_number,
+            request.commit.range
+        );
+        self.cache.send_modify(|cache| {
+            cache.remove_lower_than(request.commit.last_block_number().saturating_add(1))
+        });
+        self.mark_batch_verified(batch_number);
+
+        Ok(PendingRequestStatus::Verified)
+    }
+
+    /// Verifies buffered L1 consistency requests until the head waits for cache data.
+    ///
+    /// Returns `true` if a buffered request is still waiting for more cached blocks.
+    fn verify_available_requests(&mut self) -> anyhow::Result<bool> {
+        while self.l1_events_rx.has_buffered() {
+            match self.try_verify_pending_request()? {
+                PendingRequestStatus::Verified => {}
+                PendingRequestStatus::WaitingForCache => return Ok(true),
+                PendingRequestStatus::NoRequest => return Ok(false),
             }
         }
-        Ok(())
+        Ok(false)
     }
 
     fn mark_batch_verified(&self, batch_number: u64) {
@@ -136,13 +166,19 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
     }
 
     /// Verifies whether data received from verification request is consistent with locally replayed data
-    fn verify_commit_if_available(&self, commit: &L1CommittedBatch) -> anyhow::Result<bool> {
+    fn verify_commit_if_available(
+        chain_id: u64,
+        sl_chain_id: u64,
+        last_persisted_block_on_start: u64,
+        cache: &watch::Sender<TreeBlockCache>,
+        commit: &L1CommittedBatch,
+    ) -> anyhow::Result<bool> {
         // In case we received request for batch that was already persisted, we trust that it was verified previously
-        if commit.last_block_number() <= self.last_persisted_block_on_start {
+        if commit.last_block_number() <= last_persisted_block_on_start {
             return Ok(true);
         }
 
-        let Some(blocks) = self.cache.borrow().get_range(commit.range.clone())? else {
+        let Some(blocks) = cache.borrow().get_range(commit.range.clone())? else {
             // blocks required for consistency check are not available from cache yet
             return Ok(false);
         };
@@ -165,10 +201,10 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
                     )
                 })
                 .collect(),
-            self.chain_id,
+            chain_id,
             commit.batch_number(),
             PubdataMode::from_da_commitment_scheme(commit.batch_info.l2_da_commitment_scheme),
-            self.sl_chain_id,
+            sl_chain_id,
             last_block.multichain_root,
             &first_block.record.protocol_version,
             &last_block.record.block_context.block_hashes.0,
@@ -208,17 +244,15 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         tracing::info!("starting L1 consistency checker");
-        let mut l1_events_closed = false;
         loop {
             state_reporter.enter_state(GenericComponentState::Idle);
+            let waiting_for_cache = self.verify_available_requests()?;
+
             tokio::select! {
                 tree_block = input.recv() => {
                     let Some(tree_block) = tree_block else {
-                        if !self.pending_requests.is_empty() {
-                            anyhow::bail!(
-                                "tree block channel closed with {} pending L1 consistency checks",
-                                self.pending_requests.len()
-                            );
+                        if waiting_for_cache {
+                            anyhow::bail!("tree block channel closed with pending L1 consistency check");
                         }
                         return Ok(());
                     };
@@ -228,23 +262,24 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
                     self.insert_tree_block(tree_block)?;
 
                     // if there is a pending request for verification, it might be waiting for the received block
-                    self.verify_pending_commits()?;
+                    self.verify_available_requests()?;
                     state_reporter.record_processed(block_number, Some(block_timestamp), None);
                 }
-                event = self.l1_events_rx.recv(), if !l1_events_closed => {
+                event = self.l1_events_rx.peek_recv(|request| {
+                    (request.commit.batch_number(), request.commit.range.clone())
+                }), if !waiting_for_cache => {
                     match event {
-                        Some(request) => {
+                        Some((batch_number, range)) => {
                             state_reporter.enter_state(GenericComponentState::Active);
                             tracing::debug!(
                                 "received L1 committed batch {} for consistency checking in range {:?}",
-                                request.commit.batch_number(),
-                                request.commit.range,
+                                batch_number,
+                                range,
                             );
-                            self.pending_requests.push_back(request);
-                            self.verify_pending_commits()?;
+                            self.verify_available_requests()?;
                         }
                         None => {
-                            l1_events_closed = true;
+                            return Ok(());
                         }
                     }
                 }
