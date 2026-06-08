@@ -129,8 +129,7 @@ impl TreeBlockCacheReceiverExt for watch::Receiver<TreeBlockCache> {
         loop {
             {
                 // if block range is available already - return it. If not - wait until the cache is updated and check again
-                let cache = cache_rx.borrow_and_update();
-                if let Some(blocks) = cache.get_range(range.clone())? {
+                if let Some(blocks) = cache_rx.borrow_and_update().get_range(range.clone())? {
                     return Ok(blocks);
                 }
             }

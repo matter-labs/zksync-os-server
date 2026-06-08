@@ -19,10 +19,7 @@ impl L1CommittedBatch {
     }
 
     pub fn last_block_number(&self) -> u64 {
-        self.range
-            .clone()
-            .last()
-            .expect("last block number of batch should exist in range")
+        *self.range.end()
     }
 }
 
