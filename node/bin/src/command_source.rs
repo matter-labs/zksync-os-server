@@ -1,12 +1,13 @@
 use async_trait::async_trait;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
+use zksync_os_backpressure::PipelineAdmissionReceiver;
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_raft::{ConsensusRole, LeadershipSignal};
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand, RebuildCommand};
-use zksync_os_storage_api::{ReadReplay, ReadReplayExt, ReplayRecord};
+use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 
 /// Command source for consensus-enabled main node.
 /// Replays local WAL starting from `starting_block` and then produces new blocks when leader.
@@ -21,11 +22,13 @@ pub struct ConsensusNodeCommandSource<Replay> {
     pub rebuild_options: Option<RebuildOptions>,
     /// Inbound channel of canonized blocks. Populated by `BlockCanonizer` with blocks that are canonized
     pub replays_to_execute: mpsc::UnboundedReceiver<ReplayRecord>,
+    /// Internal pipeline admission gate driven by backpressure monitoring.
+    pub pipeline_gate: PipelineAdmissionReceiver,
     /// Current leadership status from consensus.
     pub leadership: LeadershipSignal,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RebuildOptions {
     pub from_block: u64,
     pub blocks_to_empty: HashSet<u64>,
@@ -37,6 +40,7 @@ pub struct RebuildOptions {
 pub struct ExternalNodeCommandSource {
     pub up_to_block: Option<u64>,
     pub replays_for_sequencer: mpsc::Receiver<ReplayRecord>,
+    pub pipeline_gate: PipelineAdmissionReceiver,
 }
 
 #[async_trait]
@@ -84,17 +88,11 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
             replay_until
         );
 
-        self.block_replay_storage
-            .forward_range_with(
-                self.starting_block,
-                replay_until,
-                output.clone(),
-                |record| BlockCommand::Replay(Box::new(record)),
-            )
+        self.forward_wal_replays(self.starting_block, replay_until, &output)
             .await?;
 
-        if let Some(rebuild_options) = &self.rebuild_options {
-            self.send_block_rebuilds(rebuild_options, last_block_in_wal, &output)
+        if let Some(rebuild_options) = self.rebuild_options.clone() {
+            self.send_block_rebuilds(&rebuild_options, last_block_in_wal, &output)
                 .await?;
         }
 
@@ -110,6 +108,8 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
 }
 
 impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
+    const MAX_REPLAYS_TO_DRAIN_PER_LOOP: usize = 32;
+
     /// This method kicks in after all local canonized Replayed Records (WAL) are replayed.
     /// Produces `Produce` commands only when the node is the leader.
     async fn run_loop(
@@ -122,7 +122,29 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
         tracing::info!(?role, "Consensus role initialized");
 
         loop {
+            let gate_open = self.pipeline_gate.is_open();
+            // Drain any already-queued canonized replays while the gate is open.
+            for _ in 0..Self::MAX_REPLAYS_TO_DRAIN_PER_LOOP {
+                if !gate_open {
+                    break;
+                }
+                match self.replays_to_execute.try_recv() {
+                    Ok(record) => {
+                        Self::forward_replay(record, &output, &state_reporter).await?;
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => break,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        tracing::info!("inbound channel closed");
+                        return Ok(());
+                    }
+                }
+            }
+
+            let can_produce = role == ConsensusRole::Leader && gate_open;
+
             tokio::select! {
+                biased;
+
                 res = leadership.wait_for_change() => {
                     if res.is_err() {
                         anyhow::bail!("leader watch channel closed");
@@ -133,29 +155,15 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                         role = new_role;
                     }
                 }
-                maybe_record = self.replays_to_execute.recv() => {
+                maybe_record = self.replays_to_execute.recv(), if gate_open => {
                     let Some(record) = maybe_record else {
                         tracing::info!("inbound channel closed");
                         return Ok(());
                     };
-                    let block_number = record.block_context.block_number;
-                    let timestamp = record.block_context.timestamp;
-                    tracing::info!(
-                        block_number,
-                        role = ?role,
-                        "Received canonized block from consensus",
-                    );
-                    if output
-                        .send(BlockCommand::Replay(Box::new(record)))
-                        .await
-                        .is_err()
-                    {
-                        tracing::info!("Command output channel closed, stopping source");
-                        break;
-                    }
-                    state_reporter.record_processed(block_number, Some(timestamp), None);
+                    Self::forward_replay(record, &output, &state_reporter).await?;
                 }
-                send_res = output.send(BlockCommand::Produce(ProduceCommand)), if role == ConsensusRole::Leader => {
+                _ = self.pipeline_gate.wait_until_open(), if !gate_open => {}
+                send_res = output.send(BlockCommand::Produce(ProduceCommand)), if can_produce => {
                     if send_res.is_err() {
                         tracing::info!("Command output channel closed, stopping source");
                         break;
@@ -172,8 +180,47 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
         Ok(())
     }
 
+    async fn forward_wal_replays(
+        &mut self,
+        start: u64,
+        end: u64,
+        output: &mpsc::Sender<BlockCommand>,
+    ) -> anyhow::Result<()> {
+        for block_num in start..=end {
+            self.pipeline_gate.wait_until_open().await;
+            let record = self
+                .block_replay_storage
+                .get_replay_record(block_num)
+                .ok_or_else(|| anyhow::anyhow!("missing replay record for block {block_num}"))?;
+            output
+                .send(BlockCommand::Replay(Box::new(record)))
+                .await
+                .map_err(|_| anyhow::anyhow!("command output channel closed"))?;
+        }
+        Ok(())
+    }
+
+    async fn forward_replay(
+        record: ReplayRecord,
+        output: &mpsc::Sender<BlockCommand>,
+        state_reporter: &ComponentStateReporter,
+    ) -> anyhow::Result<()> {
+        let block_number = record.block_context.block_number;
+        let timestamp = record.block_context.timestamp;
+        tracing::info!(block_number, "Received canonized block from consensus");
+        if output
+            .send(BlockCommand::Replay(Box::new(record)))
+            .await
+            .is_err()
+        {
+            anyhow::bail!("command output channel closed");
+        }
+        state_reporter.record_processed(block_number, Some(timestamp), None);
+        Ok(())
+    }
+
     async fn send_block_rebuilds(
-        &self,
+        &mut self,
         rebuild_options: &RebuildOptions,
         last_block_in_wal: u64,
         output: &mpsc::Sender<BlockCommand>,
@@ -199,6 +246,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                 make_empty,
                 reset_timestamp: rebuild_options.reset_timestamps,
             }));
+            self.pipeline_gate.wait_until_open().await;
             if output.send(command).await.is_err() {
                 tracing::info!("Command output channel closed, stopping source");
                 break;
@@ -223,7 +271,11 @@ impl PipelineComponent for ExternalNodeCommandSource {
         output: mpsc::Sender<BlockCommand>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        while let Some(record) = self.replays_for_sequencer.recv().await {
+        loop {
+            self.pipeline_gate.wait_until_open().await;
+            let Some(record) = self.replays_for_sequencer.recv().await else {
+                break;
+            };
             let block_number = record.block_context.block_number;
             let timestamp = record.block_context.timestamp;
             let txs = record.transactions.len();
