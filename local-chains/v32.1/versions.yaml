@@ -1,0 +1,15 @@
+general:
+  protocol_version: "v32.1"
+  verification_key: "TBD"
+
+era-contracts:
+  # TODO: replace with release tag once available
+  sha: "2f024c5764e7a873ce1dda5fb990331559996441"
+
+zkstack-cli:
+  # Built from matter-labs/zksync-era
+  sha: "3d40d76d76e304ae394ea591e05415fac19fedc5"
+
+zksync-os-scripts:
+  # Generated locally with a temporary v32.1 compatibility patch on top of main
+  sha: "cea7cc3"

@@ -10,6 +10,9 @@ pub const PROTOCOL_VERSION_V30_2: &str = "v30.2";
 /// Protocol version v31.0
 pub const PROTOCOL_VERSION_V31_0: &str = "v31.0";
 
+/// Protocol version v32.1
+pub const PROTOCOL_VERSION_V32_1: &str = "v32.1";
+
 /// Current default protocol version for local chain configuration.
 pub const PROTOCOL_VERSION: &str = PROTOCOL_VERSION_V30_2;
 

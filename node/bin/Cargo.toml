@@ -40,6 +40,7 @@ zksync_os_pipeline.workspace = true
 zksync_os_sequencer.workspace = true
 zksync_os_status_server.workspace = true
 zksync_os_multivm.workspace = true
+zksync_os_native_pig.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_revm_consistency_checker.workspace = true
 zksync_os_gas_adjuster.workspace = true

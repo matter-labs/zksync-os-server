@@ -30,6 +30,7 @@ members = [
     "lib/state_full_diffs",
     "lib/status",
     "lib/multivm",
+    "lib/native_pig",
     "lib/pipeline",
     "lib/gas_adjuster",
     "lib/batch_verification",
@@ -102,15 +103,16 @@ roaring = "0.11.3"
 
 zksync_os_evm_errors = { version = "0.1.3" }
 zksync_os_interface = { version = "0.1.3" }
-
+# Temporary compatibility branches on the bot forks keep the old zksync-os / airbender lanes
+# building on nightly-2026-02-10 until upstream tags are patched.
 # Historical versions of zksync-os that are kept to be able to replay old blocks and simulate calls on them. Only
 # forward system dependencies are expected to be in this section.
 
-zk_os_forward_system_0_0_28 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.29-interface-v0.1.3", features = [
+zk_os_forward_system_0_0_28 = { package = "forward_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.0.29-interface-v0.1.3", features = [
     "evm-compatibility",
     "no_print",
 ] }
-zk_os_forward_system_0_1_2 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.2-interface-v0.1.3", features = [
+zk_os_forward_system_0_1_2 = { package = "forward_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.1.2-interface-v0.1.3", features = [
     "production",
     "no_print",
     # We had an issue in this version - it's compilable only with the testing feature.
@@ -119,7 +121,7 @@ zk_os_forward_system_0_1_2 = { package = "forward_system", git = "https://github
 ], default-features = false }
 # v0.2.x is not historical yet, but we use a separate version for simulation so that `eth_estimateGas` can work with
 # 0-balance accounts. The fix was not a part of v0.2.5 and unfortunately cannot be included without changing `app.bin`.
-zk_os_forward_system_0_2_8 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.10-simulation-only-interface-v0.1.3", features = [
+zk_os_forward_system_0_2_8 = { package = "forward_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.2.10-simulation-only-interface-v0.1.3", features = [
     "production",
     "no_print",
 ], default-features = false }
@@ -130,13 +132,13 @@ zk_os_forward_system_0_2_8 = { package = "forward_system", git = "https://github
 # After its support is dropped, forward system is moved in the historical section above under a new name.
 # (`zk_os_forward_system_<version>`), while `zk_ee` and `zk_os_basic_system` dependencies are dropped completely.
 
-zk_ee_prev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.10-interface-v0.1.3" }
-zk_os_basic_prev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.10-interface-v0.1.3" }
-zk_os_forward_system_prev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.10-interface-v0.1.3", features = [
+zk_ee_prev = { package = "zk_ee", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.2.10-interface-v0.1.3" }
+zk_os_basic_prev = { package = "basic_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.2.10-interface-v0.1.3" }
+zk_os_forward_system_prev = { package = "forward_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.2.10-interface-v0.1.3", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_os_basic_system_prev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.10-interface-v0.1.3" }
+zk_os_basic_system_prev = { package = "basic_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.2.10-interface-v0.1.3" }
 #execution_utils_prev = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "" }
 #full_statement_verifier_prev = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "" }
 
@@ -145,27 +147,26 @@ zk_os_basic_system_prev = { package = "basic_system", git = "https://github.com/
 #
 # When a new version is released this version gets downgraded to the "previous version" section above.
 
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3", features = [
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.3.1-interface-v0.1.3", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_ee = { git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3" }
-zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3" }
-zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3" }
-execution_utils = { git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
-full_statement_verifier = { git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
+zk_ee = { git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.3.1-interface-v0.1.3" }
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.3.1-interface-v0.1.3" }
+zk_os_api = { package = "zksync_os_api", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.3.1-interface-v0.1.3" }
+zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/compat-nightly-2026-02-10-v0.3.1-interface-v0.1.3" }
+execution_utils = { git = "https://github.com/antoniolocascio-bot/zksync-airbender.git", branch = "antonio/compat-nightly-2026-02-10-v0.5.2" }
+full_statement_verifier = { git = "https://github.com/antoniolocascio-bot/zksync-airbender.git", branch = "antonio/compat-nightly-2026-02-10-v0.5.2" }
 
-# Next version of zksync-os that is currently in development. Usually points to a tag with some intermediary state.
-#
-# Can be updated at any time and changing it does not count as a breaking change.
-
-#zk_os_forward_system_dev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0", features = [
-#    "production",
-#    "no_print",
-#], default-features = false }
-#zk_ee_dev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
-#zk_os_basic_system_dev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
+# zksync-os v0.4.0 lane for the new STF and native batch proving.
+# This stays separate from the current released version because it is wired as distinct
+# execution/proving versions (V7/V8) on the server side.
+zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/use-airbender-platform-2418efa", features = [
+    "production",
+    "no_print",
+], default-features = false }
+zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/use-airbender-platform-2418efa" }
+zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/use-airbender-platform-2418efa" }
 
 # Other dependencies.
 
@@ -313,6 +314,7 @@ zksync_os_types = { version = "=0.20.6", path = "lib/types" }
 zksync_os_genesis = { version = "=0.20.6", path = "lib/genesis" }
 zksync_os_status_server = { version = "=0.20.6", path = "lib/status" }
 zksync_os_multivm = { version = "=0.20.6", path = "lib/multivm" }
+zksync_os_native_pig = { version = "=0.20.6", path = "lib/native_pig" }
 zksync_os_pipeline = { version = "=0.20.6", path = "lib/pipeline" }
 zksync_os_backpressure = { version = "=0.20.6", path = "lib/backpressure" }
 zksync_os_revm_consistency_checker = { version = "=0.20.6", path = "lib/revm_consistency_checker" }

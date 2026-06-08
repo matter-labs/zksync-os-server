@@ -5,6 +5,8 @@ use zksync_os_batch_types::batcher_model::{
 };
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
+use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
+use zksync_os_native_pig::{NativeBatchRunOutput, generate_batch_run};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_multichain_root};
 use zksync_os_types::{BlockOutput, ProvingVersion, PubdataMode, SystemTxType, ZkEnvelope};
 
@@ -24,30 +26,72 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     pubdata_mode: PubdataMode,
     sl_chain_id: u64,
     read_state: &ReadState,
+    merkle_tree: &MerkleTree<RocksDBWrapper>,
 ) -> anyhow::Result<BatchForSigning<ProverInput>> {
     let block_number_from = blocks.first().unwrap().1.block_context.block_number;
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
     let last_block_hash = blocks.last().unwrap().0.header.hash();
     let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
     let (_, last_replay_record, _, _) = blocks.last().unwrap();
+    let proving_version = ProvingVersion::try_from(protocol_version.clone())?;
 
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
-    let (batch_info, blob_sidecar) = ExtendedCommitBatchInfo::build(
-        blocks
-            .iter()
-            .map(|(block_output, replay_record, tree, _)| {
-                (block_output, replay_record.transactions.as_slice(), tree)
-            })
-            .collect(),
-        chain_id,
-        batch_number,
-        pubdata_mode,
-        sl_chain_id,
-        multichain_root,
-        &protocol_version,
-        &last_replay_record.block_context.block_hashes.0,
-    );
+    let native_batch_run = match proving_version {
+        ProvingVersion::V8 => Some(generate_batch_run(
+            proving_version,
+            &blocks
+                .iter()
+                .map(|(_, replay_record, _, _)| replay_record.clone())
+                .collect::<Vec<_>>(),
+            read_state,
+            merkle_tree.clone(),
+            pubdata_mode,
+        )?),
+        _ => None,
+    };
+    if let Some(native_batch_run) = &native_batch_run {
+        tracing::info!(
+            batch_number,
+            block_number_from,
+            block_number_to,
+            block_count = blocks.len(),
+            ?protocol_version,
+            ?proving_version,
+            pubdata_mode = ?pubdata_mode,
+            node_sl_chain_id = sl_chain_id,
+            native_sl_chain_id = native_batch_run.sl_chain_id,
+            native_chain_id = native_batch_run.chain_id,
+            prover_input_words = native_batch_run.prover_input.len(),
+            canonical_pubdata_bytes = native_batch_run.pubdata.len(),
+            "Using native batch PIG for batch sealing",
+        );
+    }
+
+    let (batch_info, blob_sidecar) = if let Some(native_batch_run) = &native_batch_run {
+        ExtendedCommitBatchInfo::build_from_canonical_output(
+            batch_number,
+            pubdata_mode,
+            &protocol_version,
+            native_batch_run.canonical_commit_data(block_number_from, block_number_to),
+        )?
+    } else {
+        ExtendedCommitBatchInfo::build(
+            blocks
+                .iter()
+                .map(|(block_output, replay_record, tree, _)| {
+                    (block_output, replay_record.transactions.as_slice(), tree)
+                })
+                .collect(),
+            chain_id,
+            batch_number,
+            pubdata_mode,
+            sl_chain_id,
+            multichain_root,
+            &protocol_version,
+            &last_replay_record.block_context.block_hashes.0,
+        )
+    };
 
     let mut logs = Vec::new();
     let mut messages = Vec::new();
@@ -69,10 +113,9 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         }
     }
 
-    let proving_version =
-        ProvingVersion::try_from(blocks.first().unwrap().1.protocol_version.clone())?;
     // execution version should be the same for all the blocks, it is ensured by the seal criteria
-    let batch_prover_input = compute_batch_prover_input(blocks, proving_version, pubdata_mode)?;
+    let batch_prover_input =
+        compute_batch_prover_input(blocks, proving_version, pubdata_mode, native_batch_run)?;
 
     // Sanity check: all blocks in the batch should have the same protocol version
     for (_, replay_record, _, _) in blocks.iter().skip(1) {
@@ -136,6 +179,117 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     Ok(batch_envelope)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::compute_batch_prover_input;
+    use alloy::consensus::{Header, Sealed};
+    use alloy::primitives::{Address, B256, U256};
+    use semver::Version;
+    use zksync_os_batch_types::batcher_model::ProverInput;
+    use zksync_os_merkle_tree::TreeBatchOutput;
+    use zksync_os_native_pig::NativeBatchRunOutput;
+    use zksync_os_storage_api::{BlockContext, BlockHashes, ReplayRecord};
+    use zksync_os_types::{
+        BlockOutput, BlockPubdata, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion,
+        ProvingVersion, PubdataMode,
+    };
+
+    fn dummy_block_output() -> BlockOutput {
+        let header = Header {
+            number: 1,
+            timestamp: 11,
+            ..Default::default()
+        };
+        BlockOutput {
+            header: Sealed::new_unchecked(header, B256::ZERO),
+            tx_results: vec![],
+            storage_writes: vec![],
+            account_diffs: vec![],
+            published_preimages: vec![],
+            pubdata: BlockPubdata::Length(0),
+            computational_native_used: 0,
+        }
+    }
+
+    fn dummy_replay_record() -> ReplayRecord {
+        ReplayRecord::new(
+            BlockContext {
+                chain_id: 270,
+                block_number: 1,
+                block_hashes: BlockHashes::default(),
+                timestamp: 11,
+                eip1559_basefee: U256::ZERO,
+                pubdata_price: U256::ZERO,
+                native_price: U256::ZERO,
+                coinbase: Address::ZERO,
+                gas_limit: 0,
+                pubdata_limit: 0,
+                mix_hash: U256::ZERO,
+                execution_version: ExecutionVersion::V7 as u32,
+                blob_fee: U256::ZERO,
+            },
+            vec![],
+            10,
+            Version::new(0, 0, 0),
+            ProtocolSemanticVersion::new(0, 32, 1),
+            B256::ZERO,
+            vec![],
+            BlockStartCursors::default(),
+        )
+    }
+
+    fn dummy_tree_output() -> TreeBatchOutput {
+        TreeBatchOutput {
+            root_hash: B256::ZERO,
+            leaf_count: 2,
+        }
+    }
+
+    #[test]
+    fn v8_batch_prover_input_comes_from_native_batch_run() {
+        let prover_input = compute_batch_prover_input(
+            &[],
+            ProvingVersion::V8,
+            PubdataMode::Calldata,
+            Some(NativeBatchRunOutput {
+                prover_input: vec![7, 8, 9],
+                pubdata: vec![],
+                new_state_commitment: B256::ZERO,
+                da_commitment: B256::ZERO,
+                number_of_layer1_txs: 0,
+                number_of_layer2_txs: 0,
+                priority_operations_hash: B256::ZERO,
+                dependency_roots_rolling_hash: B256::ZERO,
+                l2_to_l1_logs_root_hash: B256::ZERO,
+                first_block_timestamp: 0,
+                last_block_timestamp: 0,
+                chain_id: 0,
+                sl_chain_id: 0,
+                upgrade_tx_hash: None,
+            }),
+        )
+        .unwrap();
+
+        assert!(matches!(prover_input, ProverInput::Real(ref words) if words == &[7, 8, 9]));
+    }
+
+    #[test]
+    fn pre_v8_batch_with_fake_block_input_stays_fake() {
+        let block = (
+            dummy_block_output(),
+            dummy_replay_record(),
+            dummy_tree_output(),
+            ProverInput::Fake,
+        );
+
+        let prover_input =
+            compute_batch_prover_input(&[block], ProvingVersion::V7, PubdataMode::Calldata, None)
+                .unwrap();
+
+        assert!(matches!(prover_input, ProverInput::Fake));
+    }
+}
+
 fn compute_batch_prover_input(
     blocks: &[(
         BlockOutput,
@@ -145,13 +299,15 @@ fn compute_batch_prover_input(
     )],
     proving_version: ProvingVersion,
     pubdata_mode: PubdataMode,
+    native_batch_run: Option<NativeBatchRunOutput>,
 ) -> anyhow::Result<ProverInput> {
     use zk_os_forward_system::run::generate_batch_proof_input;
     use zk_os_forward_system_prev::run::generate_batch_proof_input as generate_batch_proof_input_prev;
 
-    if blocks
-        .iter()
-        .any(|(_, _, _, pi)| matches!(pi, ProverInput::Fake))
+    if proving_version != ProvingVersion::V8
+        && blocks
+            .iter()
+            .any(|(_, _, _, prover_input)| matches!(prover_input, ProverInput::Fake))
     {
         return Ok(ProverInput::Fake);
     }
@@ -176,7 +332,7 @@ fn compute_batch_prover_input(
                     .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
                 blocks
                     .iter()
-                    .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
+                    .map(|(block_output, _, _, _)| block_output.expect_pubdata_bytes())
                     .collect(),
             ))
         }
@@ -192,9 +348,14 @@ fn compute_batch_prover_input(
                     .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
                 blocks
                     .iter()
-                    .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
+                    .map(|(block_output, _, _, _)| block_output.expect_pubdata_bytes())
                     .collect(),
             ))
         }
+        ProvingVersion::V8 => ProverInput::Real(
+            native_batch_run
+                .expect("V8 prover input must be computed via native batch run")
+                .prover_input,
+        ),
     })
 }

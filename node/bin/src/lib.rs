@@ -1389,7 +1389,7 @@ async fn run_main_node_pipeline(
                 .maximum_in_flight_blocks,
             read_state: state.clone(),
             pubdata_mode,
-            merkle_tree: tree,
+            merkle_tree: tree.clone(),
             runtime: runtime.clone(),
             disabled: !config.prover_input_generator_config.enable_input_generation,
         })
@@ -1408,6 +1408,7 @@ async fn run_main_node_pipeline(
             sidecar_sender,
             committed_batch_provider: committed_batch_provider.clone(),
             read_state: state.clone(),
+            merkle_tree: tree,
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.clone().into(),
@@ -1556,6 +1557,7 @@ async fn run_en_pipeline(
                 finality.clone(),
                 node_state_on_startup.l1_state.clone(),
                 state.clone(),
+                tree.clone(),
                 verify_batch_rx,
                 outgoing_verify_results,
             ),

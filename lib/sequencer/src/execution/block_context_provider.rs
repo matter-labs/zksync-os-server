@@ -149,7 +149,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 // Check if we peeked an upgrade transaction info.
                 // It is possible that we peek an upgrade with version <= self.protocol_version
                 // since we do not consume patch upgrades when replaying/rebuilding blocks. Such upgrade can be safely skipped.
-                let force_preimages = if let Some(upgrade_metadata) = best_txs.upgrade_metadata
+                let includes_protocol_upgrade = if let Some(upgrade_metadata) =
+                    best_txs.upgrade_metadata.as_ref()
                     && upgrade_metadata.protocol_version > self.protocol_version
                 {
                     tracing::info!(
@@ -168,7 +169,17 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                         current_timestamp
                     );
                     self.protocol_version = upgrade_metadata.protocol_version.clone();
-                    upgrade_metadata.force_preimages.clone()
+                    true
+                } else {
+                    false
+                };
+                let force_preimages = if includes_protocol_upgrade {
+                    best_txs
+                        .upgrade_metadata
+                        .as_ref()
+                        .expect("upgrade metadata must exist when upgrade is included")
+                        .force_preimages
+                        .clone()
                 } else {
                     Vec::new()
                 };
@@ -177,26 +188,30 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     .try_into()
                     .context("Cannot instantiate a block for unsupported execution version")?;
 
-                // Append a SetSLChainId system transaction exactly once: when the protocol
-                // version is v31 (either via upgrade from v30, or on the first block of a
-                // fresh v31 chain). After it fires once, `sl_chain_id_set` prevents it from
-                // ever triggering again.
-                let (tx_source, expect_sl_chain_id_tx_after_upgrade) = if !self.sl_chain_id_set
-                    && self.protocol_version.minor == 31
-                {
-                    self.sl_chain_id_set = true;
-                    let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
-                        self.sl_chain_id_at_startup,
-                        // We use `u64::MAX` as a placeholder, since it is not an actual migration
-                        u64::MAX,
-                    );
-                    let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
-                        futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
-                    ));
-                    (tx_source, true)
-                } else {
-                    (best_txs.stream, false)
-                };
+                // Post-v31 protocols need the settlement-layer chain id to be explicitly
+                // re-established in the block whenever a protocol upgrade runs, since the
+                // upgrade may replace the system context implementation that exposes it to the
+                // batch commitment path. We also keep the old "exactly once on fresh startup"
+                // behavior for chains that begin directly on a post-v31 protocol.
+                let should_append_sl_chain_id_tx = self.protocol_version.is_post_v31()
+                    && (includes_protocol_upgrade || !self.sl_chain_id_set);
+                let (tx_source, expect_sl_chain_id_tx_after_upgrade) =
+                    if should_append_sl_chain_id_tx {
+                        self.sl_chain_id_set = true;
+                        let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
+                            self.sl_chain_id_at_startup,
+                            // We use `u64::MAX` as a placeholder, since it is not an actual migration
+                            u64::MAX,
+                        );
+                        let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
+                            futures::stream::once(
+                                async move { ZkTransaction::from(sl_chain_id_tx) },
+                            ),
+                        ));
+                        (tx_source, includes_protocol_upgrade)
+                    } else {
+                        (best_txs.stream, false)
+                    };
 
                 let FeeParams {
                     eip1559_basefee,
@@ -481,9 +496,14 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
 
         // We update protocol version here, so that we take into account replay records with protocol version bumps.
         self.protocol_version = replay_record.protocol_version.clone();
-        // If a replayed block is at v31, the SetSLChainId tx was already included — mark it as done
-        // to prevent the produce path from inserting a duplicate.
-        if self.protocol_version.minor == 31 {
+        // Replay records that already contain the placeholder SetSLChainId system transaction
+        // should suppress duplicate insertion on the next produced block.
+        if replay_record.transactions.iter().any(|tx| {
+            matches!(
+                tx.as_system_tx_type(),
+                Some(SystemTxType::SetSLChainId(_, u64::MAX))
+            )
+        }) {
             self.sl_chain_id_set = true;
         }
 
