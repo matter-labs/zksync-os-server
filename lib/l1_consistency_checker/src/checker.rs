@@ -89,17 +89,6 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         result
     }
 
-    fn mark_batch_verified(&self, batch_number: u64) {
-        self.latest_verified_batch_tx.send_if_modified(|latest| {
-            if batch_number > *latest {
-                *latest = batch_number;
-                true
-            } else {
-                false
-            }
-        });
-    }
-
     /// Verifies whether data received from verification request is consistent with locally replayed data
     fn verify_commit_if_available(&self, commit: &L1CommittedBatch) -> anyhow::Result<bool> {
         // In case we received request for batch that was already persisted, we trust that it was verified previously
@@ -189,7 +178,15 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
                 let batch_number = commit.batch_number();
                 self.cache
                     .send_modify(|cache| cache.remove_lower_or_equal_than(last_block_number));
-                self.mark_batch_verified(batch_number);
+                self.latest_verified_batch_tx
+                    .send_if_modified(|latest| {
+                        if batch_number > *latest {
+                            *latest = batch_number;
+                            true
+                        } else {
+                            false
+                        }
+                    });
                 pending = None;
             }
 
