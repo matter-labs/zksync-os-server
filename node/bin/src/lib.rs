@@ -68,9 +68,7 @@ use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
-use zksync_os_l1_consistency_checker::{
-    L1ConsistencyCheckRequest, L1ConsistencyChecker, TreeBlockCache,
-};
+use zksync_os_l1_consistency_checker::{L1CommittedBatch, L1ConsistencyChecker, TreeBlockCache};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -430,8 +428,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     });
     let persistent_batch_storage =
         ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
-    let last_persisted_block_on_start =
-        read_last_persisted_block_on_start(&persistent_batch_storage);
+    let last_persisted_block_on_start = persistent_batch_storage.last_persisted_block_number();
 
     // `starting_block` - the block number to go through the pipeline.
     let mut starting_block = if node_startup_state.l1_state.last_committed_batch > 0 {
@@ -980,7 +977,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
     let (local_batch_data_cache, _) = watch::channel(TreeBlockCache::new());
     let (l1_consistency_event_tx, l1_consistency_event_rx) =
-        tokio::sync::mpsc::channel::<L1ConsistencyCheckRequest>(4096);
+        tokio::sync::mpsc::channel::<L1CommittedBatch>(4096);
     let (latest_verified_batch_tx, latest_verified_batch_rx) =
         tokio::sync::watch::channel(persistent_batch_storage.latest_batch());
     let l1_consistency_event_tx = (!node_role.is_main()).then_some(l1_consistency_event_tx);
@@ -1532,7 +1529,7 @@ async fn run_en_pipeline(
     last_persisted_block_on_start: u64,
     local_batch_data_cache: watch::Sender<TreeBlockCache>,
     latest_verified_batch_tx: watch::Sender<u64>,
-    l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1ConsistencyCheckRequest>,
+    l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1CommittedBatch>,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
 ) -> watch::Receiver<TransactionAcceptanceState> {
@@ -1665,15 +1662,6 @@ fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashe
         .expect("Missing genesis block in repositories");
     block_hashes.0[255] = U256::from_be_slice(genesis_block.hash().as_slice());
     block_hashes
-}
-
-fn read_last_persisted_block_on_start(batch_storage: &impl ReadBatch) -> u64 {
-    let latest_batch = batch_storage.latest_batch();
-    batch_storage
-        .get_batch_by_number(latest_batch)
-        .expect("failed to read latest persisted batch")
-        .map(|batch| batch.last_block_number())
-        .unwrap_or(0)
 }
 
 fn init_and_report_internal_config_manager(

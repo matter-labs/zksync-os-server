@@ -20,8 +20,8 @@ pub struct LocalBatchBlockData {
 
 /// Ordered cache of per-block data keyed by block number.
 ///
-/// Blocks must be inserted in strictly ascending order. Eviction is the
-/// caller's responsibility; they decide when to call
+/// Blocks must be inserted consecutively (each block number exactly one greater than the last).
+/// Eviction is the caller's responsibility; they decide when to call
 /// [`TreeBlockCache::remove_lower_or_equal_than`]
 #[derive(Debug)]
 pub struct TreeBlockCache {
@@ -49,7 +49,8 @@ impl TreeBlockCache {
         }
     }
 
-    /// Insert a block into the cache. Blocks must arrive in strictly ascending order.
+    /// Insert a block into the cache. Blocks must arrive consecutively (each block number exactly
+    /// one greater than the last).
     pub fn insert(&mut self, block_number: u64, block: LocalBatchBlockData) -> anyhow::Result<()> {
         if let Some((_, last_block)) = self.range() {
             if block_number != last_block + 1 {

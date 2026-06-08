@@ -25,11 +25,6 @@ impl L1CommittedBatch {
     }
 }
 
-/// Request to verify that L1 committed batch data matches locally executed blocks.
-pub struct L1ConsistencyCheckRequest {
-    pub commit: L1CommittedBatch,
-}
-
 /// Terminal EN pipeline component that owns local batch data caching and L1 consistency checks.
 pub struct L1ConsistencyChecker<ReadState> {
     chain_id: u64,
@@ -38,7 +33,8 @@ pub struct L1ConsistencyChecker<ReadState> {
     read_state: ReadState,
     cache: watch::Sender<TreeBlockCache>,
     latest_verified_batch_tx: watch::Sender<u64>,
-    l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
+    /// Receives L1-committed batches to verify against locally replayed blocks.
+    l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
 }
 
 impl<ReadState> L1ConsistencyChecker<ReadState> {
@@ -49,7 +45,7 @@ impl<ReadState> L1ConsistencyChecker<ReadState> {
         read_state: ReadState,
         cache: watch::Sender<TreeBlockCache>,
         latest_verified_batch_tx: watch::Sender<u64>,
-        l1_events_rx: mpsc::Receiver<L1ConsistencyCheckRequest>,
+        l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
     ) -> Self {
         Self {
             chain_id,
@@ -120,9 +116,9 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
             return Ok(false);
         };
 
-        let first_block = blocks
-            .first()
-            .expect("L1 committed batch block range cannot be empty");
+        // The protocol version is uniform within a batch (a batch is sealed whenever it changes),
+        // so the last block carries everything we need: its protocol version, multichain root, and
+        // the trailing block hashes.
         let last_block = blocks
             .last()
             .expect("L1 committed batch block range cannot be empty");
@@ -143,7 +139,7 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
             PubdataMode::from_da_commitment_scheme(commit.l2_da_commitment_scheme),
             self.sl_chain_id,
             last_block.multichain_root,
-            &first_block.record.protocol_version,
+            &last_block.record.protocol_version,
             &last_block.record.block_context.block_hashes.0,
         );
 
@@ -224,17 +220,17 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
                     self.insert_tree_block(tree_block)?;
                     state_reporter.record_processed(block_number, Some(block_timestamp), None);
                 }
-                request = self.l1_events_rx.recv(), if pending.is_none() => {
-                    let Some(request) = request else {
+                commit = self.l1_events_rx.recv(), if pending.is_none() => {
+                    let Some(commit) = commit else {
                         return Ok(());
                     };
                     state_reporter.enter_state(GenericComponentState::Active);
                     tracing::debug!(
                         "received L1 committed batch {} for consistency checking in range {:?}",
-                        request.commit.batch_number(),
-                        request.commit.range,
+                        commit.batch_number(),
+                        commit.range,
                     );
-                    pending = Some(request.commit);
+                    pending = Some(commit);
                 }
             }
         }

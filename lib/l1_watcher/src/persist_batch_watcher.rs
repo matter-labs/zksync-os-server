@@ -12,7 +12,7 @@ use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
-use zksync_os_l1_consistency_checker::{L1CommittedBatch, L1ConsistencyCheckRequest};
+use zksync_os_l1_consistency_checker::L1CommittedBatch;
 use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
@@ -31,15 +31,11 @@ use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 ///   proof-related requests;
 pub struct L1PersistBatchWatcher<BatchStorage> {
     batch_storage: BatchStorage,
-    consistency_checker_tx: Option<mpsc::Sender<L1ConsistencyCheckRequest>>,
+    consistency_checker_tx: Option<mpsc::Sender<L1CommittedBatch>>,
     latest_verified_batch_rx: Option<watch::Receiver<u64>>,
-    committed_batches: HashMap<u64, PendingCommittedBatch>,
+    committed_batches: HashMap<u64, DiscoveredCommittedBatch>,
     last_processed_commit_batch: u64,
     last_persisted_batch_on_start: u64,
-}
-
-struct PendingCommittedBatch {
-    committed_batch: DiscoveredCommittedBatch,
 }
 
 impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
@@ -60,7 +56,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         gateway_block_updates: Option<watch::Receiver<BlockUpdates>>,
         l1_logs_cache: LogsCache,
         gateway_logs_cache: Option<LogsCache>,
-        consistency_checker_tx: Option<mpsc::Sender<L1ConsistencyCheckRequest>>,
+        consistency_checker_tx: Option<mpsc::Sender<L1CommittedBatch>>,
         latest_verified_batch_rx: Option<watch::Receiver<u64>>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
@@ -264,17 +260,14 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                     range: committed_batch.block_range.clone(),
                 };
 
-                tx.send(L1ConsistencyCheckRequest { commit: l1_commit })
-                    .await
-                    .map_err(|_| {
-                        L1WatcherError::Other(anyhow::anyhow!(
-                            "L1 consistency checker event channel closed"
-                        ))
-                    })?;
+                tx.send(l1_commit).await.map_err(|_| {
+                    L1WatcherError::Other(anyhow::anyhow!(
+                        "L1 consistency checker event channel closed"
+                    ))
+                })?;
             }
 
-            self.committed_batches
-                .insert(batch_number, PendingCommittedBatch { committed_batch });
+            self.committed_batches.insert(batch_number, committed_batch);
             self.last_processed_commit_batch = batch_number;
         }
         Ok(())
@@ -331,7 +324,7 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                 let batch_number = execute.batchNumber.to::<u64>();
                 if batch_number > self.last_persisted_batch_on_start {
                     let batch_hash = execute.batchHash;
-                    if let Some(batch) = self.committed_batches.remove(&batch_number) {
+                    if let Some(committed_batch) = self.committed_batches.remove(&batch_number) {
                         tracing::debug!(
                             batch_number,
                             ?batch_hash,
@@ -341,21 +334,21 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                         // we don't want to persist a batch that wasn't verified for consistency against L1
                         self.wait_until_batch_verified(batch_number).await?;
 
-                        if execute.commitment != batch.committed_batch.batch_info.commitment {
+                        if execute.commitment != committed_batch.batch_info.commitment {
                             return Err(L1WatcherError::Other(anyhow!(
                                 "Commitment is not matching for batch #{}, commit: {:?}, execute: {:?}",
                                 batch_number,
-                                batch.committed_batch.batch_info.commitment,
+                                committed_batch.batch_info.commitment,
                                 execute.commitment
                             )));
                         }
 
                         // batchHash from execute event is effectively a state commitment
-                        if execute.batchHash != batch.committed_batch.batch_info.state_commitment {
+                        if execute.batchHash != committed_batch.batch_info.state_commitment {
                             return Err(L1WatcherError::Other(anyhow!(
                                 "State commitment is not matching for batch #{}, commit: {:?}, execute: {:?}",
                                 batch_number,
-                                batch.committed_batch.batch_info.state_commitment,
+                                committed_batch.batch_info.state_commitment,
                                 execute.batchHash
                             )));
                         }
@@ -365,7 +358,7 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                             batch_number
                         );
                         self.batch_storage.write(PersistedBatch {
-                            committed_batch: batch.committed_batch,
+                            committed_batch,
                             execute_sl_block_number: Some(
                                 log.block_number.expect("Missing block number in log"),
                             ),
