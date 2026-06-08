@@ -19,7 +19,8 @@ pub struct LocalBatchBlockData {
 /// Ordered cache of per-block data keyed by block number.
 ///
 /// Blocks must be inserted in strictly ascending order. Eviction is the
-/// caller's responsibility; they decide when to call [`TreeBlockCache::remove_lower_than`]
+/// caller's responsibility; they decide when to call
+/// [`TreeBlockCache::remove_lower_or_equal_than`]
 #[derive(Debug, Default)]
 pub struct TreeBlockCache {
     data: VecDeque<LocalBatchBlockData>,
@@ -57,22 +58,21 @@ impl TreeBlockCache {
         }
     }
 
-    /// Removes all blocks lower than the given block number.
-    pub fn remove_lower_than(&mut self, block_number: u64) {
+    /// Removes all blocks lower than or equal to the given block number.
+    pub fn remove_lower_or_equal_than(&mut self, block_number: u64) {
         if let Some((first_block, last_block)) = self.range() {
-            if block_number <= first_block {
+            if block_number < first_block {
                 return;
             }
 
-            // Basically range is first_block..=min(requested_block_number - 1, last block)
-            let amount_to_remove = ((block_number - 1).min(last_block) - first_block + 1) as usize;
+            let amount_to_remove = (block_number.min(last_block) - first_block + 1) as usize;
             self.data.drain(0..amount_to_remove);
 
             // Keep `first_block` aligned with the deque; an empty cache has no valid range.
             if self.data.is_empty() {
                 self.first_block = None;
-            } else if first_block <= block_number {
-                self.first_block = Some(block_number);
+            } else {
+                self.first_block = Some(first_block + amount_to_remove as u64);
             }
         }
     }

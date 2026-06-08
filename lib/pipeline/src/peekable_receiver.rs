@@ -80,21 +80,22 @@ impl<T> PeekableReceiver<T> {
         self.buf.pop_front()
     }
 
-    /// Returns whether a prior peek has buffered an item locally.
-    pub fn has_buffered(&self) -> bool {
-        !self.buf.is_empty()
-    }
-
     /// Non-consuming peek: loads one item into local buffer via `try_recv`.
     /// Returns `None` if the channel is currently empty.
-    pub fn peek_with<R, F: FnOnce(&T) -> R>(&mut self, f: F) -> Option<R> {
+    pub fn peek(&mut self) -> Option<&T> {
         if self.buf.is_empty() {
             match self.inner.try_recv() {
                 Ok(v) => self.buf.push_back(v),
                 Err(_) => return None,
             }
         }
-        self.buf.front().map(f)
+        self.buf.front()
+    }
+
+    /// Non-consuming peek: loads one item into local buffer via `try_recv`.
+    /// Returns `None` if the channel is currently empty.
+    pub fn peek_with<R, F: FnOnce(&T) -> R>(&mut self, f: F) -> Option<R> {
+        self.peek().map(f)
     }
 
     /// Blocking peek: waits for an item and stores it in the local buffer without consuming it.

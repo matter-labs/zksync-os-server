@@ -42,12 +42,6 @@ pub struct L1ConsistencyChecker<ReadState> {
     l1_events_rx: PeekableReceiver<L1ConsistencyCheckRequest>,
 }
 
-enum PendingRequestStatus {
-    NoRequest,
-    WaitingForCache,
-    Verified,
-}
-
 impl<ReadState> L1ConsistencyChecker<ReadState> {
     pub fn new(
         chain_id: u64,
@@ -98,60 +92,59 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         result
     }
 
-    fn try_verify_pending_request(&mut self) -> anyhow::Result<PendingRequestStatus> {
+    /// Tries to verify the next L1 consistency request without blocking.
+    ///
+    /// Returns `None` if no request is currently available, `Some(false)` if the
+    /// request is waiting for more cached blocks, and `Some(true)` if it was
+    /// verified and consumed.
+    fn try_verify_pending_request(&mut self) -> anyhow::Result<Option<bool>> {
         let chain_id = self.chain_id;
         let sl_chain_id = self.sl_chain_id;
         let last_persisted_block_on_start = self.last_persisted_block_on_start;
         let cache = self.cache.clone();
 
-        let Some(verified) = self
-            .l1_events_rx
-            .peek_with(|pending| -> anyhow::Result<bool> {
-                Self::verify_commit_if_available(
-                    chain_id,
-                    sl_chain_id,
-                    last_persisted_block_on_start,
-                    &cache,
-                    &pending.commit,
-                )
-            })
-        else {
-            return Ok(PendingRequestStatus::NoRequest);
+        let Some(pending) = self.l1_events_rx.peek() else {
+            return Ok(None);
         };
-        if !verified? {
-            return Ok(PendingRequestStatus::WaitingForCache);
+        if !Self::verify_commit_if_available(
+            chain_id,
+            sl_chain_id,
+            last_persisted_block_on_start,
+            &cache,
+            &pending.commit,
+        )? {
+            return Ok(Some(false));
         }
 
-        let request = self
-            .l1_events_rx
+        let batch_number = pending.commit.batch_number();
+        let range = pending.commit.range.clone();
+        let last_block_number = pending.commit.last_block_number();
+        self.l1_events_rx
             .pop_buffer()
             .expect("verified L1 consistency check request should remain buffered");
-        let batch_number = request.commit.batch_number();
         tracing::info!(
             "verified L1 committed batch #{} against locally replayed blocks {:?}",
             batch_number,
-            request.commit.range
+            range
         );
-        self.cache.send_modify(|cache| {
-            cache.remove_lower_than(request.commit.last_block_number().saturating_add(1))
-        });
+        self.cache
+            .send_modify(|cache| cache.remove_lower_or_equal_than(last_block_number));
         self.mark_batch_verified(batch_number);
 
-        Ok(PendingRequestStatus::Verified)
+        Ok(Some(true))
     }
 
-    /// Verifies buffered L1 consistency requests until the head waits for cache data.
+    /// Verifies L1 consistency requests until none are available or the head waits for cache data.
     ///
-    /// Returns `true` if a buffered request is still waiting for more cached blocks.
+    /// Returns `true` if a request is still waiting for more cached blocks.
     fn verify_available_requests(&mut self) -> anyhow::Result<bool> {
-        while self.l1_events_rx.has_buffered() {
+        loop {
             match self.try_verify_pending_request()? {
-                PendingRequestStatus::Verified => {}
-                PendingRequestStatus::WaitingForCache => return Ok(true),
-                PendingRequestStatus::NoRequest => return Ok(false),
-            }
+                Some(true) => {}
+                Some(false) => return Ok(true),
+                None => return Ok(false),
+            };
         }
-        Ok(false)
     }
 
     fn mark_batch_verified(&self, batch_number: u64) {
@@ -260,9 +253,6 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
                     let block_number = tree_block.record.block_context.block_number;
                     let block_timestamp = tree_block.record.block_context.timestamp;
                     self.insert_tree_block(tree_block)?;
-
-                    // if there is a pending request for verification, it might be waiting for the received block
-                    self.verify_available_requests()?;
                     state_reporter.record_processed(block_number, Some(block_timestamp), None);
                 }
                 event = self.l1_events_rx.peek_recv(|request| {
@@ -276,7 +266,6 @@ impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<Rea
                                 batch_number,
                                 range,
                             );
-                            self.verify_available_requests()?;
                         }
                         None => {
                             return Ok(());
