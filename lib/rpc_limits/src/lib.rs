@@ -1,36 +1,7 @@
 //! Rate-limit policy and enforcement for the JSON-RPC server.
 
 mod limiter;
+mod policy;
 
 pub use limiter::Limiter;
-
-use std::collections::HashMap;
-use std::num::NonZeroU32;
-
-/// Returns the global and per-method RPS limits. Different impls build them from different sources — a config list, tier numbers, etc.
-pub trait Policy: Send + Sync {
-    fn global(&self) -> Option<NonZeroU32>;
-    fn method(&self, method: &str) -> Option<NonZeroU32>;
-}
-
-/// Simplest [`Policy`]: each method's limit is supplied manually.
-pub struct PerMethod {
-    global: Option<NonZeroU32>,
-    per_method: HashMap<String, NonZeroU32>,
-}
-
-impl PerMethod {
-    pub fn new(global: Option<NonZeroU32>, per_method: HashMap<String, NonZeroU32>) -> Self {
-        Self { global, per_method }
-    }
-}
-
-impl Policy for PerMethod {
-    fn global(&self) -> Option<NonZeroU32> {
-        self.global
-    }
-
-    fn method(&self, method: &str) -> Option<NonZeroU32> {
-        self.per_method.get(method).copied()
-    }
-}
+pub use policy::{PerMethod, Policy};
