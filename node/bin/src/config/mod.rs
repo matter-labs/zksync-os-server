@@ -1210,6 +1210,11 @@ pub struct L1WatcherConfig {
     /// Note: Finalization advances at epoch boundaries. Which is every ~6.4 minutes on L1.
     #[config(default_t = 1 * TimeUnit::Minutes)]
     pub finalized_poll_interval: Duration,
+
+    /// Number of recent blocks retained in the shared logs cache.
+    /// The value should be based on the depth at which blocks are finalized. Which could be >60 on L1.
+    #[config(default_t = 128)]
+    pub logs_cache_capacity: usize,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -2041,6 +2046,7 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
             confirmations: c.confirmations,
             poll_interval: c.poll_interval,
             finalized_poll_interval: c.finalized_poll_interval,
+            logs_cache_capacity: c.logs_cache_capacity,
         }
     }
 }

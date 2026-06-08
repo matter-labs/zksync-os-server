@@ -1,5 +1,5 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{BlockUpdates, L1WatcherConfig, ProcessL1Event, util};
+use crate::{BlockUpdates, L1WatcherConfig, LogsCache, ProcessL1Event, util};
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
 use alloy::providers::Provider;
@@ -33,6 +33,7 @@ impl L1TxWatcher {
         l1_subpool: L1Subpool,
         next_l1_priority_id: u64,
         block_updates: watch::Receiver<BlockUpdates>,
+        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             config.max_blocks_to_process,
@@ -56,6 +57,7 @@ impl L1TxWatcher {
         L1Watcher::new(
             config,
             zk_chain_l1.provider().clone(),
+            logs_cache,
             block_updates,
             (*zk_chain_l1.address()).into(),
             next_l1_block,

@@ -1,5 +1,5 @@
 use crate::metrics::METRICS;
-use crate::{BlockBoundary, BlockUpdates, L1WatcherConfig, ProcessRawEvents};
+use crate::{BlockBoundary, BlockUpdates, L1WatcherConfig, LogsCache, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
@@ -14,6 +14,7 @@ use zksync_os_provider::NodeProvider;
 /// [`SlAwareL1Watcher`](crate::SlAwareL1Watcher) to scan a closed segment to completion).
 pub struct L1Watcher {
     provider: NodeProvider,
+    logs_cache: LogsCache,
     address: ValueOrArray<Address>,
     next_block: BlockNumber,
     /// `Some(eb)` makes the watcher exit `run` once `next_block > eb`. `None` runs forever.
@@ -29,6 +30,7 @@ impl L1Watcher {
     pub(crate) async fn new(
         config: L1WatcherConfig,
         provider: NodeProvider,
+        logs_cache: LogsCache,
         block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
@@ -45,6 +47,7 @@ impl L1Watcher {
 
         Ok(Self {
             provider,
+            logs_cache,
             address,
             next_block,
             end_block,
@@ -55,9 +58,11 @@ impl L1Watcher {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_finalized(
         config: L1WatcherConfig,
         provider: NodeProvider,
+        logs_cache: LogsCache,
         block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
@@ -66,6 +71,7 @@ impl L1Watcher {
     ) -> Self {
         Self {
             provider,
+            logs_cache,
             address,
             next_block,
             end_block,
@@ -159,7 +165,7 @@ impl L1Watcher {
         if let Some(topic1) = self.processor.topic1_filter() {
             filter = filter.topic1(topic1);
         }
-        let new_logs = self.provider.get_logs(&filter).await?;
+        let new_logs = self.logs_cache.get_logs(&filter).await?;
 
         if new_logs.is_empty() {
             tracing::trace!(

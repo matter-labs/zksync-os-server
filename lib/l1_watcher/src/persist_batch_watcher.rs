@@ -1,6 +1,6 @@
 use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
-use crate::{BlockUpdates, L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
+use crate::{BlockUpdates, L1WatcherConfig, LogsCache, SegmentSpec, SlAwareL1Watcher, util};
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
@@ -50,6 +50,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         batch_storage: BatchStorage,
         l1_block_updates: watch::Receiver<BlockUpdates>,
         gateway_block_updates: Option<watch::Receiver<BlockUpdates>>,
+        l1_logs_cache: LogsCache,
+        gateway_logs_cache: Option<LogsCache>,
     ) -> anyhow::Result<SlAwareL1Watcher> {
         let last_persisted_batch = batch_storage.latest_batch();
         tracing::info!(
@@ -83,13 +85,16 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             }
 
             let zk_chain = &interval.proxy;
-            let block_updates = match &interval.settlement_layer {
-                IntervalSettlementLayer::L1 => l1_block_updates.clone(),
-                IntervalSettlementLayer::Gateway(_) => {
+            let (block_updates, logs_cache) = match &interval.settlement_layer {
+                IntervalSettlementLayer::L1 => (l1_block_updates.clone(), l1_logs_cache.clone()),
+                IntervalSettlementLayer::Gateway(_) => (
                     gateway_block_updates.clone().with_context(|| {
                         format!("Gateway block updates are missing for interval {interval}")
-                    })?
-                }
+                    })?,
+                    gateway_logs_cache.clone().with_context(|| {
+                        format!("Gateway logs cache is missing for interval {interval}")
+                    })?,
+                ),
             };
             let first_batch = if is_first {
                 anyhow::ensure!(
@@ -130,6 +135,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             segments.push(SegmentSpec {
                 provider: zk_chain.provider().clone(),
                 block_updates,
+                logs_cache,
                 address: (*zk_chain.address()).into(),
                 start_block,
                 end_block,
@@ -158,8 +164,9 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         log: Log,
     ) -> Result<DiscoveredCommittedBatch, L1WatcherError> {
         let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
+        let l1_block_number = log.block_number.expect("indexed log without block number");
         let zk_chain = ZkChain::new(log.address(), provider.clone());
-        let batch_info = util::fetch_committed_batch_data(&zk_chain, tx_hash)
+        let batch_info = util::fetch_committed_batch_data(&zk_chain, tx_hash, l1_block_number)
             .await?
             .into_stored();
 
