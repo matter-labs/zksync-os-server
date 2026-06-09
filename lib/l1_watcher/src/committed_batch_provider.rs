@@ -226,7 +226,7 @@ fn startup_batch_numbers(
 
 /// Resolves a committed batch from L1 by first finding the block that committed it and then
 /// decoding the corresponding stored batch data.
-async fn fetch_batch(
+pub async fn fetch_batch(
     diamond_proxy_sl: &ZkChain<DynProvider>,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
@@ -236,7 +236,9 @@ async fn fetch_batch(
         batch_number,
         max_l1_blocks_to_scan,
     )
-    .await?;
+    .await
+    .with_context(|| format!("failed to find L1 commit block for batch {batch_number}"))?;
+
     util::fetch_stored_batch_data(diamond_proxy_sl, sl_block_with_commit, batch_number)
         .await?
         .with_context(|| format!("failed to find committed batch {batch_number} on L1"))

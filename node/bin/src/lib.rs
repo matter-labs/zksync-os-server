@@ -9,7 +9,6 @@ pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
 mod init_tx_forwarder;
-mod l1_revert;
 mod migration_gate;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
@@ -17,6 +16,7 @@ pub mod prover_api;
 mod prover_block;
 mod prover_input_generator;
 mod provider;
+mod rebuild;
 mod state_initializer;
 pub mod tree_manager;
 pub mod util;
@@ -25,12 +25,11 @@ use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ConsensusNodeCommandSource, ExternalNodeCommandSource};
 use crate::config::{
-    Config, ProverApiConfig, RebuildBlocksConfig, base_token_price_updater_config,
-    gas_adjuster_config, report_static_config_metrics,
+    Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
+    report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
 use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
-use crate::l1_revert::{derive_block_rebuild_from_block, perform_l1_revert};
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -43,11 +42,12 @@ use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_api::snark_proving_pipeline_step::SnarkProvingPipelineStep;
 use crate::prover_input_generator::ProverInputGenerator;
 use crate::provider::{ProviderKind, build_node_provider};
+use crate::rebuild::l1_revert;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
-use alloy::primitives::{Address, BlockNumber};
-use alloy::providers::{DynProvider, Provider};
+use alloy::primitives::BlockNumber;
+use alloy::providers::Provider;
 use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
@@ -216,7 +216,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // wait: calling fetch_finalized on them would spuriously fail when a concurrently
     // running batcher node keeps submitting new batch transactions.
     let use_finalized = node_role.is_main() && config.batcher_config.enabled;
-    let mut l1_state = fetch_l1_state(
+    let mut l1_state = L1State::fetch_with_finality(
         use_finalized,
         l1_provider.clone().erased(),
         gateway_provider.as_ref().map(|p| p.clone().erased()),
@@ -226,80 +226,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     .await
     .expect("failed to fetch L1 state");
 
-    if node_role.is_main() {
-        let l1_revert_config = config.sequencer_config.l1_revert.as_ref();
-        if let Some(l1_revert_config) = l1_revert_config {
-            tracing::warn!(
-                last_l1_batch_to_keep = l1_revert_config.last_l1_batch_to_keep,
-                "L1 revert config detected, starting startup revert sequence"
-            );
+    // Genesis and the repository manager are initialized here (before any startup revert) so
+    // that the `from_block_hash` guard can read the current local block hash.
+    let genesis = Genesis::new(
+        genesis_input_source.clone(),
+        l1_state.diamond_proxy_l1.clone(),
+        chain_id,
+    );
 
-            let last_l1_batch_to_keep = l1_revert_config.last_l1_batch_to_keep;
-            assert!(
-                last_l1_batch_to_keep < l1_state.last_committed_batch,
-                "sequencer.l1_revert.last_l1_batch_to_keep ({last_l1_batch_to_keep}) must be \
-                 < current last committed batch ({})",
-                l1_state.last_committed_batch
-            );
-            assert!(
-                last_l1_batch_to_keep >= l1_state.last_executed_batch,
-                "sequencer.l1_revert.last_l1_batch_to_keep ({last_l1_batch_to_keep}) must be \
-                 >= last executed batch ({})",
-                l1_state.last_executed_batch
-            );
-
-            // Derive `block_rebuild.from_block` before the revert while the to-be-reverted
-            // batch is still committed on L1. The L1 fallback relies on `totalBatchesCommitted`
-            // being >= reverted_batch at the current L1 head, which is no longer true after
-            // the revert tx lands.
-            let from_block =
-                derive_block_rebuild_from_block(&config, &l1_state, &persistent_batch_storage)
-                    .await
-                    .expect("failed to derive block_rebuild.from_block for L1 revert");
-
-            if let Some(block_rebuild) = config.sequencer_config.block_rebuild.as_ref() {
-                assert_eq!(
-                    block_rebuild.from_block, from_block,
-                    "`sequencer.block_rebuild.from_block` ({}) must match auto-derived value \
-                     ({}) from `sequencer.l1_revert.last_l1_batch_to_keep={}`",
-                    block_rebuild.from_block, from_block, l1_revert_config.last_l1_batch_to_keep
-                );
-            }
-
-            perform_l1_revert(
-                &config,
-                &l1_state,
-                chain_id,
-                &l1_provider,
-                &gateway_provider,
-            )
-            .await
-            .expect("failed to perform startup L1 revert");
-
-            if config.sequencer_config.block_rebuild.is_none() {
-                config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
-                    from_block,
-                    blocks_to_empty: vec![],
-                    reset_timestamps: false,
-                });
-                tracing::info!(
-                    from_block,
-                    "auto-configured `sequencer.block_rebuild` from `sequencer.l1_revert`"
-                );
-            }
-
-            // Re-read state after revert so all further startup checks use updated L1 frontier.
-            l1_state = fetch_l1_state(
-                config.batcher_config.enabled,
-                l1_provider.clone().erased(),
-                gateway_provider.as_ref().map(|p| p.clone().erased()),
-                bridgehub_address,
-                chain_id,
-            )
-            .await
-            .expect("failed to fetch L1 state after startup revert");
-        }
-    }
+    tracing::info!("Initializing RepositoryManager");
+    let repositories = RepositoryManager::new(
+        config.general_config.blocks_to_retain_in_memory,
+        config.general_config.rocks_db_path.join(REPOSITORY_DB_NAME),
+        &genesis,
+    )
+    .await;
 
     let settles_on_gateway = l1_state.settles_on_gateway();
     let l1_block_updates = block_updates::run(
@@ -325,6 +266,31 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .expect("gateway block updates must be initialized when SL is Gateway");
         (sl_provider, sl_block_updates)
     };
+
+    if node_role.is_main() && config.sequencer_config.rebuild.is_some() {
+        let revert_ran = l1_revert(
+            &mut config,
+            &repositories,
+            &l1_state,
+            &persistent_batch_storage,
+            &sl_provider,
+        )
+        .await
+        .expect("startup l1 revert failed");
+
+        if revert_ran {
+            l1_state = L1State::fetch_with_finality(
+                config.batcher_config.enabled,
+                l1_provider.clone().erased(),
+                gateway_provider.as_ref().map(|p| p.clone().erased()),
+                bridgehub_address,
+                chain_id,
+            )
+            .await
+            .expect("failed to fetch L1 state after startup revert");
+        }
+    }
+
     tracing::info!(?l1_state, settles_on_gateway, "L1 state");
     l1_state.report_metrics();
     if node_role.is_main() {
@@ -365,12 +331,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         }
     }
 
-    let genesis = Genesis::new(
-        genesis_input_source.clone(),
-        l1_state.diamond_proxy_l1.clone(),
-        chain_id,
-    );
-
     prepare_raft_storage(&config).expect("failed to prepare raft storage");
 
     tracing::info!("Initializing BlockReplayStorage");
@@ -387,14 +347,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("Initializing Tree RocksDB");
     let tree_db = TreeManager::load_or_initialize_tree(
         Path::new(&config.general_config.rocks_db_path.join(STATE_TREE_DB_NAME)),
-        &genesis,
-    )
-    .await;
-
-    tracing::info!("Initializing RepositoryManager");
-    let repositories = RepositoryManager::new(
-        config.general_config.blocks_to_retain_in_memory,
-        config.general_config.rocks_db_path.join(REPOSITORY_DB_NAME),
         &genesis,
     )
     .await;
@@ -451,19 +403,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_l1_executed_block,
     };
 
-    if let Some(block_rebuild) = &config.sequencer_config.block_rebuild
+    if let Some(rebuild) = &config.sequencer_config.rebuild
         && node_role.is_main()
     {
         // The assertion is only relevant for the main node.
         // External node can be started at any point and doesn't have to be in sync with L1.
         // But the main node is expected to only produce blocks on top of committed L1 blocks,
         // as those can't be re-sequenced.
-        assert!(
-            block_rebuild.from_block > node_startup_state.last_l1_committed_block,
-            "rebuild_from_block must be > last_l1_committed_block, got {} <= {}",
-            block_rebuild.from_block,
-            node_startup_state.last_l1_committed_block
-        );
+        if let Some(from_block) = rebuild.rebuild_options().map(|o| o.from_block) {
+            assert!(
+                from_block > node_startup_state.last_l1_committed_block,
+                "rebuild_from_block must be > last_l1_committed_block, got {} <= {}",
+                from_block,
+                node_startup_state.last_l1_committed_block
+            );
+        }
     }
 
     let finality_storage = Finality::new(FinalityStatus {
@@ -1290,9 +1244,9 @@ async fn run_main_node_pipeline(
             starting_block,
             rebuild_options: config
                 .sequencer_config
-                .block_rebuild
-                .clone()
-                .map(Into::into),
+                .rebuild
+                .as_ref()
+                .and_then(|r| r.rebuild_options()),
             replays_to_execute,
             leadership,
         })
@@ -1886,9 +1840,10 @@ fn determine_starting_block(
             // all the blocks we are rebuilding
             config
                 .sequencer_config
-                .block_rebuild
+                .rebuild
                 .as_ref()
-                .map_or(u64::MAX, |block_rebuild| block_rebuild.from_block),
+                .and_then(|r| r.rebuild_options())
+                .map_or(u64::MAX, |opts| opts.from_block),
         ]
         .into_iter()
         .min()
@@ -1920,20 +1875,6 @@ fn determine_starting_block(
     }
 
     desired_starting_block
-}
-
-async fn fetch_l1_state(
-    use_finalized: bool,
-    l1_provider: DynProvider,
-    gateway_provider: Option<DynProvider>,
-    bridgehub_address: Address,
-    chain_id: u64,
-) -> anyhow::Result<L1State> {
-    if use_finalized {
-        L1State::fetch_finalized(l1_provider, gateway_provider, bridgehub_address, chain_id).await
-    } else {
-        L1State::fetch(l1_provider, gateway_provider, bridgehub_address, chain_id).await
-    }
 }
 
 /// Finds the last block number where the local node's block hash matches the main node's block hash.

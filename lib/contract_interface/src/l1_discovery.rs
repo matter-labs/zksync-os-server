@@ -263,6 +263,24 @@ impl L1State {
         })
     }
 
+    /// Fetch L1 state, optionally waiting for all pending L1 transactions to finalize first.
+    ///
+    /// Pass `use_finalized = true` on the main node batcher so the node doesn't race with
+    /// its own in-flight commit/prove/execute transactions.
+    pub async fn fetch_with_finality(
+        use_finalized: bool,
+        l1_provider: DynProvider,
+        gateway_provider: Option<DynProvider>,
+        bridgehub_address: Address,
+        chain_id: u64,
+    ) -> anyhow::Result<Self> {
+        if use_finalized {
+            Self::fetch_finalized(l1_provider, gateway_provider, bridgehub_address, chain_id).await
+        } else {
+            Self::fetch(l1_provider, gateway_provider, bridgehub_address, chain_id).await
+        }
+    }
+
     pub fn diamond_proxy_address_sl(&self) -> Address {
         *self.diamond_proxy_sl.address()
     }

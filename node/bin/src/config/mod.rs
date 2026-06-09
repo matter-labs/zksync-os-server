@@ -2,7 +2,7 @@ pub use self::cli::ConfigArgs;
 pub(crate) use self::metrics::report_static_config_metrics;
 use self::util::{SecretKeyDeserializer, SignerConfigDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
-use alloy::primitives::{Address, Bytes, U128};
+use alloy::primitives::{Address, BlockHash, Bytes, U128};
 use num::{BigInt, BigUint, rational::Ratio};
 use reth_net_nat::net_if::resolve_net_if_ip;
 use reth_network_peers::TrustedPeer;
@@ -757,28 +757,96 @@ pub struct StatusServerConfig {
     pub address: String,
 }
 
+/// Parameters shared by the `block_rebuild` and `danger_block_rebuild_with_l1_revert` modes:
+/// the starting boundary, the idempotency guard, and what to do during the local block replay.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-pub struct RebuildBlocksConfig {
-    /// Number of the block to start rebuilding from.
-    /// All blocks starting from this number will be replayed - but unlike normal replay,
-    /// we'll not assert that the result will match the original ReplayRecord (block).
-    /// That is, a block may close earlier (with less transactions),
-    /// have different hash, have some transactions rejected etc
+pub struct RebuildBounds {
+    /// First block to rebuild from. All blocks from this number onward are replayed.
+    ///
+    /// For `danger_block_rebuild_with_l1_revert` this must fall within a committed-only batch
+    /// (not an executed one). It may be the first block of that batch or any block inside it:
+    /// the entire containing batch is reverted on L1 before the rebuild starts, so there is no
+    /// committed-hash inconsistency regardless of where within the batch `from_block` sits.
     pub from_block: u64,
-    /// List of blocks to empty (i.e., remove all transactions from).
+    /// Expected hash of block `from_block` before the rebuild.
+    ///
+    /// The operation is skipped when the current hash does not match — prevents double-runs
+    /// on pod restarts after the operation already ran.
+    #[config(with = Serde![str])]
+    pub from_block_hash: BlockHash,
+    /// Blocks to empty (remove all transactions from) during the rebuild.
     #[config(default, with = Delimited::new(","))]
     pub blocks_to_empty: Vec<u64>,
-    /// Whether to reset timestamps of rebuilt blocks to the current time.
-    /// If false, original timestamps are kept. If true then current time is used.
+    /// If true, rebuilt blocks receive fresh timestamps instead of the originals.
     #[config(default_t = false)]
     pub reset_timestamps: bool,
 }
 
+/// Startup block/batch revert configuration.
+///
+/// The `mode` field selects one of three operations:
+///
+/// - `block_rebuild` — replay local blocks from `from_block` without touching L1.
+/// - `danger_block_rebuild_with_l1_revert` — revert committed L1 batches (batch auto-derived
+///   from `from_block`), then rebuild local blocks from the same boundary.
+/// - `l1_revert` — revert committed L1 batches only; local blocks are kept as-is.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-pub struct L1RevertConfig {
-    /// Highest L1 batch number to keep on the settlement layer.
-    /// All batches with number greater than this value will be reverted.
-    pub last_l1_batch_to_keep: u64,
+#[config(tag = "mode", rename_all = "snake_case")]
+pub enum RebuildConfig {
+    /// Replay local blocks from `from_block` without any L1 interaction.
+    BlockRebuild {
+        #[config(flatten)]
+        bounds: RebuildBounds,
+    },
+    /// Revert committed L1 batches, then rebuild local blocks from the same boundary.
+    ///
+    /// The batch to revert is auto-derived from `from_block`: the committed-only batch that
+    /// contains `from_block` is reverted on L1 (along with all higher committed batches).
+    /// `from_block` may be the first block of that batch or any block inside it — a mid-batch
+    /// value is valid because the whole batch is reverted before rebuilding starts.
+    /// The `from_block_hash` guard covers both the L1 revert and the local rebuild — if the hash
+    /// no longer matches (operation already ran), both are skipped on the next startup.
+    DangerBlockRebuildWithL1Revert {
+        #[config(flatten)]
+        bounds: RebuildBounds,
+        /// Signer for `revertBatchesSharedBridge` transactions.
+        #[config(secret, with = SignerConfigDeserializer)]
+        l1_reverter_sk: SignerConfig,
+    },
+    /// Revert committed L1 batches only; local blocks are kept as-is.
+    ///
+    /// Use this when you want to undo L1 commits while keeping the locally-produced blocks.
+    L1Revert {
+        /// First batch to revert. All committed batches >= this number are reverted.
+        /// Must be >= 1 (batch 0 is genesis and cannot be reverted).
+        from_batch: u64,
+        /// Expected on-chain hash of batch `from_batch` (keccak256 of its ABI-encoded `StoredBatchInfo`).
+        ///
+        /// The revert is skipped if the stored batch hash does not match — guards against
+        /// reverting a different batch than intended.
+        #[config(with = Serde![str])]
+        from_batch_hash: BlockHash,
+        /// Signer for `revertBatchesSharedBridge` transactions.
+        #[config(secret, with = SignerConfigDeserializer)]
+        l1_reverter_sk: SignerConfig,
+    },
+}
+
+impl RebuildConfig {
+    /// Returns `RebuildOptions` if this config triggers a local block rebuild, `None` for
+    /// `L1Revert` which only acts on L1 without replaying local blocks.
+    pub fn rebuild_options(&self) -> Option<RebuildOptions> {
+        match self {
+            Self::BlockRebuild { bounds } | Self::DangerBlockRebuildWithL1Revert { bounds, .. } => {
+                Some(RebuildOptions {
+                    from_block: bounds.from_block,
+                    blocks_to_empty: bounds.blocks_to_empty.iter().copied().collect(),
+                    reset_timestamps: bounds.reset_timestamps,
+                })
+            }
+            Self::L1Revert { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
@@ -843,24 +911,13 @@ pub struct SequencerConfig {
     #[config(default_t = false)]
     pub revm_consistency_checker_revert_on_divergence: bool,
 
-    /// Block rebuild options.
+    /// Block rebuild / L1 revert options. See [`RebuildConfig`] for the three modes.
     #[config(nest)]
     #[config_validate(custom(
-        |root: &Config, value: &Option<RebuildBlocksConfig>| !root.consensus_config.enabled || value.is_none(),
+        |root: &Config, value: &Option<RebuildConfig>| !root.consensus_config.enabled || value.is_none(),
         "requires `consensus.enabled=false`"
     ))]
-    pub block_rebuild: Option<RebuildBlocksConfig>,
-
-    /// Optional startup L1 revert configuration.
-    ///
-    /// If set on the Main Node, the node will send `revertBatchesSharedBridge` before startup
-    /// replay / rebuild starts.
-    #[config(nest)]
-    #[config_validate(custom(
-        |root: &Config, value: &Option<L1RevertConfig>| !root.consensus_config.enabled || value.is_none(),
-        "requires `consensus.enabled=false`"
-    ))]
-    pub l1_revert: Option<L1RevertConfig>,
+    pub rebuild: Option<RebuildConfig>,
 
     /// If set, external node will sync up to and including this block number and then stop processing blocks.
     #[config(default)]
@@ -1057,13 +1114,6 @@ pub struct L1SenderConfig {
     /// On a Main Node, required at runtime only when settling on L1 (see `operator_commit_sk`).
     #[config(secret, alias = "operator_execute_pk", with = SignerConfigDeserializer)]
     pub operator_execute_sk: Option<SignerConfig>,
-
-    /// Signer used to submit `revertBatchesSharedBridge` transactions.
-    ///
-    /// Supports both local private keys and GCP KMS key references, same as
-    /// `operator_commit_sk`.
-    #[config(secret, alias = "reverter_pk", with = SignerConfigDeserializer)]
-    pub reverter_sk: Option<SignerConfig>,
 
     /// Max fee per gas we are willing to spend.
     #[config(default_t = 200 * EtherUnit::Gwei)]
@@ -2052,16 +2102,6 @@ impl From<MempoolTxValidatorConfig> for zksync_os_mempool::TxValidatorConfig {
     }
 }
 
-impl From<RebuildBlocksConfig> for RebuildOptions {
-    fn from(c: RebuildBlocksConfig) -> Self {
-        Self {
-            from_block: c.from_block,
-            blocks_to_empty: c.blocks_to_empty.into_iter().collect(),
-            reset_timestamps: c.reset_timestamps,
-        }
-    }
-}
-
 impl From<BatchVerificationConfig> for zksync_os_batch_verification::BatchVerificationConfig {
     fn from(c: BatchVerificationConfig) -> Self {
         Self {
@@ -2329,7 +2369,6 @@ mod tests {
                 operator_commit_sk: Some(local_signer(0x11)),
                 operator_prove_sk: Some(local_signer(0x22)),
                 operator_execute_sk: Some(local_signer(0x33)),
-                reverter_sk: Some(local_signer(0x44)),
                 max_fee_per_gas: 200 * EtherUnit::Gwei,
                 max_priority_fee_per_gas: 1 * EtherUnit::Gwei,
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,

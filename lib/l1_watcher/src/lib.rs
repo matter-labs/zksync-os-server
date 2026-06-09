@@ -31,7 +31,7 @@ mod traits;
 pub(crate) use traits::{ProcessL1Event, ProcessRawEvents};
 
 mod committed_batch_provider;
-pub use committed_batch_provider::CommittedBatchProvider;
+pub use committed_batch_provider::{CommittedBatchProvider, fetch_batch};
 
 mod persist_batch_watcher;
 pub use persist_batch_watcher::L1PersistBatchWatcher;

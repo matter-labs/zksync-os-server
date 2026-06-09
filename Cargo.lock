@@ -15287,6 +15287,7 @@ dependencies = [
  "zksync_os_api",
  "zksync_os_contract_interface",
  "zksync_os_integration_tests_macros",
+ "zksync_os_l1_watcher",
  "zksync_os_merkle_tree_api",
  "zksync_os_multivm",
  "zksync_os_network",

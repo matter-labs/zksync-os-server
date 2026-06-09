@@ -71,8 +71,25 @@ Commonly modified values include:
 - `l1_sender.operator_commit_sk` — Private key for committing batches
 - `l1_sender.operator_prove_sk` — Private key for proving batches
 - `l1_sender.operator_execute_sk` — Private key for executing batches
-- `l1_sender.reverter_sk` — Signer (private key or GCP KMS) used for startup L1 reverts
-- `sequencer.l1_revert.last_l1_batch_to_keep` — Startup revert target batch; if set, node auto-derives `sequencer.block_rebuild.from_block`
+
+Block / batch revert options. All live under `sequencer.rebuild`; the required `mode` field selects one of three operations:
+
+**`mode: block_rebuild`** — replay local blocks from `from_block` without touching L1:
+- `from_block` — required; first block to rebuild from
+- `from_block_hash` — required; hash of `from_block` before the rebuild; the rebuild is skipped on pod restart when the hash no longer matches (block was already rebuilt)
+- `blocks_to_empty` — optional list of block numbers to remove all transactions from
+- `reset_timestamps` — optional; if `true`, rebuilt blocks get fresh timestamps
+
+**`mode: danger_block_rebuild_with_l1_revert`** — revert committed L1 batches (batch auto-derived from `from_block`), then rebuild local blocks:
+- `from_block` — required; first block to rebuild from; must fall within a committed-only (not yet executed) batch; may be the first block of that batch or any block inside it — the entire containing batch is reverted on L1 before the rebuild starts
+- `from_block_hash` — required; both the L1 revert and rebuild are skipped on restart when the hash no longer matches
+- `l1_reverter_sk` — required; signer (private key or GCP KMS) for `revertBatchesSharedBridge`
+- `blocks_to_empty`, `reset_timestamps` — optional, same as `mode: block_rebuild`
+
+**`mode: l1_revert`** — revert committed L1 batches only; local blocks are kept as-is:
+- `from_batch` — required; first batch to revert (>= 1); all committed batches from this number upward are reverted
+- `from_batch_hash` — required; expected on-chain hash of `from_batch` (keccak256 of its ABI-encoded `StoredBatchInfo`); revert is skipped when the hash no longer matches
+- `l1_reverter_sk` — required; signer (private key or GCP KMS) for `revertBatchesSharedBridge`
 
 ### `genesis.json`
 
