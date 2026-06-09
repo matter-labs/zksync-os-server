@@ -1,21 +1,15 @@
-use crate::{
-    BlockUpdates,
-    metrics::{LogsCacheLabels, METRICS},
-};
+use crate::metrics::{LogsCacheLabels, METRICS};
 use alloy::eips::BlockNumberOrTag;
-use alloy::primitives::{B256, BlockNumber, Bloom};
+use alloy::network::{Ethereum, Network};
+use alloy::primitives::{B256, Bloom};
 use alloy::providers::Provider;
+use alloy::rpc::client::PollChannel;
 use alloy::rpc::types::{Filter, Log};
 use alloy::transports::{TransportErrorKind, TransportResult};
 use futures::future::BoxFuture;
 use std::{collections::VecDeque, mem, sync::Arc};
-use tokio::sync::{RwLock, watch};
+use tokio::sync::{RwLock, broadcast::error::TryRecvError};
 use zksync_os_provider::NodeProvider;
-
-const UNSYNCED_BLOCK_UPDATES: BlockUpdates = BlockUpdates {
-    latest_block: BlockNumber::MAX,
-    finalized_block: BlockNumber::MAX,
-};
 
 #[derive(Debug)]
 struct CachedBlockLogs {
@@ -49,7 +43,7 @@ struct RecentLogs {
     /// The maximum number of blocks to store in the cache.
     capacity: usize,
     /// The chain head current cache corresponds to.
-    synced_with: BlockUpdates,
+    synced_with_hash: B256,
     first_block: Option<u64>,
     /// Logs & block hashes for blocks from `first_block` to `first_block + blocks.len() - 1`
     blocks: VecDeque<CachedBlockLogs>,
@@ -61,7 +55,7 @@ impl RecentLogs {
     fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            synced_with: UNSYNCED_BLOCK_UPDATES,
+            synced_with_hash: B256::ZERO,
             first_block: None,
             blocks: VecDeque::new(),
             approx_bytes: 0,
@@ -175,21 +169,16 @@ impl RecentLogs {
 #[derive(Clone, Debug)]
 pub struct LogsCache {
     provider: NodeProvider,
-    block_updates: watch::Receiver<BlockUpdates>,
+    latest_blocks: Arc<std::sync::Mutex<PollChannel<Option<<Ethereum as Network>::BlockResponse>>>>,
     metric_labels: LogsCacheLabels,
     recent: Arc<RwLock<RecentLogs>>,
 }
 
 impl LogsCache {
-    pub fn new(
-        provider: NodeProvider,
-        block_updates: watch::Receiver<BlockUpdates>,
-        capacity: usize,
-        chain_id: u64,
-    ) -> Self {
+    pub fn new(provider: NodeProvider, capacity: usize, chain_id: u64) -> Self {
         Self {
+            latest_blocks: Arc::new(std::sync::Mutex::new(provider.latest_header_poller())),
             provider,
-            block_updates,
             metric_labels: LogsCacheLabels { chain_id },
             recent: Arc::new(RwLock::new(RecentLogs::new(capacity))),
         }
@@ -232,22 +221,62 @@ impl LogsCache {
     }
 
     /// If the chain head has changed, check for reorgs & add new blocks.
-    ///
-    /// We check for reverts if either latest or latest finalized has changed.
-    /// This is not exact but it keeps the behavior consistent with how this worked previously.
     async fn synchronize_if_needed(&self) -> TransportResult<()> {
-        let latest_snapshot = *self.block_updates.borrow();
-        if self.recent.read().await.synced_with == latest_snapshot {
+        let latest_snapshot = {
+            let mut latest_blocks = self
+                .latest_blocks
+                .lock()
+                .expect("latest block poller mutex poisoned");
+
+            let mut latest_snapshot = loop {
+                match latest_blocks.try_recv() {
+                    Ok(Some(block)) => break block,
+                    Ok(None) => {
+                        return Err(TransportErrorKind::custom_str(
+                            "latest block poller returned no block",
+                        ));
+                    }
+                    Err(TryRecvError::Empty) => return Ok(()),
+                    Err(TryRecvError::Closed) => {
+                        return Err(TransportErrorKind::custom_str(
+                            "latest block poller unexpectedly closed",
+                        ));
+                    }
+                    Err(TryRecvError::Lagged(_)) => continue,
+                }
+            };
+
+            loop {
+                match latest_blocks.try_recv() {
+                    Ok(Some(block)) => latest_snapshot = block,
+                    Ok(None) => {
+                        return Err(TransportErrorKind::custom_str(
+                            "latest block poller returned no block",
+                        ));
+                    }
+                    Err(TryRecvError::Empty) => break latest_snapshot,
+                    Err(TryRecvError::Closed) => {
+                        return Err(TransportErrorKind::custom_str(
+                            "latest block poller unexpectedly closed",
+                        ));
+                    }
+                    Err(TryRecvError::Lagged(_)) => continue,
+                }
+            }
+        };
+
+        let latest_hash = latest_snapshot.header.hash;
+        if self.recent.read().await.synced_with_hash == latest_hash {
             return Ok(());
         }
 
         let mut recent = self.recent.write().await;
-        if recent.synced_with != latest_snapshot && recent.capacity > 0 {
-            let target_head = latest_snapshot.latest_block;
+        if recent.synced_with_hash != latest_hash && recent.capacity > 0 {
+            let target_head = latest_snapshot.header.number;
             let floor = target_head.saturating_sub(recent.capacity as u64 - 1);
             self.update_block(&mut recent, target_head, floor).await?;
         }
-        recent.synced_with = latest_snapshot;
+        recent.synced_with_hash = latest_hash;
         Ok(())
     }
 

@@ -251,16 +251,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
     let l1_logs_cache = LogsCache::new(
         l1_provider.clone(),
-        l1_block_updates.clone(),
         config.l1_watcher_config.logs_cache_capacity,
         l1_state.l1_chain_id,
     );
     let gateway_logs_cache = gateway_provider.as_ref().map(|provider| {
         LogsCache::new(
             provider.clone(),
-            gateway_block_updates
-                .clone()
-                .expect("gateway block updates must be initialized when gateway provider exists"),
             config.l1_watcher_config.logs_cache_capacity,
             l1_state.sl_chain_id,
         )
