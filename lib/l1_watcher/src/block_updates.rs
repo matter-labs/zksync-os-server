@@ -83,14 +83,3 @@ async fn poll_finalized(
     });
     Ok(())
 }
-
-impl BlockUpdates {
-    pub(crate) fn get_block_number(&self, boundary: BlockBoundary) -> BlockNumber {
-        match boundary {
-            BlockBoundary::Confirmed { confirmations } => {
-                self.latest_block.saturating_sub(confirmations)
-            }
-            BlockBoundary::Finalized => self.finalized_block,
-        }
-    }
-}

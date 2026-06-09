@@ -1,9 +1,11 @@
 use crate::metrics::METRICS;
-use crate::{BlockBoundary, BlockUpdates, L1WatcherConfig, LogsCache, ProcessRawEvents};
+use crate::{BlockBoundary, L1WatcherConfig, LogsCache, ProcessRawEvents};
+use alloy::consensus::BlockHeader;
+use alloy::network::primitives::BlockResponse;
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
-use tokio::sync::watch;
+use futures::StreamExt;
 use zksync_os_provider::NodeProvider;
 
 /// An abstract watcher for events.
@@ -21,7 +23,6 @@ pub struct L1Watcher {
     end_block: Option<BlockNumber>,
     max_blocks_to_process: u64,
     block_boundary: BlockBoundary,
-    block_updates: watch::Receiver<BlockUpdates>,
     pub(crate) processor: Box<dyn ProcessRawEvents>,
 }
 
@@ -31,7 +32,6 @@ impl L1Watcher {
         config: L1WatcherConfig,
         provider: NodeProvider,
         logs_cache: LogsCache,
-        block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
         end_block: Option<BlockNumber>,
@@ -53,7 +53,6 @@ impl L1Watcher {
             end_block,
             max_blocks_to_process: config.max_blocks_to_process,
             block_boundary: BlockBoundary::Confirmed { confirmations },
-            block_updates,
             processor,
         })
     }
@@ -63,7 +62,6 @@ impl L1Watcher {
         config: L1WatcherConfig,
         provider: NodeProvider,
         logs_cache: LogsCache,
-        block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
         end_block: Option<BlockNumber>,
@@ -77,7 +75,6 @@ impl L1Watcher {
             end_block,
             max_blocks_to_process: config.max_blocks_to_process,
             block_boundary: BlockBoundary::Finalized,
-            block_updates,
             processor,
         }
     }
@@ -94,35 +91,50 @@ impl L1Watcher {
 
     /// Non-consuming version of `run`, intended for internal usage in this crate.
     pub(crate) async fn run_inner(&mut self) {
-        loop {
-            if let Err(e) = self.poll().await {
+        // Closed segment: `end_block` was already resolved against a finalized/executed batch,
+        // so the confirmation/finalization window doesn't apply and we don't need an
+        // additional RPC.
+        if let Some(end_block) = self.end_block {
+            if let Err(e) = self.poll(end_block).await {
                 tracing::error!("l1 watcher fatal error: {e}");
                 panic!("watcher failed: {e}");
             }
-            if let Some(eb) = self.end_block
-                && self.next_block > eb
-            {
-                return;
-            }
-            if let Err(e) = self.block_updates.changed().await {
-                tracing::error!("l1 watcher block update channel closed: {e}");
-                panic!("l1 watcher block update channel closed: {e}");
+            assert!(
+                self.next_block <= end_block,
+                "poll() didn't process all blocks on a finalized segment"
+            );
+            return;
+        }
+
+        let mut headers = match self.block_boundary {
+            BlockBoundary::Confirmed { .. } => self.provider.latest_header_poller().into_stream(),
+            BlockBoundary::Finalized => self.provider.finalized_header_poller().into_stream(),
+        };
+
+        loop {
+            let Some(header) = headers.next().await else {
+                tracing::error!("l1 watcher header poller stream ended unexpectedly");
+                panic!("l1 watcher header poller stream ended unexpectedly");
+            };
+            let Some(header) = header else {
+                continue;
+            };
+
+            let cap = match self.block_boundary {
+                BlockBoundary::Confirmed { confirmations } => {
+                    header.header().number().saturating_sub(confirmations)
+                }
+                BlockBoundary::Finalized => header.header().number(),
+            };
+
+            if let Err(e) = self.poll(cap).await {
+                tracing::error!("l1 watcher fatal error: {e}");
+                panic!("watcher failed: {e}");
             }
         }
     }
 
-    async fn poll(&mut self) -> Result<(), L1WatcherError> {
-        let cap = match self.end_block {
-            // Closed segment: `end_block` was already resolved against a finalized/executed batch,
-            // so the confirmation/finalization window doesn't apply and we don't need an
-            // additional RPC.
-            Some(eb) => eb,
-            None => self
-                .block_updates
-                .borrow()
-                .get_block_number(self.block_boundary),
-        };
-
+    async fn poll(&mut self, cap: BlockNumber) -> Result<(), L1WatcherError> {
         while self.next_block <= cap {
             let from_block = self.next_block;
             // Inspect up to `self.max_blocks_to_process` blocks at a time

@@ -244,14 +244,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.l1_watcher_config.finalized_poll_interval,
         )
     });
-    let (sl_provider, sl_block_updates) = if l1_state.l1_chain_id == l1_state.sl_chain_id {
-        (l1_provider.clone(), l1_block_updates.clone())
+    let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
+        l1_provider.clone()
     } else {
-        let sl_provider = gateway_provider.clone().unwrap();
-        let sl_block_updates = gateway_block_updates
-            .clone()
-            .expect("gateway block updates must be initialized when SL is Gateway");
-        (sl_provider, sl_block_updates)
+        gateway_provider.clone().unwrap()
     };
     let l1_logs_cache = LogsCache::new(
         l1_provider.clone(),
@@ -590,7 +586,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             finality_storage.clone(),
             l1_state.sl_block_number,
             node_startup_state.l1_state.l1_chain_id,
-            sl_block_updates.clone(),
             sl_logs_cache.clone(),
             // Only nodes that actually submit commit txs locally should arm the
             // `UnexpectedCommit` guard — otherwise consensus followers configured with
@@ -610,7 +605,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_batch_provider.clone(),
             finality_storage.clone(),
             node_startup_state.l1_state.l1_chain_id,
-            sl_block_updates.clone(),
             sl_logs_cache.clone(),
         )
         .await
@@ -625,7 +619,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
-            sl_block_updates.clone(),
             sl_logs_cache.clone(),
         )
         .await
@@ -725,7 +718,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 next_cursors.migration_number,
                 config.l1_watcher_config.clone().into(),
                 sl_chain_id_subpool.clone(),
-                l1_block_updates.clone(),
                 l1_logs_cache.clone(),
             )
             .await
@@ -745,7 +737,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.l1_chain_id,
             config.l1_watcher_config.clone().into(),
             last_finalized_migration_sender,
-            sl_block_updates.clone(),
             sl_logs_cache.clone(),
         )
         .await
@@ -776,7 +767,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             next_cursors.interop_root_id,
             interop_roots_subpool.clone(),
-            gateway_block_updates.clone(),
             gateway_logs_cache.clone(),
         )
         .await
@@ -795,7 +785,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             l1_subpool.clone(),
             next_cursors.l1_priority_id,
-            l1_block_updates.clone(),
             l1_logs_cache.clone(),
         )
         .await
@@ -942,7 +931,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             bytecode_supplier_address,
             current_protocol_version.clone(),
             upgrade_subpool,
-            l1_block_updates.clone(),
             l1_logs_cache.clone(),
         )
         .await
@@ -969,8 +957,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .settlement_layer_intervals
             .clone();
         let persistent_batch_storage = persistent_batch_storage.clone();
-        let l1_block_updates = l1_block_updates.clone();
-        let gateway_block_updates = gateway_block_updates.clone();
         let l1_logs_cache = l1_logs_cache.clone();
         let gateway_logs_cache = gateway_logs_cache.clone();
         async move {
@@ -978,8 +964,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 config.into(),
                 settlement_layer_intervals,
                 persistent_batch_storage,
-                l1_block_updates,
-                gateway_block_updates,
                 l1_logs_cache,
                 gateway_logs_cache,
             )

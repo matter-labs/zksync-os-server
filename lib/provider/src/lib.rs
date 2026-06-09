@@ -70,7 +70,7 @@ where
 /// at most once. Each address gets its own [`OnceCell`] so concurrent lookups for the same address
 /// run the binary search exactly once and the rest await its result.
 type DeploymentBlockCache = Arc<Mutex<HashMap<Address, Arc<OnceCell<u64>>>>>;
-type HeaderPoller = Arc<OnceLock<PollChannel<Option<<Ethereum as Network>::HeaderResponse>>>>;
+type HeaderPoller = Arc<OnceLock<PollChannel<Option<<Ethereum as Network>::BlockResponse>>>>;
 
 /// A version of `DynProvider` that exposes `wallet()` and `wallet_mut()` as defined in
 /// `EthWalletProvider`. Also uses `Box` instead of `Arc` to make sure the wallets are mutable.
@@ -114,10 +114,10 @@ impl NodeProvider {
         }
     }
 
-    /// Returns a shared poller for `eth_getHeaderByNumber(latest)`.
+    /// Returns a shared poller for the latest block via `eth_getBlockByNumber(latest, false)`.
     pub fn latest_header_poller(
         &self,
-    ) -> PollChannel<Option<<Ethereum as Network>::HeaderResponse>> {
+    ) -> PollChannel<Option<<Ethereum as Network>::BlockResponse>> {
         self.latest_header_poller
             .get_or_init(|| {
                 self.build_header_poller(BlockNumberOrTag::Latest, self.latest_poll_interval)
@@ -125,10 +125,11 @@ impl NodeProvider {
             .resubscribe()
     }
 
-    /// Returns a shared poller for `eth_getHeaderByNumber(finalized)`.
+    /// Returns a shared poller for the finalized block via
+    /// `eth_getBlockByNumber(finalized, false)`.
     pub fn finalized_header_poller(
         &self,
-    ) -> PollChannel<Option<<Ethereum as Network>::HeaderResponse>> {
+    ) -> PollChannel<Option<<Ethereum as Network>::BlockResponse>> {
         self.finalized_header_poller
             .get_or_init(|| {
                 self.build_header_poller(BlockNumberOrTag::Finalized, self.finalized_poll_interval)
@@ -140,8 +141,8 @@ impl NodeProvider {
         &self,
         block: BlockNumberOrTag,
         poll_interval: Duration,
-    ) -> PollChannel<Option<<Ethereum as Network>::HeaderResponse>> {
-        PollerBuilder::new(self.weak_client(), "eth_getHeaderByNumber", (block,))
+    ) -> PollChannel<Option<<Ethereum as Network>::BlockResponse>> {
+        PollerBuilder::new(self.weak_client(), "eth_getBlockByNumber", (block, false))
             .with_poll_interval(poll_interval)
             .spawn()
     }
