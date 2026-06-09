@@ -746,15 +746,16 @@ impl Tester {
             l1.provider.clone()
         };
         let gateway_eth_provider = gateway_rpc_url.as_ref().map(|_| sl_provider.clone());
+        let l2_provider = NodeProvider::new(l2_provider);
         let prover_tester = ProverTester::new(
-            NodeProvider::new(l1.provider.clone()),
+            l1.provider.clone(),
             gateway_eth_provider,
-            NodeProvider::new(l2_provider.clone()),
+            l2_provider.clone(),
             DynProvider::new(l2_zk_provider.clone()),
         );
         let tester = Tester {
             l1,
-            l2_provider: NodeProvider::new(l2_provider.clone()),
+            l2_provider,
             l2_zk_provider: DynProvider::new(l2_zk_provider.clone()),
             l2_wallet,
             prover_tester,
