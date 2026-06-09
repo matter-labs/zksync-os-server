@@ -5,11 +5,11 @@ use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::TransactionRequest;
 use std::str::FromStr;
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::{L1AssetRouter, L2BaseToken};
-use zksync_os_integration_tests::provider::ZksyncApi;
 use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_multisetup};
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxType,

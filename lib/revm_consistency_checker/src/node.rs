@@ -1,3 +1,7 @@
+use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
+use crate::metrics::PUSH_METRICS;
+use crate::revm_state_provider::RevmStateProvider;
+use crate::storage_diff_comp::CompareReport;
 use alloy::primitives::{B256, U256};
 use async_trait::async_trait;
 use revm::ExecuteCommitEvm;
@@ -9,19 +13,13 @@ use std::collections::HashSet;
 use tokio::sync::mpsc;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_revm::{DefaultZk, ZkBuilder, ZkContext, ZkSpecId};
 use zksync_os_sequencer::model::blocks::AppliedBlock;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, ViewState};
-use zksync_os_types::{ExecutionVersion, SYSTEM_CONTEXT_ADDRESS};
-
-use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
-use crate::metrics::PUSH_METRICS;
-use crate::revm_state_provider::RevmStateProvider;
-use crate::storage_diff_comp::CompareReport;
+use zksync_os_types::{BlockOutput, ExecutionVersion, SYSTEM_CONTEXT_ADDRESS};
 
 const BLOB_BASE_FEE_UPDATE_FRACTION: u128 = alloy::eips::eip4844::BLOB_GASPRICE_UPDATE_FRACTION;
 const MIN_BASE_FEE_PER_BLOB_GAS: u128 = alloy::eips::eip4844::BLOB_TX_MIN_BLOB_GASPRICE;
@@ -117,13 +115,15 @@ where
         loop {
             state_reporter.enter_state(GenericComponentState::Idle);
             let Some(AppliedBlock {
-                output: block_output,
+                output: block,
                 record: replay_record,
             }) = input.recv_and_record_picked(&state_reporter).await
             else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
+            let block_output = block.as_ref();
+
             let raw_exec_ver = replay_record.block_context.execution_version;
             let zk_spec = match ExecutionVersion::try_from(raw_exec_ver)
                 .ok()
@@ -249,7 +249,7 @@ where
                             &block_output.storage_writes,
                             &block_output.account_diffs,
                         )?;
-                        self.handle_report(&block_output, &replay_record, &compare_report)?;
+                        self.handle_report(block_output, &replay_record, &compare_report)?;
                     }
                     Err(err) => {
                         // Tx conversion failed (e.g. malformed envelope) — skip
@@ -265,8 +265,8 @@ where
 
             output.send_and_record(
                 AppliedBlock {
-                    output: block_output.clone(),
-                    record: replay_record.clone(),
+                    output: block,
+                    record: replay_record,
                 },
                 &state_reporter,
             )?;

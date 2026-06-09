@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig};
+use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig, TokioConfig};
 use smart_config::{ConfigRepository, ConfigSources, Environment};
 use std::sync::mpsc;
 use std::{path::Path, path::PathBuf, str::FromStr, time::Duration};
@@ -27,7 +27,9 @@ const IMMEDIATE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// Push interval for push exporter (almost all metrics are pull)
 /// We don't have to report it frequently, because final push is guaranteed.
-const PROMETHEUS_PUSH_INTERVAL: Duration = Duration::from_secs(60);
+/// However, setting this to 60s or more,
+/// will cause a lot of reconnection log spam, due to our infra setup
+const PROMETHEUS_PUSH_INTERVAL: Duration = Duration::from_secs(30);
 /// Push exporter graceful shutdown timeout, the shutdown is nearly instant
 /// We need a graceful shutdown because push metrics can be used for alerts
 const PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -100,9 +102,11 @@ pub async fn main() {
         .install_default()
         .expect("failed to install rustls ring crypto provider");
 
-    let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
-        .build()
-        .expect("failed to build runtime");
+    let runtime = RuntimeBuilder::new(
+        RuntimeConfig::default().with_tokio(TokioConfig::existing_handle(Handle::current())),
+    )
+    .build()
+    .expect("failed to build runtime");
 
     let opt = Cli::parse();
 

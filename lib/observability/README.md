@@ -142,7 +142,7 @@ metrics::GENERAL_METRICS exposes:
 - component_time_spent_in_state (counter in seconds by component / generic state / specific state; flushed every 2 s and on state transition),
 - process_started_at (timestamp gauge with version + role),
 - startup_time (startup stage durations),
-- fee_collector_address and chain_id.
+- blacklisted_addresses_count.
 
 Access values through GENERAL_METRICS.get() or use them from other crates in the workspace.
 

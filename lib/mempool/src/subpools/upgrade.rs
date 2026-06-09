@@ -83,50 +83,57 @@ impl UpgradeSubpool {
         // We track current protocol version that we end up with after applying upgrade transaction.
         let mut current_protocol_version = self.inner.read().await.current_protocol_version.clone();
 
-        // If there are no upgrade transactions and current protocol version matches the one in the
-        // block, we do not have to do anything.
         if txs.is_empty() && protocol_version == &current_protocol_version {
             return;
         }
 
-        for tx in txs {
-            // Skip fetched patch upgrades
-            let pending_tx = loop {
-                let pending_upgrade_info = self.pop_wait().await;
-                // Update current protocol version with discovered upgrade.
-                current_protocol_version = pending_upgrade_info.protocol_version().clone();
-                if let Some(pending_tx) = pending_upgrade_info.tx {
-                    break pending_tx;
-                }
-            };
-            assert_eq!(tx, &pending_tx);
-        }
+        // Older upgrade logs cannot be found or processed reliably by the current
+        // watcher. During replay, the ReplayRecord is the source of truth.
+        self.inner.write().await.pending_upgrades.retain(|upgrade| {
+            upgrade.protocol_version()
+                >= &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS
+        });
+        if protocol_version < &ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS {
+            current_protocol_version = protocol_version.clone();
+        } else {
+            for tx in txs {
+                // Skip fetched patch upgrades
+                let pending_tx = loop {
+                    let pending_upgrade_info = self.pop_wait().await;
+                    // Update current protocol version with discovered upgrade.
+                    current_protocol_version = pending_upgrade_info.protocol_version().clone();
+                    if let Some(pending_tx) = pending_upgrade_info.tx {
+                        break pending_tx;
+                    }
+                };
+                assert_eq!(tx, &pending_tx);
+            }
 
-        // We need to make sure that our current protocol version matches the one in the block.
-        // For patch upgrades there might be no upgrade transaction, but we still have to find and
-        // consume relevant upgrade info from L1 watcher.
-        loop {
-            if &current_protocol_version == protocol_version {
-                break;
-            } else if &current_protocol_version < protocol_version {
-                let upgrade = self.pop_wait().await;
-                if upgrade.tx.is_some() {
+            // We need to make sure that our current protocol version matches the one in the block.
+            // For patch upgrades there might be no upgrade transaction, but we still have to find and
+            // consume relevant upgrade info from L1 watcher.
+            loop {
+                if &current_protocol_version == protocol_version {
+                    break;
+                } else if &current_protocol_version < protocol_version {
+                    let upgrade = self.pop_wait().await;
+                    if upgrade.tx.is_some() {
+                        panic!(
+                            "expected patch protocol upgrade {}->{} but found minor protocol upgrade {} with unapplied upgrade transaction",
+                            current_protocol_version,
+                            protocol_version,
+                            upgrade.protocol_version()
+                        );
+                    }
+                    // Update current protocol version with discovered upgrade and do one more iteration.
+                    current_protocol_version = upgrade.protocol_version().clone();
+                } else {
                     panic!(
-                        "expected patch protocol upgrade {}->{} but found minor protocol upgrade {} with unapplied upgrade transaction",
-                        current_protocol_version,
-                        protocol_version,
-                        upgrade.protocol_version()
+                        "current protocol version ({current_protocol_version}) is larger than block's protocol version ({protocol_version})",
                     );
                 }
-                // Update current protocol version with discovered upgrade and do one more iteration.
-                current_protocol_version = upgrade.protocol_version().clone();
-            } else {
-                panic!(
-                    "current protocol version ({current_protocol_version}) is larger than block's protocol version ({protocol_version})",
-                );
             }
         }
-
         // Write protocol version we ended up with.
         self.inner.write().await.current_protocol_version = current_protocol_version;
     }
@@ -193,5 +200,154 @@ impl Stream for UpgradeTransactionsStream {
         } else {
             Poll::Ready(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::{Address, B256, Bytes, U256};
+    use std::marker::PhantomData;
+    use std::time::Duration;
+    use zksync_os_types::{L1Tx, UpgradeMetadata, UpgradeTxType};
+
+    fn version(minor: u64, patch: u64) -> ProtocolSemanticVersion {
+        ProtocolSemanticVersion::new(0, minor, patch)
+    }
+
+    fn upgrade_tx(hash_byte: u8) -> L1UpgradeEnvelope {
+        L1UpgradeEnvelope {
+            inner: L1Tx::<UpgradeTxType> {
+                hash: B256::repeat_byte(hash_byte),
+                initiator: Address::ZERO,
+                to: Address::ZERO,
+                gas_limit: 0,
+                gas_per_pubdata_byte_limit: 0,
+                max_fee_per_gas: 0,
+                max_priority_fee_per_gas: 0,
+                nonce: 0,
+                value: U256::ZERO,
+                to_mint: U256::ZERO,
+                refund_recipient: Address::ZERO,
+                input: Bytes::new(),
+                factory_deps: Vec::new(),
+                marker: PhantomData,
+            },
+        }
+    }
+
+    fn upgrade_info(
+        protocol_version: ProtocolSemanticVersion,
+        tx: Option<L1UpgradeEnvelope>,
+    ) -> UpgradeInfo {
+        UpgradeInfo {
+            tx,
+            metadata: UpgradeMetadata {
+                timestamp: 0,
+                protocol_version,
+                force_preimages: Vec::new(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn historical_upgrade_replay_does_not_wait_for_watcher() {
+        let unreliable_version = version(30, 1);
+        let subpool = UpgradeSubpool::new(ProtocolSemanticVersion::legacy_genesis_version());
+        let tx = upgrade_tx(1);
+
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            subpool.on_canonical_state_change(&unreliable_version, vec![&tx]),
+        )
+        .await
+        .expect("historical upgrade replay should not wait for watcher data");
+
+        assert_eq!(
+            subpool.inner.read().await.current_protocol_version,
+            unreliable_version
+        );
+    }
+
+    #[tokio::test]
+    async fn historical_replay_drains_pending_old_upgrades() {
+        let subpool = UpgradeSubpool::new(ProtocolSemanticVersion::legacy_genesis_version());
+        let old_tx = upgrade_tx(1);
+        let new_tx = upgrade_tx(2);
+        let new_version = version(31, 0);
+        let unreliable_version = version(30, 1);
+        subpool
+            .insert(upgrade_info(unreliable_version.clone(), Some(old_tx)))
+            .await;
+        subpool
+            .insert(upgrade_info(new_version.clone(), Some(new_tx.clone())))
+            .await;
+
+        subpool
+            .on_canonical_state_change(&unreliable_version, Vec::new())
+            .await;
+
+        let mut stream = subpool.upgrade_info_stream().await;
+        let remaining = stream
+            .next()
+            .await
+            .expect("newer pending upgrade should not be drained");
+        assert_eq!(remaining.protocol_version(), &new_version);
+        assert_eq!(remaining.tx.as_ref(), Some(&new_tx));
+    }
+
+    #[tokio::test]
+    async fn supported_upgrade_waits_for_watcher_and_validates_tx() {
+        let subpool =
+            UpgradeSubpool::new(ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS);
+        let tx = upgrade_tx(1);
+        let target_version = version(31, 0);
+
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                subpool.on_canonical_state_change(&target_version, vec![&tx]),
+            )
+            .await
+            .is_err(),
+            "supported upgrade should wait for watcher data"
+        );
+
+        subpool
+            .insert(upgrade_info(target_version.clone(), Some(tx.clone())))
+            .await;
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            subpool.on_canonical_state_change(&target_version, vec![&tx]),
+        )
+        .await
+        .expect("matching watcher upgrade should validate");
+
+        assert_eq!(
+            subpool.inner.read().await.current_protocol_version,
+            target_version
+        );
+    }
+
+    #[tokio::test]
+    async fn supported_patch_upgrade_consumes_watcher_metadata() {
+        let subpool =
+            UpgradeSubpool::new(ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS);
+        let target_version = version(30, 3);
+        subpool
+            .insert(upgrade_info(target_version.clone(), None))
+            .await;
+
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            subpool.on_canonical_state_change(&target_version, Vec::new()),
+        )
+        .await
+        .expect("patch upgrade metadata should be consumed");
+
+        assert_eq!(
+            subpool.inner.read().await.current_protocol_version,
+            target_version
+        );
     }
 }

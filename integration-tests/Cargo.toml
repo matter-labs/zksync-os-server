@@ -13,13 +13,17 @@ build = "build.rs"
 
 [dependencies]
 zksync_os_server.workspace = true
+zksync_os_alloy_ext.workspace = true
+zksync_os_provider.workspace = true
 zksync_os_contract_interface.workspace = true
+zksync_os_tx_validators.workspace = true
 zksync_os_types.workspace = true
 zksync_os_rpc_api.workspace = true
 zksync_os_merkle_tree_api.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_multivm.workspace = true
 zksync_os_network.workspace = true
+zksync_os_replay_archive.workspace = true
 zksync_os_status_server.workspace = true
 zksync_os_integration_tests_macros.workspace = true
 zksync_os_verify_storage_proof = { path = "../tools/verify-storage-proof" }
@@ -56,6 +60,7 @@ sha2 = { workspace = true }
 [dev-dependencies]
 test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
 regex.workspace = true
+httpmock.workspace = true
 
 [features]
 prover-tests = []

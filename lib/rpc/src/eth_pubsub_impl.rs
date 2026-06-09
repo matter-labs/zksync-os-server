@@ -116,6 +116,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthPubsubNamespace<RpcStora
                 let filter = match params.unwrap_or_default() {
                     Params::Logs(filter) => *filter,
                     Params::Bool(_) => return Err(EthPubsubError::InvalidBoolForLogs),
+                    Params::TransactionReceipts(_) => {
+                        return Err(EthPubsubError::TransactionReceiptsNotSupported);
+                    }
                     Params::None => Default::default(),
                 };
                 Ok(serialize_stream_as_messages(
@@ -143,9 +146,15 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthPubsubNamespace<RpcStora
                         ))
                     }
                     Params::Logs(_) => Err(EthPubsubError::InvalidLogFilterForPendingTxs),
+                    Params::TransactionReceipts(_) => {
+                        Err(EthPubsubError::TransactionReceiptsNotSupported)
+                    }
                 }
             }
             SubscriptionKind::Syncing => Err(EthPubsubError::SyncingNotSupported),
+            SubscriptionKind::TransactionReceipts => {
+                Err(EthPubsubError::TransactionReceiptsNotSupported)
+            }
         }
     }
 }
@@ -251,4 +260,6 @@ pub enum EthPubsubError {
     InvalidBoolForLogs,
     #[error("invalid params: specified for head subscription (expected none)")]
     InvalidParamsForNewHeads,
+    #[error("transactionReceipts subscriptions are not supported yet")]
+    TransactionReceiptsNotSupported,
 }

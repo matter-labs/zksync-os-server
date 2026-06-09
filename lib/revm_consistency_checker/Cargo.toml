@@ -29,7 +29,6 @@ zksync_os_interface.workspace = true
 revm = { workspace = true }
 zksync-os-revm.workspace = true
 thiserror.workspace = true
-zksync_os_merkle_tree.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc"] }
 anyhow.workspace = true

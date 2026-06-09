@@ -5,14 +5,13 @@ use std::fmt;
 use alloy::primitives::B256;
 use anyhow::Context as _;
 pub use zksync_os_merkle_tree_api::{
-    BatchTreeProof, Blake2Hasher, HashTree, Leaf, MAX_TREE_DEPTH, MerkleTreeProver,
+    self as api, BatchTreeProof, Blake2Hasher, HashTree, Leaf, MAX_TREE_DEPTH, MerkleTreeProver,
     TreeBatchOutput, TreeEntry, TreeOperation,
 };
 
 pub use self::{
     errors::DeserializeError,
     storage::{Database, MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper},
-    with_version::{MerkleTreeVersion, fixed_bytes_to_bytes32},
 };
 use crate::{
     metrics::{BatchProofStage, LoadStage, METRICS, MerkleTreeInfo},
@@ -27,7 +26,6 @@ mod storage;
 #[cfg(test)]
 mod tests;
 mod types;
-mod with_version;
 
 /// Unstable types that should not be used unless you know what you're doing (e.g., implementing
 /// `Database` trait for a custom type). There are no guarantees whatsoever that APIs / structure of
@@ -345,6 +343,32 @@ impl<DB: Database, P: TreeParams> MerkleTreeProver for MerkleTree<DB, P> {
         };
         let (patch, mut update) = self.create_patch::<TreeEntry>(version, &[], keys)?;
         let proof = patch.create_batch_proof(&self.hasher, vec![], update.take_read_operations());
+        Ok(Some((proof, batch_output)))
+    }
+
+    fn prove_index(
+        &self,
+        version: u64,
+        index: u64,
+    ) -> anyhow::Result<Option<(BatchTreeProof, TreeBatchOutput)>> {
+        let Some(root) = self.db.try_root(version)? else {
+            return Ok(None);
+        };
+        let batch_output = TreeBatchOutput {
+            root_hash: root.hash::<P>(&self.hasher),
+            leaf_count: root.leaf_count,
+        };
+        anyhow::ensure!(
+            index < batch_output.leaf_count,
+            "requested index ({index}) out of range for tree version {version}; leaf count is {}",
+            batch_output.leaf_count
+        );
+
+        // Create a patch will panic if `index` is missing at the specified `version`,
+        // but we've checked for this case above.
+        let patch = self.create_patch_for_single_read(version, index)?;
+        let proof =
+            patch.create_batch_proof(&self.hasher, vec![], vec![TreeOperation::Hit { index }]);
         Ok(Some((proof, batch_output)))
     }
 }

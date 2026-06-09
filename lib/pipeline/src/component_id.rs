@@ -28,6 +28,7 @@ pub enum ComponentId {
     L1SenderExecute,
     RevmConsistencyChecker,
     MigrationGate,
+    ReplayArchiveGate,
 }
 
 impl ComponentId {
@@ -57,6 +58,7 @@ impl ComponentId {
             Self::L1SenderExecute => "l1_sender_execute",
             Self::RevmConsistencyChecker => "revm_consistency_checker",
             Self::MigrationGate => "migration_gate",
+            Self::ReplayArchiveGate => "replay_archive_gate",
         }
     }
 }

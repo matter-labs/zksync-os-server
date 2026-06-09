@@ -10,11 +10,12 @@ use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
     AccessListResult, AccountInfo, BlockOverrides, Bundle, EIP1186AccountProofResponse,
-    EthCallResponse, Index, StateContext, SyncStatus, TransactionRequest,
+    EthCallResponse, FillTransaction, Index, StateContext, SyncStatus, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
+use zksync_os_types::ZkEnvelope;
 
 /// Eth rpc interface: <https://ethereum.github.io/execution-apis/docs/reference/json-rpc-api>
 #[cfg_attr(not(feature = "server"), rpc(client, namespace = "eth"))]
@@ -197,6 +198,13 @@ pub trait EthApi {
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes>;
+
+    /// Fills defaults on a given unsigned transaction.
+    #[method(name = "fillTransaction")]
+    fn fill_transaction(
+        &self,
+        request: TransactionRequest,
+    ) -> RpcResult<FillTransaction<ZkEnvelope>>;
 
     /// Simulate arbitrary number of transactions at an arbitrary blockchain index, with the
     /// optionality of state overrides

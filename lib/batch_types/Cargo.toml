@@ -10,7 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-zksync_os_merkle_tree.workspace = true
+zksync_os_merkle_tree_api.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_mini_merkle_tree.workspace = true
 zksync_os_types.workspace = true

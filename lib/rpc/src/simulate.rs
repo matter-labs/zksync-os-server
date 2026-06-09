@@ -1,4 +1,4 @@
-use crate::eth_call_handler::{EthCallError, EthCallHandler};
+use crate::eth_call_handler::{EthCallError, EthCallHandler, build_pending_block_context};
 use crate::eth_impl::{build_api_log, build_api_tx};
 use crate::result::RevertError;
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
@@ -17,39 +17,32 @@ use zk_os_api::helpers::get_nonce;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{NopTracer, NopValidator};
 use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
-use zksync_os_interface::types::{
-    BlockContext, BlockOutput, ExecutionOutput, ExecutionResult, TxOutput,
-};
+use zksync_os_interface::types::{ExecutionOutput, ExecutionResult, TxOutput};
 use zksync_os_multivm::run_block;
-use zksync_os_rpc_api::types::ZkApiBlock;
+use zksync_os_rpc_api::types::{ZkApiBlock, ZkHeader};
+use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::state_override_view::{
     OverriddenStateView, OwnedOverrides, build_state_override_maps,
 };
-use zksync_os_types::{ZkReceipt, ZkReceiptEnvelope, ZkTransaction, ZksyncOsEncode};
+use zksync_os_types::{BlockOutput, ZkReceipt, ZkReceiptEnvelope, ZkTransaction, ZksyncOsEncode};
 
 impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
-    /// Implements `eth_simulateV1` using the same high-level model as reth: execute the requested
-    /// blocks linearly, carry an overlay of simulated writes into subsequent blocks, and use a
-    /// separate execution context when `validation=false` so fee validation does not leak into the
-    /// returned header.
+    /// Implements `eth_simulateV1`: executes the requested blocks linearly, carrying an
+    /// overlay of simulated writes into subsequent blocks.
     ///
     /// # Spec limitations
     ///
-    /// The following features from the `eth_simulateV1` spec are not supported:
-    ///
-    /// - `traceTransfers=true`: rejected with an error. ZKsync OS has no transfer-tracing
-    ///   inspector equivalent, so synthetic ERC-20 transfer logs cannot be generated.
-    /// - `movePrecompileToAddress`: rejected with an error. The VM does not support remapping
-    ///   precompile addresses on a per-block basis.
-    /// - `blockOverrides.difficulty`: silently ignored. ZKsync OS has no `difficulty` field in
-    ///   its block context; use `blockOverrides.random` (prevrandao) instead.
-    /// - `blockOverrides.parentBeaconBlockRoot`: silently ignored. There is no corresponding
-    ///   field in `BlockContext`.
-    /// - `validation=false` nonce relaxation: partially unsupported. The basefee is zeroed as
-    ///   the spec requires, but nonce checks are not disabled. Transactions without an explicit
-    ///   nonce are auto-filled from state (the common case works), but an explicitly supplied
-    ///   stale nonce will be rejected by the VM.
+    /// - `traceTransfers=true`: rejected. ZKsync OS has no transfer-tracing inspector.
+    /// - `movePrecompileToAddress`: rejected. Precompile remapping is not supported.
+    /// - `blockOverrides.difficulty`: silently ignored. Use `blockOverrides.random`
+    ///   (prevrandao) instead.
+    /// - `blockOverrides.parentBeaconBlockRoot`: silently ignored.
+    /// - `validation=false` nonce relaxation: partial. Missing nonces are auto-filled from
+    ///   state, but an explicitly supplied stale nonce is still rejected by the VM.
+    /// - `validation=false` fee relaxation: under-priced requests are accepted, but the
+    ///   real basefee is preserved during execution so the bootloader's gas accounting
+    ///   matches a future real submission.
     pub fn simulate_v1_impl(
         &self,
         opts: SimulatePayload,
@@ -90,7 +83,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let mut previous_block_number = parent_block_number;
         let mut previous_timestamp = parent_timestamp;
 
-        for sim_block in block_state_calls {
+        for mut sim_block in block_state_calls {
             // Per the eth_simulateV1 spec, prevrandao defaults to zero for simulated blocks
             // unless explicitly overridden via `blockOverrides.random`.
             block_context.mix_hash = U256::ZERO;
@@ -104,39 +97,45 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 )?;
             }
 
-            let response_context = block_context;
-            let mut execution_context = response_context;
-            if !validation {
-                execution_context.eip1559_basefee = U256::ZERO;
-            }
-
             let simulation_view =
                 OverriddenStateView::new(base_state.clone(), Arc::clone(&overlays));
 
-            let state_overrides = match sim_block.state_overrides {
-                Some(state_overrides) => {
-                    if state_overrides
-                        .values()
-                        .any(|account| account.move_precompile_to.is_some())
-                    {
-                        return Err(EthCallError::SimulateMovePrecompileNotSupported);
+            let mut user_state_overrides = sim_block.state_overrides.unwrap_or_default();
+            if !validation {
+                // RPC-layer `ensure_fees` only suppresses the early `FeeCapTooLow`; the
+                // bootloader still enforces `gas_price >= basefee` and
+                // `balance >= gas_limit * gas_price + value`. Clamp fees up to basefee and
+                // bump unfunded senders to `U256::MAX`. User-supplied overrides win.
+                let basefee = block_context.eip1559_basefee.saturating_to::<u128>();
+                for call in &mut sim_block.calls {
+                    clamp_request_fees_to_basefee(call, basefee);
+                    let from = call.from.unwrap_or_default();
+                    let entry = user_state_overrides.entry(from).or_default();
+                    if entry.balance.is_none() {
+                        entry.balance = Some(U256::MAX);
                     }
-                    build_state_override_maps(&simulation_view, state_overrides)
                 }
-                None => OwnedOverrides::default(),
-            };
+            }
+            if user_state_overrides
+                .values()
+                .any(|account| account.move_precompile_to.is_some())
+            {
+                return Err(EthCallError::SimulateMovePrecompileNotSupported);
+            }
+            let state_overrides = build_state_override_maps(&simulation_view, user_state_overrides);
             let overridden_view =
                 OverriddenStateView::new(simulation_view, state_overrides.clone());
             let txs = self.create_simulation_txs(
                 sim_block.calls,
-                execution_context,
+                block_context,
                 overridden_view.clone(),
+                !validation,
             )?;
             let tx_source = TxListSource {
                 transactions: txs.iter().cloned().map(|tx| tx.encode()).collect(),
             };
             let block_output = run_block(
-                execution_context,
+                block_context,
                 overridden_view.clone(),
                 overridden_view,
                 tx_source,
@@ -147,7 +146,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .map_err(EthCallError::ForwardSubsystemError)?;
 
             let (simulated_block, block_overlay) = build_simulated_block_response(
-                response_context,
+                block_context,
                 txs,
                 block_output,
                 return_full_transactions,
@@ -188,7 +187,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 .get_context(parent_block)
                 .ok_or(RpcStorageError::BlockNotFound(block))?;
             return Ok(SimulationStartContext {
-                block_context: self.build_pending_block_context(),
+                block_context: build_pending_block_context(&self.storage, self.chain_id),
                 parent_block_number: parent_block,
                 parent_timestamp: parent_context.timestamp,
             });
@@ -221,6 +220,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         calls: Vec<TransactionRequest>,
         block_context: BlockContext,
         mut state_view: V,
+        relax_fee_validation: bool,
     ) -> Result<Vec<ZkTransaction>, EthCallError> {
         let default_gas_limit = simulation_default_gas_limit(
             &calls,
@@ -266,7 +266,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                             ))?;
                 }
 
-                self.create_tx_from_request(request, &block_context, false)
+                self.create_tx_from_request(request, &block_context, relax_fee_validation)
             })
             .collect()
     }
@@ -330,6 +330,7 @@ fn build_simulated_block_response(
         simulated_txs.push(simulated_tx);
     }
 
+    let block_hash = sealed_header.hash();
     let mut header = sealed_header.unseal();
     header.base_fee_per_gas = Some(block_context.eip1559_basefee.saturating_to());
     header.logs_bloom = block_bloom;
@@ -342,8 +343,36 @@ fn build_simulated_block_response(
     header.transactions_root = calculate_transaction_root(&executed_envelopes);
     header.receipts_root = calculate_receipt_root(&receipts);
 
-    let header = alloy::rpc::types::Header::new(header);
-    let block_hash = header.hash;
+    let header = ZkHeader::from_consensus(
+        alloy::consensus::Header {
+            parent_hash: header.parent_hash,
+            ommers_hash: header.ommers_hash,
+            beneficiary: header.beneficiary,
+            state_root: header.state_root,
+            transactions_root: header.transactions_root,
+            receipts_root: header.receipts_root,
+            logs_bloom: header.logs_bloom,
+            difficulty: header.difficulty,
+            number: header.number,
+            gas_limit: header.gas_limit,
+            gas_used: header.gas_used,
+            timestamp: header.timestamp,
+            extra_data: header.extra_data,
+            mix_hash: header.mix_hash,
+            nonce: header.nonce,
+            base_fee_per_gas: header.base_fee_per_gas,
+            withdrawals_root: header.withdrawals_root,
+            blob_gas_used: header.blob_gas_used,
+            excess_blob_gas: header.excess_blob_gas,
+            parent_beacon_block_root: header.parent_beacon_block_root,
+            requests_hash: header.requests_hash,
+            block_access_list_hash: None,
+            slot_number: None,
+        }
+        .seal(block_hash),
+        Some(U256::ZERO),
+        None,
+    );
     let calls = simulated_txs
         .iter()
         .map(|tx| tx.to_call_result(block_hash, block_context))
@@ -427,6 +456,7 @@ fn apply_simulate_block_overrides(
         base_fee,
         blob_base_fee,
         block_hash,
+        beacon_root: _,
         // ZKsync OS uses mix_hash for prevrandao and has no separate difficulty field; ignored.
         difficulty: _,
     } = overrides;
@@ -521,6 +551,22 @@ fn simulation_default_gas_limit(
     Ok(((block_gas_limit - total_specified_gas) / calls_without_gas).min(per_call_gas_cap))
 }
 
+/// Raises the request's fees up to `basefee` so it passes the bootloader's adequacy
+/// check, preserving whichever fee shape the caller used. When no fees are supplied,
+/// defaults to legacy `gas_price` to avoid promoting the request to EIP-1559.
+fn clamp_request_fees_to_basefee(call: &mut TransactionRequest, basefee: u128) {
+    if let Some(gas_price) = call.gas_price {
+        call.gas_price = Some(gas_price.max(basefee));
+    } else if call.max_fee_per_gas.is_some() || call.max_priority_fee_per_gas.is_some() {
+        call.max_fee_per_gas = Some(call.max_fee_per_gas.unwrap_or(0).max(basefee));
+        if call.max_priority_fee_per_gas.is_none() {
+            call.max_priority_fee_per_gas = Some(0);
+        }
+    } else {
+        call.gas_price = Some(basefee);
+    }
+}
+
 struct SimulatedTx {
     tx: ZkTransaction,
     tx_index_in_block: u64,
@@ -556,7 +602,8 @@ impl SimulatedTx {
                             return_data.clone(),
                             Some(SimulateError {
                                 code: -32000,
-                                message: RevertError::new(return_data).to_string(),
+                                message: RevertError::new(return_data.clone()).to_string(),
+                                data: Some(return_data.clone()),
                             }),
                         )
                     }
@@ -566,6 +613,7 @@ impl SimulatedTx {
                     return_data,
                     logs,
                     gas_used: output.gas_used,
+                    max_used_gas: Some(output.gas_used),
                     status: error.is_none(),
                     error,
                 }
@@ -574,10 +622,12 @@ impl SimulatedTx {
                 return_data: Bytes::default(),
                 logs: vec![],
                 gas_used: 0,
+                max_used_gas: None,
                 status: false,
                 error: Some(SimulateError {
                     code: -32015,
                     message: format!("vm execution error: {err}"),
+                    data: None,
                 }),
             },
         }
@@ -646,7 +696,7 @@ impl SimulatedTx {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zksync_os_interface::types::BlockHashes;
+    use zksync_os_storage_api::BlockHashes;
 
     #[test]
     fn simulate_block_overrides_reject_non_increasing_sequences() {

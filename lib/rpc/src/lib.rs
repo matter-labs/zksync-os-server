@@ -2,12 +2,13 @@ mod call_fees;
 
 mod config;
 
-pub use config::RpcConfig;
+pub use config::{RpcConfig, RpcRateLimit};
 use std::sync::Arc;
 use tokio::sync::watch;
 
 mod eth_call_handler;
 pub use eth_call_handler::EthCallHandler;
+mod eth_fill_transaction_handler;
 mod eth_filter;
 mod eth_impl;
 mod eth_pubsub_impl;
@@ -22,7 +23,10 @@ pub mod js_tracer;
 mod log_proof_utils;
 mod monitoring_middleware;
 mod net_impl;
+mod rate_limit_middleware;
 mod sandbox;
+mod tx_forwarder;
+pub use tx_forwarder::{TxForwardEndpoint, TxForwarder};
 mod tx_handler;
 mod txpool_impl;
 mod types;
@@ -37,6 +41,7 @@ use crate::eth_pubsub_impl::EthPubsubNamespace;
 use crate::monitoring_middleware::Monitoring;
 use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
+use crate::rate_limit_middleware::{RateLimiting, build_limiters};
 use crate::txpool_impl::TxpoolNamespace;
 use crate::unstable_impl::UnstableNamespace;
 use crate::web3_impl::Web3Namespace;
@@ -53,7 +58,6 @@ use reth_tasks::Runtime;
 use tower_http::cors::{Any, CorsLayer};
 use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_genesis::GenesisInputSource;
-use zksync_os_interface::types::BlockContext;
 use zksync_os_l1_watcher::MigrationTrigger;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::debug::DebugApiServer;
@@ -66,6 +70,8 @@ use zksync_os_rpc_api::txpool::TxpoolApiServer;
 use zksync_os_rpc_api::unstable::UnstableApiServer;
 use zksync_os_rpc_api::web3::Web3ApiServer;
 use zksync_os_rpc_api::zks::ZksApiServer;
+use zksync_os_storage_api::BlockContext;
+use zksync_os_tx_validators::policy_client::PolicyClient;
 use zksync_os_types::TransactionAcceptanceState;
 
 #[allow(clippy::too_many_arguments)]
@@ -79,8 +85,9 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     genesis_input_source: Arc<dyn GenesisInputSource>,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
-    tx_forwarder: Option<DynProvider>,
+    tx_forwarder: Option<TxForwarder>,
     gateway_provider: Option<DynProvider>,
+    policy_client: Option<PolicyClient>,
     settlement_layer_intervals: SettlementLayerIntervals,
     migration_triggered: watch::Receiver<Option<MigrationTrigger>>,
     runtime: &Runtime,
@@ -94,7 +101,8 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         config.clone(),
         storage.clone(),
         chain_id,
-        last_constructed_block_context,
+        last_constructed_block_context.clone(),
+        policy_client.clone(),
     );
     rpc.merge(
         EthNamespace::new(
@@ -105,6 +113,8 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             chain_id,
             acceptance_state,
             tx_forwarder,
+            policy_client,
+            last_constructed_block_context,
         )
         .into_rpc(),
     )?;
@@ -146,8 +156,12 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     let middleware = tower::ServiceBuilder::new().layer(cors);
 
     let max_response_size_bytes = config.max_response_size_bytes();
+    // Build once so all connections share the same token-bucket state.
+    let limiters = build_limiters(&config.rate_limits);
     let rpc_middleware = RpcServiceBuilder::new()
-        .layer_fn(move |service| Monitoring::new(service, max_response_size_bytes));
+        // Monitoring is outermost so rate-limited responses still appear in error metrics.
+        .layer_fn(move |service| Monitoring::new(service, max_response_size_bytes))
+        .layer_fn(move |service| RateLimiting::new(service, limiters.clone()));
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)

@@ -1,20 +1,17 @@
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
-use crate::run_l1_sender;
-use alloy::network::{Ethereum, EthereumWallet};
 use alloy::primitives::Address;
-use alloy::providers::fillers::{FillProvider, TxFiller};
-use alloy::providers::{Provider, WalletProvider};
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_provider::NodeProvider;
 
 /// Generic L1 Sender pipeline component
 /// Can be used for commit, prove, or execute operations
-pub struct L1Sender<F: TxFiller<Ethereum>, P: Provider<Ethereum>, C> {
-    pub provider: FillProvider<F, P>,
+pub struct L1Sender<C> {
+    pub provider: NodeProvider,
     pub config: L1SenderConfig<C>,
     pub to_address: Address,
     pub gateway: bool,
@@ -25,10 +22,8 @@ pub struct L1Sender<F: TxFiller<Ethereum>, P: Provider<Ethereum>, C> {
 }
 
 #[async_trait]
-impl<F, P, C> PipelineComponent for L1Sender<F, P, C>
+impl<C> PipelineComponent for L1Sender<C>
 where
-    F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
-    P: Provider<Ethereum> + Clone + 'static,
     C: SendToL1 + Send + Sync + 'static,
 {
     type Input = L1SenderCommand<C>;
@@ -37,22 +32,15 @@ where
     const COMPONENT_ID: zksync_os_pipeline::ComponentId = C::COMPONENT_ID;
 
     async fn run(
-        self,
+        mut self,
         input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        run_l1_sender(
-            input,
-            output,
-            self.to_address,
-            self.provider,
-            self.config,
-            self.gateway,
-            state_reporter,
-            self.commit_submitted_tx,
-            self.sl_block_number,
-        )
-        .await
+        self.register_operator().await?;
+        tokio::select! {
+            result = self.run_l1_sender(input, output, state_reporter) => result,
+            result = self.report_operator_metrics_loop() => result,
+        }
     }
 }

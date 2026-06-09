@@ -88,6 +88,10 @@ impl PoolTransaction for L2PooledTransaction {
         self.transaction().clone()
     }
 
+    fn consensus_ref(&self) -> Recovered<&Self::Consensus> {
+        Recovered::new_unchecked(&*self.transaction, self.transaction.signer())
+    }
+
     fn into_consensus(self) -> Recovered<Self::Consensus> {
         self.transaction
     }
