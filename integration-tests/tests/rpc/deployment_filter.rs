@@ -6,10 +6,10 @@ use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::Result;
 use tokio::time::{Duration, timeout};
-use zksync_os_alloy_ext::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::{DeploymentFilterConfig, GatewayTester};
+use zksync_os_provider::EthWalletProvider;
 
 /// The default rich wallet address (derived from the well-known test private key).
 const AUTHORIZED_DEPLOYER: &str = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049";

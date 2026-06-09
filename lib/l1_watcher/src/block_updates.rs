@@ -1,9 +1,10 @@
 use alloy::eips::BlockId;
 use alloy::primitives::BlockNumber;
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::Provider;
 use reth_tasks::Runtime;
 use std::time::Duration;
 use tokio::sync::watch;
+use zksync_os_provider::NodeProvider;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockBoundary {
@@ -19,21 +20,27 @@ pub struct BlockUpdates {
 }
 
 pub fn run(
-    provider: DynProvider,
+    provider: NodeProvider,
     runtime: &Runtime,
     task_name: &'static str,
     poll_interval: Duration,
+    finalized_poll_interval: Duration,
 ) -> watch::Receiver<BlockUpdates> {
     let (l1_head, receiver) = watch::channel(BlockUpdates::default());
     runtime.spawn_critical_task(task_name, async move {
-        let mut timer = tokio::time::interval(poll_interval);
+        let mut latest_timer = tokio::time::interval(poll_interval);
+        let mut finalized_timer = tokio::time::interval(finalized_poll_interval);
         loop {
-            timer.tick().await;
             if l1_head.receiver_count() == 0 {
                 tracing::info!("block updates have no subscribers; stopping");
                 return;
             }
-            if let Err(e) = poll(&provider, &l1_head).await {
+
+            let result = tokio::select! {
+                _ = latest_timer.tick() => poll_latest(&provider, &l1_head).await,
+                _ = finalized_timer.tick() => poll_finalized(&provider, &l1_head).await,
+            };
+            if let Err(e) = result {
                 tracing::error!("block updates fatal error: {e}");
                 panic!("block updates failed: {e}");
             }
@@ -42,24 +49,35 @@ pub fn run(
     receiver
 }
 
-async fn poll(
-    provider: &DynProvider,
+async fn poll_latest(
+    provider: &NodeProvider,
     l1_head: &watch::Sender<BlockUpdates>,
 ) -> alloy::transports::TransportResult<()> {
     let latest_block = provider.get_block_number().await?;
+    l1_head.send_if_modified(|current| {
+        if current.latest_block == latest_block {
+            false
+        } else {
+            current.latest_block = latest_block;
+            true
+        }
+    });
+    Ok(())
+}
+
+async fn poll_finalized(
+    provider: &NodeProvider,
+    l1_head: &watch::Sender<BlockUpdates>,
+) -> alloy::transports::TransportResult<()> {
     let finalized_block = provider
         .get_block_number_by_id(BlockId::finalized())
         .await?
         .expect("The chain does not have any finalized blocks yet.");
-    let next = BlockUpdates {
-        latest_block,
-        finalized_block,
-    };
     l1_head.send_if_modified(|current| {
-        if *current == next {
+        if current.finalized_block == finalized_block {
             false
         } else {
-            *current = next;
+            current.finalized_block = finalized_block;
             true
         }
     });

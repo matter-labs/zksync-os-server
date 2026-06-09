@@ -1,19 +1,24 @@
 use crate::execution::fee_provider::{FeeParams, FeeProvider};
 use crate::execution::metrics::EXECUTION_METRICS;
-use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
-use alloy::consensus::Sealed;
-use alloy::primitives::{Address, TxHash, U256};
+use crate::model::blocks::{
+    BlockCommand, InvalidTxPolicy, PreparedBlockCommand, RebuildCommand, SealPolicy,
+};
+use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use anyhow::Context as _;
 use futures::StreamExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, time::Instant};
+use zksync_os_contract_interface::settlement_layer_intervals::{
+    IntervalSettlementLayer, SettlementLayerIntervals,
+};
+use zksync_os_genesis::genesis_header;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool};
+use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_storage_api::{BlockContext, BlockHashes};
 use zksync_os_types::{
-    BlockOutput, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, SystemTxEnvelope,
-    SystemTxType, ZkEnvelope, ZkTransaction,
+    BlockOutput, BlockStartCursors, ExecutionVersion, SystemTxEnvelope, SystemTxType, ZkEnvelope,
+    ZkTransaction,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -27,376 +32,402 @@ use zksync_os_types::{
 ///  it doesn't tolerate jumps in L1 priority IDs.
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider<Subpool> {
-    next_cursors: BlockStartCursors,
+    fee_provider: FeeProvider,
     pool: Pool<Subpool>,
-    block_hashes_for_next_block: BlockHashes,
-    previous_block_timestamp: u64,
-    next_block_number: u64,
-    block_time: Duration,
-    max_transactions_in_block: usize,
-    chain_id: u64,
-    gas_limit: u64,
-    pubdata_limit: u64,
-    interop_roots_per_block: u64,
-    service_block_delay: Duration,
+    config: Config,
+    last_block: Option<LastBlock>,
     next_interop_tx_allowed_after: Instant,
-    /// Protocol version to be used for the next produced block.
-    /// Can change in runtime in case of upgrades.
-    protocol_version: ProtocolSemanticVersion,
-    sl_chain_id_at_startup: u64,
     /// L2 chain id of the chain's currently-active settlement layer. Can change in runtime if there
     /// is a migration in the process.
     current_sl_chain_id: u64,
-    /// L1 chain id, fixed at startup.
-    l1_chain_id: u64,
-    /// Whether the one-time `SetSLChainId` system transaction has already been included.
-    /// Initialized to `true` on restart when already at v31+, since it must have been
-    /// included in a prior run. Also set to `true` during replay when a v31 block is
-    /// encountered. Only `false` on fresh v31 genesis or pre-v31 chains that haven't
-    /// upgraded yet.
-    sl_chain_id_set: bool,
-    fee_collector_address: Address,
     last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
-    fee_provider: FeeProvider,
+}
+
+pub struct Config {
+    pub l2_chain_id: u64,
+    pub l1_chain_id: u64,
+    pub gas_limit: u64,
+    pub pubdata_limit: u64,
+    pub fee_collector_address: Address,
+    pub block_time: Duration,
+    pub service_block_delay: Duration,
+    pub max_transactions_in_block: usize,
+    pub interop_roots_per_block: u64,
+}
+
+struct LastBlock {
+    record: ReplayRecord,
+    hash: BlockHash,
+    next_cursors: BlockStartCursors,
 }
 
 impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        next_cursors: BlockStartCursors,
-        pool: Pool<Subpool>,
-        block_hashes_for_next_block: BlockHashes,
-        previous_block_timestamp: u64,
-        next_block_number: u64,
-        block_time: Duration,
-        max_transactions_in_block: usize,
-        chain_id: u64,
-        gas_limit: u64,
-        pubdata_limit: u64,
-        interop_roots_per_block: u64,
-        service_block_delay: Duration,
-        protocol_version: ProtocolSemanticVersion,
-        sl_chain_id_at_startup: u64,
-        l1_chain_id: u64,
-        fee_collector_address: Address,
-        last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
         fee_provider: FeeProvider,
+        pool: Pool<Subpool>,
+        config: Config,
+        intervals: &SettlementLayerIntervals,
+        last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
     ) -> Self {
-        // If we're already past v31 and not on the very first block, the SetSLChainId tx
-        // must have been included in a previous run. For v31 itself at block > 1, it was also
-        // already included (either via upgrade or genesis). This flag may also be updated
-        // during replay in `apply_block_output`.
-        let sl_chain_id_set = protocol_version.minor >= 31 && next_block_number > 1;
+        let current_sl_chain_id = match intervals.current_settlement_layer() {
+            IntervalSettlementLayer::L1 => config.l1_chain_id,
+            IntervalSettlementLayer::Gateway(gw_chain_id) => *gw_chain_id,
+        };
         Self {
-            next_cursors,
-            pool,
-            block_hashes_for_next_block,
-            previous_block_timestamp,
-            next_block_number,
-            block_time,
-            max_transactions_in_block,
-            chain_id,
-            gas_limit,
-            pubdata_limit,
-            interop_roots_per_block,
-            service_block_delay,
-            next_interop_tx_allowed_after: Instant::now(),
-            protocol_version,
-            sl_chain_id_at_startup,
-            current_sl_chain_id: sl_chain_id_at_startup,
-            l1_chain_id,
-            sl_chain_id_set,
-            fee_collector_address,
-            last_constructed_block_ctx_sender,
             fee_provider,
+            pool,
+            config,
+            last_block: None,
+            next_interop_tx_allowed_after: Instant::now(),
+            current_sl_chain_id,
+            last_constructed_block_ctx_sender,
         }
     }
 
     /// `true` when the chain currently settles on a Gateway (i.e. its tracked SL chain id
     /// differs from L1's).
     fn settles_on_gateway(&self) -> bool {
-        self.current_sl_chain_id != self.l1_chain_id
+        self.current_sl_chain_id != self.config.l1_chain_id
     }
 
-    pub fn next_block_number(&self) -> u64 {
-        self.next_block_number
+    pub fn last_block_number(&self) -> Option<u64> {
+        self.last_block
+            .as_ref()
+            .map(|b| b.record.block_context.block_number)
     }
 
     pub async fn prepare_command(
         &mut self,
         block_command: BlockCommand,
-    ) -> anyhow::Result<PreparedBlockCommand<'_>> {
-        let prepared_command = match block_command {
-            BlockCommand::Produce(_) => {
-                let fee_params = self.fee_provider.produce_fee_params().await?;
-                self.pool
-                    .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
-                let block_number = self.next_block_number;
-                // Create stream:
-                // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
-                // - L1 transactions first, then L2 transactions.
-                let best_txs = self
-                    .pool
-                    .best_transactions_stream(
-                        self.next_interop_tx_allowed_after,
-                        self.settles_on_gateway(),
+    ) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
+        match block_command {
+            BlockCommand::Produce(_) => self.produce().await,
+            BlockCommand::Replay(record) => self.replay(record).await,
+            BlockCommand::Rebuild(rebuild) => self.rebuild(rebuild).await,
+        }
+    }
+
+    async fn produce(&mut self) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
+        let LastBlock {
+            record: previous_record,
+            hash: previous_block_hash,
+            next_cursors,
+        } = self
+            .last_block
+            .take()
+            .expect("tried to produce a block without replaying at least one record");
+        let fee_params = self.fee_provider.produce_fee_params().await?;
+        self.pool
+            .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
+        let block_number = previous_record.block_context.block_number + 1;
+        // Create stream:
+        // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
+        // - L1 transactions first, then L2 transactions.
+        let best_txs = self
+            .pool
+            .best_transactions_stream(
+                self.next_interop_tx_allowed_after,
+                self.settles_on_gateway(),
+            )
+            .await
+            .context("mempool is closed")?;
+
+        let timestamp = (millis_since_epoch() / 1000) as u64;
+
+        // Check if we peeked an upgrade transaction info.
+        // It is possible that we peek an upgrade with version <= self.protocol_version
+        // since we do not consume patch upgrades when replaying/rebuilding blocks. Such upgrade can be safely skipped.
+        let (protocol_version, force_preimages) = if let Some(upgrade_metadata) =
+            best_txs.upgrade_metadata
+            && upgrade_metadata.protocol_version > previous_record.protocol_version
+        {
+            tracing::info!(
+                block_number,
+                ?upgrade_metadata,
+                "including protocol upgrade transaction in the block"
+            );
+            // Invariant: transactions sent through this stream must be ready for execution, e.g.
+            // transaction should not be sent until timestamp is reached.
+            // We add some margin of error for timestamp comparison.
+            let current_timestamp = timestamp.saturating_add(5);
+            anyhow::ensure!(
+                upgrade_metadata.timestamp <= current_timestamp,
+                "upgrade transaction with timestamp {} received too early at {}; tx: {upgrade_metadata:?}",
+                upgrade_metadata.timestamp,
+                current_timestamp
+            );
+            (
+                upgrade_metadata.protocol_version,
+                upgrade_metadata.force_preimages.clone(),
+            )
+        } else {
+            (previous_record.protocol_version.clone(), Vec::new())
+        };
+
+        let execution_version: ExecutionVersion = (&protocol_version)
+            .try_into()
+            .context("Cannot instantiate a block for unsupported execution version")?;
+
+        // Append a SetSLChainId system transaction exactly once: when the protocol
+        // version is v31 (either via upgrade from v30, or on the first block of a
+        // fresh v31 chain). After it fires once, the condition can never trigger again.
+        let (tx_source, expect_sl_chain_id_tx_after_upgrade) = if protocol_version.minor == 31
+            && (previous_record.protocol_version.minor < 31
+                || previous_record.block_context.block_number == 0)
+        {
+            let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
+                self.current_sl_chain_id,
+                // We use `u64::MAX` as a placeholder, since it is not an actual migration
+                u64::MAX,
+            );
+            let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
+                futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
+            ));
+            (tx_source, true)
+        } else {
+            (best_txs.stream, false)
+        };
+
+        let FeeParams {
+            eip1559_basefee,
+            native_price,
+            pubdata_price,
+        } = fee_params;
+        let block_context = BlockContext {
+            eip1559_basefee,
+            native_price,
+            pubdata_price,
+            block_number,
+            timestamp,
+            chain_id: self.config.l2_chain_id,
+            coinbase: self.config.fee_collector_address,
+            block_hashes: previous_record
+                .block_context
+                .block_hashes
+                .push(previous_block_hash),
+            gas_limit: self.config.gas_limit,
+            pubdata_limit: self.config.pubdata_limit,
+            // todo: initialize as source of randomness, i.e. the value of prevRandao
+            mix_hash: Default::default(),
+            execution_version: execution_version as u32,
+            blob_fee: U256::ONE,
+        };
+        self.last_constructed_block_ctx_sender
+            .send_replace(Some(block_context));
+        Ok(Some(PreparedBlockCommand {
+            block_context,
+            tx_source,
+            seal_policy: SealPolicy::Decide(
+                self.config.block_time,
+                self.config.max_transactions_in_block,
+            ),
+            invalid_tx_policy: InvalidTxPolicy::RejectAndContinue {
+                mark_in_source: true,
+            },
+            metrics_label: "produce",
+            protocol_version,
+            expected_block_output_hash: None,
+            previous_block_timestamp: previous_record.block_context.timestamp,
+            force_preimages,
+            expect_sl_chain_id_tx_after_upgrade,
+            starting_cursors: next_cursors.clone(),
+            interop_roots_per_block: self.config.interop_roots_per_block,
+            strict_subpool_cleanup: true,
+        }))
+    }
+
+    async fn replay(
+        &mut self,
+        record: Box<ReplayRecord>,
+    ) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
+        if record.block_context.block_number == 0 {
+            self.last_block = Some(LastBlock {
+                record: *record,
+                hash: genesis_header().hash(),
+                next_cursors: Default::default(),
+            });
+            return Ok(None);
+        }
+
+        if let Some(LastBlock {
+            record: last_record,
+            ..
+        }) = &self.last_block
+        {
+            anyhow::ensure!(
+                last_record.block_context.block_number + 1 == record.block_context.block_number,
+                "blocks received our of order: last block was {}, but received {}",
+                last_record.block_context.block_number,
+                record.block_context.block_number
+            );
+            anyhow::ensure!(
+                last_record.block_context.timestamp == record.previous_block_timestamp,
+                "inconsistent previous block timestamp: last block was {}, but received {}",
+                last_record.block_context.timestamp,
+                record.previous_block_timestamp
+            );
+            anyhow::ensure!(
+                last_record.block_context.block_hashes.0[1..]
+                    == record.block_context.block_hashes.0[..255],
+                "inconsistent previous block hashes: last block's (#{}) was {:?}, but received new block's {:?}",
+                last_record.block_context.block_number,
+                last_record.block_context.block_hashes,
+                record.block_context.block_hashes
+            );
+        }
+
+        let expect_sl_chain_id_tx_after_upgrade = record
+            .transactions
+            .windows(2)
+            .find(|window| {
+                matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
+                    && matches!(
+                        window[1].as_system_tx_type(),
+                        Some(SystemTxType::SetSLChainId(_, _))
                     )
-                    .await
-                    .context("mempool is closed")?;
+            })
+            .is_some();
 
-                let timestamp = (millis_since_epoch() / 1000) as u64;
+        Ok(Some(PreparedBlockCommand {
+            block_context: record.block_context,
+            seal_policy: SealPolicy::UntilExhausted {
+                allowed_to_finish_early: false,
+            },
+            invalid_tx_policy: InvalidTxPolicy::Abort,
+            tx_source: MarkingTxStream::unmarkable(futures::stream::iter(record.transactions)),
+            metrics_label: "replay",
+            protocol_version: record.protocol_version,
+            expected_block_output_hash: Some(record.block_output_hash),
+            previous_block_timestamp: record.previous_block_timestamp,
+            force_preimages: record.force_preimages,
+            expect_sl_chain_id_tx_after_upgrade,
+            starting_cursors: record.starting_cursors,
+            interop_roots_per_block: self.config.interop_roots_per_block,
+            strict_subpool_cleanup: false,
+        }))
+    }
 
-                // Check if we peeked an upgrade transaction info.
-                // It is possible that we peek an upgrade with version <= self.protocol_version
-                // since we do not consume patch upgrades when replaying/rebuilding blocks. Such upgrade can be safely skipped.
-                let force_preimages = if let Some(upgrade_metadata) = best_txs.upgrade_metadata
-                    && upgrade_metadata.protocol_version > self.protocol_version
-                {
-                    tracing::info!(
-                        block_number,
-                        ?upgrade_metadata,
-                        "including protocol upgrade transaction in the block"
-                    );
-                    // Invariant: transactions sent through this stream must be ready for execution, e.g.
-                    // transaction should not be sent until timestamp is reached.
-                    // We add some margin of error for timestamp comparison.
-                    let current_timestamp = timestamp.saturating_add(5);
-                    anyhow::ensure!(
-                        upgrade_metadata.timestamp <= current_timestamp,
-                        "upgrade transaction with timestamp {} received too early at {}; tx: {upgrade_metadata:?}",
-                        upgrade_metadata.timestamp,
-                        current_timestamp
-                    );
-                    self.protocol_version = upgrade_metadata.protocol_version.clone();
-                    upgrade_metadata.force_preimages.clone()
+    async fn rebuild(
+        &mut self,
+        rebuild: Box<RebuildCommand>,
+    ) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
+        let (previous_block_timestamp, next_cursors, block_hashes) =
+            if let Some(last_block) = self.last_block.as_ref() {
+                (
+                    last_block.record.block_context.timestamp,
+                    last_block.next_cursors.clone(),
+                    last_block
+                        .record
+                        .block_context
+                        .block_hashes
+                        .push(last_block.hash),
+                )
+            } else {
+                (
+                    rebuild.replay_record.previous_block_timestamp,
+                    rebuild.replay_record.starting_cursors,
+                    rebuild.replay_record.block_context.block_hashes,
+                )
+            };
+
+        let block_number = rebuild.replay_record.block_context.block_number;
+        let (execution_version, protocol_version) = (
+            rebuild.replay_record.block_context.execution_version,
+            rebuild.replay_record.protocol_version,
+        );
+
+        if rebuild.make_empty
+            && rebuild
+                .replay_record
+                .transactions
+                .iter()
+                .any(|tx| matches!(tx.envelope(), ZkEnvelope::Upgrade(_)))
+        {
+            anyhow::bail!(
+                "Cannot make an empty block when there is an upgrade transaction in the replay record for block {}",
+                block_number
+            );
+        }
+
+        let timestamp = if rebuild.reset_timestamp {
+            (millis_since_epoch() / 1000) as u64
+        } else {
+            rebuild.replay_record.block_context.timestamp
+        };
+        let block_context = BlockContext {
+            eip1559_basefee: rebuild.replay_record.block_context.eip1559_basefee,
+            native_price: rebuild.replay_record.block_context.native_price,
+            pubdata_price: rebuild.replay_record.block_context.pubdata_price,
+            block_number,
+            timestamp,
+            blob_fee: rebuild.replay_record.block_context.blob_fee,
+            chain_id: self.config.l2_chain_id,
+            coinbase: self.config.fee_collector_address,
+            block_hashes,
+            gas_limit: self.config.gas_limit,
+            pubdata_limit: self.config.pubdata_limit,
+            // todo: initialize as source of randomness, i.e. the value of prevRandao
+            mix_hash: Default::default(),
+            execution_version,
+        };
+        let txs = if rebuild.make_empty {
+            Vec::new()
+        } else {
+            let first_l1_tx = rebuild
+                .replay_record
+                .transactions
+                .iter()
+                .find(|tx| matches!(tx.envelope(), ZkEnvelope::L1(_)));
+            // It's possible that we haven't processed some L1 transaction from previous blocks when rebuilding.
+            // In that case we shouldn't consider next L1 txs when rebuilding.
+            let filter_l1_txs =
+                if let Some(ZkEnvelope::L1(l1_tx)) = first_l1_tx.map(|tx| tx.envelope()) {
+                    l1_tx.priority_id() != next_cursors.l1_priority_id
                 } else {
-                    Vec::new()
+                    false
                 };
-
-                let execution_version: ExecutionVersion = (&self.protocol_version)
-                    .try_into()
-                    .context("Cannot instantiate a block for unsupported execution version")?;
-
-                // Append a SetSLChainId system transaction exactly once: when the protocol
-                // version is v31 (either via upgrade from v30, or on the first block of a
-                // fresh v31 chain). After it fires once, `sl_chain_id_set` prevents it from
-                // ever triggering again.
-                let (tx_source, expect_sl_chain_id_tx_after_upgrade) = if !self.sl_chain_id_set
-                    && self.protocol_version.minor == 31
-                {
-                    self.sl_chain_id_set = true;
-                    let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
-                        self.sl_chain_id_at_startup,
-                        // We use `u64::MAX` as a placeholder, since it is not an actual migration
-                        u64::MAX,
-                    );
-                    let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
-                        futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
-                    ));
-                    (tx_source, true)
-                } else {
-                    (best_txs.stream, false)
-                };
-
-                let FeeParams {
-                    eip1559_basefee,
-                    native_price,
-                    pubdata_price,
-                } = fee_params;
-                let block_context = BlockContext {
-                    eip1559_basefee,
-                    native_price,
-                    pubdata_price,
-                    block_number,
-                    timestamp,
-                    chain_id: self.chain_id,
-                    coinbase: self.fee_collector_address,
-                    block_hashes: self.block_hashes_for_next_block,
-                    gas_limit: self.gas_limit,
-                    pubdata_limit: self.pubdata_limit,
-                    // todo: initialize as source of randomness, i.e. the value of prevRandao
-                    mix_hash: Default::default(),
-                    execution_version: execution_version as u32,
-                    blob_fee: U256::ONE,
-                };
-                self.last_constructed_block_ctx_sender
-                    .send_replace(Some(block_context));
-                PreparedBlockCommand {
-                    block_context,
-                    tx_source,
-                    seal_policy: SealPolicy::Decide(
-                        self.block_time,
-                        self.max_transactions_in_block,
-                    ),
-                    invalid_tx_policy: InvalidTxPolicy::RejectAndContinue {
-                        mark_in_source: true,
-                    },
-                    metrics_label: "produce",
-                    protocol_version: self.protocol_version.clone(),
-                    expected_block_output_hash: None,
-                    previous_block_timestamp: self.previous_block_timestamp,
-                    force_preimages,
-                    expect_sl_chain_id_tx_after_upgrade,
-                    starting_cursors: self.next_cursors.clone(),
-                    interop_roots_per_block: self.interop_roots_per_block,
-                    strict_subpool_cleanup: true,
-                }
-            }
-            BlockCommand::Replay(record) => {
-                anyhow::ensure!(
-                    self.next_block_number == record.block_context.block_number,
-                    "blocks received our of order: {} in component state, {} in resolved ReplayRecord",
-                    self.next_block_number,
-                    record.block_context.block_number
-                );
-                anyhow::ensure!(
-                    self.previous_block_timestamp == record.previous_block_timestamp,
-                    "inconsistent previous block timestamp: {} in component state, {} in resolved ReplayRecord",
-                    self.previous_block_timestamp,
-                    record.previous_block_timestamp
-                );
-                anyhow::ensure!(
-                    self.block_hashes_for_next_block == record.block_context.block_hashes,
-                    "inconsistent previous block hashes: {} in component state, {} in resolved ReplayRecord",
-                    self.previous_block_timestamp,
-                    record.previous_block_timestamp
-                );
-
-                let expect_sl_chain_id_tx_after_upgrade = record
+            if filter_l1_txs {
+                rebuild
+                    .replay_record
                     .transactions
-                    .windows(2)
-                    .find(|window| {
-                        matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
-                            && matches!(
-                                window[1].as_system_tx_type(),
-                                Some(SystemTxType::SetSLChainId(_, _))
-                            )
-                    })
-                    .is_some();
-
-                PreparedBlockCommand {
-                    block_context: record.block_context,
-                    seal_policy: SealPolicy::UntilExhausted {
-                        allowed_to_finish_early: false,
-                    },
-                    invalid_tx_policy: InvalidTxPolicy::Abort,
-                    tx_source: MarkingTxStream::unmarkable(futures::stream::iter(
-                        record.transactions,
-                    )),
-                    metrics_label: "replay",
-                    protocol_version: record.protocol_version,
-                    expected_block_output_hash: Some(record.block_output_hash),
-                    previous_block_timestamp: self.previous_block_timestamp,
-                    force_preimages: record.force_preimages,
-                    expect_sl_chain_id_tx_after_upgrade,
-                    starting_cursors: record.starting_cursors,
-                    interop_roots_per_block: self.interop_roots_per_block,
-                    strict_subpool_cleanup: false,
-                }
-            }
-            BlockCommand::Rebuild(rebuild) => {
-                let block_number = rebuild.replay_record.block_context.block_number;
-                let (execution_version, protocol_version) = (
-                    rebuild.replay_record.block_context.execution_version,
-                    rebuild.replay_record.protocol_version,
-                );
-
-                if rebuild.make_empty
-                    && rebuild
-                        .replay_record
-                        .transactions
-                        .iter()
-                        .any(|tx| matches!(tx.envelope(), ZkEnvelope::Upgrade(_)))
-                {
-                    anyhow::bail!(
-                        "Cannot make an empty block when there is an upgrade transaction in the replay record for block {}",
-                        block_number
-                    );
-                }
-
-                let timestamp = if rebuild.reset_timestamp {
-                    (millis_since_epoch() / 1000) as u64
-                } else {
-                    rebuild.replay_record.block_context.timestamp
-                };
-                let block_context = BlockContext {
-                    eip1559_basefee: rebuild.replay_record.block_context.eip1559_basefee,
-                    native_price: rebuild.replay_record.block_context.native_price,
-                    pubdata_price: rebuild.replay_record.block_context.pubdata_price,
-                    block_number,
-                    timestamp,
-                    blob_fee: rebuild.replay_record.block_context.blob_fee,
-                    chain_id: self.chain_id,
-                    coinbase: self.fee_collector_address,
-                    block_hashes: self.block_hashes_for_next_block,
-                    gas_limit: self.gas_limit,
-                    pubdata_limit: self.pubdata_limit,
-                    // todo: initialize as source of randomness, i.e. the value of prevRandao
-                    mix_hash: Default::default(),
-                    execution_version,
-                };
-                let txs = if rebuild.make_empty {
-                    Vec::new()
-                } else {
-                    let first_l1_tx = rebuild
-                        .replay_record
-                        .transactions
-                        .iter()
-                        .find(|tx| matches!(tx.envelope(), ZkEnvelope::L1(_)));
-                    // It's possible that we haven't processed some L1 transaction from previous blocks when rebuilding.
-                    // In that case we shouldn't consider next L1 txs when rebuilding.
-                    let filter_l1_txs =
-                        if let Some(ZkEnvelope::L1(l1_tx)) = first_l1_tx.map(|tx| tx.envelope()) {
-                            l1_tx.priority_id() != self.next_cursors.l1_priority_id
-                        } else {
-                            false
-                        };
-                    if filter_l1_txs {
-                        rebuild
-                            .replay_record
-                            .transactions
-                            .into_iter()
-                            .filter(|tx| !matches!(tx.envelope(), ZkEnvelope::L1(_)))
-                            .collect()
-                    } else {
-                        rebuild.replay_record.transactions
-                    }
-                };
-
-                let expect_sl_chain_id_tx_after_upgrade = txs
-                    .windows(2)
-                    .find(|window| {
-                        matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
-                            && matches!(
-                                window[1].as_system_tx_type(),
-                                Some(SystemTxType::SetSLChainId(_, _))
-                            )
-                    })
-                    .is_some();
-
-                PreparedBlockCommand {
-                    expect_sl_chain_id_tx_after_upgrade,
-                    block_context,
-                    tx_source: MarkingTxStream::unmarkable(futures::stream::iter(txs)),
-                    seal_policy: SealPolicy::UntilExhausted {
-                        allowed_to_finish_early: true,
-                    },
-                    invalid_tx_policy: InvalidTxPolicy::RejectAndContinue {
-                        mark_in_source: false,
-                    },
-                    metrics_label: "rebuild",
-                    protocol_version,
-                    expected_block_output_hash: None,
-                    previous_block_timestamp: self.previous_block_timestamp,
-                    force_preimages: rebuild.replay_record.force_preimages,
-                    starting_cursors: self.next_cursors.clone(),
-                    interop_roots_per_block: self.interop_roots_per_block,
-                    strict_subpool_cleanup: false,
-                }
+                    .into_iter()
+                    .filter(|tx| !matches!(tx.envelope(), ZkEnvelope::L1(_)))
+                    .collect()
+            } else {
+                rebuild.replay_record.transactions
             }
         };
 
-        Ok(prepared_command)
+        let expect_sl_chain_id_tx_after_upgrade = txs
+            .windows(2)
+            .find(|window| {
+                matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
+                    && matches!(
+                        window[1].as_system_tx_type(),
+                        Some(SystemTxType::SetSLChainId(_, _))
+                    )
+            })
+            .is_some();
+
+        Ok(Some(PreparedBlockCommand {
+            expect_sl_chain_id_tx_after_upgrade,
+            block_context,
+            tx_source: MarkingTxStream::unmarkable(futures::stream::iter(txs)),
+            seal_policy: SealPolicy::UntilExhausted {
+                allowed_to_finish_early: true,
+            },
+            invalid_tx_policy: InvalidTxPolicy::RejectAndContinue {
+                mark_in_source: false,
+            },
+            metrics_label: "rebuild",
+            protocol_version,
+            expected_block_output_hash: None,
+            previous_block_timestamp,
+            force_preimages: rebuild.replay_record.force_preimages,
+            starting_cursors: next_cursors,
+            interop_roots_per_block: self.config.interop_roots_per_block,
+            strict_subpool_cleanup: false,
+        }))
     }
 
     pub fn purge_transactions(&self, tx_hashes: Vec<TxHash>) {
@@ -409,57 +440,29 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         replay_record: &ReplayRecord,
         strict_subpool_cleanup: bool,
     ) {
-        let canonical_header = {
-            let (legacy_header, hash) = block_output.header.clone().into_parts();
-            let header = alloy::consensus::Header {
-                parent_hash: legacy_header.parent_hash,
-                ommers_hash: legacy_header.ommers_hash,
-                beneficiary: legacy_header.beneficiary,
-                state_root: legacy_header.state_root,
-                transactions_root: legacy_header.transactions_root,
-                receipts_root: legacy_header.receipts_root,
-                logs_bloom: legacy_header.logs_bloom,
-                difficulty: legacy_header.difficulty,
-                number: legacy_header.number,
-                gas_limit: legacy_header.gas_limit,
-                gas_used: legacy_header.gas_used,
-                timestamp: legacy_header.timestamp,
-                extra_data: legacy_header.extra_data,
-                mix_hash: legacy_header.mix_hash,
-                nonce: legacy_header.nonce,
-                base_fee_per_gas: legacy_header.base_fee_per_gas,
-                withdrawals_root: legacy_header.withdrawals_root,
-                blob_gas_used: legacy_header.blob_gas_used,
-                excess_blob_gas: legacy_header.excess_blob_gas,
-                parent_beacon_block_root: legacy_header.parent_beacon_block_root,
-                requests_hash: legacy_header.requests_hash,
-                block_access_list_hash: None,
-                slot_number: None,
-            };
-            Sealed::new_unchecked(header, hash)
-        };
+        let mut next_cursors = replay_record.starting_cursors.clone();
         let outcome = self
             .pool
             .on_canonical_state_change(
-                canonical_header,
+                block_output.header.clone(),
                 &block_output.account_diffs,
                 replay_record,
                 strict_subpool_cleanup,
             )
             .await;
         if let Some(last_l1_priority_id) = outcome.last_l1_priority_id {
-            self.next_cursors.l1_priority_id = last_l1_priority_id + 1;
+            next_cursors.l1_priority_id = last_l1_priority_id + 1;
             EXECUTION_METRICS
                 .next_l1_priority_id
-                .set(self.next_cursors.l1_priority_id);
+                .set(next_cursors.l1_priority_id);
         }
         if let Some(last_interop_log_id) = outcome.last_interop_log_id {
-            self.next_interop_tx_allowed_after = Instant::now() + self.service_block_delay;
-            self.next_cursors.interop_root_id = last_interop_log_id + 1;
+            self.next_interop_tx_allowed_after = Instant::now() + self.config.service_block_delay;
+            next_cursors.interop_root_id = last_interop_log_id + 1;
         }
 
         if let Some(last_migration_number) = outcome.last_migration_number {
-            self.next_cursors.migration_number = last_migration_number + 1;
+            next_cursors.migration_number = last_migration_number + 1;
         }
         if let Some(target_sl_chain_id) = outcome.last_sl_chain_id_target {
             // Subsequent produced blocks will gate interop traffic on the new value (in particular:
@@ -476,32 +479,15 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             }
         }
         if let Some(last_interop_fee_number) = outcome.last_interop_fee_number {
-            self.next_cursors.interop_fee_number = last_interop_fee_number + 1;
+            next_cursors.interop_fee_number = last_interop_fee_number + 1;
         }
 
-        // We update protocol version here, so that we take into account replay records with protocol version bumps.
-        self.protocol_version = replay_record.protocol_version.clone();
-        // If a replayed block is at v31, the SetSLChainId tx was already included — mark it as done
-        // to prevent the produce path from inserting a duplicate.
-        if self.protocol_version.minor == 31 {
-            self.sl_chain_id_set = true;
-        }
-
-        // Advance `block_hashes_for_next_block`.
-        let last_block_hash = block_output.header.hash();
-        self.block_hashes_for_next_block = BlockHashes(
-            self.block_hashes_for_next_block
-                .0
-                .into_iter()
-                .skip(1)
-                .chain([U256::from_be_bytes(last_block_hash.0)])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
-        self.next_block_number += 1;
-        self.previous_block_timestamp = block_output.header.timestamp;
         self.fee_provider.on_canonical_state_change(replay_record);
+        self.last_block = Some(LastBlock {
+            record: replay_record.clone(),
+            hash: block_output.header.hash(),
+            next_cursors,
+        })
     }
 }
 

@@ -21,8 +21,10 @@ pub use upgrade_tx_watcher::L1UpgradeTxWatcher;
 mod interop_watcher;
 pub use interop_watcher::InteropWatcher;
 
+mod logs_cache;
 pub mod util;
 mod watcher;
+pub use logs_cache::LogsCache;
 
 mod sl_aware_watcher;
 pub use sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};

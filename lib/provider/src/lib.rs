@@ -1,3 +1,11 @@
+//! The node's canonical Ethereum-network provider.
+//!
+//! [`NodeProvider`] is an object-safe, wallet-capable wrapper over
+//! [`alloy::providers::Provider<Ethereum>`] used everywhere the node talks to an L1, Gateway, or L2
+//! RPC. On top of the plain provider it caches per-address contract deployment blocks (see
+//! [`NodeProvider::deployment_block`]), so the many startup binary searches over L1 history can use
+//! a tight lower bound without each rediscovering it.
+
 use alloy::consensus::{BlockHeader, TrieAccount};
 use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::eips::eip2930::AccessListResult;
@@ -23,6 +31,9 @@ use alloy::rpc::types::{
 use alloy::transports::TransportResult;
 use serde_json::value::RawValue;
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tokio::sync::OnceCell;
 
 /// A version of `Provider<Ethereum> + WalletProvider<Ethereum, Wallet = EthereumWallet>` that is
 /// object safe. Has a blanket implementation for the aforementioned constraints.
@@ -53,59 +64,119 @@ where
     }
 }
 
+/// Per-address cache of contract deployment blocks. Cloning a [`NodeProvider`] shares this cache
+/// (it sits behind an `Arc`), so all derived contract instances and watchers resolve each address
+/// at most once. Each address gets its own [`OnceCell`] so concurrent lookups for the same address
+/// run the binary search exactly once and the rest await its result.
+type DeploymentBlockCache = Arc<Mutex<HashMap<Address, Arc<OnceCell<u64>>>>>;
+
 /// A version of `DynProvider` that exposes `wallet()` and `wallet_mut()` as defined in
 /// `EthWalletProvider`. Also uses `Box` instead of `Arc` to make sure the wallets are mutable.
-pub struct EthDynProvider(Box<dyn EthWalletProvider + 'static>);
+///
+/// Carries a shared [`DeploymentBlockCache`]; see [`NodeProvider::deployment_block`].
+pub struct NodeProvider {
+    inner: Box<dyn EthWalletProvider + 'static>,
+    deployment_blocks: DeploymentBlockCache,
+}
 
-impl EthDynProvider {
-    /// Creates a new [`EthDynProvider`] by erasing the type.
+impl NodeProvider {
+    /// Creates a new [`NodeProvider`] by erasing the type.
     pub fn new<P: EthWalletProvider + 'static>(provider: P) -> Self {
-        Self(Box::new(provider))
+        Self {
+            inner: Box::new(provider),
+            deployment_blocks: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Returns the block at which `address` first had non-empty code, i.e. its deployment block.
+    /// Returns `0` if `address` has no code at the latest block (not deployed on this chain), which
+    /// keeps it usable as a binary-search lower bound on chains where the contract is absent (e.g.
+    /// local Anvil setups).
+    ///
+    /// The result is cached per address and shared across clones; the underlying binary search over
+    /// `eth_getCode` runs at most once per address for the lifetime of the cache.
+    pub async fn deployment_block(&self, address: Address) -> anyhow::Result<u64> {
+        let cell = {
+            let mut guard = self
+                .deployment_blocks
+                .lock()
+                .expect("deployment block cache mutex poisoned");
+            guard.entry(address).or_default().clone()
+        };
+        let block = cell
+            .get_or_try_init(|| Self::discover_deployment_block(self, address))
+            .await?;
+        Ok(*block)
+    }
+
+    /// Binary-searches for the first block where `address` has non-empty code. See
+    /// [`Self::deployment_block`] for the `0` fallback semantics.
+    async fn discover_deployment_block(&self, address: Address) -> anyhow::Result<u64> {
+        let latest = self.get_block_number().await?;
+        let code_at_latest = self.get_code_at(address).block_id(latest.into()).await?;
+        if code_at_latest.0.is_empty() {
+            return Ok(0);
+        }
+        let (mut lo, mut hi) = (0u64, latest);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let code = self.get_code_at(address).block_id(mid.into()).await?;
+            if !code.0.is_empty() {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        tracing::debug!(%address, deployment_block = lo, "discovered contract deployment block");
+        Ok(lo)
     }
 }
 
-impl Clone for EthDynProvider {
+impl Clone for NodeProvider {
     fn clone(&self) -> Self {
-        EthDynProvider(self.dyn_clone())
+        NodeProvider {
+            inner: self.inner.dyn_clone(),
+            deployment_blocks: self.deployment_blocks.clone(),
+        }
     }
 }
 
-impl std::fmt::Debug for EthDynProvider {
+impl std::fmt::Debug for NodeProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("DynProvider")
+        f.debug_tuple("NodeProvider")
             .field(&"<dyn Provider>")
             .finish()
     }
 }
 
 //
-// The rest of the file contains trait implementations for `EthDynProvider` that just invoke `self.0.<method>` inside
+// The rest of the file contains trait implementations for `NodeProvider` that just invoke `self.inner.<method>` inside
 //
 
 #[async_trait::async_trait]
-impl Provider<Ethereum> for EthDynProvider {
+impl Provider<Ethereum> for NodeProvider {
     fn root(&self) -> &RootProvider<Ethereum> {
-        self.0.root()
+        self.inner.root()
     }
 
     fn client(&self) -> ClientRef<'_> {
-        self.0.client()
+        self.inner.client()
     }
 
     fn weak_client(&self) -> WeakClient {
-        self.0.weak_client()
+        self.inner.weak_client()
     }
 
     fn get_accounts(&self) -> ProviderCall<NoParams, Vec<Address>> {
-        self.0.get_accounts()
+        self.inner.get_accounts()
     }
 
     fn get_blob_base_fee(&self) -> ProviderCall<NoParams, U128, u128> {
-        self.0.get_blob_base_fee()
+        self.inner.get_blob_base_fee()
     }
 
     fn get_block_number(&self) -> ProviderCall<NoParams, U64, BlockNumber> {
-        self.0.get_block_number()
+        self.inner.get_block_number()
     }
 
     // alloy 2.0 changed the `get_header` -> `get_block` fallback that 1.x had, so only JSON-RPC
@@ -130,14 +201,14 @@ impl Provider<Ethereum> for EthDynProvider {
     }
 
     fn call(&self, tx: <Ethereum as Network>::TransactionRequest) -> EthCall<Ethereum, Bytes> {
-        self.0.call(tx)
+        self.inner.call(tx)
     }
 
     fn call_many<'req>(
         &self,
         bundles: &'req [Bundle],
     ) -> EthCallMany<'req, Ethereum, Vec<Vec<EthCallResponse>>> {
-        self.0.call_many(bundles)
+        self.inner.call_many(bundles)
     }
 
     fn simulate<'req>(
@@ -147,36 +218,36 @@ impl Provider<Ethereum> for EthDynProvider {
         &'req SimulatePayload,
         Vec<SimulatedBlock<<Ethereum as Network>::BlockResponse>>,
     > {
-        self.0.simulate(payload)
+        self.inner.simulate(payload)
     }
 
     fn get_chain_id(&self) -> ProviderCall<NoParams, U64, u64> {
-        self.0.get_chain_id()
+        self.inner.get_chain_id()
     }
 
     fn create_access_list<'a>(
         &self,
         request: &'a <Ethereum as Network>::TransactionRequest,
     ) -> RpcWithBlock<&'a <Ethereum as Network>::TransactionRequest, AccessListResult> {
-        self.0.create_access_list(request)
+        self.inner.create_access_list(request)
     }
 
     fn estimate_gas(
         &self,
         tx: <Ethereum as Network>::TransactionRequest,
     ) -> EthCall<Ethereum, U64, u64> {
-        self.0.estimate_gas(tx)
+        self.inner.estimate_gas(tx)
     }
 
     async fn estimate_eip1559_fees_with(
         &self,
         estimator: Eip1559Estimator,
     ) -> TransportResult<Eip1559Estimation> {
-        self.0.estimate_eip1559_fees_with(estimator).await
+        self.inner.estimate_eip1559_fees_with(estimator).await
     }
 
     async fn estimate_eip1559_fees(&self) -> TransportResult<Eip1559Estimation> {
-        self.0.estimate_eip1559_fees().await
+        self.inner.estimate_eip1559_fees().await
     }
 
     async fn get_fee_history(
@@ -185,57 +256,57 @@ impl Provider<Ethereum> for EthDynProvider {
         last_block: BlockNumberOrTag,
         reward_percentiles: &[f64],
     ) -> TransportResult<FeeHistory> {
-        self.0
+        self.inner
             .get_fee_history(block_count, last_block, reward_percentiles)
             .await
     }
 
     fn get_gas_price(&self) -> ProviderCall<NoParams, U128, u128> {
-        self.0.get_gas_price()
+        self.inner.get_gas_price()
     }
 
     fn get_account_info(&self, address: Address) -> RpcWithBlock<Address, AccountInfo> {
-        self.0.get_account_info(address)
+        self.inner.get_account_info(address)
     }
 
     fn get_account(&self, address: Address) -> RpcWithBlock<Address, TrieAccount> {
-        self.0.get_account(address)
+        self.inner.get_account(address)
     }
 
     fn get_balance(&self, address: Address) -> RpcWithBlock<Address, U256, U256> {
-        self.0.get_balance(address)
+        self.inner.get_balance(address)
     }
 
     fn get_block(&self, block: BlockId) -> EthGetBlock<<Ethereum as Network>::BlockResponse> {
-        self.0.get_block(block)
+        self.inner.get_block(block)
     }
 
     fn get_block_by_hash(
         &self,
         hash: BlockHash,
     ) -> EthGetBlock<<Ethereum as Network>::BlockResponse> {
-        self.0.get_block_by_hash(hash)
+        self.inner.get_block_by_hash(hash)
     }
 
     fn get_block_by_number(
         &self,
         number: BlockNumberOrTag,
     ) -> EthGetBlock<<Ethereum as Network>::BlockResponse> {
-        self.0.get_block_by_number(number)
+        self.inner.get_block_by_number(number)
     }
 
     async fn get_block_transaction_count_by_hash(
         &self,
         hash: BlockHash,
     ) -> TransportResult<Option<u64>> {
-        self.0.get_block_transaction_count_by_hash(hash).await
+        self.inner.get_block_transaction_count_by_hash(hash).await
     }
 
     async fn get_block_transaction_count_by_number(
         &self,
         block_number: BlockNumberOrTag,
     ) -> TransportResult<Option<u64>> {
-        self.0
+        self.inner
             .get_block_transaction_count_by_number(block_number)
             .await
     }
@@ -244,52 +315,52 @@ impl Provider<Ethereum> for EthDynProvider {
         &self,
         block: BlockId,
     ) -> ProviderCall<(BlockId,), Option<Vec<<Ethereum as Network>::ReceiptResponse>>> {
-        self.0.get_block_receipts(block)
+        self.inner.get_block_receipts(block)
     }
 
     fn get_code_at(&self, address: Address) -> RpcWithBlock<Address, Bytes> {
-        self.0.get_code_at(address)
+        self.inner.get_code_at(address)
     }
 
     async fn watch_blocks(&self) -> TransportResult<FilterPollerBuilder<B256>> {
-        self.0.watch_blocks().await
+        self.inner.watch_blocks().await
     }
 
     async fn watch_pending_transactions(&self) -> TransportResult<FilterPollerBuilder<B256>> {
-        self.0.watch_pending_transactions().await
+        self.inner.watch_pending_transactions().await
     }
 
     async fn watch_logs(&self, filter: &Filter) -> TransportResult<FilterPollerBuilder<Log>> {
-        self.0.watch_logs(filter).await
+        self.inner.watch_logs(filter).await
     }
 
     async fn watch_full_pending_transactions(
         &self,
     ) -> TransportResult<FilterPollerBuilder<<Ethereum as Network>::TransactionResponse>> {
-        self.0.watch_full_pending_transactions().await
+        self.inner.watch_full_pending_transactions().await
     }
 
     async fn get_filter_changes_dyn(&self, id: U256) -> TransportResult<FilterChanges> {
-        self.0.get_filter_changes_dyn(id).await
+        self.inner.get_filter_changes_dyn(id).await
     }
 
     async fn get_filter_logs(&self, id: U256) -> TransportResult<Vec<Log>> {
-        self.0.get_filter_logs(id).await
+        self.inner.get_filter_logs(id).await
     }
 
     async fn uninstall_filter(&self, id: U256) -> TransportResult<bool> {
-        self.0.uninstall_filter(id).await
+        self.inner.uninstall_filter(id).await
     }
 
     async fn watch_pending_transaction(
         &self,
         config: PendingTransactionConfig,
     ) -> Result<PendingTransaction, PendingTransactionError> {
-        self.0.watch_pending_transaction(config).await
+        self.inner.watch_pending_transaction(config).await
     }
 
     async fn get_logs(&self, filter: &Filter) -> TransportResult<Vec<Log>> {
-        self.0.get_logs(filter).await
+        self.inner.get_logs(filter).await
     }
 
     fn get_proof(
@@ -297,7 +368,7 @@ impl Provider<Ethereum> for EthDynProvider {
         address: Address,
         keys: Vec<StorageKey>,
     ) -> RpcWithBlock<(Address, Vec<StorageKey>), EIP1186AccountProofResponse> {
-        self.0.get_proof(address, keys)
+        self.inner.get_proof(address, keys)
     }
 
     fn get_storage_at(
@@ -305,14 +376,14 @@ impl Provider<Ethereum> for EthDynProvider {
         address: Address,
         key: U256,
     ) -> RpcWithBlock<(Address, U256), StorageValue> {
-        self.0.get_storage_at(address, key)
+        self.inner.get_storage_at(address, key)
     }
 
     fn get_transaction_by_hash(
         &self,
         hash: TxHash,
     ) -> ProviderCall<(TxHash,), Option<<Ethereum as Network>::TransactionResponse>> {
-        self.0.get_transaction_by_hash(hash)
+        self.inner.get_transaction_by_hash(hash)
     }
 
     fn get_transaction_by_sender_nonce(
@@ -320,7 +391,7 @@ impl Provider<Ethereum> for EthDynProvider {
         sender: Address,
         nonce: u64,
     ) -> ProviderCall<(Address, U64), Option<<Ethereum as Network>::TransactionResponse>> {
-        self.0.get_transaction_by_sender_nonce(sender, nonce)
+        self.inner.get_transaction_by_sender_nonce(sender, nonce)
     }
 
     fn get_transaction_by_block_hash_and_index(
@@ -328,7 +399,7 @@ impl Provider<Ethereum> for EthDynProvider {
         block_hash: B256,
         index: usize,
     ) -> ProviderCall<(B256, Index), Option<<Ethereum as Network>::TransactionResponse>> {
-        self.0
+        self.inner
             .get_transaction_by_block_hash_and_index(block_hash, index)
     }
 
@@ -337,7 +408,7 @@ impl Provider<Ethereum> for EthDynProvider {
         block_hash: B256,
         index: usize,
     ) -> ProviderCall<(B256, Index), Option<Bytes>> {
-        self.0
+        self.inner
             .get_raw_transaction_by_block_hash_and_index(block_hash, index)
     }
 
@@ -347,7 +418,7 @@ impl Provider<Ethereum> for EthDynProvider {
         index: usize,
     ) -> ProviderCall<(BlockNumberOrTag, Index), Option<<Ethereum as Network>::TransactionResponse>>
     {
-        self.0
+        self.inner
             .get_transaction_by_block_number_and_index(block_number, index)
     }
 
@@ -356,26 +427,26 @@ impl Provider<Ethereum> for EthDynProvider {
         block_number: BlockNumberOrTag,
         index: usize,
     ) -> ProviderCall<(BlockNumberOrTag, Index), Option<Bytes>> {
-        self.0
+        self.inner
             .get_raw_transaction_by_block_number_and_index(block_number, index)
     }
 
     fn get_raw_transaction_by_hash(&self, hash: TxHash) -> ProviderCall<(TxHash,), Option<Bytes>> {
-        self.0.get_raw_transaction_by_hash(hash)
+        self.inner.get_raw_transaction_by_hash(hash)
     }
 
     fn get_transaction_count(
         &self,
         address: Address,
     ) -> RpcWithBlock<Address, U64, u64, fn(U64) -> u64> {
-        self.0.get_transaction_count(address)
+        self.inner.get_transaction_count(address)
     }
 
     fn get_transaction_receipt(
         &self,
         hash: TxHash,
     ) -> ProviderCall<(TxHash,), Option<<Ethereum as Network>::ReceiptResponse>> {
-        self.0.get_transaction_receipt(hash)
+        self.inner.get_transaction_receipt(hash)
     }
 
     async fn get_uncle(
@@ -383,34 +454,34 @@ impl Provider<Ethereum> for EthDynProvider {
         tag: BlockId,
         idx: u64,
     ) -> TransportResult<Option<<Ethereum as Network>::BlockResponse>> {
-        self.0.get_uncle(tag, idx).await
+        self.inner.get_uncle(tag, idx).await
     }
 
     async fn get_uncle_count(&self, tag: BlockId) -> TransportResult<u64> {
-        self.0.get_uncle_count(tag).await
+        self.inner.get_uncle_count(tag).await
     }
 
     fn get_max_priority_fee_per_gas(&self) -> ProviderCall<NoParams, U128, u128> {
-        self.0.get_max_priority_fee_per_gas()
+        self.inner.get_max_priority_fee_per_gas()
     }
 
     async fn new_block_filter(&self) -> TransportResult<U256> {
-        self.0.new_block_filter().await
+        self.inner.new_block_filter().await
     }
 
     async fn new_filter(&self, filter: &Filter) -> TransportResult<U256> {
-        self.0.new_filter(filter).await
+        self.inner.new_filter(filter).await
     }
 
     async fn new_pending_transactions_filter(&self, full: bool) -> TransportResult<U256> {
-        self.0.new_pending_transactions_filter(full).await
+        self.inner.new_pending_transactions_filter(full).await
     }
 
     async fn send_raw_transaction(
         &self,
         encoded_tx: &[u8],
     ) -> TransportResult<PendingTransactionBuilder<Ethereum>> {
-        self.0.send_raw_transaction(encoded_tx).await
+        self.inner.send_raw_transaction(encoded_tx).await
     }
 
     async fn send_raw_transaction_conditional(
@@ -418,7 +489,7 @@ impl Provider<Ethereum> for EthDynProvider {
         encoded_tx: &[u8],
         conditional: TransactionConditional,
     ) -> TransportResult<PendingTransactionBuilder<Ethereum>> {
-        self.0
+        self.inner
             .send_raw_transaction_conditional(encoded_tx, conditional)
             .await
     }
@@ -427,44 +498,44 @@ impl Provider<Ethereum> for EthDynProvider {
         &self,
         tx: <Ethereum as Network>::TransactionRequest,
     ) -> TransportResult<PendingTransactionBuilder<Ethereum>> {
-        self.0.send_transaction(tx).await
+        self.inner.send_transaction(tx).await
     }
 
     async fn send_tx_envelope(
         &self,
         tx: <Ethereum as Network>::TxEnvelope,
     ) -> TransportResult<PendingTransactionBuilder<Ethereum>> {
-        self.0.send_tx_envelope(tx).await
+        self.inner.send_tx_envelope(tx).await
     }
 
     async fn send_transaction_internal(
         &self,
         tx: SendableTx<Ethereum>,
     ) -> TransportResult<PendingTransactionBuilder<Ethereum>> {
-        self.0.send_transaction_internal(tx).await
+        self.inner.send_transaction_internal(tx).await
     }
 
     async fn sign_transaction(
         &self,
         tx: <Ethereum as Network>::TransactionRequest,
     ) -> TransportResult<Bytes> {
-        self.0.sign_transaction(tx).await
+        self.inner.sign_transaction(tx).await
     }
 
     fn syncing(&self) -> ProviderCall<NoParams, SyncStatus> {
-        self.0.syncing()
+        self.inner.syncing()
     }
 
     fn get_client_version(&self) -> ProviderCall<NoParams, String> {
-        self.0.get_client_version()
+        self.inner.get_client_version()
     }
 
     fn get_sha3(&self, data: &[u8]) -> ProviderCall<(String,), B256> {
-        self.0.get_sha3(data)
+        self.inner.get_sha3(data)
     }
 
     fn get_net_version(&self) -> ProviderCall<NoParams, U64, u64> {
-        self.0.get_net_version()
+        self.inner.get_net_version()
     }
 
     async fn raw_request_dyn(
@@ -472,25 +543,25 @@ impl Provider<Ethereum> for EthDynProvider {
         method: Cow<'static, str>,
         params: &RawValue,
     ) -> TransportResult<Box<RawValue>> {
-        self.0.raw_request_dyn(method, params).await
+        self.inner.raw_request_dyn(method, params).await
     }
 
     fn transaction_request(&self) -> <Ethereum as Network>::TransactionRequest {
-        self.0.transaction_request()
+        self.inner.transaction_request()
     }
 }
 
-impl EthWalletProvider for EthDynProvider {
+impl EthWalletProvider for NodeProvider {
     fn dyn_clone(&self) -> Box<dyn EthWalletProvider> {
-        self.0.dyn_clone()
+        self.inner.dyn_clone()
     }
 
     fn wallet(&self) -> &EthereumWallet {
-        self.0.wallet()
+        self.inner.wallet()
     }
 
     fn wallet_mut(&mut self) -> &mut EthereumWallet {
-        self.0.wallet_mut()
+        self.inner.wallet_mut()
     }
 }
 
@@ -510,7 +581,7 @@ mod tests {
             .disable_recommended_fillers()
             .wallet(EthereumWallet::default())
             .connect_mocked_client(asserter.clone());
-        let provider = EthDynProvider::new(provider);
+        let provider = NodeProvider::new(provider);
 
         asserter.push_failure(ErrorPayload {
             code: -39001,

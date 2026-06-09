@@ -7,7 +7,6 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy::sol;
 use std::str::FromStr;
 use std::time::Duration;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::l1_discovery::L1State;
@@ -17,6 +16,7 @@ use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
 use zksync_os_integration_tests::wallets::load_operator_private_key;
 use zksync_os_integration_tests::{CURRENT_TO_L1, StoppedTester, Tester, test_multisetup};
+use zksync_os_provider::EthWalletProvider;
 use zksync_os_server::INTERNAL_CONFIG_FILE_NAME;
 use zksync_os_server::config::Config;
 
@@ -74,7 +74,7 @@ async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
     let chain_id = tester.l2_provider.get_chain_id().await?;
     let bridgehub_address = tester.l2_zk_provider.get_bridgehub_contract().await?;
     L1State::fetch(
-        tester.l1_provider().clone().erased(),
+        tester.l1_provider().clone(),
         tester.gateway_eth_provider(),
         bridgehub_address,
         chain_id,
@@ -285,6 +285,9 @@ async fn node_recovers_from_l1_batch_revert_after_restart_v30() -> anyhow::Resul
     let mut restarted_config = restarted.config().clone();
     make_full_pipeline_config(&mut restarted_config);
     let restarted = restarted.restart_with_config(restarted_config).await?;
+    // The initial L1->L2 deposit was in the reverted batch, so the wallet balance is 0 after
+    // the revert. Wait for the priority operation to be re-included before sending transactions.
+    restarted.wait_for_initial_deposit().await?;
 
     let executed_receipt = restarted
         .l2_provider

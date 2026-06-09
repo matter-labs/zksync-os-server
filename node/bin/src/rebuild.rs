@@ -1,11 +1,10 @@
-use alloy::providers::DynProvider;
 use anyhow::Context as _;
 use ruint::aliases::U256;
-use zksync_os_alloy_ext::dyn_wallet_provider::{EthDynProvider, EthWalletProvider};
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::{IValidatorTimelock, ZkChain};
 use zksync_os_l1_watcher::fetch_batch;
 use zksync_os_operator_signer::SignerConfig;
+use zksync_os_provider::{EthWalletProvider, NodeProvider};
 use zksync_os_storage::db::ExecutedBatchStorage;
 use zksync_os_storage_api::{ReadBatch, ReadRepository};
 
@@ -21,7 +20,7 @@ async fn derive_last_l1_batch_to_keep(
     from_block: u64,
     last_committed_batch: u64,
     last_executed_batch: u64,
-    diamond_proxy_sl: &ZkChain<DynProvider>,
+    diamond_proxy_sl: &ZkChain<NodeProvider>,
     max_blocks_to_process: u64,
 ) -> anyhow::Result<u64> {
     anyhow::ensure!(
@@ -69,7 +68,7 @@ async fn perform_l1_revert(
     last_l1_batch_to_keep: u64,
     l1_state: &L1State,
     chain_id: u64,
-    sl_provider: &EthDynProvider,
+    sl_provider: &NodeProvider,
     reverter_sk: &SignerConfig,
     persistent_batch_storage: &ExecutedBatchStorage,
 ) -> anyhow::Result<()> {
@@ -158,7 +157,7 @@ pub async fn l1_revert(
     repositories: &dyn ReadRepository,
     l1_state: &L1State,
     persistent_batch_storage: &ExecutedBatchStorage,
-    sl_provider: &EthDynProvider,
+    sl_provider: &NodeProvider,
 ) -> anyhow::Result<bool> {
     let Some(rebuild) = config.sequencer_config.rebuild.clone() else {
         return Ok(false);

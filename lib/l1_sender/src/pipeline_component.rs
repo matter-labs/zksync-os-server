@@ -3,15 +3,15 @@ use crate::config::L1SenderConfig;
 use alloy::primitives::Address;
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
-use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_provider::NodeProvider;
 
 /// Generic L1 Sender pipeline component
 /// Can be used for commit, prove, or execute operations
 pub struct L1Sender<C> {
-    pub provider: EthDynProvider,
+    pub provider: NodeProvider,
     pub config: L1SenderConfig<C>,
     pub to_address: Address,
     pub gateway: bool,

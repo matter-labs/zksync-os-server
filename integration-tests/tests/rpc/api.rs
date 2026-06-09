@@ -7,7 +7,6 @@ use alloy::sol_types::SolEvent;
 use anyhow::Context as _;
 use regex::Regex;
 use std::time::Duration;
-use zksync_os_alloy_ext::dyn_wallet_provider::EthDynProvider;
 use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::IExecutor::BlockCommit;
 use zksync_os_contract_interface::l1_discovery::L1State;
@@ -17,6 +16,7 @@ use zksync_os_integration_tests::contracts::{Counter, EventEmitter};
 use zksync_os_integration_tests::{
     CURRENT_TO_L1, NEXT_TO_GATEWAY, TestEnvironment, Tester, test_multisetup,
 };
+use zksync_os_provider::NodeProvider;
 use zksync_os_rpc_api::types::BatchStorageProof;
 use zksync_os_server::config::FeeConfig;
 
@@ -281,7 +281,7 @@ async fn estimate_gas_without_balance(tester: Tester) -> anyhow::Result<()> {
 
 #[tracing::instrument(skip(provider))]
 async fn fetch_batch_commitment(
-    provider: &EthDynProvider,
+    provider: &NodeProvider,
     filter_id: U256,
     expected_batch_number: u64,
 ) -> B256 {
@@ -334,7 +334,7 @@ async fn get_storage_proof(tester: Tester) -> anyhow::Result<()> {
 
     // Get L1 state which contains diamond proxy address
     let l1_state = L1State::fetch(
-        tester.l1_provider().clone().erased(),
+        tester.l1_provider().clone(),
         tester.gateway_eth_provider(),
         bridgehub_address,
         chain_id,

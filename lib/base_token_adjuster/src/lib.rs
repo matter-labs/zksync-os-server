@@ -2,8 +2,8 @@ use crate::metrics::{METRICS, OperationResult, OperationResultLabels};
 use alloy::network::{Ethereum, TransactionBuilder};
 use alloy::primitives::Address;
 use alloy::primitives::utils::format_ether;
+use alloy::providers::Provider;
 use alloy::providers::ext::DebugApi;
-use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::TransactionReceipt;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use anyhow::Context;
@@ -12,7 +12,6 @@ use num::{BigUint, ToPrimitive};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
-use zksync_os_alloy_ext::dyn_wallet_provider::{EthDynProvider, EthWalletProvider};
 use zksync_os_contract_interface::{
     IChainAdminOwnable::{self, IChainAdminOwnableInstance},
     IERC20, ZkChain,
@@ -24,6 +23,7 @@ use zksync_os_external_price_api::{
     APIToken, ExternalPriceApiClientConfig, PriceApiClient, ZK_L1_ADDRESS,
 };
 use zksync_os_operator_signer::SignerConfig;
+use zksync_os_provider::{EthWalletProvider, NodeProvider};
 use zksync_os_types::{TokenApiRatio, TokenPricesForFees};
 
 mod metrics;
@@ -81,14 +81,14 @@ pub struct BaseTokenPriceUpdater {
     price_api_client: Box<dyn PriceApiClient>,
     config: BaseTokenPriceUpdaterConfig,
     last_l1_ratio: Ratio<BigUint>,
-    chain_admin_contract: IChainAdminOwnableInstance<EthDynProvider, Ethereum>,
+    chain_admin_contract: IChainAdminOwnableInstance<NodeProvider, Ethereum>,
     token_multiplier_setter_address: Option<Address>,
     zk_chain_address: Address,
     token_price_sender: watch::Sender<Option<TokenPricesForFees>>,
 }
 
 async fn register_operator(
-    provider: &mut EthDynProvider,
+    provider: &mut NodeProvider,
     signer_config: SignerConfig,
 ) -> anyhow::Result<Address> {
     let address = signer_config
@@ -110,9 +110,9 @@ async fn register_operator(
 
 impl BaseTokenPriceUpdater {
     pub async fn new(
-        zk_chain_l1: ZkChain<DynProvider>,
-        zk_chain_gateway: Option<ZkChain<DynProvider>>,
-        mut l1_provider: EthDynProvider,
+        zk_chain_l1: ZkChain<NodeProvider>,
+        zk_chain_gateway: Option<ZkChain<NodeProvider>>,
+        mut l1_provider: NodeProvider,
         base_token_adjuster_config: BaseTokenPriceUpdaterConfig,
         external_price_api_client_config: ExternalPriceApiClientConfig,
         token_price_sender: watch::Sender<Option<TokenPricesForFees>>,
@@ -226,7 +226,7 @@ impl BaseTokenPriceUpdater {
         token_address: Address,
         token_address_override: Option<Address>,
         decimals_override: Option<u8>,
-        l1_provider: &EthDynProvider,
+        l1_provider: &NodeProvider,
     ) -> anyhow::Result<APIToken> {
         let token_address = token_address_override.unwrap_or(token_address);
         match token_address {
@@ -486,7 +486,7 @@ impl BaseTokenPriceUpdater {
 }
 
 async fn validate_tx_receipt(
-    provider: &EthDynProvider,
+    provider: &NodeProvider,
     receipt: TransactionReceipt,
 ) -> anyhow::Result<()> {
     if receipt.status() {

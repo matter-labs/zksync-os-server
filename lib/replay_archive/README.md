@@ -27,6 +27,12 @@ For the filesystem backend, the full path is:
 <archive_root>/<timestamp_millis>-<node_id>/<block_number>/<block_hash>
 ```
 
+For the S3 backend, the object key is:
+
+```text
+<timestamp_millis>-<node_id>/<block_number>/<block_hash>
+```
+
 The object value is the replay record payload only. There is no wrapper, batch number, block range,
 or extra archive metadata in the object body.
 
@@ -53,14 +59,16 @@ Current archive implementations:
 
 - `FileSystemReplayArchiveStorage`: append-only object storage on local disk.
 - `FileSystemReplayArchiver`: filesystem archiver that stores plaintext JSON replay records.
+- `S3ReplayArchiveStorage`: append-only object storage in S3 or an S3-compatible service.
 - `AgeEncryptedReplayArchiver`: wrapper that JSON-encodes replay records and encrypts them with
   age X25519 before storing them in any `ReplayArchiveStorage`.
 
 Current reader implementation:
 
 - `FileSystemReplayArchiveReader`: lists archive objects from the filesystem layout.
+- `S3ReplayArchiveReader`: lists archive objects from S3.
 
-Other storage backends, such as S3, should implement:
+Other storage backends should implement:
 
 - `ReplayArchiveStorage` for node-side append/check operations.
 - `ReplayArchiveStorageReader` for recovery-side object listing.
@@ -120,6 +128,17 @@ Download archive objects:
 cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   download \
   --archive-root ./db/replay_archive \
+  --output-root ./replay_archive_downloaded
+```
+
+Download archive objects from S3:
+
+```bash
+cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
+  download \
+  --s3-bucket-base-url my-replay-archive \
+  --s3-credential-file-path ./s3-credentials \
+  --s3-region us-east-2 \
   --output-root ./replay_archive_downloaded
 ```
 
@@ -183,3 +202,22 @@ replay_archive:
     type: AgeX25519
     recipient: age1...
 ```
+
+S3 archive with age encryption:
+
+```yaml
+replay_archive:
+  type: S3WithCredentialFile
+  bucket_base_url: my-replay-archive
+  s3_credential_file_path: ./s3-credentials
+  endpoint: null
+  region: us-east-2
+  encryption:
+    type: AgeX25519
+    recipient: age1...
+```
+
+The S3 backend follows the old object-store initialization path: credentials are loaded from the
+configured credentials file, `endpoint` overrides S3 API endpoint for S3-compatible
+providers, and `region` is used as the first region provider before falling back to the SDK
+defaults and then `auto`.
