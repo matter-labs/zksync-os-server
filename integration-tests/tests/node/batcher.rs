@@ -12,6 +12,11 @@ use zksync_os_integration_tests::{
     upgrade::prepare_gateway_chain_at_v32_1,
 };
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION_V32_1;
+use zksync_os_server::pig_telemetry::{
+    BatchPigMode, clear_batch_pig_telemetry, clear_block_pig_telemetry, take_batch_pig_telemetry,
+    take_block_pig_telemetry,
+};
+use zksync_os_types::ProvingVersion;
 
 const TRANSACTIONS_TO_SEND_BEFORE_RESTART: usize = 5;
 
@@ -155,6 +160,9 @@ async fn v32_1_main_node_creates_and_commits_batch() -> anyhow::Result<()> {
 
 #[test_log::test(tokio::test)]
 async fn v32_1_direct_l1_main_node_creates_and_commits_batch() -> anyhow::Result<()> {
+    clear_batch_pig_telemetry();
+    clear_block_pig_telemetry();
+
     let env = TestCase {
         protocol_version: PROTOCOL_VERSION_V32_1,
         settlement_layer: SettlementLayer::L1,
@@ -162,6 +170,7 @@ async fn v32_1_direct_l1_main_node_creates_and_commits_batch() -> anyhow::Result
     .environment()
     .await?;
     let tester = env.launch_default().await?;
+    let chain_id = tester.l2_provider.get_chain_id().await?;
     let initial_committed_batch = fetch_l1_state(&tester).await?.last_committed_batch;
 
     let receipt = tester
@@ -185,6 +194,30 @@ async fn v32_1_direct_l1_main_node_creates_and_commits_batch() -> anyhow::Result
         |state| state.last_committed_batch >= batch_number,
     )
     .await?;
+    let block_number = receipt.block_number.unwrap();
+
+    let batch_pig_telemetry = take_batch_pig_telemetry();
+    let batch_pig = batch_pig_telemetry
+        .iter()
+        .find(|telemetry| telemetry.chain_id == chain_id && telemetry.batch_number == batch_number)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing batch PIG telemetry for chain {chain_id}, batch {batch_number}; got {batch_pig_telemetry:?}"
+            )
+        })?;
+    assert_eq!(batch_pig.proving_version, ProvingVersion::V8);
+    assert_eq!(batch_pig.mode, BatchPigMode::NativeBatch);
+    assert!(
+        batch_pig.first_block_number <= block_number && block_number <= batch_pig.last_block_number,
+        "expected tx block {block_number} to be within native batch PIG telemetry range {:?}",
+        batch_pig
+    );
+
+    let block_pig_telemetry = take_block_pig_telemetry();
+    assert!(
+        block_pig_telemetry.is_empty(),
+        "expected direct V32.1 startup and batch sealing to avoid block PIG / simulator entirely, got {block_pig_telemetry:?}"
+    );
 
     assert!(
         l1_state.last_committed_batch > initial_committed_batch,

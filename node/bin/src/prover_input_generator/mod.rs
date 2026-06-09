@@ -1,5 +1,6 @@
 use self::tree_adapter::TreeOutputAdapter;
 use self::tree_adapter::VersionedMerkleTree;
+use crate::pig_telemetry::{BlockPigTelemetry, record_block_pig_telemetry};
 use crate::prover_block::ProverBlock;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -180,14 +181,22 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
 
         let mut handle = tokio::task::spawn_blocking(move || {
             let tree_output = tree.output;
-            let prover_input = ProverInput::Real(compute_prover_input(
+            let (prover_input_words, elapsed) = compute_prover_input(
                 &replay_record,
                 read_state,
                 tree,
                 versioned_tree,
                 da_commitment_scheme,
                 enable_logging,
-            ));
+            );
+            record_block_pig_telemetry(BlockPigTelemetry {
+                chain_id: replay_record.block_context.chain_id,
+                block_number,
+                proving_version,
+                prover_input_words: prover_input_words.len(),
+                elapsed,
+            });
+            let prover_input = ProverInput::Real(prover_input_words);
             ProverBlock {
                 output: block_output,
                 record: replay_record,
@@ -222,7 +231,7 @@ fn compute_prover_input(
     versioned_tree: VersionedMerkleTree,
     da_commitment_scheme: DACommitmentScheme,
     enable_logging: bool,
-) -> Vec<u32> {
+) -> (Vec<u32>, Duration) {
     let block_number = replay_record.block_context.block_number;
     let state_view = state_handle.state_view_at(block_number - 1).unwrap();
     let transactions = replay_record
@@ -331,7 +340,7 @@ fn compute_prover_input(
         latency
     );
 
-    prover_input
+    (prover_input, latency)
 }
 
 const LEN_BUCKETS: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);

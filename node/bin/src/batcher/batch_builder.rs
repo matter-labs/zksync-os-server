@@ -1,4 +1,6 @@
+use crate::pig_telemetry::{BatchPigMode, BatchPigTelemetry, record_batch_pig_telemetry};
 use alloy::primitives::Address;
+use std::time::Duration;
 use zksync_os_batch_types::ExtendedCommitBatchInfo;
 use zksync_os_batch_types::batcher_model::{
     BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
@@ -9,6 +11,13 @@ use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_native_pig::{NativeBatchRunOutput, generate_batch_run};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_multichain_root};
 use zksync_os_types::{BlockOutput, ProvingVersion, PubdataMode, SystemTxType, ZkEnvelope};
+
+#[derive(Debug, Clone, Copy)]
+struct BatchPigMeasurement {
+    mode: BatchPigMode,
+    prover_input_words: usize,
+    elapsed: Duration,
+}
 
 /// Takes a vector of blocks and produces a batch envelope.
 #[allow(clippy::too_many_arguments)]
@@ -34,20 +43,40 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
     let (_, last_replay_record, _, _) = blocks.last().unwrap();
     let proving_version = ProvingVersion::try_from(protocol_version.clone())?;
+    let batch_computational_native_used: u64 = blocks
+        .iter()
+        .map(|(block_output, _, _, _)| block_output.computational_native_used)
+        .sum();
 
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
     let native_batch_run = match proving_version {
-        ProvingVersion::V8 => Some(generate_batch_run(
-            proving_version,
-            &blocks
-                .iter()
-                .map(|(_, replay_record, _, _)| replay_record.clone())
-                .collect::<Vec<_>>(),
-            read_state,
-            merkle_tree.clone(),
-            pubdata_mode,
-        )?),
+        ProvingVersion::V8 => {
+            let started_at = std::time::Instant::now();
+            let batch_run = generate_batch_run(
+                proving_version,
+                &blocks
+                    .iter()
+                    .map(|(_, replay_record, _, _)| replay_record.clone())
+                    .collect::<Vec<_>>(),
+                read_state,
+                merkle_tree.clone(),
+                pubdata_mode,
+            )?;
+            let elapsed = started_at.elapsed();
+            record_batch_pig_telemetry(BatchPigTelemetry {
+                batch_number,
+                chain_id,
+                first_block_number: block_number_from,
+                last_block_number: block_number_to,
+                proving_version,
+                mode: BatchPigMode::NativeBatch,
+                prover_input_words: batch_run.prover_input.len(),
+                computational_native_used: batch_computational_native_used,
+                elapsed,
+            });
+            Some(batch_run)
+        }
         _ => None,
     };
     if let Some(native_batch_run) = &native_batch_run {
@@ -114,8 +143,21 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     }
 
     // execution version should be the same for all the blocks, it is ensured by the seal criteria
-    let batch_prover_input =
+    let (batch_prover_input, batch_pig_measurement) =
         compute_batch_prover_input(blocks, proving_version, pubdata_mode, native_batch_run)?;
+    if let Some(batch_pig_measurement) = batch_pig_measurement {
+        record_batch_pig_telemetry(BatchPigTelemetry {
+            batch_number,
+            chain_id,
+            first_block_number: block_number_from,
+            last_block_number: block_number_to,
+            proving_version,
+            mode: batch_pig_measurement.mode,
+            prover_input_words: batch_pig_measurement.prover_input_words,
+            computational_native_used: batch_computational_native_used,
+            elapsed: batch_pig_measurement.elapsed,
+        });
+    }
 
     // Sanity check: all blocks in the batch should have the same protocol version
     for (_, replay_record, _, _) in blocks.iter().skip(1) {
@@ -161,12 +203,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
                 .iter()
                 .map(|(block_output, _, _, _)| block_output.tx_results.len())
                 .sum(),
-            computational_native_used: Some(
-                blocks
-                    .iter()
-                    .map(|(block_output, _, _, _)| block_output.computational_native_used)
-                    .sum(),
-            ),
+            computational_native_used: Some(batch_computational_native_used),
             logs,
             messages,
             multichain_root,
@@ -247,7 +284,7 @@ mod tests {
 
     #[test]
     fn v8_batch_prover_input_comes_from_native_batch_run() {
-        let prover_input = compute_batch_prover_input(
+        let (prover_input, batch_pig_measurement) = compute_batch_prover_input(
             &[],
             ProvingVersion::V8,
             PubdataMode::Calldata,
@@ -270,6 +307,7 @@ mod tests {
         )
         .unwrap();
 
+        assert!(batch_pig_measurement.is_none());
         assert!(matches!(prover_input, ProverInput::Real(ref words) if words == &[7, 8, 9]));
     }
 
@@ -282,10 +320,11 @@ mod tests {
             ProverInput::Fake,
         );
 
-        let prover_input =
+        let (prover_input, batch_pig_measurement) =
             compute_batch_prover_input(&[block], ProvingVersion::V7, PubdataMode::Calldata, None)
                 .unwrap();
 
+        assert!(batch_pig_measurement.is_none());
         assert!(matches!(prover_input, ProverInput::Fake));
     }
 }
@@ -300,7 +339,7 @@ fn compute_batch_prover_input(
     proving_version: ProvingVersion,
     pubdata_mode: PubdataMode,
     native_batch_run: Option<NativeBatchRunOutput>,
-) -> anyhow::Result<ProverInput> {
+) -> anyhow::Result<(ProverInput, Option<BatchPigMeasurement>)> {
     use zk_os_forward_system::run::generate_batch_proof_input;
     use zk_os_forward_system_prev::run::generate_batch_proof_input as generate_batch_proof_input_prev;
 
@@ -309,7 +348,7 @@ fn compute_batch_prover_input(
             .iter()
             .any(|(_, _, _, prover_input)| matches!(prover_input, ProverInput::Fake))
     {
-        return Ok(ProverInput::Fake);
+        return Ok((ProverInput::Fake, None));
     }
 
     Ok(match proving_version {
@@ -322,7 +361,8 @@ fn compute_batch_prover_input(
         }
         ProvingVersion::V6 => {
             // TODO: in the long-term we should generate proof input per batch
-            ProverInput::Real(generate_batch_proof_input_prev(
+            let started_at = std::time::Instant::now();
+            let prover_input = generate_batch_proof_input_prev(
                 blocks
                     .iter()
                     .map(|(_, _, _, prover_input)| prover_input.unwrap_real())
@@ -334,11 +374,21 @@ fn compute_batch_prover_input(
                     .iter()
                     .map(|(block_output, _, _, _)| block_output.expect_pubdata_bytes())
                     .collect(),
-            ))
+            );
+            let prover_input_words = prover_input.len();
+            (
+                ProverInput::Real(prover_input),
+                Some(BatchPigMeasurement {
+                    mode: BatchPigMode::LegacyBatch,
+                    prover_input_words,
+                    elapsed: started_at.elapsed(),
+                }),
+            )
         }
         ProvingVersion::V7 => {
             // TODO: in the long-term we should generate proof input per batch
-            ProverInput::Real(generate_batch_proof_input(
+            let started_at = std::time::Instant::now();
+            let prover_input = generate_batch_proof_input(
                 blocks
                     .iter()
                     .map(|(_, _, _, prover_input)| prover_input.unwrap_real())
@@ -350,12 +400,24 @@ fn compute_batch_prover_input(
                     .iter()
                     .map(|(block_output, _, _, _)| block_output.expect_pubdata_bytes())
                     .collect(),
-            ))
+            );
+            let prover_input_words = prover_input.len();
+            (
+                ProverInput::Real(prover_input),
+                Some(BatchPigMeasurement {
+                    mode: BatchPigMode::LegacyBatch,
+                    prover_input_words,
+                    elapsed: started_at.elapsed(),
+                }),
+            )
         }
-        ProvingVersion::V8 => ProverInput::Real(
-            native_batch_run
-                .expect("V8 prover input must be computed via native batch run")
-                .prover_input,
+        ProvingVersion::V8 => (
+            ProverInput::Real(
+                native_batch_run
+                    .expect("V8 prover input must be computed via native batch run")
+                    .prover_input,
+            ),
+            None,
         ),
     })
 }

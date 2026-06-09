@@ -63,6 +63,13 @@ alloy::sol!(
     "test-contracts/out/Counter.sol/Counter.json"
 );
 
+alloy::sol!(
+    /// Compute-heavy contract for stress tests that repeatedly calls `keccak256`.
+    #[sol(rpc)]
+    KeccakBurner,
+    "test-contracts/out/KeccakBurner.sol/KeccakBurner.json"
+);
+
 alloy::sol! {
     #[sol(rpc)]
     interface IBaseToken {

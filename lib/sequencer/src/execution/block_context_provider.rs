@@ -143,6 +143,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     )
                     .await
                     .context("mempool is closed")?;
+                let upgrade_tx_in_stream = best_txs.upgrade_tx_in_stream;
 
                 let timestamp = (millis_since_epoch() / 1000) as u64;
 
@@ -181,7 +182,12 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                         .force_preimages
                         .clone()
                 } else {
-                    Vec::new()
+                    best_txs
+                        .upgrade_metadata
+                        .as_ref()
+                        .filter(|_| upgrade_tx_in_stream)
+                        .map(|metadata| metadata.force_preimages.clone())
+                        .unwrap_or_default()
                 };
 
                 let execution_version: ExecutionVersion = (&self.protocol_version)
@@ -194,7 +200,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 // batch commitment path. We also keep the old "exactly once on fresh startup"
                 // behavior for chains that begin directly on a post-v31 protocol.
                 let should_append_sl_chain_id_tx = self.protocol_version.is_post_v31()
-                    && (includes_protocol_upgrade || !self.sl_chain_id_set);
+                    && (upgrade_tx_in_stream || !self.sl_chain_id_set);
                 let (tx_source, expect_sl_chain_id_tx_after_upgrade) =
                     if should_append_sl_chain_id_tx {
                         self.sl_chain_id_set = true;
@@ -208,7 +214,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                                 async move { ZkTransaction::from(sl_chain_id_tx) },
                             ),
                         ));
-                        (tx_source, includes_protocol_upgrade)
+                        (tx_source, upgrade_tx_in_stream)
                     } else {
                         (best_txs.stream, false)
                     };

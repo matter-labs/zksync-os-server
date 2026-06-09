@@ -11,6 +11,7 @@ mod en_remote_config;
 mod init_tx_forwarder;
 mod migration_gate;
 mod node_state_on_startup;
+pub mod pig_telemetry;
 mod priority_tree_pipeline_step;
 pub mod prover_api;
 mod prover_block;
