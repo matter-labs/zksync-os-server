@@ -88,9 +88,18 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             .try_into_recovered()
             .map_err(|_| EthSendRawTransactionError::InvalidTransactionSignature)?;
         let hash = *l2_tx.hash();
-        if self.config.l2_signer_blacklist.contains(&l2_tx.signer()) {
+        let signer = l2_tx.signer();
+        let tx_size = tx_bytes.len();
+        if self.config.l2_signer_blacklist.contains(&signer) {
             return Err(EthSendRawTransactionError::BlacklistedSigner);
         }
+        tracing::info!(
+            chain_id = self.chain_id,
+            tx_hash = %hash,
+            signer = %signer,
+            tx_size,
+            "eth_sendRawTransaction decoded"
+        );
 
         if let Some(policy_client) = &self.policy_client {
             // `last_constructed_block_context` is None until the sequencer has
@@ -138,7 +147,36 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         }
         {
             let _guard = MempoolLatencyGuard::new();
-            self.mempool.add_l2_transaction(l2_tx).await?;
+            let started_at = Instant::now();
+            match self.mempool.add_l2_transaction(l2_tx).await {
+                Ok(outcome) => {
+                    tracing::info!(
+                        chain_id = self.chain_id,
+                        tx_hash = %hash,
+                        signer = %signer,
+                        tx_size,
+                        elapsed_ms = started_at.elapsed().as_millis(),
+                        pool_hash = %outcome.hash,
+                        pool_pending = outcome.is_pending(),
+                        pool_queued = outcome.is_queued(),
+                        "eth_sendRawTransaction admitted to local mempool"
+                    );
+                }
+                Err(err) => {
+                    let reason = TxRejectionReason::from(&err.kind);
+                    tracing::warn!(
+                        chain_id = self.chain_id,
+                        tx_hash = %hash,
+                        signer = %signer,
+                        tx_size,
+                        reason = ?reason,
+                        error = %err,
+                        elapsed_ms = started_at.elapsed().as_millis(),
+                        "eth_sendRawTransaction rejected by local mempool"
+                    );
+                    return Err(err.into());
+                }
+            }
         }
         Ok(hash)
     }
@@ -148,6 +186,12 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         tx_bytes: Bytes,
     ) -> Result<B256, EthSendRawTransactionError> {
         let hash = self.admit_to_local_mempool(&tx_bytes).await?;
+        tracing::info!(
+            chain_id = self.chain_id,
+            tx_hash = %hash,
+            forwarded = self.tx_forwarder.is_some(),
+            "eth_sendRawTransaction accepted by RPC handler"
+        );
 
         if let Some(tx_forwarder) = self.tx_forwarder.as_ref() {
             // If the handler future is dropped before the forward returns

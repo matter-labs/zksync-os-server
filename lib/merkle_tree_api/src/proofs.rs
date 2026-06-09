@@ -518,6 +518,13 @@ mod tests {
     }
 
     #[test]
+    fn no_op_proof_has_no_sibling_hashes() {
+        let proof = <BatchTreeProof>::empty();
+        let sibling_hashes: Vec<_> = proof.sibling_hashes(64, 2).collect();
+        assert!(sibling_hashes.is_empty());
+    }
+
+    #[test]
     fn mixed_read_write_proof() {
         let proof = BatchTreeProof {
             operations: vec![TreeOperation::Miss { prev_index: 0 }],

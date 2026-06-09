@@ -10,7 +10,9 @@ use blake2::{Blake2s256, Digest};
 use futures::{FutureExt, TryFutureExt};
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
+use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zksync_os_genesis::{GenesisInput, GenesisInputSource};
 use zksync_os_merkle_tree_api::flat::StorageSlotProof;
@@ -26,6 +28,37 @@ use zksync_os_storage_api::{PersistedBatch, RepositoryError, StateError, read_mu
 use zksync_os_types::L2_TO_L1_TREE_SIZE;
 
 const LOG_PROOF_SUPPORTED_METADATA_VERSION: u8 = 1;
+const L2_TO_L1_LOG_SERIALIZE_SIZE: usize = 88;
+
+#[derive(Clone)]
+struct LocalBatchProofData {
+    leaves: Vec<[u8; L2_TO_L1_LOG_SERIALIZE_SIZE]>,
+    log_leaf_paths: Vec<Vec<B256>>,
+    tx_log_ranges: HashMap<TxHash, (usize, usize)>,
+    multichain_root: B256,
+    root: B256,
+}
+
+#[derive(Clone)]
+struct GatewayProofData {
+    batch_proof_len: u8,
+    batch_chain_proof: Vec<B256>,
+    is_final_node: bool,
+    gateway_block_number: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct GatewayProofKey {
+    proof_target: u8,
+    batch_number: u64,
+    execute_sl_block_number: u64,
+}
+
+#[derive(Default)]
+struct LogProofCache {
+    local_batches: HashMap<u64, LocalBatchProofData>,
+    gateway_proofs: HashMap<GatewayProofKey, GatewayProofData>,
+}
 
 pub struct ZksNamespace<RpcStorage> {
     bridgehub_address: Address,
@@ -34,6 +67,7 @@ pub struct ZksNamespace<RpcStorage> {
     genesis_input_source: Arc<dyn GenesisInputSource>,
     l2_chain_id: u64,
     gateway_provider: Option<DynProvider>,
+    log_proof_cache: Arc<Mutex<LogProofCache>>,
 }
 
 impl<RpcStorage> ZksNamespace<RpcStorage> {
@@ -52,11 +86,250 @@ impl<RpcStorage> ZksNamespace<RpcStorage> {
             genesis_input_source,
             l2_chain_id,
             gateway_provider,
+            log_proof_cache: Arc::new(Mutex::new(LogProofCache::default())),
         }
     }
 }
 
 impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
+    fn build_local_batch_proof_data(
+        &self,
+        batch: &PersistedBatch,
+    ) -> ZksResult<LocalBatchProofData> {
+        let mut tx_log_ranges = HashMap::new();
+        let mut merkle_tree_leaves = vec![];
+
+        for block in batch.block_range.clone() {
+            let Some(block) = self.storage.repository().get_block_by_number(block)? else {
+                return Err(ZksError::BlockNotAvailable(block));
+            };
+            for block_tx_hash in block.unseal().body.transactions {
+                let Some(receipt) = self
+                    .storage
+                    .repository()
+                    .get_transaction_receipt(block_tx_hash)?
+                else {
+                    return Err(ZksError::TxNotAvailable(block_tx_hash));
+                };
+                let l2_to_l1_logs = receipt.into_l2_to_l1_logs();
+                tx_log_ranges.insert(
+                    block_tx_hash,
+                    (merkle_tree_leaves.len(), l2_to_l1_logs.len()),
+                );
+                for l2_to_l1_log in l2_to_l1_logs {
+                    merkle_tree_leaves.push(l2_to_l1_log.encode());
+                }
+            }
+        }
+
+        let tree =
+            MiniMerkleTree::new(merkle_tree_leaves.iter().copied(), Some(L2_TO_L1_TREE_SIZE));
+        let local_root = tree.merkle_root();
+        let log_leaf_paths = (0..merkle_tree_leaves.len())
+            .map(|index| {
+                let (path_root, path) = tree.merkle_root_and_path(index);
+                debug_assert_eq!(path_root, local_root);
+                path
+            })
+            .collect();
+
+        let state = self.storage.state_view_at(*batch.block_range.end())?;
+        let last_block_replay_record = self
+            .storage
+            .replay_storage()
+            .get_replay_record(*batch.block_range.end())
+            .ok_or(ZksError::BlockNotAvailable(*batch.block_range.end()))?;
+        let multichain_root = if last_block_replay_record.protocol_version.is_post_v31() {
+            read_multichain_root(state)
+        } else {
+            B256::new([0u8; 32])
+        };
+        let root = keccak256([local_root.0, multichain_root.0].concat());
+
+        Ok(LocalBatchProofData {
+            leaves: merkle_tree_leaves,
+            log_leaf_paths,
+            tx_log_ranges,
+            multichain_root,
+            root,
+        })
+    }
+
+    async fn local_batch_proof_data(
+        &self,
+        batch: &PersistedBatch,
+    ) -> ZksResult<LocalBatchProofData> {
+        let batch_number = batch.number();
+        if let Some(cached) = self
+            .log_proof_cache
+            .lock()
+            .await
+            .local_batches
+            .get(&batch_number)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+
+        let mut cache = self.log_proof_cache.lock().await;
+        if let Some(cached) = cache.local_batches.get(&batch_number).cloned() {
+            return Ok(cached);
+        }
+
+        let proof_data = self.build_local_batch_proof_data(batch)?;
+        if cache.local_batches.len() > 128 {
+            cache.local_batches.clear();
+        }
+        cache.local_batches.insert(batch_number, proof_data.clone());
+        Ok(proof_data)
+    }
+
+    async fn gateway_proof_data(
+        &self,
+        batch: &PersistedBatch,
+        proof_target: LogProofTarget,
+        gateway_provider: &DynProvider,
+    ) -> ZksResult<GatewayProofData> {
+        let execute_sl_block_number = batch
+            .execute_sl_block_number
+            .ok_or(ZksError::BatchNotAvailableYet)?;
+        let key = GatewayProofKey {
+            proof_target: match proof_target {
+                LogProofTarget::L1BatchRoot => 0,
+                LogProofTarget::MessageRoot => 1,
+            },
+            batch_number: batch.number(),
+            execute_sl_block_number,
+        };
+
+        if let Some(cached) = self
+            .log_proof_cache
+            .lock()
+            .await
+            .gateway_proofs
+            .get(&key)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+
+        let batch_number = batch.number();
+        let proof_data = match proof_target {
+            LogProofTarget::L1BatchRoot => {
+                let gateway_batch: PersistedBatch = gateway_provider
+                    .raw_request(
+                        "unstable_getBatchByBlockNumber".into(),
+                        (execute_sl_block_number,),
+                    )
+                    .await
+                    .context("unstable_getBatchByBlockNumber")?;
+                let gateway_batch_number = gateway_batch.number();
+
+                let chain_log_proof_future = get_chain_log_proof(
+                    self.l2_chain_id,
+                    gateway_batch.last_block_number(),
+                    gateway_provider,
+                )
+                .map_err(|e| e.context("get_chain_log_proof"));
+
+                let gw_local_root_future = gateway_provider
+                    .raw_request("unstable_getLocalRoot".into(), (gateway_batch_number,))
+                    .map_err(|e| anyhow::Error::from(e).context("unstable_getLocalRoot"));
+
+                let gw_chain_id_future = gateway_provider
+                    .get_chain_id()
+                    .map_err(|e| anyhow::Error::from(e).context("get_chain_id"));
+
+                let chain_proof_vector_future = futures::future::try_join3(
+                    chain_log_proof_future,
+                    gw_local_root_future,
+                    gw_chain_id_future,
+                )
+                .map_ok(|(mut chain_log_proof, gw_local_root, gw_chain_id)| {
+                    chain_log_proof.chain_id_leaf_proof_mask |=
+                        U256::from(1u64 << chain_log_proof.chain_id_leaf_proof.len());
+                    chain_log_proof.chain_id_leaf_proof.push(gw_local_root);
+                    chain_proof_vector(gateway_batch_number, chain_log_proof, gw_chain_id)
+                });
+
+                let batch_tree_proof_future = batch_tree_proof(
+                    gateway_batch.block_range.clone(),
+                    self.l2_chain_id,
+                    batch_number,
+                    gateway_provider,
+                )
+                .map_err(|e| e.context("batch_tree_proof"));
+
+                let (chain_proof_vector, (mut batch_chain_proof, batch_proof_len)) =
+                    futures::future::try_join(
+                        chain_proof_vector_future.boxed(),
+                        batch_tree_proof_future.boxed(),
+                    )
+                    .await?;
+
+                batch_chain_proof.extend(chain_proof_vector);
+
+                GatewayProofData {
+                    batch_proof_len,
+                    batch_chain_proof,
+                    is_final_node: false,
+                    gateway_block_number: Some(execute_sl_block_number),
+                }
+            }
+            LogProofTarget::MessageRoot => {
+                let chain_log_proof_future = get_chain_log_proof(
+                    self.l2_chain_id,
+                    execute_sl_block_number,
+                    gateway_provider,
+                )
+                .map_err(|e| e.context("get_chain_log_proof"));
+
+                let gw_chain_id_future = gateway_provider
+                    .get_chain_id()
+                    .map_err(|e| anyhow::Error::from(e).context("get_chain_id"));
+
+                let chain_proof_vector_future = futures::future::try_join(
+                    chain_log_proof_future,
+                    gw_chain_id_future,
+                )
+                .map_ok(|(chain_log_proof, gw_chain_id)| {
+                    chain_proof_vector(execute_sl_block_number, chain_log_proof, gw_chain_id)
+                });
+
+                let batch_tree_proof_future = batch_tree_proof(
+                    execute_sl_block_number..=execute_sl_block_number,
+                    self.l2_chain_id,
+                    batch_number,
+                    gateway_provider,
+                )
+                .map_err(|e| e.context("batch_tree_proof"));
+
+                let (chain_proof_vector, (mut batch_chain_proof, batch_proof_len)) =
+                    futures::future::try_join(
+                        chain_proof_vector_future.boxed(),
+                        batch_tree_proof_future.boxed(),
+                    )
+                    .await?;
+
+                batch_chain_proof.extend(chain_proof_vector);
+
+                GatewayProofData {
+                    batch_proof_len,
+                    batch_chain_proof,
+                    is_final_node: false,
+                    gateway_block_number: Some(execute_sl_block_number),
+                }
+            }
+        };
+
+        let mut cache = self.log_proof_cache.lock().await;
+        if cache.gateway_proofs.len() > 512 {
+            cache.gateway_proofs.clear();
+        }
+        cache.gateway_proofs.insert(key, proof_data.clone());
+        Ok(proof_data)
+    }
+
     async fn get_l2_to_l1_log_proof_impl(
         &self,
         tx_hash: TxHash,
@@ -75,193 +348,47 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             return Ok(None);
         };
 
-        let mut batch_index = None;
-        let mut merkle_tree_leaves = vec![];
         let batch_number = batch.number();
-        for block in batch.block_range.clone() {
-            let Some(block) = self.storage.repository().get_block_by_number(block)? else {
-                return Err(ZksError::BlockNotAvailable(block));
-            };
-            for block_tx_hash in block.unseal().body.transactions {
-                let Some(receipt) = self
-                    .storage
-                    .repository()
-                    .get_transaction_receipt(block_tx_hash)?
-                else {
-                    return Err(ZksError::TxNotAvailable(block_tx_hash));
-                };
-                let l2_to_l1_logs = receipt.into_l2_to_l1_logs();
-                if block_tx_hash == tx_hash {
-                    if index.0 >= l2_to_l1_logs.len() {
-                        return Err(ZksError::IndexOutOfBounds(index.0, l2_to_l1_logs.len()));
-                    }
-                    batch_index.replace(merkle_tree_leaves.len() + index.0);
-                }
-                for l2_to_l1_log in l2_to_l1_logs {
-                    merkle_tree_leaves.push(l2_to_l1_log.encode());
-                }
-            }
-        }
-        let l1_log_index = batch_index
-            .expect("transaction not found in the batch that was supposed to contain it");
-
-        let (local_root, proof) =
-            MiniMerkleTree::new(merkle_tree_leaves.into_iter(), Some(L2_TO_L1_TREE_SIZE))
-                .merkle_root_and_path(l1_log_index);
-
-        let state = self.storage.state_view_at(*batch.block_range.end())?;
-        let last_block_replay_record = self
-            .storage
-            .replay_storage()
-            .get_replay_record(*batch.block_range.end())
-            .ok_or(ZksError::BlockNotAvailable(*batch.block_range.end()))?;
-        let multichain_root = if last_block_replay_record.protocol_version.is_post_v31() {
-            read_multichain_root(state)
-        } else {
-            B256::new([0u8; 32])
+        let local_proof_data = self.local_batch_proof_data(&batch).await?;
+        let Some((first_log_index, log_count)) =
+            local_proof_data.tx_log_ranges.get(&tx_hash).copied()
+        else {
+            return Err(ZksError::TxNotAvailable(tx_hash));
         };
-        let root = keccak256([local_root.0, multichain_root.0].concat());
+        if index.0 >= log_count {
+            return Err(ZksError::IndexOutOfBounds(index.0, log_count));
+        }
+        let l1_log_index = first_log_index + index.0;
+
+        let proof = local_proof_data
+            .log_leaf_paths
+            .get(l1_log_index)
+            .cloned()
+            .ok_or(ZksError::IndexOutOfBounds(
+                l1_log_index,
+                local_proof_data.leaves.len(),
+            ))?;
 
         let log_leaf_proof = proof
             .into_iter()
-            .chain(std::iter::once(multichain_root))
+            .chain(std::iter::once(local_proof_data.multichain_root))
             .collect::<Vec<_>>();
 
-        let (batch_proof_len, batch_chain_proof, is_final_node, gateway_block_number) = match &self
-            .gateway_provider
-        {
-            Some(gateway_provider) => {
-                let execute_sl_block_number = batch
-                    .execute_sl_block_number
-                    .ok_or(ZksError::BatchNotAvailableYet)?;
-
-                match proof_target {
-                    LogProofTarget::L1BatchRoot => {
-                        let gateway_batch: PersistedBatch = gateway_provider
-                            .raw_request(
-                                "unstable_getBatchByBlockNumber".into(),
-                                (execute_sl_block_number,),
-                            )
-                            .await
-                            .context("unstable_getBatchByBlockNumber")?;
-                        let gateway_batch_number = gateway_batch.number();
-
-                        // "batch" and "chain" parts can be fetched in parallel, so we prepare futures and join them at the end.
-                        let chain_log_proof_future = get_chain_log_proof(
-                            self.l2_chain_id,
-                            gateway_batch.last_block_number(),
-                            gateway_provider,
-                        )
-                        .map_err(|e| e.context("get_chain_log_proof"));
-
-                        let gw_local_root_future = gateway_provider
-                            .raw_request("unstable_getLocalRoot".into(), (gateway_batch_number,))
-                            .map_err(|e| anyhow::Error::from(e).context("unstable_getLocalRoot"));
-
-                        let gw_chain_id_future = gateway_provider
-                            .get_chain_id()
-                            .map_err(|e| anyhow::Error::from(e).context("get_chain_id"));
-
-                        let chain_proof_vector_future = futures::future::try_join3(
-                            chain_log_proof_future,
-                            gw_local_root_future,
-                            gw_chain_id_future,
-                        )
-                        .map_ok(
-                            |(mut chain_log_proof, gw_local_root, gw_chain_id)| {
-                                // Chain tree is the right subtree of the aggregated tree.
-                                // We append root of the left subtree to form full proof.
-                                chain_log_proof.chain_id_leaf_proof_mask |=
-                                    U256::from(1u64 << chain_log_proof.chain_id_leaf_proof.len());
-                                chain_log_proof.chain_id_leaf_proof.push(gw_local_root);
-                                chain_proof_vector(
-                                    gateway_batch_number,
-                                    chain_log_proof,
-                                    gw_chain_id,
-                                )
-                            },
-                        );
-
-                        let batch_tree_proof_future = batch_tree_proof(
-                            gateway_batch.block_range.clone(),
-                            self.l2_chain_id,
-                            batch_number,
-                            gateway_provider,
-                        )
-                        .map_err(|e| e.context("batch_tree_proof"));
-
-                        let (chain_proof_vector, (mut batch_chain_proof, batch_proof_len)) =
-                            futures::future::try_join(
-                                chain_proof_vector_future.boxed(),
-                                batch_tree_proof_future.boxed(),
-                            )
-                            .await?;
-
-                        batch_chain_proof.extend(chain_proof_vector);
-
-                        (
-                            batch_proof_len,
-                            batch_chain_proof,
-                            false,
-                            Some(execute_sl_block_number),
-                        )
-                    }
-                    LogProofTarget::MessageRoot => {
-                        // For the "until msg root" format the chain proof is taken at the specific
-                        // SL block where this chain batch was executed (not at the end of the SL
-                        // L1 batch). The proof goes from the batch leaf directly to the block-level
-                        // message root, so no local-root extension is required.
-                        let chain_log_proof_future = get_chain_log_proof(
-                            self.l2_chain_id,
-                            execute_sl_block_number,
-                            gateway_provider,
-                        )
-                        .map_err(|e| e.context("get_chain_log_proof"));
-
-                        let gw_chain_id_future = gateway_provider
-                            .get_chain_id()
-                            .map_err(|e| anyhow::Error::from(e).context("get_chain_id"));
-
-                        let chain_proof_vector_future =
-                            futures::future::try_join(chain_log_proof_future, gw_chain_id_future)
-                                .map_ok(|(chain_log_proof, gw_chain_id)| {
-                                    chain_proof_vector(
-                                        execute_sl_block_number,
-                                        chain_log_proof,
-                                        gw_chain_id,
-                                    )
-                                });
-
-                        // The batch tree proof uses only the single execution block so that the
-                        // resulting root matches the block-level message root.
-                        let batch_tree_proof_future = batch_tree_proof(
-                            execute_sl_block_number..=execute_sl_block_number,
-                            self.l2_chain_id,
-                            batch_number,
-                            gateway_provider,
-                        )
-                        .map_err(|e| e.context("batch_tree_proof"));
-
-                        let (chain_proof_vector, (mut batch_chain_proof, batch_proof_len)) =
-                            futures::future::try_join(
-                                chain_proof_vector_future.boxed(),
-                                batch_tree_proof_future.boxed(),
-                            )
-                            .await?;
-
-                        batch_chain_proof.extend(chain_proof_vector);
-
-                        (
-                            batch_proof_len,
-                            batch_chain_proof,
-                            false,
-                            Some(execute_sl_block_number),
-                        )
-                    }
+        let (batch_proof_len, batch_chain_proof, is_final_node, gateway_block_number) =
+            match &self.gateway_provider {
+                Some(gateway_provider) => {
+                    let proof_data = self
+                        .gateway_proof_data(&batch, proof_target, gateway_provider)
+                        .await?;
+                    (
+                        proof_data.batch_proof_len,
+                        proof_data.batch_chain_proof,
+                        proof_data.is_final_node,
+                        proof_data.gateway_block_number,
+                    )
                 }
-            }
-            None => (0, Vec::<B256>::new(), true, None),
-        };
+                None => (0, Vec::<B256>::new(), true, None),
+            };
 
         let proof = {
             let mut metadata = [0u8; 32];
@@ -281,7 +408,7 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         Ok(Some(L2ToL1LogProof {
             batch_number,
             proof,
-            root,
+            root: local_proof_data.root,
             id: l1_log_index as u32,
             gateway_block_number,
         }))

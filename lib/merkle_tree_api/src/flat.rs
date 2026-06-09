@@ -140,15 +140,19 @@ impl BatchTreeProof {
         leaf_count_before_update: u64,
     ) -> impl Iterator<Item = ((u8, u64), B256)> {
         let mut sibling_hashes = vec![];
-        Self::zip_leaves(
-            &Blake2Hasher,
-            tree_depth,
-            leaf_count_before_update,
-            self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
-            self.hashes.iter(),
-            Some(&mut sibling_hashes),
-        )
-        .expect("invalid batch tree proof");
+        // A no-op batch (no storage writes and no reads) has no proven leaves; `zip_leaves` cannot
+        // restore a root from an empty leaf set, so there are simply no sibling hashes to extract.
+        if !self.sorted_leaves.is_empty() {
+            Self::zip_leaves(
+                &Blake2Hasher,
+                tree_depth,
+                leaf_count_before_update,
+                self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
+                self.hashes.iter(),
+                Some(&mut sibling_hashes),
+            )
+            .expect("invalid batch tree proof");
+        }
 
         sibling_hashes
             .into_iter()
@@ -169,15 +173,20 @@ impl BatchTreeProof {
         // in the same way they will be queried below; the order correctness is asserted
         // (see the `get_sibling_hash` closure).
         let mut sibling_hashes = vec![];
-        Self::zip_leaves(
-            &Blake2Hasher,
-            tree_depth,
-            leaf_count,
-            self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
-            self.hashes.iter(),
-            Some(&mut sibling_hashes),
-        )
-        .expect("invalid batch tree proof");
+        // A no-op batch has no proven leaves; `zip_leaves` cannot restore a root from an empty leaf
+        // set. With no leaves, the loops below iterate over nothing and the `get_sibling_hash`
+        // closure (which indexes into `sibling_hashes`) is never invoked.
+        if !self.sorted_leaves.is_empty() {
+            Self::zip_leaves(
+                &Blake2Hasher,
+                tree_depth,
+                leaf_count,
+                self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
+                self.hashes.iter(),
+                Some(&mut sibling_hashes),
+            )
+            .expect("invalid batch tree proof");
+        }
 
         let proof_entries = self.sorted_leaves.iter().map(|(&index, leaf)| {
             let proof_entry = StorageSlotProofEntry {

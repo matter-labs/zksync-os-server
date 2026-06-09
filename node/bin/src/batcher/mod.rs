@@ -246,7 +246,40 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                     state_reporter.enter_state(GenericComponentState::Active);
                     match should_seal {
                         Some(true) => {
-                            // some of the limits was reached, start sealing the batch
+                            if blocks.is_empty() {
+                                // The next block does not fit into an empty batch according to
+                                // the configured limits. Seal it as a single-block batch instead
+                                // of producing an invalid empty batch.
+                                let Some(ProverBlock { output: block_output, record: replay_record, prover_input, tree_output }) = block_receiver.pop_buffer() else {
+                                    anyhow::bail!("No block received in buffer after peeking")
+                                };
+
+                                let block_number = replay_record.block_context.block_number;
+
+                                state_reporter.record_picked(
+                                    block_number,
+                                    Some(replay_record.block_context.timestamp),
+                                    None,
+                                );
+
+                                tracing::warn!(
+                                    batch_number,
+                                    block_number,
+                                    "Adding oversized block as a single-block batch."
+                                );
+
+                                first_block_timestamp
+                                    .get_or_insert(replay_record.block_context.timestamp);
+                                accumulator.add(&block_output, &replay_record);
+                                blocks.push((
+                                    block_output,
+                                    replay_record,
+                                    tree_output,
+                                    prover_input,
+                                ));
+                            }
+
+                            // Some of the limits was reached, start sealing the batch.
                             break;
                         }
                         Some(false) => {

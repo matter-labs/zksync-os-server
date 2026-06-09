@@ -1,0 +1,30 @@
+general:
+  ephemeral: true
+gateway_provider:
+  rpc_url: http://localhost:3052
+  rpc_poll_interval: 100ms
+genesis:
+  bridgehub_address: '0x5825f6a2b33fb1fd13cac04bd4a1414d67a3bb23'
+  bytecode_supplier_address: '0x18d5044c28edd97b48168244539036e1f4491157'
+  genesis_input_path: ./local-chains/v31.0_5chain/genesis.json
+  chain_id: 6565
+gateway_sender:
+  operator_commit_sk: '0xedfe53011e4c6e3d682ceb0f4dd51789ba68cc756f267f2e86921957cea59cdf'
+  operator_prove_sk: '0xd9c83196f6fc123730b625536ab49f19d8bff482179de92319e4749eee65f2dc'
+  operator_execute_sk: '0xcfc3e155dbca9eabc0377a715a0ce05673801186c4531d4956d23e1d9a80800f'
+  max_fee_per_gas: 10 gwei
+  max_priority_fee_per_gas: 1 gwei
+  tx_gas_limit: 100000000
+  force_transaction_resubmission:
+    enabled: true
+batcher:
+  batch_timeout: 1s
+  tx_per_batch_limit: 100
+  interop_roots_per_batch_limit: 1000
+sequencer:
+  service_block_delay: 0ms
+  interop_roots_per_tx: 100
+  block_gas_limit: 500000000
+  block_pubdata_limit_bytes: 110000
+rpc:
+  address: 0.0.0.0:3050

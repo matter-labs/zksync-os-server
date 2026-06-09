@@ -19,6 +19,9 @@ pub struct L1SenderConfig<Input> {
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     pub command_limit: usize,
 
+    /// Gas limit used for settlement-layer transactions.
+    pub tx_gas_limit: u64,
+
     /// How often to poll L1 for new blocks.
     pub poll_interval: Duration,
 
