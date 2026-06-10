@@ -2,6 +2,7 @@ use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::B256;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{Provider, ProviderBuilder};
+use alloy::rpc::types::TransactionReceipt;
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use anyhow::Context;
@@ -38,22 +39,11 @@ async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
     .await
 }
 
-async fn fetch_on_chain_batch_hash(tester: &Tester, batch_number: u64) -> anyhow::Result<B256> {
-    let l1_state = fetch_l1_state(tester).await?;
-    let batch = fetch_batch(
-        &l1_state.diamond_proxy_sl,
-        batch_number,
-        tester.config().l1_watcher_config.max_blocks_to_process,
-    )
-    .await?;
-    Ok(batch.batch_info.hash())
-}
-
-/// Returns the `(first_block, last_block)` range of a committed batch on L1.
-async fn fetch_committed_batch_range(
+/// Fetches committed batch `batch_number` from L1, returning `(batch_hash, first_block, last_block)`.
+async fn fetch_committed_batch(
     tester: &Tester,
     batch_number: u64,
-) -> anyhow::Result<(u64, u64)> {
+) -> anyhow::Result<(B256, u64, u64)> {
     let l1_state = fetch_l1_state(tester).await?;
     let batch = fetch_batch(
         &l1_state.diamond_proxy_sl,
@@ -61,7 +51,64 @@ async fn fetch_committed_batch_range(
         tester.config().l1_watcher_config.max_blocks_to_process,
     )
     .await?;
-    Ok((batch.first_block_number(), batch.last_block_number()))
+    Ok((
+        batch.batch_info.hash(),
+        batch.first_block_number(),
+        batch.last_block_number(),
+    ))
+}
+
+async fn fetch_on_chain_batch_hash(tester: &Tester, batch_number: u64) -> anyhow::Result<B256> {
+    Ok(fetch_committed_batch(tester, batch_number).await?.0)
+}
+
+/// Returns the hash of L2 block `block_number`, erroring if the block does not exist.
+async fn block_hash(tester: &Tester, block_number: u64) -> anyhow::Result<B256> {
+    Ok(tester
+        .l2_provider
+        .get_block_by_number(block_number.into())
+        .await?
+        .context(format!("block {block_number} should exist"))?
+        .header
+        .hash)
+}
+
+/// Sends a 1-wei transfer to a random address and waits for a successful receipt. Used both to
+/// advance a block and to confirm the node is alive and accepting transactions.
+async fn send_throwaway_tx(tester: &Tester) -> anyhow::Result<TransactionReceipt> {
+    tester
+        .l2_provider
+        .send_transaction(
+            TransactionRequest::default()
+                .with_to(Address::random())
+                .with_value(U256::from(1u64)),
+        )
+        .await?
+        .expect_successful_receipt()
+        .await
+}
+
+/// Polls L2 block `block_number` until its hash differs from `original`, returning the new hash.
+/// Used by the hash-guard tests to detect that a rebuild completed.
+async fn wait_for_block_hash_change(
+    tester: &Tester,
+    block_number: u64,
+    original: B256,
+) -> anyhow::Result<B256> {
+    (|| async {
+        let hash = block_hash(tester, block_number).await?;
+        if hash != original {
+            Ok(hash)
+        } else {
+            anyhow::bail!("rebuild not done yet: block {block_number} hash still matches original")
+        }
+    })
+    .retry(
+        ConstantBuilder::default()
+            .with_delay(Duration::from_millis(200))
+            .with_max_times(150),
+    )
+    .await
 }
 
 /// Sends throwaway L2 transactions on `tester` until `predicate` holds for the L1 state, polling
@@ -82,16 +129,7 @@ async fn mine_until_l1_state(
         if predicate(&state) {
             return Ok(state);
         }
-        tester
-            .l2_provider
-            .send_transaction(
-                TransactionRequest::default()
-                    .with_to(Address::random())
-                    .with_value(U256::from(1u64)),
-            )
-            .await?
-            .expect_successful_receipt()
-            .await?;
+        send_throwaway_tx(tester).await?;
         tokio::time::sleep(MINE_SEND_INTERVAL).await;
     }
     Err(anyhow::anyhow!(
@@ -178,16 +216,7 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
         tester.l2_provider.get_block_number().await? + BLOCKS_TO_MINE_BEFORE_REBUILD;
     let mut primary_last_block = tester.l2_provider.get_block_number().await?;
     while primary_last_block < target_primary_last_block {
-        let receipt = tester
-            .l2_provider
-            .send_transaction(
-                TransactionRequest::default()
-                    .with_to(Address::random())
-                    .with_value(U256::from(1u64)),
-            )
-            .await?
-            .expect_successful_receipt()
-            .await?;
+        let receipt = send_throwaway_tx(&tester).await?;
         primary_last_block = receipt
             .block_number
             .expect("transfer receipt should have a block number");
@@ -209,29 +238,9 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
         .expect("second sender receipt should have a block number");
     let block_to_empty = primary_last_block - BLOCKS_FROM_TIP_TO_EMPTY;
 
-    let original_previous_block_hash = tester
-        .l2_provider
-        .get_block_by_number((block_to_empty - 1).into())
-        .await?
-        .context("previous block should exist")?
-        .header
-        .hash;
-
-    let original_emptied_block_hash = tester
-        .l2_provider
-        .get_block_by_number(block_to_empty.into())
-        .await?
-        .context("original block should exist")?
-        .header
-        .hash;
-
-    let original_last_block_hash = tester
-        .l2_provider
-        .get_block_by_number(last_rebuilt_block.into())
-        .await?
-        .context("last block should exist")?
-        .header
-        .hash;
+    let original_previous_block_hash = block_hash(&tester, block_to_empty - 1).await?;
+    let original_emptied_block_hash = block_hash(&tester, block_to_empty).await?;
+    let original_last_block_hash = block_hash(&tester, last_rebuilt_block).await?;
 
     let mut restarted_config = tester.config().clone();
     restarted_config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
@@ -245,44 +254,13 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
     let restarted = tester.restart_with_config(restarted_config).await?;
     let rebuild_started_at = Instant::now();
 
-    let rebuilt_last_block = (|| async {
-        let rebuilt_last_block = restarted
-            .l2_provider
-            .get_block_by_number(last_rebuilt_block.into())
-            .await?
-            .context("rebuilt last block should exist")?;
-        let rebuilt_last_block_hash = rebuilt_last_block.header.hash;
+    // Wait for the rebuild to reach the tip: the last block's hash changes once it is rebuilt.
+    let rebuilt_last_block_hash =
+        wait_for_block_hash_change(&restarted, last_rebuilt_block, original_last_block_hash)
+            .await?;
 
-        if rebuilt_last_block_hash != original_last_block_hash {
-            Ok(rebuilt_last_block)
-        } else {
-            anyhow::bail!(
-                "rebuild not finished yet: last_block={} hash={} original_hash={}",
-                last_rebuilt_block,
-                rebuilt_last_block_hash,
-                original_last_block_hash,
-            );
-        }
-    })
-    .retry(
-        ConstantBuilder::default()
-            .with_delay(Duration::from_millis(200))
-            .with_max_times(100),
-    )
-    .await?;
-
-    let rebuilt_emptied_block = restarted
-        .l2_provider
-        .get_block_by_number(block_to_empty.into())
-        .await?
-        .context("rebuilt emptied block should exist")?;
-    let rebuilt_previous_block_hash = restarted
-        .l2_provider
-        .get_block_by_number((block_to_empty - 1).into())
-        .await?
-        .context("rebuilt previous block should exist")?
-        .header
-        .hash;
+    let rebuilt_emptied_block_hash = block_hash(&restarted, block_to_empty).await?;
+    let rebuilt_previous_block_hash = block_hash(&restarted, block_to_empty - 1).await?;
     let rebuilt_emptied_block_tx_count = restarted
         .l2_provider
         .get_block_transaction_count_by_number(block_to_empty.into())
@@ -293,8 +271,6 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
         .get_transaction_by_hash(second_sender_receipt.transaction_hash)
         .await?
         .context("rebuilt last transaction should exist")?;
-    let rebuilt_emptied_block_hash = rebuilt_emptied_block.header.hash;
-    let rebuilt_last_block_hash = rebuilt_last_block.header.hash;
     let rebuild_elapsed = rebuild_started_at.elapsed();
 
     assert_ne!(
@@ -369,13 +345,7 @@ async fn rebuild_panics_if_from_block_is_already_committed(
     .await?;
 
     // Block 1 is always within the committed range once any batch has been committed.
-    let block1_hash = tester
-        .l2_provider
-        .get_block_by_number(1u64.into())
-        .await?
-        .context("block 1 should exist")?
-        .header
-        .hash;
+    let block1_hash = block_hash(&tester, 1).await?;
 
     let mut restarted_config = tester.config().clone();
     restarted_config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
@@ -429,24 +399,9 @@ async fn block_rebuild_hash_guard_prevents_double_rebuild(
     config.sequencer_config.block_time = Duration::from_millis(50);
     let tester = env.launch(config).await?;
 
-    tester
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    send_throwaway_tx(&tester).await?;
 
-    let original_block1_hash = tester
-        .l2_provider
-        .get_block_by_number(1u64.into())
-        .await?
-        .context("block 1 should exist")?
-        .header
-        .hash;
+    let original_block1_hash = block_hash(&tester, 1).await?;
 
     let stopped = tester.stop().await?;
     let mut restart_config = stopped.config().clone();
@@ -461,55 +416,20 @@ async fn block_rebuild_hash_guard_prevents_double_rebuild(
         },
     });
 
-    // First restart: hash matches → rebuild runs.
+    // First restart: hash matches → rebuild runs; wait until block 1 has a new hash.
     let first_restart = stopped.start_with_config(restart_config.clone()).await?;
-
-    // Wait until block 1 has a new hash (rebuild completed).
-    let rebuilt_block1_hash = (|| async {
-        let hash = first_restart
-            .l2_provider
-            .get_block_by_number(1u64.into())
-            .await?
-            .context("block 1 should exist after rebuild")?
-            .header
-            .hash;
-        if hash != original_block1_hash {
-            Ok(hash)
-        } else {
-            anyhow::bail!("rebuild not done yet: block 1 hash still matches original")
-        }
-    })
-    .retry(
-        ConstantBuilder::default()
-            .with_delay(Duration::from_millis(200))
-            .with_max_times(150),
-    )
-    .await?;
+    let rebuilt_block1_hash =
+        wait_for_block_hash_change(&first_restart, 1, original_block1_hash).await?;
 
     // Second restart: block 1's hash has changed → guard fires, rebuild skipped.
     let stopped2 = first_restart.stop().await?;
     let second_restart = stopped2.start_with_config(restart_config).await?;
 
     // Confirm the node started cleanly and is accepting new transactions.
-    second_restart
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    send_throwaway_tx(&second_restart).await?;
 
     // Block 1 must still carry the rebuilt hash — guard fired, no re-rebuild.
-    let block1_after = second_restart
-        .l2_provider
-        .get_block_by_number(1u64.into())
-        .await?
-        .context("block 1 should exist after second restart")?
-        .header
-        .hash;
+    let block1_after = block_hash(&second_restart, 1).await?;
     assert_eq!(
         block1_after, rebuilt_block1_hash,
         "block_rebuild hash guard failed: block 1 was rebuilt again on second restart"
@@ -542,16 +462,7 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
     // Unlike `rebuild_panics_if_from_block_is_already_committed` which uses a fast 50ms block
     // time, this test uses the default block time, so we send a transaction to give the batcher
     // real content and trigger a batch commit quickly.
-    tester
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    send_throwaway_tx(&tester).await?;
 
     // last_executed_batch == 0 is a safety measure: since batch execution is disabled, it
     // should always satisfy.
@@ -564,13 +475,7 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
 
     // last_executed_batch == 0 so we want to keep batch 0, reverting all committed batches
     // (batch 1+). Batch 1 always starts at block 1, so from_block = 1.
-    let block1_hash = tester
-        .l2_provider
-        .get_block_by_number(1u64.into())
-        .await?
-        .context("block 1 should exist")?
-        .header
-        .hash;
+    let block1_hash = block_hash(&tester, 1).await?;
 
     let stopped = tester.stop().await?;
     let reverter_signer = make_reverter_config(&stopped)?;
@@ -587,16 +492,7 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
     let restarted = stopped.start_with_config(restart_config).await?;
 
     // Confirm the node is alive and accepting new L2 transactions after rebuild.
-    restarted
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    send_throwaway_tx(&restarted).await?;
 
     // Verify the server commits a new batch on L1 with the same number as the reverted one.
     // After the revert, last_committed_batch on L1 is 0; reaching committed_state.last_committed_batch
@@ -632,16 +528,7 @@ async fn danger_block_rebuild_with_l1_revert_hash_guard_prevents_double_revert(
     make_commit_only_config(&mut config);
     let tester = env.launch(config).await?;
 
-    tester
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    send_throwaway_tx(&tester).await?;
 
     wait_for_l1_state(
         &tester,
@@ -651,13 +538,7 @@ async fn danger_block_rebuild_with_l1_revert_hash_guard_prevents_double_revert(
     .await?;
 
     // Snapshot block 1's hash before any rebuild; this is stored as the guard value.
-    let original_block1_hash = tester
-        .l2_provider
-        .get_block_by_number(1u64.into())
-        .await?
-        .context("block 1 should exist")?
-        .header
-        .hash;
+    let original_block1_hash = block_hash(&tester, 1).await?;
 
     let stopped = tester.stop().await?;
     let reverter_signer = make_reverter_config(&stopped)?;
@@ -678,26 +559,7 @@ async fn danger_block_rebuild_with_l1_revert_hash_guard_prevents_double_revert(
     let first_restart = stopped.start_with_config(restart_config.clone()).await?;
 
     // Wait for block 1 to be rebuilt with a new timestamp (hash changes).
-    (|| async {
-        let hash = first_restart
-            .l2_provider
-            .get_block_by_number(1u64.into())
-            .await?
-            .context("block 1 should exist after rebuild")?
-            .header
-            .hash;
-        if hash != original_block1_hash {
-            Ok(())
-        } else {
-            anyhow::bail!("rebuild not done yet: block 1 hash still matches original")
-        }
-    })
-    .retry(
-        ConstantBuilder::default()
-            .with_delay(Duration::from_millis(200))
-            .with_max_times(150),
-    )
-    .await?;
+    wait_for_block_hash_change(&first_restart, 1, original_block1_hash).await?;
 
     // Wait for the batcher to re-commit a batch after rebuild; record the count.
     let state_before_second_restart = wait_for_l1_state(
@@ -713,16 +575,7 @@ async fn danger_block_rebuild_with_l1_revert_hash_guard_prevents_double_revert(
     let second_restart = stopped2.start_with_config(restart_config).await?;
 
     // Confirm node is alive.
-    second_restart
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    send_throwaway_tx(&second_restart).await?;
 
     // The guard must have fired: L1 was not reverted, so committed_batch did not drop.
     let l1_after = fetch_l1_state(&second_restart).await?;
@@ -754,16 +607,7 @@ async fn revert_l1_commits_without_rebuild_leaves_local_blocks_intact(
     make_commit_only_config(&mut config);
     let tester = env.launch(config).await?;
 
-    tester
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    send_throwaway_tx(&tester).await?;
 
     wait_for_l1_state(
         &tester,
@@ -774,13 +618,7 @@ async fn revert_l1_commits_without_rebuild_leaves_local_blocks_intact(
 
     // Snapshot the current tip hash; it must survive the standalone L1 revert unchanged.
     let tip_block = tester.l2_provider.get_block_number().await?;
-    let original_tip_hash = tester
-        .l2_provider
-        .get_block_by_number(tip_block.into())
-        .await?
-        .context("tip block should exist")?
-        .header
-        .hash;
+    let original_tip_hash = block_hash(&tester, tip_block).await?;
 
     // Fetch the on-chain hash of batch 1 for the revert guard.
     let batch1_on_chain_hash = fetch_on_chain_batch_hash(&tester, 1).await?;
@@ -798,25 +636,10 @@ async fn revert_l1_commits_without_rebuild_leaves_local_blocks_intact(
     let reverted = stopped.start_with_config(revert_config).await?;
 
     // Confirm the node is alive.
-    reverted
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    send_throwaway_tx(&reverted).await?;
 
     // Local blocks must be unchanged: tip hash identical to pre-revert snapshot.
-    let tip_hash_after = reverted
-        .l2_provider
-        .get_block_by_number(tip_block.into())
-        .await?
-        .context("tip block should still exist after standalone L1 revert")?
-        .header
-        .hash;
+    let tip_hash_after = block_hash(&reverted, tip_block).await?;
     assert_eq!(
         tip_hash_after, original_tip_hash,
         "local blocks must not change after l1_revert"
@@ -847,16 +670,7 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
     make_commit_only_config(&mut config);
     let tester = env.launch(config).await?;
 
-    tester
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    send_throwaway_tx(&tester).await?;
 
     wait_for_l1_state(
         &tester,
@@ -895,16 +709,7 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
     let second = stopped2.start_with_config(revert_config).await?;
 
     // Confirm the node started cleanly and is alive.
-    second
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    send_throwaway_tx(&second).await?;
 
     Ok(())
 }
@@ -951,7 +756,7 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
     // Target batch 2: a non-last committed batch. Place `from_block` strictly inside it when it
     // spans multiple blocks, otherwise at its single block — either way it resolves to batch 2.
     let containing_batch = 2;
-    let (first_block, last_block) = fetch_committed_batch_range(&tester, containing_batch).await?;
+    let (_, first_block, last_block) = fetch_committed_batch(&tester, containing_batch).await?;
     let from_block = if last_block > first_block {
         first_block + 1
     } else {
@@ -960,22 +765,10 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
     // Batch 1 is the deepest batch that must survive the revert.
     let survivor_batch = containing_batch - 1;
 
-    let from_block_hash = tester
-        .l2_provider
-        .get_block_by_number(from_block.into())
-        .await?
-        .context("from_block should exist")?
-        .header
-        .hash;
+    let from_block_hash = block_hash(&tester, from_block).await?;
     // A local block strictly below `from_block` — must be untouched by the rebuild.
     let below_block = from_block - 1;
-    let below_block_hash = tester
-        .l2_provider
-        .get_block_by_number(below_block.into())
-        .await?
-        .context("block below from_block should exist")?
-        .header
-        .hash;
+    let below_block_hash = block_hash(&tester, below_block).await?;
     // On-chain hash of the surviving batch — must be unchanged after the revert+rebuild, proving
     // the revert kept everything up to and including `survivor_batch`.
     let survivor_hash_before = fetch_on_chain_batch_hash(&tester, survivor_batch).await?;
@@ -1004,29 +797,14 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
     );
 
     // Local blocks below `from_block` must be untouched by the rebuild.
-    let below_block_hash_after = restarted
-        .l2_provider
-        .get_block_by_number(below_block.into())
-        .await?
-        .context("block below from_block should still exist after rebuild")?
-        .header
-        .hash;
+    let below_block_hash_after = block_hash(&restarted, below_block).await?;
     assert_eq!(
         below_block_hash_after, below_block_hash,
         "block {below_block} below from_block must not change during rebuild"
     );
 
     // Node is alive and accepting new L2 transactions after the rebuild.
-    restarted
-        .l2_provider
-        .send_transaction(
-            TransactionRequest::default()
-                .with_to(Address::random())
-                .with_value(U256::from(1u64)),
-        )
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    send_throwaway_tx(&restarted).await?;
 
     // The node rebuilds and re-commits at least up to the batch that was reverted.
     wait_for_l1_state(
