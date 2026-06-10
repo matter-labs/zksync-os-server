@@ -1,3 +1,4 @@
+use crate::sl_aware_watcher::segment_resolver;
 use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
 use crate::{BlockUpdates, L1WatcherConfig, LogsCache, SegmentSpec, SlAwareL1Watcher, util};
@@ -44,7 +45,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     /// chain can migrate off an SL (`Migrator.sol`), so each closed interval is self-contained:
     /// every commit on that SL has a matching execute on the same SL, and the in-memory
     /// `committed_batches` map is empty at interval boundaries.
-    pub async fn create_watcher(
+    pub fn create_watcher(
         config: L1WatcherConfig,
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
@@ -52,109 +53,125 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         gateway_block_updates: Option<watch::Receiver<BlockUpdates>>,
         l1_logs_cache: LogsCache,
         gateway_logs_cache: Option<LogsCache>,
-    ) -> anyhow::Result<SlAwareL1Watcher> {
-        let last_persisted_batch = batch_storage.latest_batch();
+    ) -> SlAwareL1Watcher<()> {
         tracing::info!(
-            last_persisted_batch,
             num_intervals = intervals.intervals().len(),
             config.max_blocks_to_process,
             ?config.poll_interval,
             "initializing L1 persist batch watcher"
         );
 
-        // Build segment specs from the relevant intervals. The first non-skipped segment is
-        // adjusted to start at `last_persisted_batch` (so we re-validate it on resume), unless
-        // we're at genesis — in which case `0` triggers the batch-0 fast path inside
-        // `find_l1_commit_block_by_batch_number`.
-        let mut segments = Vec::new();
-        let mut is_first = true;
-        for interval in intervals.intervals() {
-            // Empty interval: a migration can close without any new batches on the SL.
-            if interval
-                .last_batch
-                .is_some_and(|lb| interval.first_batch > lb)
-            {
-                continue;
-            }
-            // Wholly behind `last_persisted_batch`: nothing left to validate or persist here.
-            if interval
-                .last_batch
-                .is_some_and(|lb| last_persisted_batch > lb)
-            {
-                continue;
-            }
+        let max_blocks_to_process = config.max_blocks_to_process;
 
-            let zk_chain = &interval.proxy;
-            let (block_updates, logs_cache) = match &interval.settlement_layer {
-                IntervalSettlementLayer::L1 => (l1_block_updates.clone(), l1_logs_cache.clone()),
-                IntervalSettlementLayer::Gateway(_) => (
-                    gateway_block_updates.clone().with_context(|| {
-                        format!("Gateway block updates are missing for interval {interval}")
-                    })?,
-                    gateway_logs_cache.clone().with_context(|| {
-                        format!("Gateway logs cache is missing for interval {interval}")
-                    })?,
-                ),
-            };
-            let first_batch = if is_first {
-                anyhow::ensure!(
-                    interval.first_batch <= last_persisted_batch + 1,
-                    "first SL interval ({interval}) must start at or before first non-persisted batch ({})",
-                    last_persisted_batch + 1
-                );
-                last_persisted_batch
-            } else {
-                // First batch in the interval might not have been committed yet. We resolve the
-                // canonical start of the segment from the previous batch's import block.
-                interval.first_batch - 1
-            };
-            is_first = false;
+        // Per-segment block resolution (and the starting `last_persisted_batch`) are deferred to
+        // the watcher's `run()`; only static dependencies are captured here.
+        let resolve_segments = segment_resolver(move |()| async move {
+            let last_persisted_batch = batch_storage.latest_batch();
+            tracing::info!(
+                last_persisted_batch,
+                "resolving L1 persist batch watcher segments"
+            );
 
-            let start_block = util::find_l1_commit_block_by_batch_number(
-                zk_chain.clone(),
-                first_batch,
-                config.max_blocks_to_process,
-            )
-            .await
-            .with_context(|| {
-                format!("failed to find L1 commit for batch #{first_batch} in interval {interval}")
-            })?;
-            let end_block = match interval.last_batch {
-                Some(last_batch) => Some(
-                    util::find_l1_execute_block_by_batch_number(zk_chain.clone(), last_batch)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to find L1 execute for batch #{last_batch} in interval {interval}"
-                            )
+            // Build segment specs from the relevant intervals. The first non-skipped segment
+            // is adjusted to start at `last_persisted_batch` (so we re-validate it on resume),
+            // unless we're at genesis — in which case `0` triggers the batch-0 fast path
+            // inside `find_l1_commit_block_by_batch_number`.
+            let mut segments = Vec::new();
+            let mut is_first = true;
+            for interval in intervals.intervals() {
+                // Empty interval: a migration can close without any new batches on the SL.
+                if interval
+                    .last_batch
+                    .is_some_and(|lb| interval.first_batch > lb)
+                {
+                    continue;
+                }
+                // Wholly behind `last_persisted_batch`: nothing left to validate or persist.
+                if interval
+                    .last_batch
+                    .is_some_and(|lb| last_persisted_batch > lb)
+                {
+                    continue;
+                }
+
+                let zk_chain = &interval.proxy;
+                let (block_updates, logs_cache) = match &interval.settlement_layer {
+                    IntervalSettlementLayer::L1 => {
+                        (l1_block_updates.clone(), l1_logs_cache.clone())
+                    }
+                    IntervalSettlementLayer::Gateway(_) => (
+                        gateway_block_updates.clone().with_context(|| {
+                            format!("Gateway block updates are missing for interval {interval}")
                         })?,
-                ),
-                None => None,
-            };
+                        gateway_logs_cache.clone().with_context(|| {
+                            format!("Gateway logs cache is missing for interval {interval}")
+                        })?,
+                    ),
+                };
+                let first_batch = if is_first {
+                    anyhow::ensure!(
+                        interval.first_batch <= last_persisted_batch + 1,
+                        "first SL interval ({interval}) must start at or before first non-persisted batch ({})",
+                        last_persisted_batch + 1
+                    );
+                    last_persisted_batch
+                } else {
+                    // First batch in the interval might not have been committed yet. We
+                    // resolve the canonical start of the segment from the previous batch's
+                    // import block.
+                    interval.first_batch - 1
+                };
+                is_first = false;
 
-            segments.push(SegmentSpec {
-                provider: zk_chain.provider().clone(),
-                block_updates,
-                logs_cache,
-                address: (*zk_chain.address()).into(),
-                start_block,
-                end_block,
+                let start_block = util::find_l1_commit_block_by_batch_number(
+                    zk_chain.clone(),
+                    first_batch,
+                    max_blocks_to_process,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to find L1 commit for batch #{first_batch} in interval {interval}"
+                    )
+                })?;
+                let end_block = match interval.last_batch {
+                    Some(last_batch) => Some(
+                        util::find_l1_execute_block_by_batch_number(zk_chain.clone(), last_batch)
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "failed to find L1 execute for batch #{last_batch} in interval {interval}"
+                                )
+                            })?,
+                    ),
+                    None => None,
+                };
+
+                segments.push(SegmentSpec {
+                    provider: zk_chain.provider().clone(),
+                    block_updates,
+                    logs_cache,
+                    address: (*zk_chain.address()).into(),
+                    start_block,
+                    end_block,
+                });
+            }
+
+            anyhow::ensure!(
+                !segments.is_empty(),
+                "no settlement layer intervals are pending persistence"
+            );
+
+            let processor: Box<dyn ProcessRawEvents> = Box::new(Self {
+                batch_storage,
+                committed_batches: HashMap::new(),
+                last_processed_commit_batch: last_persisted_batch,
+                last_persisted_batch_on_start: last_persisted_batch,
             });
-        }
+            Ok((segments, processor))
+        });
 
-        anyhow::ensure!(
-            !segments.is_empty(),
-            "no settlement layer intervals are pending persistence"
-        );
-
-        let this = Self {
-            batch_storage,
-            committed_batches: HashMap::new(),
-            last_processed_commit_batch: last_persisted_batch,
-            last_persisted_batch_on_start: last_persisted_batch,
-        };
-
-        SlAwareL1Watcher::new(config, segments, Box::new(this))
+        SlAwareL1Watcher::new(config, resolve_segments)
     }
 
     async fn parse_committed_batch(

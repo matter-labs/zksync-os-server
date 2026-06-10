@@ -1,7 +1,8 @@
-use crate::watcher::L1Watcher;
+use crate::watcher::RunningL1Watcher;
 use crate::{BlockUpdates, L1WatcherConfig, LogsCache, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::rpc::types::ValueOrArray;
+use futures::future::BoxFuture;
 use std::collections::VecDeque;
 use tokio::sync::watch;
 use zksync_os_provider::NodeProvider;
@@ -37,44 +38,56 @@ pub struct SegmentSpec {
 /// watcher drains them in order and then exits cleanly — useful for scenarios where the active
 /// settlement layer no longer emits events of interest (e.g. an interop-root watcher on a chain
 /// that has migrated back to L1).
-pub struct SlAwareL1Watcher {
+pub struct SlAwareL1Watcher<S> {
     config: L1WatcherConfig,
-    segments: VecDeque<SegmentSpec>,
-    processor: Box<dyn ProcessRawEvents>,
+    resolve_segments: SegmentResolver<S>,
 }
 
-impl SlAwareL1Watcher {
-    pub fn new(
-        config: L1WatcherConfig,
-        segments: Vec<SegmentSpec>,
-        processor: Box<dyn ProcessRawEvents>,
-    ) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            !segments.is_empty(),
-            "SlAwareL1Watcher requires at least one segment"
-        );
-        // Only the final segment may be open-ended. Internal open-ended segments are nonsense
-        // because they'd never yield to the next one.
-        for seg in &segments[..segments.len() - 1] {
-            anyhow::ensure!(
-                seg.end_block.is_some(),
-                "non-final SlAwareL1Watcher segments must be closed"
-            );
-        }
+/// Resolves an SL-aware watcher's segments and processor once the starting point `S` is known.
+///
+/// Mirrors [`StartResolver`](crate::watcher::StartResolver) but yields the full segment list
+/// (each segment's `start_block`/`end_block` resolved via per-segment binary searches) instead
+/// of a single block.
+pub(crate) type SegmentResolver<S> = Box<
+    dyn FnOnce(
+            S,
+        )
+            -> BoxFuture<'static, anyhow::Result<(Vec<SegmentSpec>, Box<dyn ProcessRawEvents>)>>
+        + Send,
+>;
 
-        Ok(Self {
+/// Builds a [`SegmentResolver`] from an async closure, hiding the `Box::new`/`Box::pin` ceremony.
+pub(crate) fn segment_resolver<S, Fut>(
+    f: impl FnOnce(S) -> Fut + Send + 'static,
+) -> SegmentResolver<S>
+where
+    Fut: std::future::Future<Output = anyhow::Result<(Vec<SegmentSpec>, Box<dyn ProcessRawEvents>)>>
+        + Send
+        + 'static,
+{
+    Box::new(move |s| Box::pin(f(s)))
+}
+
+impl<S> SlAwareL1Watcher<S> {
+    pub fn new(config: L1WatcherConfig, resolve_segments: SegmentResolver<S>) -> Self {
+        Self {
             config,
-            segments: segments.into(),
-            processor,
-        })
+            resolve_segments,
+        }
     }
 
-    pub async fn run(self) {
+    pub async fn run(self, start: S)
+    where
+        S: Send + 'static,
+    {
         let Self {
             config,
-            mut segments,
-            mut processor,
+            resolve_segments,
         } = self;
+        let (segments, mut processor) = resolve_segments(start)
+            .await
+            .expect("failed to resolve SL-aware watcher segments");
+        let mut segments = validate_segments(segments).expect("invalid SL-aware watcher segments");
         while let Some(segment) = segments.pop_front() {
             processor = run_segment(config.clone(), segment, processor).await;
         }
@@ -82,6 +95,22 @@ impl SlAwareL1Watcher {
         // final segment this is unreachable; for one with only closed segments it terminates
         // cleanly after the historical sweep.
     }
+}
+
+fn validate_segments(segments: Vec<SegmentSpec>) -> anyhow::Result<VecDeque<SegmentSpec>> {
+    anyhow::ensure!(
+        !segments.is_empty(),
+        "SlAwareL1Watcher requires at least one segment"
+    );
+    // Only the final segment may be open-ended. Internal open-ended segments are nonsense
+    // because they'd never yield to the next one.
+    for seg in &segments[..segments.len() - 1] {
+        anyhow::ensure!(
+            seg.end_block.is_some(),
+            "non-final SlAwareL1Watcher segments must be closed"
+        );
+    }
+    Ok(segments.into())
 }
 
 async fn run_segment(
@@ -103,7 +132,7 @@ async fn run_segment(
     // executed-batch / migration boundary), so the boundary mode does not matter — `end_block`
     // dominates the cap. The open-ended segment uses the finalized boundary so persistence-style
     // processors only react to irreversibly observed events.
-    let mut watcher = L1Watcher::new_finalized(
+    let mut watcher = RunningL1Watcher::new_finalized(
         config,
         segment.provider,
         segment.logs_cache,
