@@ -20,11 +20,14 @@ zksync_os_multivm.workspace = true
 zksync_os_tx_validators.workspace = true
 zksync_os_metadata.workspace = true
 zksync_os_contract_interface.workspace = true
+zksync_os_l1_watcher.workspace = true
 
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
 zk_os_forward_system.workspace = true
 zksync_os_interface.workspace = true
+
+reth-tasks.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc"] }
 anyhow.workspace = true

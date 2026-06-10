@@ -6,19 +6,21 @@ use crate::model::blocks::{
 use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use anyhow::Context as _;
 use futures::StreamExt;
+use reth_tasks::Runtime;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, time::Instant};
 use zksync_os_contract_interface::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
 use zksync_os_genesis::genesis_header;
+use zksync_os_l1_watcher::{L1Watcher, SlAwareL1Watcher};
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool};
 use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    BlockOutput, BlockStartCursors, ExecutionVersion, SystemTxEnvelope, SystemTxType, ZkEnvelope,
-    ZkTransaction,
+    BlockOutput, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, SystemTxEnvelope,
+    SystemTxType, ZkEnvelope, ZkTransaction,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -32,6 +34,7 @@ use zksync_os_types::{
 ///  it doesn't tolerate jumps in L1 priority IDs.
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider<Subpool> {
+    runtime: Runtime,
     fee_provider: FeeProvider,
     pool: Pool<Subpool>,
     config: Config,
@@ -41,6 +44,7 @@ pub struct BlockContextProvider<Subpool> {
     /// is a migration in the process.
     current_sl_chain_id: u64,
     last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
+    watchers: Watchers,
 }
 
 pub struct Config {
@@ -55,6 +59,12 @@ pub struct Config {
     pub interop_roots_per_block: u64,
 }
 
+pub struct Watchers {
+    pub l1_tx_watcher: Option<L1Watcher<u64>>,
+    pub interop_watcher: Option<SlAwareL1Watcher<u64>>,
+    pub gateway_migration_watcher: Option<L1Watcher<u64>>,
+}
+
 struct LastBlock {
     record: ReplayRecord,
     hash: BlockHash,
@@ -63,17 +73,20 @@ struct LastBlock {
 
 impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     pub fn new(
+        runtime: Runtime,
         fee_provider: FeeProvider,
         pool: Pool<Subpool>,
         config: Config,
         intervals: &SettlementLayerIntervals,
         last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
+        watchers: Watchers,
     ) -> Self {
         let current_sl_chain_id = match intervals.current_settlement_layer() {
             IntervalSettlementLayer::L1 => config.l1_chain_id,
             IntervalSettlementLayer::Gateway(gw_chain_id) => *gw_chain_id,
         };
         Self {
+            runtime,
             fee_provider,
             pool,
             config,
@@ -81,6 +94,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             next_interop_tx_allowed_after: Instant::now(),
             current_sl_chain_id,
             last_constructed_block_ctx_sender,
+            watchers,
         }
     }
 
@@ -240,6 +254,10 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         &mut self,
         record: Box<ReplayRecord>,
     ) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
+        if self.last_block.is_none() {
+            self.init(&record).await;
+        }
+
         if record.block_context.block_number == 0 {
             self.last_block = Some(LastBlock {
                 record: *record,
@@ -311,8 +329,14 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         &mut self,
         rebuild: Box<RebuildCommand>,
     ) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
+        if self.last_block.is_none() {
+            self.init(&rebuild.replay_record).await;
+        }
+
         let (previous_block_timestamp, next_cursors, block_hashes) =
             if let Some(last_block) = self.last_block.as_ref() {
+                // We can't just use `rebuild`'s fields as the last block might have changed if we
+                // are rebuilding a range of blocks
                 (
                     last_block.record.block_context.timestamp,
                     last_block.next_cursors.clone(),
@@ -428,6 +452,34 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             interop_roots_per_block: self.config.interop_roots_per_block,
             strict_subpool_cleanup: false,
         }))
+    }
+
+    async fn init(&mut self, replay: &ReplayRecord) {
+        self.pool.init(&replay.starting_cursors).await;
+
+        if let Some(l1_tx_watcher) = self.watchers.l1_tx_watcher.take() {
+            self.runtime.spawn_critical_task(
+                "L1 transaction watcher",
+                l1_tx_watcher.run(replay.starting_cursors.l1_priority_id),
+            );
+        }
+
+        let current_protocol_version = &replay.protocol_version;
+        if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
+            if let Some(gateway_migration_watcher) = self.watchers.gateway_migration_watcher.take()
+            {
+                self.runtime.spawn_critical_task(
+                    "gateway migration watcher",
+                    gateway_migration_watcher.run(replay.starting_cursors.migration_number),
+                );
+            }
+            if let Some(interop_watcher) = self.watchers.interop_watcher.take() {
+                self.runtime.spawn_critical_task(
+                    "interop roots watcher",
+                    interop_watcher.run(replay.starting_cursors.interop_root_id),
+                );
+            }
+        }
     }
 
     pub fn purge_transactions(&self, tx_hashes: Vec<TxHash>) {

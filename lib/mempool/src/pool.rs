@@ -16,7 +16,9 @@ use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
 use tokio::time::Instant;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{L1TxSerialId, SystemTxType, UpgradeMetadata, ZkEnvelope, ZkTransaction};
+use zksync_os_types::{
+    BlockStartCursors, L1TxSerialId, SystemTxType, UpgradeMetadata, ZkEnvelope, ZkTransaction,
+};
 
 /// General pool that provides unified access to all transaction sources in the system.
 ///
@@ -47,6 +49,12 @@ impl<T: L2Subpool> Pool<T> {
             l1_subpool,
             l2_subpool,
         }
+    }
+
+    pub async fn init(&self, cursors: &BlockStartCursors) {
+        self.interop_fee_subpool
+            .init(cursors.interop_fee_number)
+            .await;
     }
 
     /// Picks the best source of transactions out of currently available ones. If there are none,

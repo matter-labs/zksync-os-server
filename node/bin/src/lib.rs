@@ -120,8 +120,8 @@ use zksync_os_storage_api::{
     WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
-    BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, PubdataMode,
-    TransactionAcceptanceState, UpgradeInfo, UpgradeMetadata,
+    ExecutionVersion, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
+    UpgradeInfo, UpgradeMetadata,
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -638,12 +638,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "Unless it's a new chain, replay record must exist"
     );
 
-    let next_cursors = first_replay_record
-        .as_ref()
-        .map_or(BlockStartCursors::default(), |record| {
-            record.starting_cursors.clone()
-        });
-
     let current_protocol_version = if let Some(record) = &first_replay_record {
         &record.protocol_version
     } else {
@@ -683,7 +677,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
-    let interop_fee_subpool = InteropFeeSubpool::new(next_cursors.interop_fee_number);
+    let interop_fee_subpool = InteropFeeSubpool::new();
     let interop_roots_subpool =
         InteropRootsSubpool::new(config.sequencer_config.interop_roots_per_tx);
 
@@ -713,24 +707,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         watch::channel::<Option<u64>>(None);
 
     if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
-        runtime.spawn_critical_task(
-            "gateway migration watcher",
-            GatewayMigrationWatcher::create_watcher(
-                node_startup_state.l1_state.diamond_proxy_l1.clone(),
-                node_startup_state.l1_state.bridgehub_l1.clone(),
-                chain_id,
-                node_startup_state.l1_state.l1_chain_id,
-                config.general_config.gateway_chain_id,
-                config.l1_watcher_config.clone().into(),
-                sl_chain_id_subpool.clone(),
-                l1_block_updates.clone(),
-                l1_logs_cache.clone(),
-            )
-            .await
-            .expect("failed to start gateway migration watcher")
-            .run(next_cursors.migration_number),
-        );
-
         // Initializes `last_finalized_migration` from the SL's `migrationNumber(chainId)` and,
         // if the current SL interval migration has not yet finalized, spawns a watcher to track
         // future `MigrationFinalized` events. When the migration is already finalized at startup
@@ -764,42 +740,46 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             )
             .run(),
         );
-
-        if let Some(interop_watcher) = InteropWatcher::create_watcher(
-            node_startup_state
-                .l1_state
-                .settlement_layer_intervals
-                .clone(),
-            config.l1_watcher_config.clone().into(),
-            chain_id,
-            interop_roots_subpool.clone(),
-            gateway_block_updates.clone(),
-            gateway_logs_cache.clone(),
-        )
-        .expect("failed to start L1 interop roots watcher")
-        {
-            runtime.spawn_critical_task(
-                "interop roots watcher",
-                interop_watcher.run(next_cursors.interop_root_id),
-            );
-        }
     }
 
+    let gateway_migration_watcher = GatewayMigrationWatcher::create_watcher(
+        node_startup_state.l1_state.diamond_proxy_l1.clone(),
+        node_startup_state.l1_state.bridgehub_l1.clone(),
+        chain_id,
+        node_startup_state.l1_state.l1_chain_id,
+        config.general_config.gateway_chain_id,
+        config.l1_watcher_config.clone().into(),
+        sl_chain_id_subpool.clone(),
+        l1_block_updates.clone(),
+        l1_logs_cache.clone(),
+    )
+    .await
+    .expect("failed to start gateway migration watcher");
+
+    let interop_watcher = InteropWatcher::create_watcher(
+        node_startup_state
+            .l1_state
+            .settlement_layer_intervals
+            .clone(),
+        config.l1_watcher_config.clone().into(),
+        chain_id,
+        interop_roots_subpool.clone(),
+        gateway_block_updates.clone(),
+        gateway_logs_cache.clone(),
+    )
+    .expect("failed to start interop roots watcher");
+
     let l1_subpool = L1Subpool::new(10);
-    runtime.spawn_critical_task(
-        "L1 transaction watcher",
-        L1TxWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            l1_subpool.clone(),
-            l1_block_updates.clone(),
-            l1_logs_cache.clone(),
-        )
-        .await
-        .expect("failed to start L1 transaction watcher")
-        .run(next_cursors.l1_priority_id),
-    );
+    let l1_tx_watcher = L1TxWatcher::create_watcher(
+        config.l1_watcher_config.clone().into(),
+        node_startup_state.l1_state.diamond_proxy_l1.clone(),
+        node_startup_state.l1_state.diamond_proxy_sl.clone(),
+        l1_subpool.clone(),
+        l1_block_updates.clone(),
+        l1_logs_cache.clone(),
+    )
+    .await
+    .expect("failed to start L1 transaction watcher");
 
     // Transaction acceptance state - tracks whether we're accepting new transactions
     // Main nodes: accepts, but may switch to reject when `sequencer_max_blocks_to_produce` blocks are produced
@@ -879,6 +859,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l2_subpool.clone(),
     );
     let block_context_provider = BlockContextProvider::new(
+        runtime.clone(),
         fee_provider,
         pool,
         zksync_os_sequencer::execution::block_context_provider::Config {
@@ -895,6 +876,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         },
         &node_startup_state.l1_state.settlement_layer_intervals,
         last_constructed_block_ctx_sender,
+        zksync_os_sequencer::execution::block_context_provider::Watchers {
+            l1_tx_watcher: Some(l1_tx_watcher),
+            interop_watcher,
+            gateway_migration_watcher: Some(gateway_migration_watcher),
+        },
     );
 
     // ========== Start L1 Upgrade Watcher ===========

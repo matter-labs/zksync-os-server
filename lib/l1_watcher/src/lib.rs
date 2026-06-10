@@ -22,9 +22,10 @@ mod interop_watcher;
 pub use interop_watcher::InteropWatcher;
 
 mod logs_cache;
-pub mod util;
-mod watcher;
 pub use logs_cache::LogsCache;
+
+mod watcher;
+pub use watcher::L1Watcher;
 
 mod sl_aware_watcher;
 pub use sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};
@@ -46,3 +47,5 @@ pub use migration_finalized_watcher::MigrationFinalizedWatcher;
 
 mod settlement_layer_watcher;
 pub use settlement_layer_watcher::SettlementLayerWatcher;
+
+pub mod util;
