@@ -10,5 +10,4 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-dashmap.workspace = true
 governor.workspace = true
