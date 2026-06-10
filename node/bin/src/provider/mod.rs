@@ -7,6 +7,7 @@ use alloy::network::EthereumWallet;
 use alloy::providers::ProviderBuilder;
 use alloy::rpc::client::RpcClient;
 use alloy::signers::local::PrivateKeySigner;
+use std::time::Duration;
 use tower::ServiceBuilder;
 use vise::{EncodeLabelSet, EncodeLabelValue};
 use zksync_os_provider::NodeProvider;
@@ -20,6 +21,9 @@ pub(crate) enum ProviderKind {
 
 pub(crate) async fn build_node_provider(
     config: &ProviderConfig,
+    latest_poll_interval: Duration,
+    finalized_poll_interval: Duration,
+    log_cache_capacity: usize,
     provider: ProviderKind,
 ) -> NodeProvider {
     let max_retries = config.max_retries;
@@ -42,5 +46,12 @@ pub(crate) async fn build_node_provider(
     let provider = ProviderBuilder::new()
         .wallet(EthereumWallet::new(PrivateKeySigner::random()))
         .connect_client(client);
-    NodeProvider::new(provider)
+    NodeProvider::new_with_features(
+        provider,
+        latest_poll_interval,
+        finalized_poll_interval,
+        log_cache_capacity,
+    )
+    .await
+    .expect("failed to initialize node provider features")
 }

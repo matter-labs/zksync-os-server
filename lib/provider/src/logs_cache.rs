@@ -1,21 +1,13 @@
-use crate::{
-    BlockUpdates,
-    metrics::{LogsCacheLabels, METRICS},
-};
+use crate::metrics::{LogsCacheLabels, METRICS};
 use alloy::eips::BlockNumberOrTag;
-use alloy::primitives::{B256, BlockNumber, Bloom};
-use alloy::providers::Provider;
+use alloy::network::{Ethereum, Network};
+use alloy::primitives::{B256, Bloom};
+use alloy::providers::{Provider, RootProvider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::transports::{TransportErrorKind, TransportResult};
 use futures::future::BoxFuture;
 use std::{collections::VecDeque, mem, sync::Arc};
 use tokio::sync::{RwLock, watch};
-use zksync_os_provider::NodeProvider;
-
-const UNSYNCED_BLOCK_UPDATES: BlockUpdates = BlockUpdates {
-    latest_block: BlockNumber::MAX,
-    finalized_block: BlockNumber::MAX,
-};
 
 #[derive(Debug)]
 struct CachedBlockLogs {
@@ -49,7 +41,7 @@ struct RecentLogs {
     /// The maximum number of blocks to store in the cache.
     capacity: usize,
     /// The chain head current cache corresponds to.
-    synced_with: BlockUpdates,
+    synced_with_hash: B256,
     first_block: Option<u64>,
     /// Logs & block hashes for blocks from `first_block` to `first_block + blocks.len() - 1`
     blocks: VecDeque<CachedBlockLogs>,
@@ -61,7 +53,7 @@ impl RecentLogs {
     fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            synced_with: UNSYNCED_BLOCK_UPDATES,
+            synced_with_hash: B256::ZERO,
             first_block: None,
             blocks: VecDeque::new(),
             approx_bytes: 0,
@@ -145,7 +137,6 @@ impl RecentLogs {
                 .as_mut()
                 .expect("first_block must be present when cache contains blocks") += 1;
         }
-
         Ok(())
     }
 
@@ -171,33 +162,33 @@ impl RecentLogs {
 /// And remembers them for last `watcher_config.capacity` blocks.
 ///
 /// TODO: As of now there is no filtering for these logs. Although with current settings memory usage shouldn't be a problem.
-/// TODO: In reorg checks we do additional eth_getBlockByNumber - this can be avoided by extending BlockUpdates.
-#[derive(Clone, Debug)]
-pub struct LogsCache {
-    provider: NodeProvider,
-    block_updates: watch::Receiver<BlockUpdates>,
+#[derive(Clone)]
+pub(crate) struct LogsCache {
+    latest_blocks: watch::Receiver<<Ethereum as Network>::HeaderResponse>,
     metric_labels: LogsCacheLabels,
     recent: Arc<RwLock<RecentLogs>>,
 }
 
 impl LogsCache {
-    pub fn new(
-        provider: NodeProvider,
-        block_updates: watch::Receiver<BlockUpdates>,
+    pub(crate) fn new(
+        latest_blocks: watch::Receiver<<Ethereum as Network>::HeaderResponse>,
         capacity: usize,
         chain_id: u64,
     ) -> Self {
         Self {
-            provider,
-            block_updates,
-            metric_labels: LogsCacheLabels { chain_id },
+            latest_blocks,
+            metric_labels: LogsCacheLabels(chain_id),
             recent: Arc::new(RwLock::new(RecentLogs::new(capacity))),
         }
     }
 
     /// Identical to alloy's get_logs but with caching optimizations.
-    pub async fn get_logs(&self, filter: &Filter) -> TransportResult<Vec<Log>> {
-        if let Err(err) = self.synchronize_if_needed().await {
+    pub async fn get_logs(
+        &self,
+        provider: &RootProvider<Ethereum>,
+        filter: &Filter,
+    ) -> TransportResult<Vec<Log>> {
+        if let Err(err) = self.synchronize_if_needed(provider).await {
             tracing::warn!(
                 ?err,
                 "Recent logs cache synchronization failed; Clearing cache & not using it for this request."
@@ -205,7 +196,7 @@ impl LogsCache {
             let mut recent = self.recent.write().await;
             let capacity = recent.capacity;
             *recent = RecentLogs::new(capacity);
-            METRICS.logs_cache_approx_memory[&self.metric_labels].set(0);
+            METRICS[&self.metric_labels].approx_memory.set(0);
         }
 
         let cached_logs = if let (Some(from_block), Some(to_block)) = filter.extract_block_range() {
@@ -223,40 +214,51 @@ impl LogsCache {
         };
 
         if let Some(cached_logs) = cached_logs {
-            METRICS.logs_cache_hits[&self.metric_labels].inc();
+            METRICS[&self.metric_labels].hits.inc();
             Ok(cached_logs)
         } else {
-            METRICS.logs_cache_fallbacks[&self.metric_labels].inc();
-            self.provider.get_logs(filter).await
+            METRICS[&self.metric_labels].fallbacks.inc();
+            provider.get_logs(filter).await
         }
     }
 
     /// If the chain head has changed, check for reorgs & add new blocks.
-    ///
-    /// We check for reverts if either latest or latest finalized has changed.
-    /// This is not exact but it keeps the behavior consistent with how this worked previously.
-    async fn synchronize_if_needed(&self) -> TransportResult<()> {
-        let latest_snapshot = *self.block_updates.borrow();
-        if self.recent.read().await.synced_with == latest_snapshot {
+    async fn synchronize_if_needed(
+        &self,
+        provider: &RootProvider<Ethereum>,
+    ) -> TransportResult<()> {
+        let latest_snapshot = self.latest_blocks.borrow().clone();
+
+        let latest_hash = latest_snapshot.hash;
+        if self.recent.read().await.synced_with_hash == latest_hash {
             return Ok(());
         }
 
         let mut recent = self.recent.write().await;
-        if recent.synced_with != latest_snapshot && recent.capacity > 0 {
-            let target_head = latest_snapshot.latest_block;
+        if recent.synced_with_hash != latest_hash && recent.capacity > 0 {
+            let target_head = latest_snapshot.number;
             let floor = target_head.saturating_sub(recent.capacity as u64 - 1);
-            self.update_block(&mut recent, target_head, floor).await?;
+            self.update_block(
+                provider,
+                &mut recent,
+                target_head,
+                floor,
+                Some(latest_snapshot),
+            )
+            .await?;
         }
-        recent.synced_with = latest_snapshot;
+        recent.synced_with_hash = latest_hash;
         Ok(())
     }
 
     /// Recursive helper that adds new blocks to the recent logs cache & handles reorgs.
     fn update_block<'a>(
         &'a self,
+        provider: &'a RootProvider<Ethereum>,
         recent: &'a mut RecentLogs,
         block_number: u64,
         floor: u64,
+        header_hint: Option<<Ethereum as Network>::HeaderResponse>,
     ) -> BoxFuture<'a, TransportResult<()>> {
         Box::pin(async move {
             if block_number < floor {
@@ -266,22 +268,31 @@ impl LogsCache {
             // Ensure the parent block is cached before fetching this one.
             let has_parent = block_number > floor;
             if has_parent && recent.cached_hash(block_number - 1).is_none() {
-                self.update_block(recent, block_number - 1, floor).await?;
+                self.update_block(provider, recent, block_number - 1, floor, None)
+                    .await?;
             }
 
-            let block = self
-                .provider
-                .get_block_by_number(BlockNumberOrTag::Number(block_number))
-                .await?
-                .ok_or_else(|| TransportErrorKind::custom_str("block not found"))?;
-            let logs = self
-                .provider
-                .get_logs(&Filter::new().at_block_hash(block.header.hash))
+            let header = if let Some(header) = header_hint {
+                if header.number != block_number {
+                    return Err(TransportErrorKind::custom_str(
+                        "header hint does not match requested block number",
+                    ));
+                }
+                header
+            } else {
+                provider
+                    .get_block_by_number(BlockNumberOrTag::Number(block_number))
+                    .await?
+                    .ok_or_else(|| TransportErrorKind::custom_str("block not found"))?
+                    .header
+            };
+            let logs = provider
+                .get_logs(&Filter::new().at_block_hash(header.hash))
                 .await?;
             // A very rare corner case is introduced here.
-            // We get `block`. Reorg happens before we get `logs`. Some RPCs would return
+            // We get `header`. Reorg happens before we get `logs`. Some RPCs would return
             // empty list(instead of proper logs) or an error.
-            if logs.is_empty() && block.header.logs_bloom != Bloom::ZERO {
+            if logs.is_empty() && header.logs_bloom != Bloom::ZERO {
                 return Err(TransportErrorKind::custom_str(
                     "RPC returned empty logs, but the block has logs. Most likely due to reorg.",
                 ));
@@ -289,20 +300,19 @@ impl LogsCache {
 
             // Reorg check: our cached parent hash doesn't match the block's parent_hash.
             let parent_hash_mismatch = has_parent
-                && recent.cached_hash(block_number - 1) != Some(block.header.parent_hash);
+                && recent
+                    .cached_hash(block_number - 1)
+                    .is_some_and(|hash| hash != header.parent_hash);
             if parent_hash_mismatch {
-                tracing::warn!("recent logs cache detected reorg at block {block_number}");
-                // Update blocks to match current chain
-                self.update_block(recent, block_number - 1, floor).await?;
-                // Re-fetch this block from the start for the rare case where `block` & `logs` got
-                // reorged while we were fetching the previous blocks.
-                self.update_block(recent, block_number, floor).await?;
-                return Ok(());
+                self.update_block(provider, recent, block_number - 1, floor, None)
+                    .await?;
             }
 
-            recent.push_head(block_number, block.header.hash, logs)?;
-            METRICS.logs_cache_blocks_loaded[&self.metric_labels].inc();
-            METRICS.logs_cache_approx_memory[&self.metric_labels].set(recent.approx_bytes);
+            recent.push_head(block_number, header.hash, logs)?;
+            METRICS[&self.metric_labels].blocks_loaded.inc();
+            METRICS[&self.metric_labels]
+                .approx_memory
+                .set(recent.approx_bytes);
             Ok(())
         })
     }

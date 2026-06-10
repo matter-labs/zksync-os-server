@@ -3,9 +3,6 @@ pub use config::L1WatcherConfig;
 
 mod metrics;
 
-pub mod block_updates;
-pub use block_updates::{BlockBoundary, BlockUpdates};
-
 mod tx_watcher;
 pub use tx_watcher::L1TxWatcher;
 
@@ -21,10 +18,8 @@ pub use upgrade_tx_watcher::L1UpgradeTxWatcher;
 mod interop_watcher;
 pub use interop_watcher::InteropWatcher;
 
-mod logs_cache;
 pub mod util;
 mod watcher;
-pub use logs_cache::LogsCache;
 
 mod sl_aware_watcher;
 pub use sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};
