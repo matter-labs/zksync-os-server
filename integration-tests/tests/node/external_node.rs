@@ -163,6 +163,66 @@ async fn transaction_replay(main_node: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// EN2 boots from EN1 only (no direct path to MN), exercising the EN-EN block relay path.
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+async fn transaction_replay_en_chain(main_node: Tester) -> anyhow::Result<()> {
+    let en1 = launch_en(&main_node, |_| {}).await?;
+
+    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    let contract_address = deploy_tx_receipt
+        .contract_address()
+        .expect("no contract deployed");
+
+    check_contract_present(&en1, contract_address).await?;
+
+    let en2 = launch_en(&en1, |_| {}).await?;
+
+    check_contract_present(&en2, contract_address).await?;
+
+    Ok(())
+}
+
+/// EN2 boots from EN1 only. After EN1 restarts (same peer ID), EN2 must reconnect and
+/// continue receiving blocks.
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+async fn en_chain_survives_en1_restart(main_node: Tester) -> anyhow::Result<()> {
+    let en1 = launch_en(&main_node, |_| {}).await?;
+    let en2 = launch_en(&en1, |_| {}).await?;
+
+    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    let contract_address = deploy_tx_receipt
+        .contract_address()
+        .expect("no contract deployed");
+
+    check_contract_present(&en2, contract_address).await?;
+
+    let stopped_en1 = en1.stop().await?;
+
+    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    let contract_address_after_restart = deploy_tx_receipt
+        .contract_address()
+        .expect("no contract deployed");
+
+    let en1 = stopped_en1.start().await?;
+
+    check_contract_present(&en1, contract_address_after_restart).await?;
+    check_contract_present(&en2, contract_address_after_restart).await?;
+
+    Ok(())
+}
+
 /// It is easy to write to a channel that the EN doesn't need
 /// which leads to the EN getting stuck when the channel is full.
 #[test_multisetup([CURRENT_TO_L1])]
