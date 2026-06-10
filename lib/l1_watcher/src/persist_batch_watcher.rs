@@ -1,6 +1,6 @@
 use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
-use crate::{L1WatcherConfig, LogsCache, SegmentSpec, SlAwareL1Watcher, util};
+use crate::{L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
@@ -11,7 +11,7 @@ use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
-use zksync_os_provider::NodeProvider;
+use zksync_os_provider::{LogsCache, NodeProvider};
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
 /// Watches finalized commit and execute events together and persists only irreversibly executed

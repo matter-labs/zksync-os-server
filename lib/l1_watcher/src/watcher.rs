@@ -1,9 +1,9 @@
 use crate::metrics::METRICS;
-use crate::{L1WatcherConfig, LogsCache, ProcessRawEvents};
+use crate::{L1WatcherConfig, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
-use zksync_os_provider::NodeProvider;
+use zksync_os_provider::{LogsCache, NodeProvider};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BlockBoundary {

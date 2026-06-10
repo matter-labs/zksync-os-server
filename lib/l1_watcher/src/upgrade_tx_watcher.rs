@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::util::ANVIL_L1_CHAIN_ID;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, LogsCache, ProcessL1Event, util};
+use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
 use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
 use alloy::providers::Provider;
@@ -18,7 +18,7 @@ use zksync_os_contract_interface::ServerNotifier::UpgradeTimestampUpdated;
 use zksync_os_contract_interface::is_method_missing;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
-use zksync_os_provider::NodeProvider;
+use zksync_os_provider::{LogsCache, NodeProvider};
 use zksync_os_types::{
     L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
     UpgradeMetadata,

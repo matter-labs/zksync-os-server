@@ -1,12 +1,12 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, LogsCache, ProcessRawEvents, util};
+use crate::{L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, U256};
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use tokio::sync::watch;
 use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_contract_interface::{Bridgehub, IChainAssetHandler::MigrationFinalized, ZkChain};
-use zksync_os_provider::NodeProvider;
+use zksync_os_provider::{LogsCache, NodeProvider};
 
 /// Watches for `MigrationFinalized(uint256 indexed chainId, uint256 migrationNumber, ...)` events
 /// emitted by the `IChainAssetHandler` contract on the current settlement layer.

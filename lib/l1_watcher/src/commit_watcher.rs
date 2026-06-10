@@ -1,12 +1,12 @@
 use crate::committed_batch_provider::CommittedBatchProvider;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, LogsCache, ProcessL1Event, util};
+use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::rpc::types::Log;
 use tokio::sync::watch;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_provider::NodeProvider;
+use zksync_os_provider::{LogsCache, NodeProvider};
 use zksync_os_storage_api::WriteFinality;
 
 /// Watches settlement-layer commit events and advances the committed finality frontier.

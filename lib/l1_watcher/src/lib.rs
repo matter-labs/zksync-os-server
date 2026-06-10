@@ -20,7 +20,6 @@ pub use interop_watcher::InteropWatcher;
 
 pub mod util;
 mod watcher;
-pub use zksync_os_provider::LogsCache;
 
 mod sl_aware_watcher;
 pub use sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};
