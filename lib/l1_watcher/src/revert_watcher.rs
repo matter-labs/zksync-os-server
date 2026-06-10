@@ -6,20 +6,9 @@ use zksync_os_contract_interface::ZkChain;
 use zksync_os_provider::NodeProvider;
 
 /// Watches settlement-layer `BlocksRevert` events and crashes the node when the main node reverts
-/// committed L1 batches, so the process supervisor restarts us.
-///
-/// Intended for **external nodes** only. When the main node performs an L1 batch revert it
-/// re-produces different L2 blocks; a running external node does not detect this divergence on its
-/// live P2P sync (it hangs on a `block_output_hash` mismatch or silently overwrites local records).
-/// A restart is what triggers the external node's existing startup recovery
-/// (`find_last_matching_main_node_block`), which re-syncs the corrected chain from the main node.
-///
-/// Loop prevention: at startup `last_committed_batch` / the SL block are read live from L1, so a
-/// revert that happened *before* startup is already reflected in our frontier. We therefore only
-/// act on reverts observed in L1 blocks strictly after the startup SL block; after a restart the new
-/// startup SL block sits above the handled revert, which becomes historical and is skipped.
+/// committed L1 batches.
 pub struct L1RevertWatcher {
-    /// SL block number used to initialise finality at startup. Reverts at or below this block are
+    /// SL block number used to initialize finality at startup. Reverts at or below this block are
     /// already reflected in the startup frontier and must be ignored.
     startup_sl_block: u64,
 }
@@ -37,7 +26,7 @@ impl L1RevertWatcher {
             "initializing L1 revert watcher"
         );
         let this = Self { startup_sl_block };
-        // Tail forward from the startup SL block; reverts in earlier blocks are already accounted for.
+        // Process forward from the startup SL block; reverts in earlier blocks are already accounted for.
         L1Watcher::new(
             config,
             zk_chain.provider().clone(),

@@ -59,10 +59,6 @@ async fn derive_last_l1_batch_to_keep(
         batch -= 1;
     }
 
-    // The scan reached `first_committed_unexecuted_batch` without any committed-only batch
-    // starting at or before `from_block`. This means `from_block` lies within (or before) an
-    // already-executed batch, which the Danger-mode fail-fast normally rejects — but that guard
-    // is skipped when the executed batch is absent from local storage, so we can land here.
     anyhow::bail!(
         "from_block ({from_block}) is at or before the first committed-only batch \
          ({first_committed_unexecuted_batch}); it lies within an executed (finalized) batch \
@@ -80,8 +76,8 @@ async fn perform_l1_revert(
     reverter_sk: &SignerConfig,
     persistent_batch_storage: &ExecutedBatchStorage,
 ) -> anyhow::Result<()> {
-    // Fail fast: if the first batch to revert is already in executed storage, it has been
-    // finalized on L1 and cannot be rolled back.
+    // if the first batch to revert is already in executed storage, it has been finalized on L1
+    // and cannot be rolled back.
     let reverted_batch = last_l1_batch_to_keep
         .checked_add(1)
         .expect("last_l1_batch_to_keep overflow");
@@ -196,9 +192,6 @@ fn from_block_hash_matches(
 ///
 /// Returns `true` if an L1 revert was performed and the caller should refresh `L1State`.
 /// Returns `false` if no revert was needed (skipped or `BlockRebuild` which never touches L1).
-///
-/// May clear `config.sequencer_config.rebuild` when the hash guard fails — this suppresses the
-/// rebuild on subsequent restarts after the operation already ran.
 pub async fn handle_startup_rebuild(
     config: &mut Config,
     repositories: &dyn ReadRepository,

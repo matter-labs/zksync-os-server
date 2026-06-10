@@ -764,9 +764,7 @@ pub struct RebuildBounds {
     /// First block to rebuild from. All blocks from this number onward are replayed.
     ///
     /// For `danger_block_rebuild_with_l1_revert` this must fall within a committed-only batch
-    /// (not an executed one). It may be the first block of that batch or any block inside it:
-    /// the entire containing batch is reverted on L1 before the rebuild starts, so there is no
-    /// committed-hash inconsistency regardless of where within the batch `from_block` sits.
+    /// (not an executed one). It may be the first block of that batch or any block inside it.
     pub from_block: u64,
     /// Expected hash of block `from_block` before the rebuild.
     ///
@@ -802,8 +800,7 @@ pub enum RebuildConfig {
     ///
     /// The batch to revert is auto-derived from `from_block`: the committed-only batch that
     /// contains `from_block` is reverted on L1 (along with all higher committed batches).
-    /// `from_block` may be the first block of that batch or any block inside it — a mid-batch
-    /// value is valid because the whole batch is reverted before rebuilding starts.
+    /// `from_block` may be the first block of that batch or any block inside it.
     /// The `from_block_hash` guard covers both the L1 revert and the local rebuild — if the hash
     /// no longer matches (operation already ran), both are skipped on the next startup.
     DangerBlockRebuildWithL1Revert {

@@ -627,9 +627,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .run(),
     );
 
-    // External nodes restart themselves on an L1 batch revert so their existing startup recovery
-    // (`find_last_matching_main_node_block`) re-syncs the corrected chain from the main node. Main
-    // nodes initiate reverts intentionally and must not self-restart, so this watcher is EN-only.
+    // External nodes restart themselves on an L1 batch revert to resync correct data.
     if node_role.is_external() {
         runtime.spawn_critical_task(
             "l1 revert watcher",

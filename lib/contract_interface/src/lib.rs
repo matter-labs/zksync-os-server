@@ -258,8 +258,7 @@ alloy::sol! {
     }
 
     // `ValidatorTimelock.sol`
-    // Used by the node startup flow to revert committed (but not executed) batches
-    // before local block rebuild / replay.
+    // Used by the node startup flow to revert committed batches before local block rebuild.
     #[sol(rpc)]
     interface IValidatorTimelock {
         function REVERTER_ROLE() external view returns (bytes32);

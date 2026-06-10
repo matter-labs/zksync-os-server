@@ -265,9 +265,6 @@ impl L1State {
     }
 
     /// Fetch L1 state, optionally waiting for all pending L1 transactions to finalize first.
-    ///
-    /// Pass `use_finalized = true` on the main node batcher so the node doesn't race with
-    /// its own in-flight commit/prove/execute transactions.
     pub async fn fetch_with_finality(
         use_finalized: bool,
         l1_provider: NodeProvider,

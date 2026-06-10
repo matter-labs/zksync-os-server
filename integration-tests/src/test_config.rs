@@ -7,14 +7,8 @@ use zksync_os_server::config::{Config, ProviderConfig};
 
 pub(crate) const TEST_PROVIDER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Configures the node to commit batches on L1 but never execute them: FRI proofs are faked and
-/// produced instantly, while SNARK proving (a prerequisite for execution) is disabled. This keeps
-/// batches in the committed-but-not-executed state that the L1-revert paths require.
-///
-/// Also shortens `batch_timeout` from the 60s default so batches seal (and commit) within a few
-/// seconds — otherwise every commit-only test waits a full minute per batch. Prover Input
-/// Generation cannot be disabled here (it requires both fake provers, and SNARK is off), so it
-/// stays on the critical path; keep the number of mined blocks small to bound its cost.
+/// Configures the node to commit batches on L1 but never execute them: FRI proofs are faked,
+/// while SNARK proving is disabled. This keeps batches in the committed-but-not-executed state.
 pub fn make_commit_only_config(config: &mut Config) {
     config.prover_api_config.fake_fri_provers.enabled = true;
     config.prover_api_config.fake_fri_provers.compute_time = Duration::from_millis(200);
