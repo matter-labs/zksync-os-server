@@ -42,5 +42,5 @@ pub(crate) async fn build_node_provider(
     let provider = ProviderBuilder::new()
         .wallet(EthereumWallet::new(PrivateKeySigner::random()))
         .connect_client(client);
-    NodeProvider::new(provider)
+    NodeProvider::new(provider).await
 }
