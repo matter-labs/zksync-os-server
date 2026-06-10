@@ -517,6 +517,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                             outgoing_verify_results: outgoing_verify_results.clone(),
                         }
                     }),
+                    trusted_peers: config
+                        .network_config
+                        .boot_nodes
+                        .iter()
+                        .map(|n| n.id)
+                        .collect(),
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,

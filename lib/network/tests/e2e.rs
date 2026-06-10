@@ -227,6 +227,7 @@ where
                         max_blocks_per_message: 64,
                         replay_sender: replay_tx,
                         verification,
+                        trusted_peers: Default::default(),
                     },
                     UpstreamGuard::new(),
                     state,

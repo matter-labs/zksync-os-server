@@ -14,7 +14,7 @@ use futures::FutureExt;
 use futures::{Stream, StreamExt};
 use reth_network_peers::PeerId;
 use secrecy::ExposeSecret;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
@@ -40,6 +40,7 @@ pub(super) async fn run_en_connection<P: ZksProtocolVersionSpec, Replay: ReadRep
         max_blocks_per_message,
         replay_sender,
         verification: verifier,
+        trusted_peers,
     } = config;
 
     if perform_verifier_handshake::<P>(&mut conn, &outbound_tx, verifier.as_ref())
@@ -71,6 +72,7 @@ pub(super) async fn run_en_connection<P: ZksProtocolVersionSpec, Replay: ReadRep
         upstream,
         events_sender,
         replay,
+        trusted_peers,
     )
     .await;
 }
@@ -157,6 +159,7 @@ async fn receive_and_serve_replays<P: ZksProtocolVersionSpec, Replay: ReadReplay
     upstream: UpstreamGuard,
     events_sender: mpsc::UnboundedSender<ProtocolEvent>,
     replay: Replay,
+    trusted_peers: HashSet<PeerId>,
 ) {
     let mut upstream_permit: Option<OwnedSemaphorePermit> = None;
     let mut serve_stream: Option<(Pin<Box<dyn Stream<Item = ReplayRecord> + Send>>, usize)> = None;
@@ -184,6 +187,15 @@ async fn receive_and_serve_replays<P: ZksProtocolVersionSpec, Replay: ReadReplay
                             // Skip, if response is not aligned with the local cursor.
                             // This rejects a stale stream left over from before we synced through another link.
                             if first_block != *starting_block.read().unwrap() {
+                                continue;
+                            }
+                            // Skip untrusted peers: only configured boot nodes may act as upstream.
+                            // An empty set disables the check (tests, unconfigured deployments).
+                            if !trusted_peers.is_empty() && !trusted_peers.contains(&peer_id) {
+                                tracing::info!(
+                                    %peer_id,
+                                    "ignoring block replay from untrusted peer"
+                                );
                                 continue;
                             }
                             // Try to pin this peer as the single upstream,
