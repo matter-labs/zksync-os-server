@@ -569,7 +569,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .await
         .expect("failed to start L1 commit watcher")
-        .run(),
+        .run(()),
     );
 
     runtime.spawn_critical_task(
@@ -583,7 +583,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .await
         .expect("failed to start L1 execute watcher")
-        .run(),
+        .run(()),
     );
 
     runtime.spawn_critical_task(
@@ -596,7 +596,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .await
         .expect("failed to start finalized L1 execute watcher")
-        .run(),
+        .run(()),
     );
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
@@ -688,13 +688,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 chain_id,
                 node_startup_state.l1_state.l1_chain_id,
                 config.general_config.gateway_chain_id,
-                next_cursors.migration_number,
                 config.l1_watcher_config.clone().into(),
                 sl_chain_id_subpool.clone(),
             )
             .await
             .expect("failed to start gateway migration watcher")
-            .run(),
+            .run(next_cursors.migration_number),
         );
 
         // Initializes `last_finalized_migration` from the SL's `migrationNumber(chainId)` and,
@@ -713,7 +712,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .await
         .expect("failed to start migration finalized watcher");
         if let Some(watcher) = migration_finalized_watcher {
-            runtime.spawn_critical_task("migration finalized watcher", watcher.run());
+            runtime.spawn_critical_task("migration finalized watcher", watcher.run(()));
         }
 
         // Crashes the node when getSettlementLayer() changes, forcing a restart against the
@@ -736,13 +735,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .clone(),
             config.l1_watcher_config.clone().into(),
             chain_id,
-            next_cursors.interop_root_id,
             interop_roots_subpool.clone(),
         )
-        .await
         .expect("failed to start L1 interop roots watcher")
         {
-            runtime.spawn_critical_task("interop roots watcher", interop_watcher.run());
+            runtime.spawn_critical_task(
+                "interop roots watcher",
+                interop_watcher.run(next_cursors.interop_root_id),
+            );
         }
     }
 
@@ -754,11 +754,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_l1.clone(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             l1_subpool.clone(),
-            next_cursors.l1_priority_id,
         )
         .await
         .expect("failed to start L1 transaction watcher")
-        .run(),
+        .run(next_cursors.l1_priority_id),
     );
 
     // Transaction acceptance state - tracks whether we're accepting new transactions
@@ -868,12 +867,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy_l1.clone(),
             node_startup_state.l1_state.diamond_proxy_sl.clone(),
             bytecode_supplier_address,
-            current_protocol_version.clone(),
             upgrade_subpool,
         )
         .await
         .expect("failed to start L1 upgrade transaction watcher")
-        .run(),
+        .run(current_protocol_version.clone()),
     );
 
     // ========== Start L1 Persist Batch Watcher ===========
@@ -901,9 +899,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 settlement_layer_intervals,
                 persistent_batch_storage,
             )
-            .await
-            .expect("failed to start L1 batch persist watcher")
-            .run()
+            .run(())
             .await
         }
     });
