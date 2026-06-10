@@ -14,7 +14,9 @@ use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL, ReceiptAssert};
 use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
-use zksync_os_integration_tests::test_config::make_commit_only_config;
+use zksync_os_integration_tests::test_config::{
+    make_commit_only_config, make_full_pipeline_config,
+};
 use zksync_os_integration_tests::wallets::load_operator_private_key;
 use zksync_os_integration_tests::{
     CURRENT_TO_L1, StoppedTester, TestEnvironment, Tester, test_multisetup,
@@ -813,6 +815,64 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
         move |state| state.last_committed_batch >= containing_batch,
     )
     .await?;
+
+    Ok(())
+}
+
+/// Verifies that `rebuild.mode = l1_revert` refuses to revert a batch that has already been
+/// executed (finalized) on L1.
+///
+/// Scenario:
+///   1. Start a node with the full pipeline and wait until at least one batch is executed on L1.
+///   2. Restart with `rebuild.mode = l1_revert`, `from_batch = 1` (<= last_executed_batch).
+///   3. Expect a fatal startup error containing "at or before the last executed batch".
+#[test_multisetup([CURRENT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn l1_revert_rejects_already_executed_batch(env: TestEnvironment) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    make_full_pipeline_config(&mut config);
+    let tester = env.launch(config).await?;
+
+    send_throwaway_tx(&tester).await?;
+
+    // The full pipeline executes batches; wait until batch 1 is executed (finalized) on L1.
+    wait_for_l1_state(&tester, "at least one executed batch on L1", |state| {
+        state.last_executed_batch >= 1
+    })
+    .await?;
+
+    // Pass the real on-chain hash so the test stays meaningful even if the guard order changes:
+    // with a matching hash the revert proceeds to the executed-batch check either way.
+    let batch1_on_chain_hash = fetch_on_chain_batch_hash(&tester, 1).await?;
+
+    let stopped = tester.stop().await?;
+    let reverter_signer = make_reverter_config(&stopped)?;
+    let mut revert_config = stopped.config().clone();
+    // from_batch = 1 is at or below last_executed_batch, so the revert must be rejected.
+    revert_config.sequencer_config.rebuild = Some(RebuildConfig::L1Revert {
+        from_batch: 1,
+        from_batch_hash: batch1_on_chain_hash,
+        l1_reverter_sk: reverter_signer,
+    });
+
+    // The guard fires synchronously during startup via `handle_startup_rebuild(...).expect(...)`,
+    // so it panics through `start_with_config`. Isolate it in a spawned task so the JoinError
+    // captures the panic instead of unwinding the test thread.
+    let join_result =
+        tokio::task::spawn(async move { stopped.start_with_config(revert_config).await }).await;
+
+    let join_err = join_result.expect_err("expected node startup to panic");
+    assert!(join_err.is_panic(), "expected a panic, got a cancellation");
+    let payload = join_err.into_panic();
+    let panic_msg = payload
+        .downcast_ref::<String>()
+        .map(|s| s.as_str())
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .expect("panic payload should be a string");
+    assert!(
+        panic_msg.contains("at or before the last executed batch"),
+        "unexpected panic message: {panic_msg}"
+    );
 
     Ok(())
 }

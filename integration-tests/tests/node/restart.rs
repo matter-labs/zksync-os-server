@@ -14,7 +14,9 @@ use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL,
 use zksync_os_integration_tests::config::load_chain_config;
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
-use zksync_os_integration_tests::test_config::make_commit_only_config;
+use zksync_os_integration_tests::test_config::{
+    make_commit_only_config, make_full_pipeline_config,
+};
 use zksync_os_integration_tests::wallets::load_operator_private_key;
 use zksync_os_integration_tests::{CURRENT_TO_L1, StoppedTester, Tester, test_multisetup};
 use zksync_os_provider::EthWalletProvider;
@@ -33,14 +35,6 @@ sol! {
 fn disable_commits_config(config: &mut Config) {
     config.prover_api_config.fake_fri_provers.enabled = false;
     config.prover_api_config.fake_snark_provers.enabled = false;
-}
-
-fn make_full_pipeline_config(config: &mut Config) {
-    config.prover_api_config.fake_fri_provers.enabled = true;
-    config.prover_api_config.fake_fri_provers.compute_time = Duration::from_millis(200);
-    config.prover_api_config.fake_fri_provers.min_age = Duration::ZERO;
-    config.prover_api_config.fake_snark_provers.enabled = true;
-    config.prover_api_config.fake_snark_provers.max_batch_age = Duration::ZERO;
 }
 
 fn configure_failing_block(config: &Config, failing_block: u64) {
