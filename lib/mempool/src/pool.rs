@@ -229,11 +229,11 @@ impl<T: L2Subpool> Pool<T> {
             }
         }
         self.upgrade_subpool
-            .on_canonical_state_change(&replay_record.protocol_version, upgrade_txs)
+            .on_canonical_state_change(&replay_record.protocol_version, upgrade_txs, strict_subpool_cleanup)
             .await;
         let last_interop_log_id = self
             .interop_roots_subpool
-            .on_canonical_state_change(interop_txs)
+            .on_canonical_state_change(interop_txs, strict_subpool_cleanup)
             .await;
         let last_interop_fee_number = self
             .interop_fee_subpool
@@ -241,11 +241,11 @@ impl<T: L2Subpool> Pool<T> {
             .await;
         let sl_chain_id_outcome = self
             .sl_chain_id_subpool
-            .on_canonical_state_change(sl_chain_id_txs)
+            .on_canonical_state_change(sl_chain_id_txs, strict_subpool_cleanup)
             .await;
         let last_l1_priority_id = self
             .l1_subpool
-            .on_canonical_state_change(l1_transactions)
+            .on_canonical_state_change(l1_transactions, strict_subpool_cleanup)
             .await;
 
         let (header, hash) = header.into_parts();

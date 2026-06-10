@@ -96,6 +96,7 @@ impl SlChainIdSubpool {
     pub async fn on_canonical_state_change(
         &self,
         txs: Vec<&SystemTxEnvelope>,
+        _strict_subpool_cleanup: bool,
     ) -> Option<SlChainIdOutcome> {
         if txs.is_empty() {
             return None;

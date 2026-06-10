@@ -79,6 +79,7 @@ impl UpgradeSubpool {
         &self,
         protocol_version: &ProtocolSemanticVersion,
         txs: Vec<&L1UpgradeEnvelope>,
+        _strict_subpool_cleanup: bool,
     ) {
         // We track current protocol version that we end up with after applying upgrade transaction.
         let mut current_protocol_version = self.inner.read().await.current_protocol_version.clone();
@@ -258,7 +259,7 @@ mod tests {
 
         tokio::time::timeout(
             Duration::from_millis(50),
-            subpool.on_canonical_state_change(&unreliable_version, vec![&tx]),
+            subpool.on_canonical_state_change(&unreliable_version, vec![&tx], true),
         )
         .await
         .expect("historical upgrade replay should not wait for watcher data");
@@ -284,7 +285,7 @@ mod tests {
             .await;
 
         subpool
-            .on_canonical_state_change(&unreliable_version, Vec::new())
+            .on_canonical_state_change(&unreliable_version, Vec::new(), true)
             .await;
 
         let mut stream = subpool.upgrade_info_stream().await;
@@ -306,7 +307,7 @@ mod tests {
         assert!(
             tokio::time::timeout(
                 Duration::from_millis(50),
-                subpool.on_canonical_state_change(&target_version, vec![&tx]),
+                subpool.on_canonical_state_change(&target_version, vec![&tx], true),
             )
             .await
             .is_err(),
@@ -318,7 +319,7 @@ mod tests {
             .await;
         tokio::time::timeout(
             Duration::from_millis(50),
-            subpool.on_canonical_state_change(&target_version, vec![&tx]),
+            subpool.on_canonical_state_change(&target_version, vec![&tx], true),
         )
         .await
         .expect("matching watcher upgrade should validate");
@@ -340,7 +341,7 @@ mod tests {
 
         tokio::time::timeout(
             Duration::from_millis(50),
-            subpool.on_canonical_state_change(&target_version, Vec::new()),
+            subpool.on_canonical_state_change(&target_version, Vec::new(), true),
         )
         .await
         .expect("patch upgrade metadata should be consumed");

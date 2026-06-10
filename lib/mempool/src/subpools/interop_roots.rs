@@ -111,7 +111,7 @@ impl InteropRootsSubpool {
 
     /// Cleans up the stream and removes all roots that were sent in transactions.
     /// Returns the last log_id of the executed interop root.
-    pub async fn on_canonical_state_change(&self, txs: Vec<&SystemTxEnvelope>) -> Option<u64> {
+    pub async fn on_canonical_state_change(&self, txs: Vec<&SystemTxEnvelope>, _strict_subpool_cleanup: bool) -> Option<u64> {
         if txs.is_empty() {
             return None;
         }
