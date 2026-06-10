@@ -1,10 +1,7 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{
-    BlockUpdates, CommittedBatchProvider, L1WatcherConfig, LogsCache, ProcessL1Event, util,
-};
+use crate::{CommittedBatchProvider, L1WatcherConfig, ProcessL1Event, util};
 use alloy::providers::Provider;
 use alloy::rpc::types::Log;
-use tokio::sync::watch;
 use zksync_os_contract_interface::IExecutor::BlockExecution;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_provider::NodeProvider;
@@ -44,8 +41,6 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         l1_chain_id: u64,
-        block_updates: watch::Receiver<BlockUpdates>,
-        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_executed_batch = finality.get_finality_status().last_executed_batch;
@@ -72,8 +67,6 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         L1Watcher::new(
             config,
             zk_chain.provider().clone(),
-            logs_cache,
-            block_updates,
             (*zk_chain.address()).into(),
             // We start from last L1 block as it may contain more executed batches apart from the last
             // one.
@@ -92,8 +85,6 @@ impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
         zk_chain: ZkChain<NodeProvider>,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
-        block_updates: watch::Receiver<BlockUpdates>,
-        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_finalized_executed_batch =
@@ -123,8 +114,6 @@ impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
         Ok(L1Watcher::new_finalized(
             config,
             zk_chain.provider().clone(),
-            logs_cache,
-            block_updates,
             (*zk_chain.address()).into(),
             last_l1_block,
             None,

@@ -1,7 +1,6 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{BlockUpdates, L1WatcherConfig, LogsCache, ProcessL1Event};
+use crate::{L1WatcherConfig, ProcessL1Event};
 use alloy::rpc::types::Log;
-use tokio::sync::watch;
 use zksync_os_contract_interface::IExecutor::BlocksRevert;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_provider::NodeProvider;
@@ -31,8 +30,6 @@ impl L1RevertWatcher {
         zk_chain: ZkChain<NodeProvider>,
         startup_sl_block: u64,
         l1_chain_id: u64,
-        block_updates: watch::Receiver<BlockUpdates>,
-        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             startup_sl_block,
@@ -44,8 +41,6 @@ impl L1RevertWatcher {
         L1Watcher::new(
             config,
             zk_chain.provider().clone(),
-            logs_cache,
-            block_updates,
             (*zk_chain.address()).into(),
             startup_sl_block + 1,
             None,

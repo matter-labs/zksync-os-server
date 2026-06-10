@@ -1,9 +1,8 @@
 use crate::watcher::L1Watcher;
-use crate::{BlockUpdates, L1WatcherConfig, LogsCache, ProcessRawEvents};
+use crate::{L1WatcherConfig, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::rpc::types::ValueOrArray;
 use std::collections::VecDeque;
-use tokio::sync::watch;
 use zksync_os_provider::NodeProvider;
 
 /// Description of a single settlement-layer segment that [`SlAwareL1Watcher`] should scan, in
@@ -15,10 +14,6 @@ use zksync_os_provider::NodeProvider;
 pub struct SegmentSpec {
     /// Provider for the settlement layer this segment is scanned on.
     pub provider: NodeProvider,
-    /// Block updates for the segment's settlement-layer provider.
-    pub block_updates: watch::Receiver<BlockUpdates>,
-    /// Shared logs cache for the segment's settlement-layer provider.
-    pub logs_cache: LogsCache,
     /// Contract address(es) whose logs the segment scans (e.g. the chain's diamond proxy or a
     /// bridgehub's message-root contract).
     pub address: ValueOrArray<Address>,
@@ -106,8 +101,6 @@ async fn run_segment(
     let mut watcher = L1Watcher::new_finalized(
         config,
         segment.provider,
-        segment.logs_cache,
-        segment.block_updates,
         segment.address,
         segment.start_block,
         segment.end_block,
