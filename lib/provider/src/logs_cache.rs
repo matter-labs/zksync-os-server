@@ -230,7 +230,8 @@ impl LogsCache {
         if recent.synced_with_hash != latest_hash && recent.capacity > 0 {
             let target_head = latest_snapshot.number;
             let floor = target_head.saturating_sub(recent.capacity as u64 - 1);
-            self.update_block(&mut recent, target_head, floor).await?;
+            self.update_block(&mut recent, target_head, floor, Some(latest_snapshot))
+                .await?;
         }
         recent.synced_with_hash = latest_hash;
         Ok(())
@@ -242,6 +243,7 @@ impl LogsCache {
         recent: &'a mut RecentLogs,
         block_number: u64,
         floor: u64,
+        header_hint: Option<<Ethereum as Network>::HeaderResponse>,
     ) -> BoxFuture<'a, TransportResult<()>> {
         Box::pin(async move {
             if block_number < floor {
@@ -251,22 +253,32 @@ impl LogsCache {
             // Ensure the parent block is cached before fetching this one.
             let has_parent = block_number > floor;
             if has_parent && recent.cached_hash(block_number - 1).is_none() {
-                self.update_block(recent, block_number - 1, floor).await?;
+                self.update_block(recent, block_number - 1, floor, None)
+                    .await?;
             }
 
-            let block = self
-                .provider
-                .get_block_by_number(BlockNumberOrTag::Number(block_number))
-                .await?
-                .ok_or_else(|| TransportErrorKind::custom_str("block not found"))?;
+            let header = if let Some(header) = header_hint {
+                if header.number != block_number {
+                    return Err(TransportErrorKind::custom_str(
+                        "header hint does not match requested block number",
+                    ));
+                }
+                header
+            } else {
+                self.provider
+                    .get_block_by_number(BlockNumberOrTag::Number(block_number))
+                    .await?
+                    .ok_or_else(|| TransportErrorKind::custom_str("block not found"))?
+                    .header
+            };
             let logs = self
                 .provider
-                .get_logs(&Filter::new().at_block_hash(block.header.hash))
+                .get_logs(&Filter::new().at_block_hash(header.hash))
                 .await?;
             // A very rare corner case is introduced here.
-            // We get `block`. Reorg happens before we get `logs`. Some RPCs would return
+            // We get `header`. Reorg happens before we get `logs`. Some RPCs would return
             // empty list(instead of proper logs) or an error.
-            if logs.is_empty() && block.header.logs_bloom != Bloom::ZERO {
+            if logs.is_empty() && header.logs_bloom != Bloom::ZERO {
                 return Err(TransportErrorKind::custom_str(
                     "RPC returned empty logs, but the block has logs. Most likely due to reorg.",
                 ));
@@ -276,12 +288,13 @@ impl LogsCache {
             let parent_hash_mismatch = has_parent
                 && recent
                     .cached_hash(block_number - 1)
-                    .is_some_and(|hash| hash != block.header.parent_hash);
+                    .is_some_and(|hash| hash != header.parent_hash);
             if parent_hash_mismatch {
-                self.update_block(recent, block_number - 1, floor).await?;
+                self.update_block(recent, block_number - 1, floor, None)
+                    .await?;
             }
 
-            recent.push_head(block_number, block.header.hash, logs)?;
+            recent.push_head(block_number, header.hash, logs)?;
             METRICS[&LogCacheLabels(self.chain_id)].blocks_loaded.inc();
             METRICS[&LogCacheLabels(self.chain_id)]
                 .approx_memory
