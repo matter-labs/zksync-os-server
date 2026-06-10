@@ -6,6 +6,11 @@
 //! [`NodeProvider::deployment_block`]), so the many startup binary searches over L1 history can use
 //! a tight lower bound without each rediscovering it.
 
+mod logs_cache;
+mod metrics;
+
+pub use logs_cache::LogsCache;
+
 use alloy::consensus::{BlockHeader, TrieAccount};
 use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::eips::eip2930::AccessListResult;

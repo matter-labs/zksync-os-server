@@ -1,9 +1,15 @@
 use crate::metrics::METRICS;
-use crate::{BlockBoundary, L1WatcherConfig, LogsCache, ProcessRawEvents};
+use crate::{L1WatcherConfig, LogsCache, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
 use zksync_os_provider::NodeProvider;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockBoundary {
+    Confirmed { confirmations: BlockNumber },
+    Finalized,
+}
 
 /// An abstract watcher for events.
 /// Handles polling for new blocks and extracting logs,

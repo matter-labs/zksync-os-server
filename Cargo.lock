@@ -15857,10 +15857,12 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
+ "futures",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
+ "vise",
 ]
 
 [[package]]
