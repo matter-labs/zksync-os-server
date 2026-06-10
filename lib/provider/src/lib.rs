@@ -10,7 +10,7 @@ use alloy::consensus::{BlockHeader, TrieAccount};
 use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::eips::eip2930::AccessListResult;
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::network::primitives::BlockResponse;
+use alloy::network::primitives::{BlockResponse, HeaderResponse};
 use alloy::network::{Ethereum, EthereumWallet, Network};
 use alloy::primitives::{
     Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, TxHash, U64, U128, U256,
@@ -21,7 +21,7 @@ use alloy::providers::{
     PendingTransactionBuilder, PendingTransactionConfig, PendingTransactionError, Provider,
     ProviderCall, RootProvider, RpcWithBlock, SendableTx, WalletProvider,
 };
-use alloy::rpc::client::{ClientRef, NoParams, PollChannel, PollerBuilder, WeakClient};
+use alloy::rpc::client::{ClientRef, NoParams, WeakClient};
 use alloy::rpc::types::erc4337::TransactionConditional;
 use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::{
@@ -32,9 +32,9 @@ use alloy::transports::TransportResult;
 use serde_json::value::RawValue;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, watch};
 
 /// A version of `Provider<Ethereum> + WalletProvider<Ethereum, Wallet = EthereumWallet>` that is
 /// object safe. Has a blanket implementation for the aforementioned constraints.
@@ -70,7 +70,7 @@ where
 /// at most once. Each address gets its own [`OnceCell`] so concurrent lookups for the same address
 /// run the binary search exactly once and the rest await its result.
 type DeploymentBlockCache = Arc<Mutex<HashMap<Address, Arc<OnceCell<u64>>>>>;
-type HeaderPoller = Arc<OnceLock<PollChannel<Option<<Ethereum as Network>::BlockResponse>>>>;
+type HeaderPoller = Arc<OnceCell<watch::Sender<<Ethereum as Network>::HeaderResponse>>>;
 
 /// A version of `DynProvider` that exposes `wallet()` and `wallet_mut()` as defined in
 /// `EthWalletProvider`. Also uses `Box` instead of `Arc` to make sure the wallets are mutable.
@@ -107,44 +107,99 @@ impl NodeProvider {
         Self {
             inner: Box::new(provider),
             deployment_blocks: Arc::new(Mutex::new(HashMap::new())),
-            latest_header_poller: Arc::new(OnceLock::new()),
-            finalized_header_poller: Arc::new(OnceLock::new()),
+            latest_header_poller: Arc::new(OnceCell::new()),
+            finalized_header_poller: Arc::new(OnceCell::new()),
             latest_poll_interval,
             finalized_poll_interval,
         }
     }
 
     /// Returns a shared poller for the latest block via `eth_getBlockByNumber(latest, false)`.
-    pub fn latest_header_poller(
+    pub async fn latest_header_poller(
         &self,
-    ) -> PollChannel<Option<<Ethereum as Network>::BlockResponse>> {
+    ) -> watch::Receiver<<Ethereum as Network>::HeaderResponse> {
         self.latest_header_poller
-            .get_or_init(|| {
+            .get_or_init(|| async {
                 self.build_header_poller(BlockNumberOrTag::Latest, self.latest_poll_interval)
+                    .await
             })
-            .resubscribe()
+            .await
+            .subscribe()
     }
 
     /// Returns a shared poller for the finalized block via
     /// `eth_getBlockByNumber(finalized, false)`.
-    pub fn finalized_header_poller(
+    ///
+    /// The chains we use always have a finalized block.
+    pub async fn finalized_header_poller(
         &self,
-    ) -> PollChannel<Option<<Ethereum as Network>::BlockResponse>> {
+    ) -> watch::Receiver<<Ethereum as Network>::HeaderResponse> {
         self.finalized_header_poller
-            .get_or_init(|| {
+            .get_or_init(|| async {
                 self.build_header_poller(BlockNumberOrTag::Finalized, self.finalized_poll_interval)
+                    .await
             })
-            .resubscribe()
+            .await
+            .subscribe()
     }
 
-    fn build_header_poller(
+    /// Builds a provider-owned header poller backed by a raw RPC client request.
+    ///
+    /// This uses the underlying RPC client directly so the spawned task can be tied to
+    /// `WeakClient` shutdown. That preserves the client's transport/request layers, but it
+    /// intentionally bypasses provider-level fillers/layers.
+    ///
+    /// We also assume that our chains always have both latest and finalized blocks, so the head
+    /// block exists and can be unwrapped directly.
+    async fn build_header_poller(
         &self,
         block: BlockNumberOrTag,
         poll_interval: Duration,
-    ) -> PollChannel<Option<<Ethereum as Network>::BlockResponse>> {
-        PollerBuilder::new(self.weak_client(), "eth_getBlockByNumber", (block, false))
-            .with_poll_interval(poll_interval)
-            .spawn()
+    ) -> watch::Sender<<Ethereum as Network>::HeaderResponse> {
+        let initial_block: Option<<Ethereum as Network>::BlockResponse> = self
+            .client()
+            .request("eth_getBlockByNumber", (block, false))
+            .await
+            .unwrap_or_else(|err| panic!("failed to initialize {block:?} header poller: {err}"));
+        let (tx, _) = watch::channel(
+            initial_block
+                .expect("header poller RPC returned no block for a chain head")
+                .header()
+                .clone(),
+        );
+        let weak_client = self.weak_client();
+        let tx_task = tx.clone();
+
+        tokio::spawn(async move {
+            let mut timer = tokio::time::interval(poll_interval);
+            loop {
+                timer.tick().await;
+                let Some(client) = weak_client.upgrade() else {
+                    return;
+                };
+
+                let block: Option<<Ethereum as Network>::BlockResponse> = client
+                    .request("eth_getBlockByNumber", (block, false))
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!("failed to poll {block:?} header: {err}");
+                    });
+                let header = block
+                    .expect("header poller RPC returned no block for a chain head")
+                    .header()
+                    .clone();
+                tx_task.send_if_modified(|current: &mut <Ethereum as Network>::HeaderResponse| {
+                    if current.hash() == header.hash() {
+                        false
+                    } else {
+                        *current = header.clone();
+                        true
+                    }
+                });
+            }
+        });
+
+        tx
     }
 
     /// Returns the block at which `address` first had non-empty code, i.e. its deployment block.

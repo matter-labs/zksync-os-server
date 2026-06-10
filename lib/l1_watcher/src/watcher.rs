@@ -1,11 +1,8 @@
 use crate::metrics::METRICS;
 use crate::{BlockBoundary, L1WatcherConfig, LogsCache, ProcessRawEvents};
-use alloy::consensus::BlockHeader;
-use alloy::network::primitives::BlockResponse;
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
-use futures::StreamExt;
 use zksync_os_provider::NodeProvider;
 
 /// An abstract watcher for events.
@@ -107,29 +104,27 @@ impl L1Watcher {
         }
 
         let mut headers = match self.block_boundary {
-            BlockBoundary::Confirmed { .. } => self.provider.latest_header_poller().into_stream(),
-            BlockBoundary::Finalized => self.provider.finalized_header_poller().into_stream(),
+            BlockBoundary::Confirmed { .. } => self.provider.latest_header_poller().await,
+            BlockBoundary::Finalized => self.provider.finalized_header_poller().await,
         };
 
         loop {
-            let Some(header) = headers.next().await else {
-                tracing::error!("l1 watcher header poller stream ended unexpectedly");
-                panic!("l1 watcher header poller stream ended unexpectedly");
-            };
-            let Some(header) = header else {
-                continue;
-            };
-
+            let header = headers.borrow_and_update().clone();
             let cap = match self.block_boundary {
                 BlockBoundary::Confirmed { confirmations } => {
-                    header.header().number().saturating_sub(confirmations)
+                    header.number.saturating_sub(confirmations)
                 }
-                BlockBoundary::Finalized => header.header().number(),
+                BlockBoundary::Finalized => header.number,
             };
 
             if let Err(e) = self.poll(cap).await {
                 tracing::error!("l1 watcher fatal error: {e}");
                 panic!("watcher failed: {e}");
+            }
+
+            if let Err(e) = headers.changed().await {
+                tracing::error!("l1 watcher header poller closed unexpectedly: {e}");
+                panic!("l1 watcher header poller closed unexpectedly: {e}");
             }
         }
     }

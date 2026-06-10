@@ -195,9 +195,23 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         };
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
-    let l1_provider = build_node_provider(&config.l1_provider_config, ProviderKind::L1).await;
-    let gateway_provider = if let Some(config) = &config.gateway_provider_config {
-        Some(build_node_provider(config, ProviderKind::Gateway).await)
+    let l1_provider = build_node_provider(
+        &config.l1_provider_config,
+        config.l1_watcher_config.poll_interval,
+        config.l1_watcher_config.finalized_poll_interval,
+        ProviderKind::L1,
+    )
+    .await;
+    let gateway_provider = if let Some(gw_config) = &config.gateway_provider_config {
+        Some(
+            build_node_provider(
+                gw_config,
+                config.l1_watcher_config.poll_interval,
+                config.l1_watcher_config.finalized_poll_interval,
+                ProviderKind::Gateway,
+            )
+            .await,
+        )
     } else {
         None
     };
@@ -228,22 +242,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to fetch L1 state")
     };
     let settles_on_gateway = l1_state.settles_on_gateway();
-    let l1_block_updates = block_updates::run(
-        l1_provider.clone(),
-        runtime,
-        "l1 block updates",
-        config.l1_watcher_config.poll_interval,
-        config.l1_watcher_config.finalized_poll_interval,
-    );
-    let gateway_block_updates = gateway_provider.as_ref().map(|provider| {
-        block_updates::run(
-            provider.clone(),
-            runtime,
-            "gateway block updates",
-            config.l1_watcher_config.poll_interval,
-            config.l1_watcher_config.finalized_poll_interval,
-        )
-    });
     let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
         l1_provider.clone()
     } else {
@@ -253,14 +251,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l1_provider.clone(),
         config.l1_watcher_config.logs_cache_capacity,
         l1_state.l1_chain_id,
-    );
-    let gateway_logs_cache = gateway_provider.as_ref().map(|provider| {
-        LogsCache::new(
-            provider.clone(),
-            config.l1_watcher_config.logs_cache_capacity,
-            l1_state.sl_chain_id,
-        )
-    });
+    )
+    .await;
+    let gateway_logs_cache = match gateway_provider.as_ref() {
+        Some(provider) => Some(
+            LogsCache::new(
+                provider.clone(),
+                config.l1_watcher_config.logs_cache_capacity,
+                l1_state.sl_chain_id,
+            )
+            .await,
+        ),
+        None => None,
+    };
     let sl_logs_cache = if l1_state.l1_chain_id == l1_state.sl_chain_id {
         l1_logs_cache.clone()
     } else {

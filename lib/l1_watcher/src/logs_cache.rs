@@ -3,12 +3,11 @@ use alloy::eips::BlockNumberOrTag;
 use alloy::network::{Ethereum, Network};
 use alloy::primitives::{B256, Bloom};
 use alloy::providers::Provider;
-use alloy::rpc::client::PollChannel;
 use alloy::rpc::types::{Filter, Log};
 use alloy::transports::{TransportErrorKind, TransportResult};
 use futures::future::BoxFuture;
 use std::{collections::VecDeque, mem, sync::Arc};
-use tokio::sync::{RwLock, broadcast::error::TryRecvError};
+use tokio::sync::{RwLock, watch};
 use zksync_os_provider::NodeProvider;
 
 #[derive(Debug)]
@@ -169,15 +168,15 @@ impl RecentLogs {
 #[derive(Clone, Debug)]
 pub struct LogsCache {
     provider: NodeProvider,
-    latest_blocks: Arc<std::sync::Mutex<PollChannel<Option<<Ethereum as Network>::BlockResponse>>>>,
+    latest_blocks: Arc<std::sync::Mutex<watch::Receiver<<Ethereum as Network>::HeaderResponse>>>,
     metric_labels: LogsCacheLabels,
     recent: Arc<RwLock<RecentLogs>>,
 }
 
 impl LogsCache {
-    pub fn new(provider: NodeProvider, capacity: usize, chain_id: u64) -> Self {
+    pub async fn new(provider: NodeProvider, capacity: usize, chain_id: u64) -> Self {
         Self {
-            latest_blocks: Arc::new(std::sync::Mutex::new(provider.latest_header_poller())),
+            latest_blocks: Arc::new(std::sync::Mutex::new(provider.latest_header_poller().await)),
             provider,
             metric_labels: LogsCacheLabels { chain_id },
             recent: Arc::new(RwLock::new(RecentLogs::new(capacity))),
@@ -227,52 +226,25 @@ impl LogsCache {
                 .latest_blocks
                 .lock()
                 .expect("latest block poller mutex poisoned");
-
-            let mut latest_snapshot = loop {
-                match latest_blocks.try_recv() {
-                    Ok(Some(block)) => break block,
-                    Ok(None) => {
-                        return Err(TransportErrorKind::custom_str(
-                            "latest block poller returned no block",
-                        ));
-                    }
-                    Err(TryRecvError::Empty) => return Ok(()),
-                    Err(TryRecvError::Closed) => {
-                        return Err(TransportErrorKind::custom_str(
-                            "latest block poller unexpectedly closed",
-                        ));
-                    }
-                    Err(TryRecvError::Lagged(_)) => continue,
-                }
-            };
-
-            loop {
-                match latest_blocks.try_recv() {
-                    Ok(Some(block)) => latest_snapshot = block,
-                    Ok(None) => {
-                        return Err(TransportErrorKind::custom_str(
-                            "latest block poller returned no block",
-                        ));
-                    }
-                    Err(TryRecvError::Empty) => break latest_snapshot,
-                    Err(TryRecvError::Closed) => {
-                        return Err(TransportErrorKind::custom_str(
-                            "latest block poller unexpectedly closed",
-                        ));
-                    }
-                    Err(TryRecvError::Lagged(_)) => continue,
+            match latest_blocks.has_changed() {
+                Ok(false) => return Ok(()),
+                Ok(true) => latest_blocks.borrow_and_update().clone(),
+                Err(_) => {
+                    return Err(TransportErrorKind::custom_str(
+                        "latest block poller unexpectedly closed",
+                    ));
                 }
             }
         };
 
-        let latest_hash = latest_snapshot.header.hash;
+        let latest_hash = latest_snapshot.hash;
         if self.recent.read().await.synced_with_hash == latest_hash {
             return Ok(());
         }
 
         let mut recent = self.recent.write().await;
         if recent.synced_with_hash != latest_hash && recent.capacity > 0 {
-            let target_head = latest_snapshot.header.number;
+            let target_head = latest_snapshot.number;
             let floor = target_head.saturating_sub(recent.capacity as u64 - 1);
             self.update_block(&mut recent, target_head, floor).await?;
         }
