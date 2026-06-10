@@ -1,8 +1,8 @@
-use crate::EthWalletProvider;
 use crate::metrics::{LogsCacheLabels, METRICS};
 use alloy::eips::BlockNumberOrTag;
 use alloy::network::{Ethereum, Network};
 use alloy::primitives::{B256, Bloom};
+use alloy::providers::{Provider, RootProvider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::transports::{TransportErrorKind, TransportResult};
 use futures::future::BoxFuture;
@@ -163,22 +163,19 @@ impl RecentLogs {
 ///
 /// TODO: As of now there is no filtering for these logs. Although with current settings memory usage shouldn't be a problem.
 #[derive(Clone)]
-pub struct LogsCache {
-    provider: Box<dyn EthWalletProvider + 'static>,
+pub(crate) struct LogsCache {
     latest_blocks: watch::Receiver<<Ethereum as Network>::HeaderResponse>,
     metric_labels: LogsCacheLabels,
     recent: Arc<RwLock<RecentLogs>>,
 }
 
 impl LogsCache {
-    pub fn new(
-        provider: Box<dyn EthWalletProvider + 'static>,
+    pub(crate) fn new(
         latest_blocks: watch::Receiver<<Ethereum as Network>::HeaderResponse>,
         capacity: usize,
         chain_id: u64,
     ) -> Self {
         Self {
-            provider,
             latest_blocks,
             metric_labels: LogsCacheLabels(chain_id),
             recent: Arc::new(RwLock::new(RecentLogs::new(capacity))),
@@ -186,8 +183,12 @@ impl LogsCache {
     }
 
     /// Identical to alloy's get_logs but with caching optimizations.
-    pub async fn get_logs(&self, filter: &Filter) -> TransportResult<Vec<Log>> {
-        if let Err(err) = self.synchronize_if_needed().await {
+    pub async fn get_logs(
+        &self,
+        provider: &RootProvider<Ethereum>,
+        filter: &Filter,
+    ) -> TransportResult<Vec<Log>> {
+        if let Err(err) = self.synchronize_if_needed(provider).await {
             tracing::warn!(
                 ?err,
                 "Recent logs cache synchronization failed; Clearing cache & not using it for this request."
@@ -217,12 +218,15 @@ impl LogsCache {
             Ok(cached_logs)
         } else {
             METRICS[&self.metric_labels].fallbacks.inc();
-            self.provider.get_logs(filter).await
+            provider.get_logs(filter).await
         }
     }
 
     /// If the chain head has changed, check for reorgs & add new blocks.
-    async fn synchronize_if_needed(&self) -> TransportResult<()> {
+    async fn synchronize_if_needed(
+        &self,
+        provider: &RootProvider<Ethereum>,
+    ) -> TransportResult<()> {
         let latest_snapshot = self.latest_blocks.borrow().clone();
 
         let latest_hash = latest_snapshot.hash;
@@ -234,8 +238,14 @@ impl LogsCache {
         if recent.synced_with_hash != latest_hash && recent.capacity > 0 {
             let target_head = latest_snapshot.number;
             let floor = target_head.saturating_sub(recent.capacity as u64 - 1);
-            self.update_block(&mut recent, target_head, floor, Some(latest_snapshot))
-                .await?;
+            self.update_block(
+                provider,
+                &mut recent,
+                target_head,
+                floor,
+                Some(latest_snapshot),
+            )
+            .await?;
         }
         recent.synced_with_hash = latest_hash;
         Ok(())
@@ -244,6 +254,7 @@ impl LogsCache {
     /// Recursive helper that adds new blocks to the recent logs cache & handles reorgs.
     fn update_block<'a>(
         &'a self,
+        provider: &'a RootProvider<Ethereum>,
         recent: &'a mut RecentLogs,
         block_number: u64,
         floor: u64,
@@ -257,7 +268,7 @@ impl LogsCache {
             // Ensure the parent block is cached before fetching this one.
             let has_parent = block_number > floor;
             if has_parent && recent.cached_hash(block_number - 1).is_none() {
-                self.update_block(recent, block_number - 1, floor, None)
+                self.update_block(provider, recent, block_number - 1, floor, None)
                     .await?;
             }
 
@@ -269,14 +280,13 @@ impl LogsCache {
                 }
                 header
             } else {
-                self.provider
+                provider
                     .get_block_by_number(BlockNumberOrTag::Number(block_number))
                     .await?
                     .ok_or_else(|| TransportErrorKind::custom_str("block not found"))?
                     .header
             };
-            let logs = self
-                .provider
+            let logs = provider
                 .get_logs(&Filter::new().at_block_hash(header.hash))
                 .await?;
             // A very rare corner case is introduced here.
@@ -294,7 +304,7 @@ impl LogsCache {
                     .cached_hash(block_number - 1)
                     .is_some_and(|hash| hash != header.parent_hash);
             if parent_hash_mismatch {
-                self.update_block(recent, block_number - 1, floor, None)
+                self.update_block(provider, recent, block_number - 1, floor, None)
                     .await?;
             }
 

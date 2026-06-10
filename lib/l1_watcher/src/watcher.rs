@@ -90,8 +90,8 @@ impl L1Watcher {
     /// Non-consuming version of `run`, intended for internal usage in this crate.
     pub(crate) async fn run_inner(&mut self) {
         let mut headers = match self.block_boundary {
-            BlockBoundary::Confirmed { .. } => self.provider.latest_header_poller().await,
-            BlockBoundary::Finalized => self.provider.finalized_header_poller().await,
+            BlockBoundary::Confirmed { .. } => self.provider.latest_header_watcher().await,
+            BlockBoundary::Finalized => self.provider.finalized_header_watcher().await,
         };
 
         loop {
@@ -123,8 +123,8 @@ impl L1Watcher {
             }
 
             if let Err(e) = headers.changed().await {
-                tracing::error!("l1 watcher header poller closed unexpectedly: {e}");
-                panic!("l1 watcher header poller closed unexpectedly: {e}");
+                tracing::error!("l1 watcher header watcher closed unexpectedly: {e}");
+                panic!("l1 watcher header watcher closed unexpectedly: {e}");
             }
         }
     }

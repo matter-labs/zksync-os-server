@@ -47,8 +47,8 @@ async fn compare_js_tracer_outputs_between_nodes() -> anyhow::Result<()> {
         .connect(&reth_url)
         .await?;
 
-    let zksync_provider = NodeProvider::new(zksync_provider).await;
-    let reth_provider = NodeProvider::new(reth_provider).await;
+    let zksync_provider = NodeProvider::new(zksync_provider).await?;
+    let reth_provider = NodeProvider::new(reth_provider).await?;
 
     // Deploy helper contracts on both nodes.
     let secondary_init_value = U256::from(7);
