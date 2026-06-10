@@ -746,7 +746,6 @@ impl Tester {
             l1.provider.clone()
         };
         let gateway_eth_provider = gateway_rpc_url.as_ref().map(|_| sl_provider.clone());
-        let l2_provider = NodeProvider::new(l2_provider).await;
         let prover_tester = ProverTester::new(
             NodeProvider::new(l1.provider.clone()).await,
             gateway_eth_provider,

@@ -7,9 +7,8 @@
 //! a tight lower bound without each rediscovering it.
 
 mod logs_cache;
-mod metrics;
-
 pub use logs_cache::LogsCache;
+mod metrics;
 
 use alloy::consensus::{BlockHeader, TrieAccount};
 use alloy::eips::eip1559::Eip1559Estimation;
