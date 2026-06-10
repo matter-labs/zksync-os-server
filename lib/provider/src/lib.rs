@@ -132,6 +132,8 @@ pub struct NodeProvider {
     deployment_blocks: DeploymentBlockCache,
     latest_header_poller: HeaderPoller,
     finalized_header_poller: HeaderPoller,
+    // Poll intervals are read-only and should not be changed after initialization
+    // They are here becaue pollers are initialized lazily - if we don't need it it's not initialized.
     latest_poll_interval: Duration,
     finalized_poll_interval: Duration,
     // This is optional because only the async feature-enabled constructor should eagerly create
@@ -197,7 +199,7 @@ impl NodeProvider {
         Ok(this)
     }
 
-    /// Returns a shared poller for the latest block via `eth_getBlockByNumber(latest, false)`.
+    /// Returns a shared poller for the latest block header via `eth_getBlockByNumber(latest, false)`.
     pub async fn latest_header_poller(
         &self,
     ) -> watch::Receiver<<Ethereum as Network>::HeaderResponse> {
@@ -210,16 +212,20 @@ impl NodeProvider {
             .subscribe()
     }
 
-    /// Returns a shared poller for the finalized block via
+    /// Returns a shared poller for the finalized block header via
     /// `eth_getBlockByNumber(finalized, false)`.
-    ///
-    /// The chains we use always have a finalized block.
+    /// Falls back to latetst if the chain does not support finalized tag.
     pub async fn finalized_header_poller(
         &self,
     ) -> watch::Receiver<<Ethereum as Network>::HeaderResponse> {
+        let finalized = if self.capabilities.finalized_tag {
+            BlockNumberOrTag::Finalized
+        } else {
+            BlockNumberOrTag::Latest
+        }
         self.finalized_header_poller
             .get_or_init(|| async {
-                self.build_header_poller(BlockNumberOrTag::Finalized, self.finalized_poll_interval)
+                self.build_header_poller(finalized, self.finalized_poll_interval)
                     .await
             })
             .await
@@ -232,8 +238,8 @@ impl NodeProvider {
     /// `WeakClient` shutdown. That preserves the client's transport/request layers, but it
     /// intentionally bypasses provider-level fillers/layers.
     ///
-    /// We also assume that our chains always have both latest and finalized blocks, so the head
-    /// block exists and can be unwrapped directly.
+    /// The shutdown is not tied to reth-tasks, it is only tied to the Provider. But it should be
+    /// fine because the task does not own any resources. This is similar to how alloy pollers work.
     async fn build_header_poller(
         &self,
         block: BlockNumberOrTag,

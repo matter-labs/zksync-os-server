@@ -10,6 +10,7 @@ impl std::fmt::Display for LogsCacheLabels {
     }
 }
 
+// Use provider prefix here, because it should be eventually merged into provider metrics.
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "provider_log_cache")]
 pub(crate) struct LogsCacheMetrics {
