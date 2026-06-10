@@ -6,7 +6,7 @@ use alloy::sol_types::SolEvent;
 use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
 use zksync_os_contract_interface::{Bridgehub, ServerNotifier::MigrateToGateway, ZkChain};
 use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
-use zksync_os_provider::{LogsCache, NodeProvider};
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::SystemTxEnvelope;
 
 /// Watches for both `MigrateToGateway` and `MigrateFromGateway` events on L1 in a single
@@ -39,7 +39,6 @@ impl GatewayMigrationWatcher {
         next_migration_number: u64,
         config: L1WatcherConfig,
         sl_chain_id_subpool: SlChainIdSubpool,
-        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         let server_notifier_contract = zk_chain.get_server_notifier_address().await?;
         let chain_asset_handler_address = bridgehub.chain_asset_handler_address().await?;
@@ -72,7 +71,6 @@ impl GatewayMigrationWatcher {
         L1Watcher::new(
             config,
             zk_chain.provider().clone(),
-            logs_cache,
             server_notifier_contract.into(),
             next_l1_block,
             None,

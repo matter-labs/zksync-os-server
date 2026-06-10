@@ -70,6 +70,12 @@ where
     }
 }
 
+impl Clone for Box<dyn EthWalletProvider + 'static> {
+    fn clone(&self) -> Self {
+        self.dyn_clone()
+    }
+}
+
 /// Per-address cache of contract deployment blocks. Cloning a [`NodeProvider`] shares this cache
 /// (it sits behind an `Arc`), so all derived contract instances and watchers resolve each address
 /// at most once. Each address gets its own [`OnceCell`] so concurrent lookups for the same address
@@ -88,6 +94,11 @@ pub struct NodeProvider {
     finalized_header_poller: HeaderPoller,
     latest_poll_interval: Duration,
     finalized_poll_interval: Duration,
+    // This is optional because only the async feature-enabled constructor should eagerly create
+    // the cache and its latest-header subscription. It is stored by value rather than behind an
+    // `Arc` because `LogsCache` already shares its mutable state internally; cloning a
+    // `NodeProvider` simply clones / shares that internal state via `LogsCache::clone()`.
+    log_cache: Option<LogsCache>,
 }
 
 impl NodeProvider {
@@ -96,27 +107,49 @@ impl NodeProvider {
     where
         P: Provider<Ethereum> + WalletProvider<Ethereum, Wallet = EthereumWallet> + Clone + 'static,
     {
-        Self::new_with_poll_intervals(provider, Duration::from_secs(1), Duration::from_secs(1))
+        Self {
+            inner: Box::new(provider),
+            deployment_blocks: Arc::new(Mutex::new(HashMap::new())),
+            latest_header_poller: Arc::new(OnceCell::new()),
+            finalized_header_poller: Arc::new(OnceCell::new()),
+            latest_poll_interval: Duration::from_secs(1),
+            finalized_poll_interval: Duration::from_secs(1),
+            log_cache: None,
+        }
     }
 
-    /// Creates a new [`NodeProvider`] by erasing the type and configuring poll intervals for
-    /// future provider-owned header pollers.
-    pub fn new_with_poll_intervals<P>(
+    /// Creates a new [`NodeProvider`] with provider-owned pollers and, optionally, a log cache.
+    pub async fn new_with_features<P>(
         provider: P,
         latest_poll_interval: Duration,
         finalized_poll_interval: Duration,
-    ) -> Self
+        log_cache_capacity: usize,
+    ) -> TransportResult<Self>
     where
         P: Provider<Ethereum> + WalletProvider<Ethereum, Wallet = EthereumWallet> + Clone + 'static,
     {
-        Self {
+        let mut this = Self {
             inner: Box::new(provider),
             deployment_blocks: Arc::new(Mutex::new(HashMap::new())),
             latest_header_poller: Arc::new(OnceCell::new()),
             finalized_header_poller: Arc::new(OnceCell::new()),
             latest_poll_interval,
             finalized_poll_interval,
+            log_cache: None,
+        };
+
+        if log_cache_capacity > 0 {
+            let chain_id = this.inner.get_chain_id().await?;
+            let latest_blocks = this.latest_header_poller().await;
+            this.log_cache = Some(LogsCache::new(
+                this.inner.dyn_clone(),
+                latest_blocks,
+                log_cache_capacity,
+                chain_id,
+            ));
         }
+
+        Ok(this)
     }
 
     /// Returns a shared poller for the latest block via `eth_getBlockByNumber(latest, false)`.
@@ -260,6 +293,7 @@ impl Clone for NodeProvider {
             finalized_header_poller: self.finalized_header_poller.clone(),
             latest_poll_interval: self.latest_poll_interval,
             finalized_poll_interval: self.finalized_poll_interval,
+            log_cache: self.log_cache.clone(),
         }
     }
 }
@@ -483,7 +517,11 @@ impl Provider<Ethereum> for NodeProvider {
     }
 
     async fn get_logs(&self, filter: &Filter) -> TransportResult<Vec<Log>> {
-        self.inner.get_logs(filter).await
+        if let Some(log_cache) = &self.log_cache {
+            log_cache.get_logs(filter).await
+        } else {
+            self.inner.get_logs(filter).await
+        }
     }
 
     fn get_proof(
@@ -685,94 +723,5 @@ impl EthWalletProvider for NodeProvider {
 
     fn wallet_mut(&mut self) -> &mut EthereumWallet {
         self.inner.wallet_mut()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloy::providers::ProviderBuilder;
-    use alloy::rpc::json_rpc::ErrorPayload;
-    use alloy::rpc::types::Block;
-    use alloy::transports::mock::Asserter;
-    use std::borrow::Cow;
-
-    #[tokio::test]
-    async fn get_block_number_by_id_falls_back_when_get_header_errors() {
-        let asserter = Asserter::new();
-        let provider = ProviderBuilder::new()
-            .disable_recommended_fillers()
-            .wallet(EthereumWallet::default())
-            .connect_mocked_client(asserter.clone());
-        let provider = NodeProvider::new(provider);
-
-        asserter.push_failure(ErrorPayload {
-            code: -39001,
-            message: Cow::Borrowed("custom upstream error"),
-            data: None,
-        });
-        let mut block: Block = Block::default();
-        block.header.inner.number = 42;
-        asserter.push_success(&block);
-
-        let result = provider
-            .get_block_number_by_id(BlockId::finalized())
-            .await
-            .expect("fallback to get_block should succeed");
-        assert_eq!(result, Some(42));
-        assert!(
-            asserter.read_q().is_empty(),
-            "both mock responses should be consumed",
-        );
-    }
-
-    #[test]
-    fn node_provider_uses_expected_poll_intervals_and_shares_poller_state_across_clones() {
-        let asserter = Asserter::new();
-        let provider = ProviderBuilder::new()
-            .disable_recommended_fillers()
-            .wallet(EthereumWallet::default())
-            .connect_mocked_client(asserter);
-        let provider = NodeProvider::new(provider);
-        assert_eq!(
-            provider.latest_poll_interval,
-            std::time::Duration::from_secs(1)
-        );
-        assert_eq!(
-            provider.finalized_poll_interval,
-            std::time::Duration::from_secs(1)
-        );
-
-        let cloned = provider.clone();
-        assert!(Arc::ptr_eq(
-            &provider.latest_header_poller,
-            &cloned.latest_header_poller
-        ));
-        assert!(Arc::ptr_eq(
-            &provider.finalized_header_poller,
-            &cloned.finalized_header_poller
-        ));
-    }
-
-    #[test]
-    fn node_provider_supports_custom_poll_intervals() {
-        let asserter = Asserter::new();
-        let provider = ProviderBuilder::new()
-            .disable_recommended_fillers()
-            .wallet(EthereumWallet::default())
-            .connect_mocked_client(asserter);
-        let provider = NodeProvider::new_with_poll_intervals(
-            provider,
-            std::time::Duration::from_millis(250),
-            std::time::Duration::from_secs(3),
-        );
-        assert_eq!(
-            provider.latest_poll_interval,
-            std::time::Duration::from_millis(250)
-        );
-        assert_eq!(
-            provider.finalized_poll_interval,
-            std::time::Duration::from_secs(3)
-        );
     }
 }

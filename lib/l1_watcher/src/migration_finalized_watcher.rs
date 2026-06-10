@@ -6,7 +6,7 @@ use alloy::sol_types::SolEvent;
 use tokio::sync::watch;
 use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_contract_interface::{Bridgehub, IChainAssetHandler::MigrationFinalized, ZkChain};
-use zksync_os_provider::{LogsCache, NodeProvider};
+use zksync_os_provider::NodeProvider;
 
 /// Watches for `MigrationFinalized(uint256 indexed chainId, uint256 migrationNumber, ...)` events
 /// emitted by the `IChainAssetHandler` contract on the current settlement layer.
@@ -36,7 +36,6 @@ impl MigrationFinalizedWatcher {
         l1_chain_id: u64,
         config: L1WatcherConfig,
         last_finalized_migration: watch::Sender<u64>,
-        logs_cache: LogsCache,
     ) -> anyhow::Result<Option<L1Watcher>> {
         let active_migration_number = (intervals.intervals().len() - 1) as u64;
         let sl_migration_number: u64 = bridgehub_sl
@@ -83,7 +82,6 @@ impl MigrationFinalizedWatcher {
         let watcher = L1Watcher::new(
             config,
             zk_chain.provider().clone(),
-            logs_cache,
             chain_asset_handler.into(),
             starting_block,
             None,

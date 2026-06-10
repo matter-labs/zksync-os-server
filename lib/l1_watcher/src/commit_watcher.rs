@@ -6,7 +6,7 @@ use tokio::sync::watch;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_provider::{LogsCache, NodeProvider};
+use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::WriteFinality;
 
 /// Watches settlement-layer commit events and advances the committed finality frontier.
@@ -40,7 +40,6 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
         finality: Finality,
         sl_block_initial_finality_init_at: u64,
         l1_chain_id: u64,
-        logs_cache: LogsCache,
         commit_submitted_rx: Option<watch::Receiver<u64>>,
     ) -> anyhow::Result<L1Watcher> {
         let last_committed_batch = finality.get_finality_status().last_committed_batch;
@@ -71,7 +70,6 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
         L1Watcher::new(
             config,
             zk_chain.provider().clone(),
-            logs_cache,
             (*zk_chain.address()).into(),
             // We start from last L1 block as it may contain more committed batches apart from the last
             // one.

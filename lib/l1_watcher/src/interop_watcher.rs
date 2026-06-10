@@ -18,7 +18,6 @@ use crate::sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};
 use crate::util::{find_l1_block_by_interop_root_id, find_l1_execute_block_by_batch_number};
 use crate::watcher::L1WatcherError;
 use crate::{L1WatcherConfig, ProcessRawEvents};
-use zksync_os_provider::LogsCache;
 /// Watches interop root updates emitted by Gateway settlement layers and feeds them into the
 /// interop subpool.
 ///
@@ -43,7 +42,6 @@ impl InteropWatcher {
         l2_chain_id: u64,
         starting_interop_root_id: u64,
         interop_roots_subpool: InteropRootsSubpool,
-        gateway_logs_cache: Option<LogsCache>,
     ) -> anyhow::Result<Option<SlAwareL1Watcher>> {
         let mut segments = Vec::new();
         for interval in intervals.intervals() {
@@ -60,9 +58,6 @@ impl InteropWatcher {
                 continue;
             }
 
-            let logs_cache = gateway_logs_cache.clone().with_context(|| {
-                format!("Gateway logs cache is missing for interval {interval}")
-            })?;
             let gw_zk_chain = &interval.proxy;
             let bridgehub = Bridgehub::new(
                 L2_BRIDGEHUB_ADDRESS,
@@ -116,7 +111,6 @@ impl InteropWatcher {
             );
             segments.push(SegmentSpec {
                 provider: gw_zk_chain.provider().clone(),
-                logs_cache,
                 address: message_root.into(),
                 start_block,
                 end_block,

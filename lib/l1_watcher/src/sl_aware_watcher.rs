@@ -3,7 +3,7 @@ use crate::{L1WatcherConfig, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::rpc::types::ValueOrArray;
 use std::collections::VecDeque;
-use zksync_os_provider::{LogsCache, NodeProvider};
+use zksync_os_provider::NodeProvider;
 
 /// Description of a single settlement-layer segment that [`SlAwareL1Watcher`] should scan, in
 /// isolation, before advancing to the next one. `end_block = None` marks the open-ended (live)
@@ -14,8 +14,6 @@ use zksync_os_provider::{LogsCache, NodeProvider};
 pub struct SegmentSpec {
     /// Provider for the settlement layer this segment is scanned on.
     pub provider: NodeProvider,
-    /// Shared logs cache for the segment's settlement-layer provider.
-    pub logs_cache: LogsCache,
     /// Contract address(es) whose logs the segment scans (e.g. the chain's diamond proxy or a
     /// bridgehub's message-root contract).
     pub address: ValueOrArray<Address>,
@@ -103,7 +101,6 @@ async fn run_segment(
     let mut watcher = L1Watcher::new_finalized(
         config,
         segment.provider,
-        segment.logs_cache,
         segment.address,
         segment.start_block,
         segment.end_block,

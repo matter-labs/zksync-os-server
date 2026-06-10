@@ -1,9 +1,8 @@
-use crate::NodeProvider;
+use crate::EthWalletProvider;
 use crate::metrics::{LogCacheLabels, METRICS};
 use alloy::eips::BlockNumberOrTag;
 use alloy::network::{Ethereum, Network};
 use alloy::primitives::{B256, Bloom};
-use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log};
 use alloy::transports::{TransportErrorKind, TransportResult};
 use futures::future::BoxFuture;
@@ -163,19 +162,24 @@ impl RecentLogs {
 /// And remembers them for last `watcher_config.capacity` blocks.
 ///
 /// TODO: As of now there is no filtering for these logs. Although with current settings memory usage shouldn't be a problem.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct LogsCache {
-    provider: NodeProvider,
+    provider: Box<dyn EthWalletProvider + 'static>,
     latest_blocks: watch::Receiver<<Ethereum as Network>::HeaderResponse>,
     chain_id: u64,
     recent: Arc<RwLock<RecentLogs>>,
 }
 
 impl LogsCache {
-    pub async fn new(provider: NodeProvider, capacity: usize, chain_id: u64) -> Self {
+    pub fn new(
+        provider: Box<dyn EthWalletProvider + 'static>,
+        latest_blocks: watch::Receiver<<Ethereum as Network>::HeaderResponse>,
+        capacity: usize,
+        chain_id: u64,
+    ) -> Self {
         Self {
-            latest_blocks: provider.latest_header_poller().await,
             provider,
+            latest_blocks,
             chain_id,
             recent: Arc::new(RwLock::new(RecentLogs::new(capacity))),
         }

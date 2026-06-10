@@ -18,7 +18,7 @@ use zksync_os_contract_interface::ServerNotifier::UpgradeTimestampUpdated;
 use zksync_os_contract_interface::is_method_missing;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
-use zksync_os_provider::{LogsCache, NodeProvider};
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::{
     L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
     UpgradeMetadata,
@@ -71,7 +71,6 @@ impl L1UpgradeTxWatcher {
         bytecode_supplier_address: Address,
         current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
-        logs_cache: LogsCache,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             config.max_blocks_to_process,
@@ -124,7 +123,6 @@ impl L1UpgradeTxWatcher {
         L1Watcher::new(
             config,
             zk_chain_l1.provider().clone(),
-            logs_cache,
             server_notifier_l1.into(),
             last_l1_block,
             None,
