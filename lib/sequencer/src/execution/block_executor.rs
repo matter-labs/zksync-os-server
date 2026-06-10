@@ -79,11 +79,10 @@ where
             tracing::info!("Command {cmd} received by BlockExecutor");
             let cmd_type = cmd.command_type();
             state_reporter.enter_state(SequencerState::WaitingForApplier);
-            wait_for_block_applier(
-                &mut self.applied_block_number_receiver,
-                self.block_context_provider.next_block_number() - 1,
-            )
-            .await?;
+            if let Some(last_block_number) = self.block_context_provider.last_block_number() {
+                wait_for_block_applier(&mut self.applied_block_number_receiver, last_block_number)
+                    .await?;
+            }
 
             // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
             if matches!(cmd, BlockCommand::Produce(_))
@@ -100,7 +99,10 @@ where
             }
             state_reporter.enter_state(SequencerState::WaitingForTransaction);
 
-            let prepared_command = self.block_context_provider.prepare_command(cmd).await?;
+            let Some(prepared_command) = self.block_context_provider.prepare_command(cmd).await?
+            else {
+                continue;
+            };
 
             state_reporter.enter_state(SequencerState::InitializingVm);
 

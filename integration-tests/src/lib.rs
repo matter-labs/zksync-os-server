@@ -741,21 +741,21 @@ impl Tester {
                 tracing::info!(%err, ?dur, "retrying connection to L2 node");
             })
             .await?;
-            NodeProvider::new(sl_provider)
+            NodeProvider::new(sl_provider).await
         } else {
             l1.provider.clone()
         };
         let gateway_eth_provider = gateway_rpc_url.as_ref().map(|_| sl_provider.clone());
         let l2_provider = NodeProvider::new(l2_provider);
         let prover_tester = ProverTester::new(
-            l1.provider.clone(),
+            NodeProvider::new(l1.provider.clone()).await,
             gateway_eth_provider,
-            l2_provider.clone(),
+            NodeProvider::new(l2_provider.clone()).await,
             DynProvider::new(l2_zk_provider.clone()),
         );
         let tester = Tester {
             l1,
-            l2_provider,
+            l2_provider: NodeProvider::new(l2_provider.clone()).await,
             l2_zk_provider: DynProvider::new(l2_zk_provider.clone()),
             l2_wallet,
             prover_tester,
@@ -1291,7 +1291,7 @@ async fn wait_for_gateway_readiness(
 
         L1State::fetch_finalized(
             l1.provider.clone(),
-            Some(NodeProvider::new(gateway_provider)),
+            Some(NodeProvider::new(gateway_provider).await),
             bridgehub_address,
             chain_id,
         )
@@ -1368,7 +1368,7 @@ impl AnvilL1 {
 
         Ok(Self {
             address,
-            provider: NodeProvider::new(provider),
+            provider: NodeProvider::new(provider).await,
             wallet,
             _tempdir: Arc::new(tempdir),
         })

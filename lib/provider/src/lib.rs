@@ -70,6 +70,45 @@ where
     }
 }
 
+/// Optional RPC features the underlying provider may or may not support, probed once when the
+/// [`NodeProvider`] is constructed.
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderCapabilities {
+    /// Whether the RPC understands the `finalized`/`safe` block tags. When false, finalized/safe
+    /// lookups degrade to the latest block.
+    pub finalized_tag: bool,
+    /// Whether the RPC implements `eth_getHeaderBy*`. When false, header lookups use
+    /// `eth_getBlockBy*` instead.
+    pub get_header: bool,
+}
+
+impl ProviderCapabilities {
+    /// Probes `provider` once to determine which optional features it supports.
+    async fn detect(provider: &impl Provider<Ethereum>) -> Self {
+        // `latest` always exists, so a failure here means `eth_getHeaderBy*` is unsupported.
+        let get_header = match provider.get_header(BlockId::latest()).await {
+            Ok(_) => true,
+            Err(err) => {
+                tracing::info!(%err, "provider lacks eth_getHeaderBy*; using eth_getBlockBy*");
+                false
+            }
+        };
+        // Probe the finalized tag with whichever block-fetch method we just confirmed works.
+        let finalized_tag = if get_header {
+            provider.get_header(BlockId::finalized()).await.is_ok()
+        } else {
+            provider.get_block(BlockId::finalized()).await.is_ok()
+        };
+        if !finalized_tag {
+            tracing::info!("provider lacks the `finalized` block tag; degrading to latest");
+        }
+        Self {
+            get_header,
+            finalized_tag,
+        }
+    }
+}
+
 impl Clone for Box<dyn EthWalletProvider + 'static> {
     fn clone(&self) -> Self {
         self.dyn_clone()
@@ -89,6 +128,7 @@ type HeaderPoller = Arc<OnceCell<watch::Sender<<Ethereum as Network>::HeaderResp
 /// Carries a shared [`DeploymentBlockCache`]; see [`NodeProvider::deployment_block`].
 pub struct NodeProvider {
     inner: Box<dyn EthWalletProvider + 'static>,
+    capabilities: ProviderCapabilities,
     deployment_blocks: DeploymentBlockCache,
     latest_header_poller: HeaderPoller,
     finalized_header_poller: HeaderPoller,
@@ -102,13 +142,16 @@ pub struct NodeProvider {
 }
 
 impl NodeProvider {
-    /// Creates a new [`NodeProvider`] by erasing the type.
-    pub fn new<P>(provider: P) -> Self
+    /// Creates a new [`NodeProvider`] by erasing the type, probing the provider once for its
+    /// optional [`ProviderCapabilities`].
+    pub async fn new<P>(provider: P) -> Self
     where
         P: Provider<Ethereum> + WalletProvider<Ethereum, Wallet = EthereumWallet> + Clone + 'static,
     {
+        let capabilities = ProviderCapabilities::detect(&provider).await;
         Self {
             inner: Box::new(provider),
+            capabilities,
             deployment_blocks: Arc::new(Mutex::new(HashMap::new())),
             latest_header_poller: Arc::new(OnceCell::new()),
             finalized_header_poller: Arc::new(OnceCell::new()),
@@ -128,8 +171,10 @@ impl NodeProvider {
     where
         P: Provider<Ethereum> + WalletProvider<Ethereum, Wallet = EthereumWallet> + Clone + 'static,
     {
+        let capabilities = ProviderCapabilities::detect(&provider).await;
         let mut this = Self {
             inner: Box::new(provider),
+            capabilities,
             deployment_blocks: Arc::new(Mutex::new(HashMap::new())),
             latest_header_poller: Arc::new(OnceCell::new()),
             finalized_header_poller: Arc::new(OnceCell::new()),
@@ -240,6 +285,11 @@ impl NodeProvider {
         tx
     }
 
+    /// Returns the optional features the underlying provider was detected to support.
+    pub fn capabilities(&self) -> ProviderCapabilities {
+        self.capabilities
+    }
+
     /// Returns the block at which `address` first had non-empty code, i.e. its deployment block.
     /// Returns `0` if `address` has no code at the latest block (not deployed on this chain), which
     /// keeps it usable as a binary-search lower bound on chains where the contract is absent (e.g.
@@ -288,6 +338,7 @@ impl Clone for NodeProvider {
     fn clone(&self) -> Self {
         NodeProvider {
             inner: self.inner.dyn_clone(),
+            capabilities: self.capabilities,
             deployment_blocks: self.deployment_blocks.clone(),
             latest_header_poller: self.latest_header_poller.clone(),
             finalized_header_poller: self.finalized_header_poller.clone(),
@@ -336,10 +387,9 @@ impl Provider<Ethereum> for NodeProvider {
         self.inner.get_block_number()
     }
 
-    // alloy 2.0 changed the `get_header` -> `get_block` fallback that 1.x had, so only JSON-RPC
-    // errors with -32601 code from `eth_getHeaderBy*` now propagate instead of degrading to
-    // `eth_getBlockBy*`. Upstream nodes return varying error codes for unsupported
-    // methods, so restore the pre-2.0 behavior of falling back on any error.
+    // Dispatch based on the capabilities probed at construction (see `ProviderCapabilities`)
+    // instead of trying-and-failing: skip `eth_getHeaderBy*` when unsupported, and degrade
+    // finalized/safe lookups straight to the latest block when the tags are unsupported.
     async fn get_block_number_by_id(
         &self,
         block_id: BlockId,
@@ -348,11 +398,18 @@ impl Provider<Ethereum> for NodeProvider {
             BlockId::Number(BlockNumberOrTag::Number(num)) => Ok(Some(num)),
             BlockId::Number(BlockNumberOrTag::Latest) => self.get_block_number().await.map(Some),
             _ => {
-                if let Ok(header) = self.get_header(block_id).await {
-                    return Ok(header.map(|h| h.number()));
+                if (block_id.is_finalized() || block_id.is_safe())
+                    && !self.capabilities.finalized_tag
+                {
+                    // If `finalized`/`safe` are not supported we presume immediate finality like it
+                    // is with Besu: https://besu.hyperledger.org/private-networks/concepts/poa
+                    return self.get_block_number().await.map(Some);
                 }
-                let block = self.get_block(block_id).await?;
-                Ok(block.map(|b| b.header().number()))
+                if self.capabilities.get_header {
+                    Ok(self.get_header(block_id).await?.map(|h| h.number()))
+                } else {
+                    Ok(self.get_block(block_id).await?.map(|b| b.header().number()))
+                }
             }
         }
     }
@@ -723,5 +780,105 @@ impl EthWalletProvider for NodeProvider {
 
     fn wallet_mut(&mut self) -> &mut EthereumWallet {
         self.inner.wallet_mut()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::providers::ProviderBuilder;
+    use alloy::rpc::json_rpc::ErrorPayload;
+    use alloy::rpc::types::{Block, Header};
+    use alloy::transports::mock::Asserter;
+    use std::borrow::Cow;
+
+    fn mocked_provider(asserter: &Asserter) -> impl EthWalletProvider {
+        ProviderBuilder::new()
+            .disable_recommended_fillers()
+            .wallet(EthereumWallet::default())
+            .connect_mocked_client(asserter.clone())
+    }
+
+    fn header_with_number(number: u64) -> Header {
+        let mut block: Block = Block::default();
+        block.header.inner.number = number;
+        block.header
+    }
+
+    fn block_with_number(number: u64) -> Block {
+        let mut block: Block = Block::default();
+        block.header.inner.number = number;
+        block
+    }
+
+    fn unsupported_method() -> ErrorPayload {
+        ErrorPayload {
+            code: -39001,
+            message: Cow::Borrowed("custom upstream error"),
+            data: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn uses_get_header_when_supported() {
+        let asserter = Asserter::new();
+        // Probe: get_header(latest) ok -> get_header supported; get_header(finalized) ok ->
+        // finalized supported.
+        asserter.push_success(&header_with_number(1));
+        asserter.push_success(&header_with_number(1));
+        let provider = NodeProvider::new(mocked_provider(&asserter)).await;
+        assert!(provider.capabilities().get_header);
+        assert!(provider.capabilities().finalized_tag);
+
+        // The lookup itself resolves via get_header.
+        asserter.push_success(&header_with_number(42));
+        let result = provider
+            .get_block_number_by_id(BlockId::finalized())
+            .await
+            .expect("get_header lookup should succeed");
+        assert_eq!(result, Some(42));
+        assert!(asserter.read_q().is_empty(), "all responses consumed");
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_get_block_when_get_header_unsupported() {
+        let asserter = Asserter::new();
+        // Probe: get_header(latest) fails -> get_header unsupported; get_block(finalized) ok ->
+        // finalized supported.
+        asserter.push_failure(unsupported_method());
+        asserter.push_success(&block_with_number(1));
+        let provider = NodeProvider::new(mocked_provider(&asserter)).await;
+        assert!(!provider.capabilities().get_header);
+        assert!(provider.capabilities().finalized_tag);
+
+        // The lookup resolves via get_block, never touching get_header.
+        asserter.push_success(&block_with_number(42));
+        let result = provider
+            .get_block_number_by_id(BlockId::finalized())
+            .await
+            .expect("get_block lookup should succeed");
+        assert_eq!(result, Some(42));
+        assert!(asserter.read_q().is_empty(), "all responses consumed");
+    }
+
+    #[tokio::test]
+    async fn degrades_to_latest_when_finalized_unsupported() {
+        let asserter = Asserter::new();
+        // Probe: get_header(latest) ok -> get_header supported; get_header(finalized) fails ->
+        // finalized unsupported.
+        asserter.push_success(&header_with_number(1));
+        asserter.push_failure(unsupported_method());
+        let provider = NodeProvider::new(mocked_provider(&asserter)).await;
+        assert!(provider.capabilities().get_header);
+        assert!(!provider.capabilities().finalized_tag);
+
+        // The lookup degrades straight to get_block_number (latest), issuing no header/block call.
+        asserter.push_success(&U64::from(99));
+        let result = provider
+            .get_block_number_by_id(BlockId::finalized())
+            .await
+            .expect("degraded latest lookup should succeed");
+        assert_eq!(result, Some(99));
+        assert!(asserter.read_q().is_empty(), "all responses consumed");
     }
 }
