@@ -89,38 +89,37 @@ impl L1Watcher {
 
     /// Non-consuming version of `run`, intended for internal usage in this crate.
     pub(crate) async fn run_inner(&mut self) {
-        // Closed segment: `end_block` was already resolved against a finalized/executed batch,
-        // so the confirmation/finalization window doesn't apply and we don't need an
-        // additional RPC.
-        if let Some(end_block) = self.end_block {
-            if let Err(e) = self.poll(end_block).await {
-                tracing::error!("l1 watcher fatal error: {e}");
-                panic!("watcher failed: {e}");
-            }
-            assert!(
-                self.next_block <= end_block,
-                "poll() didn't process all blocks on a finalized segment"
-            );
-            return;
-        }
-
         let mut headers = match self.block_boundary {
             BlockBoundary::Confirmed { .. } => self.provider.latest_header_poller().await,
             BlockBoundary::Finalized => self.provider.finalized_header_poller().await,
         };
 
         loop {
-            let header = headers.borrow_and_update().clone();
-            let cap = match self.block_boundary {
-                BlockBoundary::Confirmed { confirmations } => {
-                    header.number.saturating_sub(confirmations)
+            let cap = match self.end_block {
+                // Closed segment: `end_block` was already resolved against a finalized/executed
+                // batch, so the confirmation/finalization window doesn't apply and we don't need
+                // an additional RPC.
+                Some(end_block) => end_block,
+                None => {
+                    let number = headers.borrow_and_update().number;
+                    match self.block_boundary {
+                        BlockBoundary::Confirmed { confirmations } => {
+                            number.saturating_sub(confirmations)
+                        }
+                        BlockBoundary::Finalized => number,
+                    }
                 }
-                BlockBoundary::Finalized => header.number,
             };
 
             if let Err(e) = self.poll(cap).await {
                 tracing::error!("l1 watcher fatal error: {e}");
                 panic!("watcher failed: {e}");
+            }
+
+            if let Some(end_block) = self.end_block
+                && self.next_block > end_block
+            {
+                return;
             }
 
             if let Err(e) = headers.changed().await {

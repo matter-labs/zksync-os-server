@@ -11,6 +11,7 @@ impl std::fmt::Display for LogCacheLabels {
 }
 
 #[derive(Debug, Metrics)]
+#[metrics(prefix = "provider_log_cache")]
 pub(crate) struct LogCacheMetrics {
     pub hits: Counter,
     pub fallbacks: Counter,

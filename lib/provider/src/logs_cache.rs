@@ -116,41 +116,41 @@ impl RecentLogs {
             && latest_block.checked_add(1) != Some(number)
         {
             return Err(TransportErrorKind::custom_str(
-                "log cache expects continuous blocks",
+                "recent logs cache cannot append a non-contiguous block",
             ));
         }
-        let cached = CachedBlockLogs::new(hash, logs);
-        self.approx_bytes += cached.approx_bytes;
-        self.blocks.push_back(cached);
-        self.first_block.get_or_insert(number);
+
+        if self.blocks.is_empty() {
+            self.first_block = Some(number);
+        }
+        let cached_block = CachedBlockLogs::new(hash, logs);
+        self.approx_bytes += cached_block.approx_bytes;
+        self.blocks.push_back(cached_block);
         while self.blocks.len() > self.capacity {
             let removed = self
                 .blocks
                 .pop_front()
-                .expect("cache head must exist when blocks.len() > capacity");
+                .expect("cache head must exist when capacity eviction runs");
             self.approx_bytes -= removed.approx_bytes;
             *self
                 .first_block
                 .as_mut()
-                .expect("first_block must exist when evicting from non-empty cache") += 1;
+                .expect("first_block must be present when cache contains blocks") += 1;
         }
         Ok(())
     }
 
-    fn contains_range(&self, from_block: u64, to_block: u64) -> bool {
-        let Some(first_block) = self.first_block else {
-            return false;
-        };
-        let last_block = self
-            .latest_block()
-            .expect("latest_block must exist when first_block does");
-        from_block >= first_block && to_block <= last_block
+    /// Largest `block_number` that is present in the cache.
+    fn latest_block(&self) -> Option<u64> {
+        Some(self.first_block? + (self.blocks.len().checked_sub(1)? as u64))
     }
 
-    fn latest_block(&self) -> Option<u64> {
-        self.first_block
-            .zip(self.blocks.len().checked_sub(1))
-            .map(|(first_block, len_minus_one)| first_block + len_minus_one as u64)
+    /// Check if all blocks in the range are present in the cache.
+    fn contains_range(&self, from_block: u64, to_block: u64) -> bool {
+        let (Some(first), Some(last)) = (self.first_block, self.latest_block()) else {
+            return false;
+        };
+        from_block <= to_block && from_block >= first && to_block <= last
     }
 }
 
