@@ -191,7 +191,7 @@ pub async fn l1_revert(
 
         RebuildConfig::DangerBlockRebuildWithL1Revert {
             bounds,
-            ref l1_reverter_sk,
+            l1_reverter_sk,
         } => {
             let current_hash = repositories
                 .get_block_by_number(bounds.from_block)
@@ -247,7 +247,7 @@ pub async fn l1_revert(
                 l1_state,
                 chain_id,
                 sl_provider,
-                l1_reverter_sk,
+                &l1_reverter_sk,
                 persistent_batch_storage,
             )
             .await
@@ -259,7 +259,7 @@ pub async fn l1_revert(
         RebuildConfig::L1Revert {
             from_batch,
             from_batch_hash,
-            ref l1_reverter_sk,
+            l1_reverter_sk,
         } => {
             let last_l1_batch_to_keep = from_batch
                 .checked_sub(1)
@@ -302,7 +302,7 @@ pub async fn l1_revert(
                 l1_state,
                 chain_id,
                 sl_provider,
-                l1_reverter_sk,
+                &l1_reverter_sk,
                 persistent_batch_storage,
             )
             .await

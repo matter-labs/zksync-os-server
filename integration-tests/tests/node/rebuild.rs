@@ -48,19 +48,18 @@ async fn fetch_on_chain_batch_hash(tester: &Tester, batch_number: u64) -> anyhow
     Ok(batch.batch_info.hash())
 }
 
-fn make_reverter_config(stopped: &StoppedTester) -> anyhow::Result<(u64, SignerConfig)> {
+fn make_reverter_config(stopped: &StoppedTester) -> anyhow::Result<SignerConfig> {
     let chain_id = stopped
         .config()
         .genesis_config
         .chain_id
         .context("chain_id missing from config")?;
     let operator_sk = load_operator_private_key(stopped.chain_layout(), chain_id)?;
-    let signer = SignerConfig::Local(
+    Ok(SignerConfig::Local(
         PrivateKeySigner::from_str(&operator_sk)?
             .credential()
             .clone(),
-    );
-    Ok((chain_id, signer))
+    ))
 }
 
 async fn wait_for_l1_state(
@@ -68,18 +67,21 @@ async fn wait_for_l1_state(
     description: &str,
     predicate: impl Fn(&L1State) -> bool,
 ) -> anyhow::Result<L1State> {
-    let mut retries = DEFAULT_TIMEOUT.div_duration_f64(POLL_INTERVAL).floor() as u64;
-    while retries > 0 {
+    let max_times = DEFAULT_TIMEOUT.div_duration_f64(POLL_INTERVAL).floor() as usize;
+    (|| async {
         let state = fetch_l1_state(tester).await?;
         if predicate(&state) {
-            return Ok(state);
+            Ok(state)
+        } else {
+            anyhow::bail!("waiting for L1 state: {description}")
         }
-        retries -= 1;
-        tokio::time::sleep(POLL_INTERVAL).await;
-    }
-    Err(anyhow::anyhow!(
-        "timed out waiting for L1 state: {description}"
-    ))
+    })
+    .retry(
+        ConstantBuilder::default()
+            .with_delay(POLL_INTERVAL)
+            .with_max_times(max_times),
+    )
+    .await
 }
 
 fn make_commit_only_config(config: &mut Config) {
@@ -623,7 +625,7 @@ async fn danger_block_rebuild_with_l1_revert_hash_guard_prevents_double_revert(
         .hash;
 
     let stopped = tester.stop().await?;
-    let (_, reverter_signer) = make_reverter_config(&stopped)?;
+    let reverter_signer = make_reverter_config(&stopped)?;
     let mut restart_config = stopped.config().clone();
     // reset_timestamps: true ensures the rebuilt block gets a fresh timestamp, so its hash
     // differs from the pre-rebuild value and the guard can distinguish the two states.
@@ -748,7 +750,7 @@ async fn revert_l1_commits_without_rebuild_leaves_local_blocks_intact(
     let batch1_on_chain_hash = fetch_on_chain_batch_hash(&tester, 1).await?;
 
     let stopped = tester.stop().await?;
-    let (_, reverter_signer) = make_reverter_config(&stopped)?;
+    let reverter_signer = make_reverter_config(&stopped)?;
     let mut revert_config = stopped.config().clone();
     // Revert batch 1 and above, keeping no committed batches. L1Revert → no local block rebuild.
     revert_config.sequencer_config.rebuild = Some(RebuildConfig::L1Revert {
@@ -831,7 +833,7 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
     let batch1_on_chain_hash = fetch_on_chain_batch_hash(&tester, 1).await?;
 
     let stopped = tester.stop().await?;
-    let (_, reverter_signer) = make_reverter_config(&stopped)?;
+    let reverter_signer = make_reverter_config(&stopped)?;
     let mut revert_config = stopped.config().clone();
     // Disable the batcher so last_committed_batch stays at 0 after the revert, giving the
     // idempotency test a stable condition to exercise the graceful-skip path.

@@ -76,7 +76,7 @@ use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
-    L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, LogsCache,
+    L1FinalizedExecuteWatcher, L1RevertWatcher, L1TxWatcher, L1UpgradeTxWatcher, LogsCache,
     MigrationFinalizedWatcher, SettlementLayerWatcher, block_updates,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
@@ -659,6 +659,26 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to start finalized L1 execute watcher")
         .run(),
     );
+
+    // External nodes restart themselves on an L1 batch revert so their existing startup recovery
+    // (`find_last_matching_main_node_block`) re-syncs the corrected chain from the main node. Main
+    // nodes initiate reverts intentionally and must not self-restart, so this watcher is EN-only.
+    if node_role.is_external() {
+        runtime.spawn_critical_task(
+            "l1 revert watcher",
+            L1RevertWatcher::create_watcher(
+                config.l1_watcher_config.clone().into(),
+                node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                node_startup_state.l1_state.sl_block_number,
+                node_startup_state.l1_state.l1_chain_id,
+                sl_block_updates.clone(),
+                sl_logs_cache.clone(),
+            )
+            .await
+            .expect("failed to start L1 revert watcher")
+            .run(),
+        );
+    }
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
     assert!(
