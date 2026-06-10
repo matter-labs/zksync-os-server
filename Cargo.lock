@@ -16030,7 +16030,6 @@ dependencies = [
  "zksync_os_multivm",
  "zksync_os_raft",
  "zksync_os_rpc_api",
- "zksync_os_rpc_limits",
  "zksync_os_storage",
  "zksync_os_storage_api",
  "zksync_os_tx_validators",
@@ -16051,13 +16050,6 @@ dependencies = [
  "zksync_os_merkle_tree_api",
  "zksync_os_storage_api",
  "zksync_os_types",
-]
-
-[[package]]
-name = "zksync_os_rpc_limits"
-version = "0.20.6"
-dependencies = [
- "governor",
 ]
 
 [[package]]

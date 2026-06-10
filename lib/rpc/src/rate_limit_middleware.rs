@@ -1,3 +1,4 @@
+use crate::limits::Limiter;
 use jsonrpsee::MethodResponse;
 use jsonrpsee::core::middleware::{Batch, Notification};
 use jsonrpsee::core::to_json_raw_value;
@@ -6,7 +7,6 @@ use jsonrpsee::types::Request;
 use jsonrpsee::types::error::ErrorObject;
 use serde::Serialize;
 use std::sync::Arc;
-use zksync_os_rpc_limits::Limiter;
 
 /// EIP-1474 "Limit exceeded" — the de facto Ethereum rate-limit error code used by Infura, Alchemy, etc.
 const RATE_LIMIT_ERROR_CODE: i32 = -32005;

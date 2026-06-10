@@ -15,7 +15,6 @@ members = [
     "lib/rocksdb",
     "lib/rpc",
     "lib/rpc_api",
-    "lib/rpc_limits",
     "lib/sequencer",
     "lib/state",
     "lib/storage",
@@ -305,7 +304,6 @@ zksync_os_observability = { version = "=0.20.6", path = "lib/observability" }
 zksync_os_rocksdb = { version = "=0.20.6", path = "lib/rocksdb" }
 zksync_os_rpc = { version = "=0.20.6", path = "lib/rpc" }
 zksync_os_rpc_api = { version = "=0.20.6", path = "lib/rpc_api" }
-zksync_os_rpc_limits = { version = "=0.20.6", path = "lib/rpc_limits" }
 zksync_os_sequencer = { version = "=0.20.6", path = "lib/sequencer" }
 zksync_os_state = { version = "=0.20.6", path = "lib/state" }
 zksync_os_state_full_diffs = { version = "=0.20.6", path = "lib/state_full_diffs" }

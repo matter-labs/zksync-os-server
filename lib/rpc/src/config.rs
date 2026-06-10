@@ -1,9 +1,9 @@
+use crate::limits::{PerMethod, Policy};
 use alloy::primitives::Address;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
-use zksync_os_rpc_limits::{PerMethod, Policy};
 
 /// A per-method rate limit entry.
 #[derive(Clone, Debug)]

@@ -1,4 +1,4 @@
-use crate::Policy;
+use super::Policy;
 use governor::clock::{Clock, DefaultClock, QuantaInstant};
 use governor::{DefaultDirectRateLimiter, NotUntil, Quota};
 use std::collections::HashMap;
