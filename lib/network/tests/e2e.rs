@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, B256, BlockNumber, Bytes};
+use alloy::primitives::{Address, B256, B512, BlockNumber, Bytes};
 use alloy::signers::local::PrivateKeySigner;
 use assert_matches::assert_matches;
 use reth_network::test_utils::Peer;
@@ -210,7 +210,7 @@ where
                     InMemReplay(HashMap::from_iter(replays)),
                     MainNodeProtocolConfig {
                         accepted_verifier_signers: accepted_verifier_signers(),
-                        verify_result_tx: Some(verify_result_tx),
+                        verify_result_tx,
                     },
                     state,
                     connection_registry.clone(),
@@ -1268,13 +1268,8 @@ async fn en_with_verifier_syncs_from_en_server() {
         100,
         false,
     );
-    let (_from_peer1, mut replay_rx_peer1) = net.peers_mut()[1].add_zks_sub_protocol::<ZksProtocolV3>(
-        NodeRole::ExternalNode,
-        1,
-        [],
-        100,
-        true,
-    );
+    let (_from_peer1, mut replay_rx_peer1) = net.peers_mut()[1]
+        .add_zks_sub_protocol::<ZksProtocolV3>(NodeRole::ExternalNode, 1, [], 100, true);
 
     let peer0_id = net.peers()[0].peer_id();
     let peer0_addr = net.peers()[0].local_addr();
@@ -1286,4 +1281,69 @@ async fn en_with_verifier_syncs_from_en_server() {
         .expect("EN2 (with verifier) did not receive a replay record in time")
         .expect("EN2 replay channel closed");
     assert_eq!(received, record1);
+}
+
+fn add_en_with_trusted_peers<C, P>(
+    peer: &mut Peer<C>,
+    starting_block: BlockNumber,
+    trusted_peers: HashSet<PeerId>,
+) -> mpsc::Receiver<ReplayRecord>
+where
+    C: BlockReader + HeaderProvider + Clone + 'static,
+    P: ZksProtocolVersionSpec,
+{
+    let (protocol_tx, _protocol_rx) = mpsc::unbounded_channel();
+    let (replay_tx, replay_rx) = mpsc::channel(8);
+    let state = HandlerSharedState::new(protocol_tx, 100);
+    let connection_registry = Arc::new(RwLock::new(HashMap::new()));
+    let handler = ZksProtocolHandler::<P, _>::for_external_node(
+        InMemReplay(HashMap::new()),
+        ExternalNodeProtocolConfig {
+            starting_block: Arc::new(RwLock::new(starting_block)),
+            record_overrides: vec![],
+            max_blocks_per_message: 64,
+            replay_sender: replay_tx,
+            verification: None,
+            trusted_peers,
+        },
+        UpstreamGuard::new(),
+        state,
+        connection_registry,
+    );
+    peer.add_rlpx_sub_protocol(handler);
+    replay_rx
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn untrusted_peer_rejected_as_upstream() {
+    let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
+    let record1 = dummy_record::<ZksProtocolV3>(1);
+
+    let mn_peer_id = net.peers()[0].peer_id();
+    let fake_peer_id: PeerId = B512::repeat_byte(0xFF);
+    assert_ne!(fake_peer_id, mn_peer_id);
+
+    let (_from_mn, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV3>(
+        NodeRole::MainNode,
+        0,
+        [(1, record1.clone())],
+        100,
+        false,
+    );
+    let mut replay_rx = add_en_with_trusted_peers::<_, ZksProtocolV3>(
+        &mut net.peers_mut()[1],
+        1,
+        HashSet::from([fake_peer_id]),
+    );
+
+    let mn_addr = net.peers()[0].local_addr();
+    let handle = net.spawn();
+    handle.peers()[1].network().add_peer(mn_peer_id, mn_addr);
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(500), replay_rx.recv())
+            .await
+            .is_err(),
+        "EN must not accept blocks from an untrusted peer"
+    );
 }
