@@ -148,7 +148,7 @@ impl NodeProvider {
     /// optional [`ProviderCapabilities`].
     pub async fn new<P>(provider: P) -> Self
     where
-        P: Provider<Ethereum> + WalletProvider<Ethereum, Wallet = EthereumWallet> + Clone + 'static,
+        P: EthWalletProvider + 'static,
     {
         let capabilities = ProviderCapabilities::detect(&provider).await;
         Self {
@@ -171,7 +171,7 @@ impl NodeProvider {
         log_cache_capacity: usize,
     ) -> TransportResult<Self>
     where
-        P: Provider<Ethereum> + WalletProvider<Ethereum, Wallet = EthereumWallet> + Clone + 'static,
+        P: EthWalletProvider + 'static,
     {
         let capabilities = ProviderCapabilities::detect(&provider).await;
         let mut this = Self {
@@ -222,7 +222,7 @@ impl NodeProvider {
             BlockNumberOrTag::Finalized
         } else {
             BlockNumberOrTag::Latest
-        }
+        };
         self.finalized_header_poller
             .get_or_init(|| async {
                 self.build_header_poller(finalized, self.finalized_poll_interval)
