@@ -13,13 +13,14 @@ use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL, ReceiptAssert};
 use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
+use zksync_os_integration_tests::test_config::make_commit_only_config;
 use zksync_os_integration_tests::wallets::load_operator_private_key;
 use zksync_os_integration_tests::{
     CURRENT_TO_L1, StoppedTester, TestEnvironment, Tester, test_multisetup,
 };
 use zksync_os_l1_watcher::fetch_batch;
 use zksync_os_operator_signer::SignerConfig;
-use zksync_os_server::config::{Config, RebuildBounds, RebuildConfig};
+use zksync_os_server::config::{RebuildBounds, RebuildConfig};
 
 const BLOCKS_TO_MINE_BEFORE_REBUILD: u64 = 10;
 const BLOCKS_FROM_TIP_TO_EMPTY: u64 = 4;
@@ -46,6 +47,56 @@ async fn fetch_on_chain_batch_hash(tester: &Tester, batch_number: u64) -> anyhow
     )
     .await?;
     Ok(batch.batch_info.hash())
+}
+
+/// Returns the `(first_block, last_block)` range of a committed batch on L1.
+async fn fetch_committed_batch_range(
+    tester: &Tester,
+    batch_number: u64,
+) -> anyhow::Result<(u64, u64)> {
+    let l1_state = fetch_l1_state(tester).await?;
+    let batch = fetch_batch(
+        &l1_state.diamond_proxy_sl,
+        batch_number,
+        tester.config().l1_watcher_config.max_blocks_to_process,
+    )
+    .await?;
+    Ok((batch.first_block_number(), batch.last_block_number()))
+}
+
+/// Sends throwaway L2 transactions on `tester` until `predicate` holds for the L1 state, polling
+/// after each send. Used to drive enough blocks/batches onto L1 for the revert scenarios.
+///
+/// Transactions are sent at a deliberately relaxed cadence: batches seal on the (short) batch
+/// timeout, so a slow drip is enough to advance them while keeping the block count — and therefore
+/// the per-block Prover Input Generation cost — low.
+async fn mine_until_l1_state(
+    tester: &Tester,
+    description: &str,
+    predicate: impl Fn(&L1State) -> bool,
+) -> anyhow::Result<L1State> {
+    const MINE_SEND_INTERVAL: Duration = Duration::from_millis(500);
+    let max_times = DEFAULT_TIMEOUT.div_duration_f64(MINE_SEND_INTERVAL).floor() as u64;
+    for _ in 0..max_times {
+        let state = fetch_l1_state(tester).await?;
+        if predicate(&state) {
+            return Ok(state);
+        }
+        tester
+            .l2_provider
+            .send_transaction(
+                TransactionRequest::default()
+                    .with_to(Address::random())
+                    .with_value(U256::from(1u64)),
+            )
+            .await?
+            .expect_successful_receipt()
+            .await?;
+        tokio::time::sleep(MINE_SEND_INTERVAL).await;
+    }
+    Err(anyhow::anyhow!(
+        "timed out mining for L1 state: {description}"
+    ))
 }
 
 fn make_reverter_config(stopped: &StoppedTester) -> anyhow::Result<SignerConfig> {
@@ -82,13 +133,6 @@ async fn wait_for_l1_state(
             .with_max_times(max_times),
     )
     .await
-}
-
-fn make_commit_only_config(config: &mut Config) {
-    config.prover_api_config.fake_fri_provers.enabled = true;
-    config.prover_api_config.fake_fri_provers.compute_time = Duration::from_millis(200);
-    config.prover_api_config.fake_fri_provers.min_age = Duration::ZERO;
-    config.prover_api_config.fake_snark_provers.enabled = false;
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
@@ -529,17 +573,8 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
         .hash;
 
     let stopped = tester.stop().await?;
+    let reverter_signer = make_reverter_config(&stopped)?;
     let mut restart_config = stopped.config().clone();
-    let chain_id = restart_config
-        .genesis_config
-        .chain_id
-        .expect("chain_id must be set");
-    let operator_sk = load_operator_private_key(stopped.chain_layout(), chain_id)?;
-    let reverter_sk = Some(SignerConfig::Local(
-        PrivateKeySigner::from_str(&operator_sk)?
-            .credential()
-            .clone(),
-    ));
     restart_config.sequencer_config.rebuild = Some(RebuildConfig::DangerBlockRebuildWithL1Revert {
         bounds: RebuildBounds {
             from_block: 1,
@@ -547,7 +582,7 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
             blocks_to_empty: vec![],
             reset_timestamps: false,
         },
-        l1_reverter_sk: reverter_sk.unwrap(),
+        l1_reverter_sk: reverter_signer,
     });
     let restarted = stopped.start_with_config(restart_config).await?;
 
@@ -701,12 +736,13 @@ async fn danger_block_rebuild_with_l1_revert_hash_guard_prevents_double_revert(
     Ok(())
 }
 
-/// Verifies that `revert_l1_commits` reverts committed L1 batches without touching local blocks.
+/// Verifies that `rebuild.mode = l1_revert` reverts committed L1 batches without touching local
+/// blocks.
 ///
 /// Scenario:
 ///   1. Start a node with the batcher and wait for a batch to be committed on L1.
 ///   2. Snapshot the local tip block hash.
-///   3. Restart with `revert_l1_commits.from_batch_number = 1` (revert batch 1 and above).
+///   3. Restart with `rebuild.mode = l1_revert`, `from_batch = 1` (revert batch 1 and above).
 ///   4. Assert the tip block hash is unchanged (local blocks not rebuilt).
 ///   5. Assert the node is alive and accepting new L2 transactions.
 #[test_multisetup([CURRENT_TO_L1])]
@@ -783,24 +819,24 @@ async fn revert_l1_commits_without_rebuild_leaves_local_blocks_intact(
         .hash;
     assert_eq!(
         tip_hash_after, original_tip_hash,
-        "local blocks must not change after revert_l1_commits"
+        "local blocks must not change after l1_revert"
     );
 
     Ok(())
 }
 
-/// Verifies that restarting twice with `revert_l1_commits` is idempotent: the second startup
-/// skips the revert gracefully rather than panicking.
+/// Verifies that restarting twice with `rebuild.mode = l1_revert` is idempotent: the second
+/// startup skips the revert gracefully rather than panicking.
 ///
 /// Before this change the startup path had an `assert!` that fired when
-/// `last_committed_batch < from_batch_number`, causing a crash-loop on every pod restart
+/// `last_committed_batch < from_batch`, causing a crash-loop on every pod restart
 /// after a successful revert (if no new batches had been committed in the meantime).
 ///
 /// Scenario:
 ///   1. Commit a batch on L1.
-///   2. First restart: `revert_l1_commits.from_batch_number = 1`, batcher disabled so nothing
+///   2. First restart: `rebuild.mode = l1_revert`, `from_batch = 1`, batcher disabled so nothing
 ///      re-commits; `last_committed_batch` drops to 0.
-///   3. Second restart: same config; `last_committed_batch (0) < from_batch_number (1)` → graceful skip.
+///   3. Second restart: same config; `last_committed_batch (0) < from_batch (1)` → graceful skip.
 ///   4. Assert the node starts cleanly and processes new L2 transactions.
 #[test_multisetup([CURRENT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
@@ -854,7 +890,7 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
     })
     .await?;
 
-    // Second restart: last_committed_batch (0) < from_batch_number (1) → graceful skip, no panic.
+    // Second restart: last_committed_batch (0) < from_batch (1) → graceful skip, no panic.
     let stopped2 = first_reverted.stop().await?;
     let second = stopped2.start_with_config(revert_config).await?;
 
@@ -869,6 +905,136 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
         .await?
         .expect_successful_receipt()
         .await?;
+
+    Ok(())
+}
+
+/// Verifies `danger_block_rebuild_with_l1_revert` when `from_block` lies in a committed batch that
+/// is **not** the last committed batch.
+///
+/// The `from_block = 1` tests always resolve to batch 1 in a single scan step, so they never
+/// exercise `derive_last_l1_batch_to_keep`'s scan loop (skipping higher committed batches and
+/// decrementing). This test commits at least three batches and points `from_block` into batch 2,
+/// forcing the scan to skip every batch above 2 before deciding to keep batch 1 and revert batch 2
+/// and above. When batch 2 happens to span multiple blocks, `from_block` is placed strictly inside
+/// it, additionally covering mid-batch acceptance.
+///
+/// Scenario:
+///   1. Start a node with the batcher and a short batch timeout so several batches commit.
+///   2. Mine until `last_committed_batch >= 3` (still unexecuted) — guarantees batch 2 is a
+///      non-last committed batch with batch 1 below it to keep and batches above it to skip.
+///   3. Point `from_block` into batch 2 (strictly inside it if it spans >1 block). Snapshot the
+///      on-chain hash of batch 1 (must survive) and a local block hash below `from_block`.
+///   4. Restart with `danger_block_rebuild_with_l1_revert` from that `from_block`.
+///   5. Assert: the node started (no panic — the startup `from_block > last_l1_committed_block`
+///      assertion only holds if the revert kept exactly batch 1), batch 1's on-chain hash is
+///      unchanged, the local block below `from_block` is unchanged, the node accepts new L2
+///      transactions, and it re-commits up to at least the reverted batch.
+#[test_multisetup([CURRENT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
+    env: TestEnvironment,
+) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    make_commit_only_config(&mut config);
+    let tester = env.launch(config).await?;
+
+    // Drive at least three committed (still unexecuted) batches onto L1 so batch 2 is a non-last
+    // committed batch (batch 1 below to keep, batches >= 3 above to skip during the scan).
+    mine_until_l1_state(
+        &tester,
+        "at least three committed but unexecuted batches",
+        |state| state.last_committed_batch >= 3 && state.last_executed_batch == 0,
+    )
+    .await?;
+
+    // Target batch 2: a non-last committed batch. Place `from_block` strictly inside it when it
+    // spans multiple blocks, otherwise at its single block — either way it resolves to batch 2.
+    let containing_batch = 2;
+    let (first_block, last_block) = fetch_committed_batch_range(&tester, containing_batch).await?;
+    let from_block = if last_block > first_block {
+        first_block + 1
+    } else {
+        first_block
+    };
+    // Batch 1 is the deepest batch that must survive the revert.
+    let survivor_batch = containing_batch - 1;
+
+    let from_block_hash = tester
+        .l2_provider
+        .get_block_by_number(from_block.into())
+        .await?
+        .context("from_block should exist")?
+        .header
+        .hash;
+    // A local block strictly below `from_block` — must be untouched by the rebuild.
+    let below_block = from_block - 1;
+    let below_block_hash = tester
+        .l2_provider
+        .get_block_by_number(below_block.into())
+        .await?
+        .context("block below from_block should exist")?
+        .header
+        .hash;
+    // On-chain hash of the surviving batch — must be unchanged after the revert+rebuild, proving
+    // the revert kept everything up to and including `survivor_batch`.
+    let survivor_hash_before = fetch_on_chain_batch_hash(&tester, survivor_batch).await?;
+
+    let stopped = tester.stop().await?;
+    let reverter_signer = make_reverter_config(&stopped)?;
+    let mut restart_config = stopped.config().clone();
+    restart_config.sequencer_config.rebuild = Some(RebuildConfig::DangerBlockRebuildWithL1Revert {
+        bounds: RebuildBounds {
+            from_block,
+            from_block_hash,
+            blocks_to_empty: vec![],
+            reset_timestamps: false,
+        },
+        l1_reverter_sk: reverter_signer,
+    });
+    // Startup panics if the derived revert boundary is wrong (`from_block` would not be strictly
+    // greater than `last_l1_committed_block`), so a successful start already proves the derivation.
+    let restarted = stopped.start_with_config(restart_config).await?;
+
+    // The surviving batch must be byte-for-byte identical: it was never reverted.
+    let survivor_hash_after = fetch_on_chain_batch_hash(&restarted, survivor_batch).await?;
+    assert_eq!(
+        survivor_hash_after, survivor_hash_before,
+        "batch {survivor_batch} below the containing batch must survive the mid-batch revert unchanged"
+    );
+
+    // Local blocks below `from_block` must be untouched by the rebuild.
+    let below_block_hash_after = restarted
+        .l2_provider
+        .get_block_by_number(below_block.into())
+        .await?
+        .context("block below from_block should still exist after rebuild")?
+        .header
+        .hash;
+    assert_eq!(
+        below_block_hash_after, below_block_hash,
+        "block {below_block} below from_block must not change during rebuild"
+    );
+
+    // Node is alive and accepting new L2 transactions after the rebuild.
+    restarted
+        .l2_provider
+        .send_transaction(
+            TransactionRequest::default()
+                .with_to(Address::random())
+                .with_value(U256::from(1u64)),
+        )
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    // The node rebuilds and re-commits at least up to the batch that was reverted.
+    wait_for_l1_state(
+        &restarted,
+        "node re-commits up to the reverted batch after mid-batch rebuild",
+        move |state| state.last_committed_batch >= containing_batch,
+    )
+    .await?;
 
     Ok(())
 }

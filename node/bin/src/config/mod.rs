@@ -2,7 +2,7 @@ pub use self::cli::ConfigArgs;
 pub(crate) use self::metrics::report_static_config_metrics;
 use self::util::{SecretKeyDeserializer, SignerConfigDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
-use alloy::primitives::{Address, BlockHash, Bytes, U128};
+use alloy::primitives::{Address, B256, BlockHash, Bytes, U128};
 use num::{BigInt, BigUint, rational::Ratio};
 use reth_net_nat::net_if::resolve_net_if_ip;
 use reth_network_peers::TrustedPeer;
@@ -825,7 +825,7 @@ pub enum RebuildConfig {
         /// The revert is skipped if the stored batch hash does not match — guards against
         /// reverting a different batch than intended.
         #[config(with = Serde![str])]
-        from_batch_hash: BlockHash,
+        from_batch_hash: B256,
         /// Signer for `revertBatchesSharedBridge` transactions.
         #[config(secret, with = SignerConfigDeserializer)]
         l1_reverter_sk: SignerConfig,

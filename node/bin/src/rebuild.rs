@@ -59,7 +59,15 @@ async fn derive_last_l1_batch_to_keep(
         batch -= 1;
     }
 
-    unreachable!("scan exhausted without finding from_block ({from_block})");
+    // The scan reached `first_committed_unexecuted_batch` without any committed-only batch
+    // starting at or before `from_block`. This means `from_block` lies within (or before) an
+    // already-executed batch, which the Danger-mode fail-fast normally rejects — but that guard
+    // is skipped when the executed batch is absent from local storage, so we can land here.
+    anyhow::bail!(
+        "from_block ({from_block}) is at or before the first committed-only batch \
+         ({first_committed_unexecuted_batch}); it lies within an executed (finalized) batch \
+         and cannot be reverted"
+    );
 }
 
 /// Calls `revertBatchesSharedBridge` on the validator timelock to roll back all committed batches
@@ -88,7 +96,7 @@ async fn perform_l1_revert(
     let reverter_address = reverter_sk
         .register_with_wallet(sl_provider.wallet_mut())
         .await
-        .context("failed to initialize `l1_sender.reverter_sk`")?;
+        .context("failed to initialize `sequencer.rebuild.l1_reverter_sk`")?;
 
     let validator_timelock = IValidatorTimelock::new(l1_state.validator_timelock_sl, sl_provider);
     let reverter_role = validator_timelock.REVERTER_ROLE().call().await?;
@@ -98,7 +106,7 @@ async fn perform_l1_revert(
         .await?;
     anyhow::ensure!(
         has_reverter_role,
-        "`l1_sender.reverter_sk` address {reverter_address} does not have REVERTER_ROLE for chain {chain_id}"
+        "`sequencer.rebuild.l1_reverter_sk` address {reverter_address} does not have REVERTER_ROLE for chain {chain_id}"
     );
 
     tracing::warn!(
@@ -145,6 +153,45 @@ async fn perform_l1_revert(
     Ok(())
 }
 
+/// Checks whether block `from_block` currently has the expected `from_block_hash`.
+///
+/// Returns `false` (operation should be skipped) when the hashes differ — distinguishing the two
+/// reasons in the logs:
+/// - block missing locally: likely a misconfigured `from_block` (typo / beyond local tip);
+/// - hash changed: the rebuild/revert already ran on a previous startup (the expected case).
+fn from_block_hash_matches(
+    repositories: &dyn ReadRepository,
+    from_block: u64,
+    from_block_hash: alloy::primitives::BlockHash,
+) -> bool {
+    let current_hash = repositories
+        .get_block_by_number(from_block)
+        .ok()
+        .flatten()
+        .map(|b| b.hash());
+    match current_hash {
+        Some(hash) if hash == from_block_hash => true,
+        Some(hash) => {
+            tracing::info!(
+                from_block,
+                current_hash = ?hash,
+                ?from_block_hash,
+                "skipping startup rebuild/revert: from_block_hash changed (already ran)"
+            );
+            false
+        }
+        None => {
+            tracing::warn!(
+                from_block,
+                ?from_block_hash,
+                "skipping startup rebuild/revert: block `from_block` not found locally \
+                 (check `from_block` is correct — it may be a typo or beyond the local tip)"
+            );
+            false
+        }
+    }
+}
+
 /// Handles the startup rebuild/revert config and performs L1 revert.
 ///
 /// Returns `true` if an L1 revert was performed and the caller should refresh `L1State`.
@@ -152,7 +199,7 @@ async fn perform_l1_revert(
 ///
 /// May clear `config.sequencer_config.rebuild` when the hash guard fails — this suppresses the
 /// rebuild on subsequent restarts after the operation already ran.
-pub async fn l1_revert(
+pub async fn handle_startup_rebuild(
     config: &mut Config,
     repositories: &dyn ReadRepository,
     l1_state: &L1State,
@@ -171,18 +218,7 @@ pub async fn l1_revert(
 
     match rebuild {
         RebuildConfig::BlockRebuild { bounds } => {
-            let current_hash = repositories
-                .get_block_by_number(bounds.from_block)
-                .ok()
-                .flatten()
-                .map(|b| b.hash());
-            if current_hash != Some(bounds.from_block_hash) {
-                tracing::info!(
-                    from_block = bounds.from_block,
-                    ?current_hash,
-                    from_block_hash = ?bounds.from_block_hash,
-                    "skipping block rebuild: from_block_hash mismatch (already rebuilt)"
-                );
+            if !from_block_hash_matches(repositories, bounds.from_block, bounds.from_block_hash) {
                 config.sequencer_config.rebuild = None;
             }
             // No L1 revert for this mode.
@@ -193,18 +229,7 @@ pub async fn l1_revert(
             bounds,
             l1_reverter_sk,
         } => {
-            let current_hash = repositories
-                .get_block_by_number(bounds.from_block)
-                .ok()
-                .flatten()
-                .map(|b| b.hash());
-            if current_hash != Some(bounds.from_block_hash) {
-                tracing::info!(
-                    from_block = bounds.from_block,
-                    ?current_hash,
-                    from_block_hash = ?bounds.from_block_hash,
-                    "skipping rebuild+L1 revert: from_block_hash mismatch (already ran)"
-                );
+            if !from_block_hash_matches(repositories, bounds.from_block, bounds.from_block_hash) {
                 config.sequencer_config.rebuild = None;
                 return Ok(false);
             }
@@ -261,9 +286,11 @@ pub async fn l1_revert(
             from_batch_hash,
             l1_reverter_sk,
         } => {
-            let last_l1_batch_to_keep = from_batch
-                .checked_sub(1)
-                .expect("l1_revert.from_batch must be >= 1");
+            anyhow::ensure!(
+                from_batch >= 1,
+                "`l1_revert.from_batch` must be >= 1 (batch 0 is genesis and cannot be reverted)"
+            );
+            let last_l1_batch_to_keep = from_batch - 1;
 
             if l1_state.last_committed_batch < from_batch {
                 tracing::info!(
@@ -273,6 +300,13 @@ pub async fn l1_revert(
                 );
                 return Ok(false);
             }
+
+            anyhow::ensure!(
+                from_batch > l1_state.last_executed_batch,
+                "`l1_revert.from_batch` ({from_batch}) is at or before the last executed batch \
+                 ({}); executed batches are finalized on L1 and cannot be reverted",
+                l1_state.last_executed_batch,
+            );
 
             let on_chain_hash = fetch_batch(&l1_state.diamond_proxy_sl, from_batch, max_blocks)
                 .await

@@ -42,7 +42,7 @@ use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_api::snark_proving_pipeline_step::SnarkProvingPipelineStep;
 use crate::prover_input_generator::ProverInputGenerator;
 use crate::provider::{ProviderKind, build_node_provider};
-use crate::rebuild::l1_revert;
+use crate::rebuild::handle_startup_rebuild;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
@@ -267,7 +267,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
 
     if node_role.is_main() && config.sequencer_config.rebuild.is_some() {
-        let revert_ran = l1_revert(
+        let l1_revert_ran = handle_startup_rebuild(
             &mut config,
             &repositories,
             &l1_state,
@@ -277,7 +277,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .await
         .expect("startup l1 revert failed");
 
-        if revert_ran {
+        if l1_revert_ran {
             l1_state = L1State::fetch_with_finality(
                 config.batcher_config.enabled,
                 l1_provider.clone(),
