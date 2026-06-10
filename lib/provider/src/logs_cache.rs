@@ -1,5 +1,5 @@
 use crate::EthWalletProvider;
-use crate::metrics::{LogCacheLabels, METRICS};
+use crate::metrics::{LogsCacheLabels, METRICS};
 use alloy::eips::BlockNumberOrTag;
 use alloy::network::{Ethereum, Network};
 use alloy::primitives::{B256, Bloom};
@@ -166,7 +166,7 @@ impl RecentLogs {
 pub struct LogsCache {
     provider: Box<dyn EthWalletProvider + 'static>,
     latest_blocks: watch::Receiver<<Ethereum as Network>::HeaderResponse>,
-    chain_id: u64,
+    metric_labels: LogsCacheLabels,
     recent: Arc<RwLock<RecentLogs>>,
 }
 
@@ -180,7 +180,7 @@ impl LogsCache {
         Self {
             provider,
             latest_blocks,
-            chain_id,
+            metric_labels: LogsCacheLabels(chain_id),
             recent: Arc::new(RwLock::new(RecentLogs::new(capacity))),
         }
     }
@@ -195,7 +195,7 @@ impl LogsCache {
             let mut recent = self.recent.write().await;
             let capacity = recent.capacity;
             *recent = RecentLogs::new(capacity);
-            METRICS[&LogCacheLabels(self.chain_id)].approx_memory.set(0);
+            METRICS[&self.metric_labels].approx_memory.set(0);
         }
 
         let cached_logs = if let (Some(from_block), Some(to_block)) = filter.extract_block_range() {
@@ -213,10 +213,10 @@ impl LogsCache {
         };
 
         if let Some(cached_logs) = cached_logs {
-            METRICS[&LogCacheLabels(self.chain_id)].hits.inc();
+            METRICS[&self.metric_labels].hits.inc();
             Ok(cached_logs)
         } else {
-            METRICS[&LogCacheLabels(self.chain_id)].fallbacks.inc();
+            METRICS[&self.metric_labels].fallbacks.inc();
             self.provider.get_logs(filter).await
         }
     }
@@ -299,8 +299,8 @@ impl LogsCache {
             }
 
             recent.push_head(block_number, header.hash, logs)?;
-            METRICS[&LogCacheLabels(self.chain_id)].blocks_loaded.inc();
-            METRICS[&LogCacheLabels(self.chain_id)]
+            METRICS[&self.metric_labels].blocks_loaded.inc();
+            METRICS[&self.metric_labels]
                 .approx_memory
                 .set(recent.approx_bytes);
             Ok(())
