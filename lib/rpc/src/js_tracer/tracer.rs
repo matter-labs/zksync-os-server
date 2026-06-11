@@ -1110,6 +1110,10 @@ mod tests {
         let tracer = JsTracer {
             ctx: BoaContext::default(),
             tracer_config: JsonValue::Null,
+            invokers: HashMap::new(),
+            limits: JsTracerLimits::default(),
+            started_at: Instant::now(),
+            mem_baseline: None,
             storage_overlay: OverlayState::<(Address, B256), B256>::new(),
             code_overlay: OverlayState::<Address, Option<Vec<u8>>>::new(),
             balance_overlay: OverlayState::<Address, BalanceDelta>::new(),
