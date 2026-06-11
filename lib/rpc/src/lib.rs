@@ -2,8 +2,7 @@ mod call_fees;
 
 mod config;
 
-use crate::config::rpc_limit_policy;
-pub use config::{RpcConfig, RpcRateLimit};
+pub use config::RpcConfig;
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -40,7 +39,7 @@ use crate::debug_impl::DebugNamespace;
 use crate::eth_filter::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
-use crate::limits::Limiter;
+use crate::limits::{Limiter, Limits};
 use crate::monitoring_middleware::Monitoring;
 use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
@@ -153,7 +152,12 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     let middleware = tower::ServiceBuilder::new().layer(cors);
 
     let max_response_size_bytes = config.max_response_size_bytes();
-    let limiter = Limiter::new(rpc_limit_policy(&config.rate_limits));
+    let mut methods = config.rate_limits.clone();
+    let global_rps = methods.remove("*");
+    let limiter = Limiter::new(Limits {
+        global_rps,
+        methods,
+    });
     let rpc_middleware = RpcServiceBuilder::new()
         // Monitoring is outermost so rate-limited responses still appear in error metrics.
         .layer_fn(move |service| Monitoring::new(service, max_response_size_bytes))

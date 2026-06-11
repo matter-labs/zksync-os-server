@@ -1,7 +1,5 @@
-//! Rate-limit policy and enforcement for the JSON-RPC server.
+//! Rate-limit spec and runtime enforcement for the JSON-RPC server.
 
 mod limiter;
-mod policy;
 
-pub(crate) use limiter::Limiter;
-pub(crate) use policy::{PerMethod, Policy};
+pub(crate) use limiter::{Limiter, Limits};

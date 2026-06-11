@@ -1,27 +1,7 @@
-use crate::limits::{PerMethod, Policy};
 use alloy::primitives::Address;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
-use std::sync::Arc;
 use std::time::Duration;
-
-/// A per-method rate limit entry.
-#[derive(Clone, Debug)]
-pub struct RpcRateLimit {
-    /// Exact RPC method name, e.g. `"eth_call"`.
-    pub method: String,
-    /// Maximum number of requests per second across all callers combined.
-    pub requests_per_second: NonZeroU32,
-}
-
-impl From<(String, NonZeroU32)> for RpcRateLimit {
-    fn from((method, requests_per_second): (String, NonZeroU32)) -> Self {
-        Self {
-            method,
-            requests_per_second,
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct RpcConfig {
@@ -69,9 +49,9 @@ pub struct RpcConfig {
     /// because pubdata price increase in-between estimation and sequencing.
     pub estimate_gas_pubdata_price_factor: f64,
 
-    /// Per-method rate limits.  Use `"*"` as the method name for a global limit applied before
-    /// per-method limits.  Empty means no rate limiting.
-    pub rate_limits: Vec<RpcRateLimit>,
+    /// Per-method rate limits. Use `"*"` as the method name for a global limit applied before
+    /// per-method limits. Empty means no rate limiting.
+    pub rate_limits: HashMap<String, NonZeroU32>,
 }
 
 impl RpcConfig {
@@ -84,17 +64,4 @@ impl RpcConfig {
     pub fn max_response_size_bytes(&self) -> u32 {
         self.max_response_size.saturating_mul(1024 * 1024)
     }
-}
-
-pub fn rpc_limit_policy(rate_limits: &[RpcRateLimit]) -> Arc<dyn Policy> {
-    let mut global = None;
-    let mut per_method = HashMap::new();
-    for limit in rate_limits {
-        if limit.method == "*" {
-            global = Some(limit.requests_per_second);
-        } else {
-            per_method.insert(limit.method.clone(), limit.requests_per_second);
-        }
-    }
-    Arc::new(PerMethod::new(global, per_method))
 }
