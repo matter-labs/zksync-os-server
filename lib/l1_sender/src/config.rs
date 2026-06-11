@@ -2,6 +2,14 @@ use std::marker::PhantomData;
 use std::time::Duration;
 use zksync_os_operator_signer::SignerConfig;
 
+/// Default number of confirmations required for transactions settled directly on L1.
+pub const DEFAULT_REQUIRED_CONFIRMATIONS_L1: u64 = 3;
+/// Default number of confirmations required for transactions settled on a Gateway.
+///
+/// In case there's only one chain connected to gateway, it is very likely that there will be not
+/// enough block production to reach 3 confirmations for such transactions.
+pub const DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
+
 /// Configuration of L1 sender.
 #[derive(Clone, Debug)]
 pub struct L1SenderConfig<Input> {
@@ -24,6 +32,13 @@ pub struct L1SenderConfig<Input> {
 
     /// Maximum time to wait for a transaction to be included on L1.
     pub transaction_timeout: Duration,
+
+    /// Number of confirmations (settlement-layer blocks, inclusive of the inclusion block) a
+    /// transaction must accumulate before it is treated as confirmed.
+    ///
+    /// Defaults differ by settlement layer: [`DEFAULT_REQUIRED_CONFIRMATIONS_L1`] for L1 and
+    /// [`DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY`] for Gateway.
+    pub required_confirmations: u64,
 
     /// Use Fusaka blob transaction format if the timestamp has passed.
     pub fusaka_upgrade_timestamp: u64,

@@ -24,6 +24,9 @@ use zksync_os_config_validation_macros::ConfigValidate;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
+use zksync_os_l1_sender::config::{
+    DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY, DEFAULT_REQUIRED_CONFIRMATIONS_L1,
+};
 use zksync_os_mempool::SubPoolLimit;
 use zksync_os_network::{NodeRecord, PeerId, SecretKey};
 use zksync_os_observability::LogFormat;
@@ -1071,6 +1074,11 @@ pub struct L1SenderConfig {
     #[config(default_t = 600 * TimeUnit::Seconds)]
     pub transaction_timeout: Duration,
 
+    /// Number of confirmations (L1 blocks, inclusive of the inclusion block) a transaction must
+    /// accumulate before it is treated as confirmed.
+    #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_L1)]
+    pub required_confirmations: u64,
+
     /// Use Fusaka blob transaction format if the timestamp has passed.
     ///
     /// Defaults to `2^64-1` which is practically never. This is needed for local setup as anvil
@@ -1182,6 +1190,11 @@ pub struct GatewaySenderConfig {
     /// Maximum time to wait for a Gateway transaction to be included.
     #[config(default_t = 600 * TimeUnit::Seconds)]
     pub transaction_timeout: Duration,
+
+    /// Number of confirmations (Gateway blocks, inclusive of the inclusion block) a transaction
+    /// must accumulate before it is treated as confirmed.
+    #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY)]
+    pub required_confirmations: u64,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1944,6 +1957,7 @@ impl L1SenderConfig {
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
+            required_confirmations: self.required_confirmations,
             fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
             phantom_data: Default::default(),
         }
@@ -2002,6 +2016,7 @@ impl GatewaySenderConfig {
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
+            required_confirmations: self.required_confirmations,
             // Gateway transactions never carry blobs, so the EIP-7594 cutover does not apply.
             fusaka_upgrade_timestamp: u64::MAX,
             phantom_data: Default::default(),
@@ -2395,6 +2410,7 @@ mod tests {
                 command_limit: 16,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
+                required_confirmations: DEFAULT_REQUIRED_CONFIRMATIONS_L1,
                 fusaka_upgrade_timestamp: u64::MAX,
                 enabled: true,
                 pubdata_mode: Some(PubdataMode::Blobs),
