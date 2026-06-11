@@ -123,7 +123,6 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
         tracing::info!(?role, "Consensus role initialized");
 
         loop {
-            let gate_open = self.pipeline_gate.is_open();
             // Drain any already-queued canonized replays while the gate is open.
             for _ in 0..Self::MAX_REPLAYS_TO_DRAIN_PER_LOOP {
                 if !self.pipeline_gate.is_open() {
@@ -143,6 +142,11 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                 }
             }
 
+            // Read the gate after draining so the select guards below see the
+            // post-drain state. The gate may still flip while we are parked in
+            // select! with the recv/produce arms enabled; that bounded one-block
+            // overshoot is acceptable for soft backpressure.
+            let gate_open = self.pipeline_gate.is_open();
             let can_produce = role == ConsensusRole::Leader && gate_open;
 
             tokio::select! {
@@ -240,6 +244,7 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
             "Starting block rebuilds! {rebuild_options:?}, last_block_in_wal: {last_block_in_wal}"
         );
         for block_number in rebuild_options.from_block..=last_block_in_wal {
+            self.pipeline_gate.wait_until_open().await;
             let replay_record = self
                 .block_replay_storage
                 .get_replay_record(block_number)
@@ -257,7 +262,6 @@ impl<Replay: ReadReplay> ConsensusNodeCommandSource<Replay> {
                 make_empty,
                 reset_timestamp: rebuild_options.reset_timestamps,
             }));
-            self.pipeline_gate.wait_until_open().await;
             if output.send(command).await.is_err() {
                 tracing::info!("Command output channel closed, stopping source");
                 break;
