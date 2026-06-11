@@ -5,22 +5,25 @@ use alloy::signers::local::PrivateKeySigner;
 use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc, watch};
-use zksync_os_batch_types::{BatchSignature, ExtendedCommitBatchInfo};
+use zksync_os_batch_types::BatchSignature;
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
-use zksync_os_l1_consistency_checker::{TreeBlockCache, TreeBlockCacheReceiverExt};
+use zksync_os_l1_consistency_checker::BatchReplayer;
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
 };
+use zksync_os_storage_api::{ReadReplay, ReadStateHistory};
 
 mod metrics;
 
 /// Batch verification responder that consumes requests from the network.
-pub struct BatchVerificationResponder {
-    chain_id: u64,
+pub struct BatchVerificationResponder<State, Replays> {
     diamond_proxy_sl: Address,
     l1_state: L1State,
     signer: PrivateKeySigner,
-    block_cache: watch::Receiver<TreeBlockCache>,
+    replayer: BatchReplayer<State, Replays>,
+    /// Highest block processed by the local pipeline (published by the L1 consistency checker);
+    /// requests are served once it passes the requested range.
+    last_processed_block: watch::Receiver<u64>,
     verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
 }
@@ -29,18 +32,21 @@ pub struct BatchVerificationResponder {
 enum BatchVerificationError {
     #[error("Missing records for block {0}")]
     MissingBlock(u64),
+    #[error("Failed to rebuild batch locally: {0:#}")]
+    Rebuild(anyhow::Error),
     #[error("Batch data mismatch")]
     BatchDataMismatch,
 }
 
-impl BatchVerificationResponder {
-    #[allow(clippy::too_many_arguments)]
+impl<State: ReadStateHistory + Clone, Replays: ReadReplay + Clone>
+    BatchVerificationResponder<State, Replays>
+{
     pub fn new(
-        chain_id: u64,
         diamond_proxy_sl: Address,
         private_key: SecretString,
         l1_state: L1State,
-        block_cache: watch::Receiver<TreeBlockCache>,
+        replayer: BatchReplayer<State, Replays>,
+        last_processed_block: watch::Receiver<u64>,
         verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
         outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
     ) -> Self {
@@ -56,11 +62,11 @@ impl BatchVerificationResponder {
         }
 
         Self {
-            chain_id,
             diamond_proxy_sl,
             l1_state,
             signer,
-            block_cache,
+            replayer,
+            last_processed_block,
             verify_request_rx,
             outgoing_verify_results,
         }
@@ -78,40 +84,32 @@ impl BatchVerificationResponder {
             request.last_block_number,
         );
 
-        let blocks = self
-            .block_cache
-            .wait_for_range(request.first_block_number..=request.last_block_number)
+        // Wait until the local pipeline has processed the requested range; everything needed to
+        // rebuild the batch is then available in storage.
+        self.last_processed_block
+            .clone()
+            .wait_for(|&block| block >= request.last_block_number)
             .await
-            .map_err(|err| {
-                tracing::warn!(
-                    "failed to load local batch data for verification request {} for batch #{}: {err}",
-                    request.request_id,
-                    request.batch_number
-                );
-                BatchVerificationError::MissingBlock(request.first_block_number)
-            })?;
+            .map_err(|_| BatchVerificationError::MissingBlock(request.last_block_number))?;
 
-        let last_block = blocks.last().unwrap();
-
-        let (batch_info, _) = ExtendedCommitBatchInfo::build(
-            blocks
-                .iter()
-                .map(|block| {
-                    (
-                        &block.output,
-                        block.record.transactions.as_slice(),
-                        &block.tree_output,
-                    )
-                })
-                .collect(),
-            self.chain_id,
-            request.batch_number,
-            request.pubdata_mode,
-            self.l1_state.sl_chain_id,
-            last_block.multichain_root,
-            &blocks.first().unwrap().record.protocol_version,
-            &last_block.record.block_context.block_hashes.0,
-        );
+        let replayer = self.replayer.clone();
+        let range = request.first_block_number..=request.last_block_number;
+        let (batch_number, pubdata_mode) = (request.batch_number, request.pubdata_mode);
+        // Rebuilding re-executes every block of the batch in the VM; keep that off the async
+        // runtime.
+        let batch_info = tokio::task::spawn_blocking(move || {
+            replayer.build_batch_info(range, batch_number, pubdata_mode)
+        })
+        .await
+        .map_err(|err| BatchVerificationError::Rebuild(err.into()))?
+        .map_err(|err| {
+            tracing::warn!(
+                "failed to rebuild local batch data for verification request {} for batch #{}: {err:#}",
+                request.request_id,
+                request.batch_number
+            );
+            BatchVerificationError::Rebuild(err)
+        })?;
 
         let expected_commit_data = normalized_commit_data(
             batch_info.commit_info.clone(),
@@ -127,7 +125,7 @@ impl BatchVerificationResponder {
             self.diamond_proxy_sl,
             self.l1_state.sl_chain_id,
             self.l1_state.validator_timelock_sl,
-            &blocks.first().unwrap().record.protocol_version,
+            &batch_info.protocol_version,
             &self.signer,
         )
         .await;

@@ -29,17 +29,18 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
     let last_block_hash = blocks.last().unwrap().0.header.hash();
     let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
-    let (_, last_replay_record, _, _) = blocks.last().unwrap();
+    let (_, last_replay_record, last_block_tree, _) = blocks.last().unwrap();
 
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
     let (batch_info, blob_sidecar) = ExtendedCommitBatchInfo::build(
         blocks
             .iter()
-            .map(|(block_output, replay_record, tree, _)| {
-                (block_output, replay_record.transactions.as_slice(), tree)
+            .map(|(block_output, replay_record, _, _)| {
+                (block_output, replay_record.transactions.as_slice())
             })
             .collect(),
+        last_block_tree,
         chain_id,
         batch_number,
         pubdata_mode,

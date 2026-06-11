@@ -1,5 +1,5 @@
-mod cache;
 mod checker;
+mod replayer;
 
-pub use cache::{LocalBatchBlockData, TreeBlockCache, TreeBlockCacheReceiverExt};
 pub use checker::{L1CommittedBatch, L1ConsistencyChecker};
+pub use replayer::BatchReplayer;

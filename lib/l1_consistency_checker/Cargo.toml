@@ -15,11 +15,12 @@ zksync_os_observability.workspace = true
 zksync_os_pipeline.workspace = true
 zksync_os_types.workspace = true
 zksync_os_batch_types.workspace = true
-zksync_os_merkle_tree_api.workspace = true
+zksync_os_interface.workspace = true
+zksync_os_merkle_tree.workspace = true
+zksync_os_multivm.workspace = true
+zksync_os_storage_api.workspace = true
 
 anyhow.workspace = true
-alloy.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-zksync_os_storage_api.workspace = true

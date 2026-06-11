@@ -32,7 +32,8 @@ pub struct ExtendedCommitBatchInfo {
 impl ExtendedCommitBatchInfo {
     #[allow(clippy::too_many_arguments)]
     pub fn build(
-        blocks: Vec<(&BlockOutput, &[ZkTransaction], &TreeBatchOutput)>,
+        blocks: Vec<(&BlockOutput, &[ZkTransaction])>,
+        last_block_tree: &TreeBatchOutput,
         chain_id: u64,
         batch_number: u64,
         pubdata_mode: PubdataMode,
@@ -47,14 +48,14 @@ impl ExtendedCommitBatchInfo {
         let mut total_pubdata = vec![];
         let mut encoded_l2_l1_logs = vec![];
 
-        let (first_block_output, _, _) = *blocks.first().unwrap();
-        let (last_block_output, _, last_block_tree) = *blocks.last().unwrap();
+        let (first_block_output, _) = *blocks.first().unwrap();
+        let (last_block_output, _) = *blocks.last().unwrap();
 
         let mut upgrade_tx_hash = None;
 
         let mut dependency_roots_rolling_hash = B256::ZERO;
 
-        for (block_output, transactions, _) in blocks {
+        for (block_output, transactions) in blocks {
             total_pubdata.extend(block_output.pubdata.clone());
 
             for tx in transactions {

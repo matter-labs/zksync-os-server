@@ -68,7 +68,7 @@ use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
-use zksync_os_l1_consistency_checker::{L1CommittedBatch, L1ConsistencyChecker, TreeBlockCache};
+use zksync_os_l1_consistency_checker::{BatchReplayer, L1CommittedBatch, L1ConsistencyChecker};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -975,7 +975,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
         tree_for_rpc,
     );
-    let (local_batch_data_cache, _) = watch::channel(TreeBlockCache::new());
     let (l1_consistency_event_tx, l1_consistency_event_rx) =
         tokio::sync::mpsc::channel::<L1CommittedBatch>(4096);
     let (latest_verified_batch_tx, latest_verified_batch_rx) =
@@ -1159,7 +1158,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             tx_acceptance_state_sender,
             chain_id,
             last_persisted_block_on_start,
-            local_batch_data_cache,
             latest_verified_batch_tx,
             l1_consistency_event_rx,
             verify_batch_rx,
@@ -1527,7 +1525,6 @@ async fn run_en_pipeline(
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
     last_persisted_block_on_start: u64,
-    local_batch_data_cache: watch::Sender<TreeBlockCache>,
     latest_verified_batch_tx: watch::Sender<u64>,
     l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1CommittedBatch>,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
@@ -1545,13 +1542,26 @@ async fn run_en_pipeline(
     let monitor =
         BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver.clone());
 
+    // Rebuilds batch data from storage for both the L1 consistency checker and the batch
+    // verification responder; the watermark tracks how far the local pipeline has progressed
+    // (i.e. which blocks are rebuildable).
+    let batch_replayer = BatchReplayer::new(
+        chain_id,
+        node_state_on_startup.l1_state.sl_chain_id,
+        state.clone(),
+        block_replay_storage.clone(),
+        tree.clone(),
+    );
+    let (last_processed_block_tx, last_processed_block_rx) =
+        watch::channel(last_persisted_block_on_start);
+
     if config.batch_verification_config.client_enabled {
         let responder = BatchVerificationResponder::new(
-            chain_id,
             node_state_on_startup.l1_state.diamond_proxy_address_sl(),
             config.batch_verification_config.signing_key.clone(),
             node_state_on_startup.l1_state.clone(),
-            local_batch_data_cache.subscribe(),
+            batch_replayer.clone(),
+            last_processed_block_rx,
             verify_batch_rx,
             outgoing_verify_results,
         );
@@ -1606,11 +1616,9 @@ async fn run_en_pipeline(
         )
         .pipe(TreeManager { tree: tree.clone() })
         .pipe(L1ConsistencyChecker::new(
-            chain_id,
-            node_state_on_startup.l1_state.sl_chain_id,
             last_persisted_block_on_start,
-            state.clone(),
-            local_batch_data_cache,
+            batch_replayer,
+            last_processed_block_tx,
             latest_verified_batch_tx,
             l1_consistency_event_rx,
         ));

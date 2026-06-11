@@ -15589,14 +15589,15 @@ dependencies = [
 name = "zksync_os_l1_consistency_checker"
 version = "0.20.6"
 dependencies = [
- "alloy",
  "anyhow",
  "async-trait",
  "tokio",
  "tracing",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
- "zksync_os_merkle_tree_api",
+ "zksync_os_interface",
+ "zksync_os_merkle_tree",
+ "zksync_os_multivm",
  "zksync_os_observability",
  "zksync_os_pipeline",
  "zksync_os_storage_api",
