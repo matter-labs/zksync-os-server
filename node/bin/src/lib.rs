@@ -68,7 +68,9 @@ use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
-use zksync_os_l1_consistency_checker::{L1CommittedBatch, L1ConsistencyChecker, TreeBlockCache};
+use zksync_os_l1_consistency_checker::{
+    L1CommittedBatch, L1ConsistencyChecker, LocalBatchDataCacher, TreeBlockCache,
+};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -1627,15 +1629,31 @@ async fn run_en_pipeline(
                 }),
         )
         .pipe(TreeManager { tree: tree.clone() })
-        .pipe(L1ConsistencyChecker::new(
+        // Block intake (folding replayed blocks into the shared cache) stays on the pipeline;
+        // the CPU-heavy L1 commit verification runs in the separate task spawned below so it
+        // cannot starve intake and overflow the upstream channel.
+        .pipe(LocalBatchDataCacher::new(
+            last_persisted_block_on_start,
+            state.clone(),
+            local_batch_data_cache.clone(),
+        ));
+
+    runtime.spawn_critical_task("l1 consistency checker", {
+        let checker = L1ConsistencyChecker::new(
             chain_id,
             node_state_on_startup.l1_state.sl_chain_id,
             last_persisted_block_on_start,
-            state.clone(),
             local_batch_data_cache,
             latest_verified_batch_tx,
             l1_consistency_event_rx,
-        ));
+        );
+        async move {
+            checker
+                .run()
+                .await
+                .expect("L1 consistency checker failed");
+        }
+    });
 
     let components = pipeline.components();
     pipeline.spawn();

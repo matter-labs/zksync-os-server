@@ -1,12 +1,8 @@
-use crate::cache::TreeBlockCache;
-use async_trait::async_trait;
+use crate::cache::{TreeBlockCache, TreeBlockCacheReceiverExt};
 use std::ops::RangeInclusive;
 use tokio::sync::{mpsc, watch};
-use zksync_os_batch_types::{BlockCommitmentData, ExtendedCommitBatchInfo};
+use zksync_os_batch_types::ExtendedCommitBatchInfo;
 use zksync_os_contract_interface::models::{DACommitmentScheme, StoredBatchInfo};
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_storage_api::{ReadStateHistory, TreeBlock, read_multichain_root};
 use zksync_os_types::PubdataMode;
 
 pub struct L1CommittedBatch {
@@ -25,99 +21,56 @@ impl L1CommittedBatch {
     }
 }
 
-/// Terminal EN pipeline component that owns local batch data caching and L1 consistency checks.
-pub struct L1ConsistencyChecker<ReadState> {
+/// Background task that checks L1-committed batches against locally replayed blocks.
+///
+/// It runs off the pipeline (unlike the [`LocalBatchDataCacher`](crate::cacher::LocalBatchDataCacher)
+/// that fills the cache) so that its CPU-heavy commitment rebuild cannot starve block intake.
+/// It consumes committed batches in order, waits until the cacher has folded the batch's blocks
+/// into the shared cache, rebuilds the commitment locally, compares it against L1, then evicts the
+/// verified prefix and advances the latest-verified-batch watermark.
+pub struct L1ConsistencyChecker {
     chain_id: u64,
     sl_chain_id: u64,
     last_persisted_block_on_start: u64,
-    read_state: ReadState,
+    /// Shared with the cacher (which inserts) and the batch verification responder (which reads).
+    /// We hold the sender to evict verified blocks and a receiver to await freshly cached ones.
     cache: watch::Sender<TreeBlockCache>,
+    cache_rx: watch::Receiver<TreeBlockCache>,
     latest_verified_batch_tx: watch::Sender<u64>,
     /// Receives L1-committed batches to verify against locally replayed blocks.
     l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
 }
 
-impl<ReadState> L1ConsistencyChecker<ReadState> {
+impl L1ConsistencyChecker {
     pub fn new(
         chain_id: u64,
         sl_chain_id: u64,
         last_persisted_block_on_start: u64,
-        read_state: ReadState,
         cache: watch::Sender<TreeBlockCache>,
         latest_verified_batch_tx: watch::Sender<u64>,
         l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
     ) -> Self {
+        let cache_rx = cache.subscribe();
         Self {
             chain_id,
             sl_chain_id,
             last_persisted_block_on_start,
-            read_state,
             cache,
+            cache_rx,
             latest_verified_batch_tx,
             l1_events_rx,
         }
     }
-}
 
-impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
-    /// Our backpressure signal: whether to pull another tree block from the input.
-    ///
-    /// We normally stop accepting once the cache reaches its soft bound. The one exception
-    /// is a pending batch larger than that bound: we must keep caching its blocks, otherwise
-    /// it could never be verified and evicted and the pipeline would deadlock. Once its full
-    /// range is cached it is verified and evicted at the top of the loop, restoring backpressure.
-    fn can_accept_tree_block(&self, pending: Option<&L1CommittedBatch>) -> bool {
-        let cache = self.cache.borrow();
-        if cache.has_capacity() {
-            return true;
-        }
-        match (pending, cache.range()) {
-            (Some(commit), Some((_, last_cached))) => last_cached < commit.last_block_number(),
-            _ => false,
-        }
-    }
-
-    /// Inserts a block into the shared cache, pre-folded into its commitment ingredients so the
-    /// cache holds a few hundred bytes per block (plus pubdata) instead of full block data.
-    fn insert_tree_block(&self, tree_block: TreeBlock) -> anyhow::Result<()> {
-        let block_number = tree_block.record.block_context.block_number;
-        if block_number <= self.last_persisted_block_on_start {
+    /// Verifies a single committed batch against locally replayed blocks, blocking until the
+    /// cacher has the batch's blocks available. Batches already covered by a persisted batch were
+    /// verified by a previous run and are trusted without rebuilding.
+    async fn verify_commit(&self, commit: &L1CommittedBatch) -> anyhow::Result<()> {
+        if commit.last_block_number() <= self.last_persisted_block_on_start {
             return Ok(());
         }
-        let state_view = self.read_state.state_view_at(block_number)?;
-        let multichain_root = read_multichain_root(state_view);
-        let data = BlockCommitmentData::new(
-            &tree_block.output,
-            &tree_block.record.transactions,
-            &tree_block.tree.output,
-            &tree_block.record.block_context.block_hashes.0,
-            multichain_root,
-            tree_block.record.protocol_version,
-        );
 
-        let mut result = Ok(());
-        self.cache
-            .send_if_modified(|cache| match cache.insert(block_number, data) {
-                Ok(()) => true,
-                Err(err) => {
-                    result = Err(err);
-                    false
-                }
-            });
-        result
-    }
-
-    /// Verifies whether data received from verification request is consistent with locally replayed data
-    fn verify_commit_if_available(&self, commit: &L1CommittedBatch) -> anyhow::Result<bool> {
-        // In case we received request for batch that was already persisted, we trust that it was verified previously
-        if commit.last_block_number() <= self.last_persisted_block_on_start {
-            return Ok(true);
-        }
-
-        let Some(blocks) = self.cache.borrow().get_range(commit.range.clone())? else {
-            // blocks required for consistency check are not available from cache yet
-            return Ok(false);
-        };
+        let blocks = self.cache_rx.wait_for_range(commit.range.clone()).await?;
 
         let (local_batch_info, _) = ExtendedCommitBatchInfo::build(
             &blocks,
@@ -142,81 +95,41 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
             );
         }
 
-        Ok(true)
+        Ok(())
     }
-}
 
-#[async_trait]
-impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<ReadState> {
-    type Input = TreeBlock;
-    type Output = ();
-
-    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
-        zksync_os_pipeline::ComponentId::L1ConsistencyChecker;
-
-    async fn run(
-        mut self,
-        mut input: PeekableReceiver<Self::Input>,
-        _output: mpsc::Sender<Self::Output>,
-        state_reporter: ComponentStateReporter,
-    ) -> anyhow::Result<()> {
+    pub async fn run(mut self) -> anyhow::Result<()> {
         tracing::info!("starting L1 consistency checker");
-        // At most one request is held outside the channel at a time; new requests stay queued
-        // in `l1_events_rx` (providing natural backpressure) until this slot is empty again.
-        let mut pending: Option<L1CommittedBatch> = None;
-        loop {
-            if let Some(commit) = &pending
-                && self.verify_commit_if_available(commit)?
-            {
-                tracing::info!(
-                    "verified L1 committed batch #{} against locally replayed blocks {:?}",
-                    commit.batch_number(),
-                    commit.range,
-                );
-                let last_block_number = commit.last_block_number();
-                let batch_number = commit.batch_number();
-                self.cache
-                    .send_modify(|cache| cache.remove_lower_or_equal_than(last_block_number));
-                self.latest_verified_batch_tx.send_if_modified(|latest| {
-                    if batch_number > *latest {
-                        *latest = batch_number;
-                        true
-                    } else {
-                        false
-                    }
-                });
-                pending = None;
-            }
+        // Committed batches arrive in order; the channel itself provides backpressure on the
+        // L1 watcher, so we simply process them one at a time.
+        while let Some(commit) = self.l1_events_rx.recv().await {
+            tracing::debug!(
+                "received L1 committed batch {} for consistency checking in range {:?}",
+                commit.batch_number(),
+                commit.range,
+            );
+            self.verify_commit(&commit).await?;
+            tracing::info!(
+                "verified L1 committed batch #{} against locally replayed blocks {:?}",
+                commit.batch_number(),
+                commit.range,
+            );
 
-            state_reporter.enter_state(GenericComponentState::Idle);
-            let can_accept_tree_block = self.can_accept_tree_block(pending.as_ref());
-            tokio::select! {
-                tree_block = input.recv(), if can_accept_tree_block => {
-                    let Some(tree_block) = tree_block else {
-                        if pending.is_some() {
-                            anyhow::bail!("tree block channel closed with pending L1 consistency check");
-                        }
-                        return Ok(());
-                    };
-                    state_reporter.enter_state(GenericComponentState::Active);
-                    let block_number = tree_block.record.block_context.block_number;
-                    let block_timestamp = tree_block.record.block_context.timestamp;
-                    self.insert_tree_block(tree_block)?;
-                    state_reporter.record_processed(block_number, Some(block_timestamp), None);
+            // Drop the now-verified prefix from the cache, restoring intake capacity for the
+            // cacher, and publish the new watermark for the batch persist watcher.
+            let last_block_number = commit.last_block_number();
+            let batch_number = commit.batch_number();
+            self.cache
+                .send_modify(|cache| cache.remove_lower_or_equal_than(last_block_number));
+            self.latest_verified_batch_tx.send_if_modified(|latest| {
+                if batch_number > *latest {
+                    *latest = batch_number;
+                    true
+                } else {
+                    false
                 }
-                commit = self.l1_events_rx.recv(), if pending.is_none() => {
-                    let Some(commit) = commit else {
-                        return Ok(());
-                    };
-                    state_reporter.enter_state(GenericComponentState::Active);
-                    tracing::debug!(
-                        "received L1 committed batch {} for consistency checking in range {:?}",
-                        commit.batch_number(),
-                        commit.range,
-                    );
-                    pending = Some(commit);
-                }
-            }
+            });
         }
+        Ok(())
     }
 }
