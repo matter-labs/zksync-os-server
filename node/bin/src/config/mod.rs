@@ -952,7 +952,8 @@ pub struct RpcConfig {
     #[config(default_t = 10 * TimeUnit::Seconds)]
     pub js_tracer_timeout: Duration,
 
-    /// Maximum memory growth allowed during a single JS tracer run. Set to `0` to disable the check.
+    /// Maximum memory growth allowed during a single JS tracer run, measured via jemalloc
+    /// per-thread allocation counters. Set to `0` to disable the check.
     #[config(default_t = 512 * SizeUnit::MiB)]
     pub js_tracer_max_memory: ByteSize,
 

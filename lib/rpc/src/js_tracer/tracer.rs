@@ -28,9 +28,6 @@ const MAX_JS_TRACER_PAYLOAD_BYTES: usize = 512 * 1024;
 const DEFAULT_JS_TRACER_EXECUTION_DEADLINE: Duration = Duration::from_secs(10);
 const DEFAULT_JS_TRACER_MAX_MEMORY_BYTES: usize = 512 * 1024 * 1024;
 
-/// How often (in steps) the memory limit is checked; the deadline is checked every step.
-const MEMORY_CHECK_INTERVAL: u64 = 64;
-
 /// Boa loop-iteration limit per hook invocation — catches a runaway loop inside a single hook
 /// (e.g. `while (true) {}`), which the wall-clock deadline can't since control never returns to
 /// the Rust side.
@@ -41,8 +38,8 @@ const JS_TRACER_MAX_LOOP_ITERATIONS: u64 = 50_000_000;
 pub struct JsTracerLimits {
     /// Abort the trace once it has been running this long.
     pub execution_deadline: Duration,
-    /// Abort the trace once process RSS has grown by more than this many bytes.
-    /// `None` disables the check.
+    /// Abort the trace once net bytes allocated by the tracing thread have grown by more than
+    /// this. `None` disables the check; only enforced in jemalloc builds (`jemalloc` feature).
     pub max_memory_bytes: Option<usize>,
 }
 
@@ -113,8 +110,7 @@ pub struct JsTracer {
     // Execution bounds
     limits: JsTracerLimits,
     started_at: Instant,
-    start_rss_bytes: Option<usize>,
-    step_count: u64,
+    mem_baseline: Option<(ThreadMemoryProbe, i128)>,
 
     // Overlays for storage and code modifications
     storage_overlay: OverlayState<(Address, B256), B256>,
@@ -177,8 +173,7 @@ impl JsTracer {
             invokers,
             limits,
             started_at: Instant::now(),
-            start_rss_bytes: current_rss_bytes(),
-            step_count: 0,
+            mem_baseline: ThreadMemoryProbe::new().map(|probe| (probe, probe.net_allocated())),
             storage_overlay,
             code_overlay,
             balance_overlay,
@@ -218,11 +213,9 @@ impl JsTracer {
         Ok(())
     }
 
-    /// Returns an error reason once the tracer has run longer than its deadline or grown process
-    /// memory past its limit.
-    fn budget_exceeded(&mut self) -> Option<String> {
-        self.step_count = self.step_count.wrapping_add(1);
-
+    /// Returns an error reason once the tracer has run longer than its deadline or its thread has
+    /// allocated more memory than its limit.
+    fn budget_exceeded(&self) -> Option<String> {
         if self.started_at.elapsed() >= self.limits.execution_deadline {
             return Some(format!(
                 "JS tracer exceeded execution time limit of {}s",
@@ -230,11 +223,9 @@ impl JsTracer {
             ));
         }
 
-        if self.step_count.is_multiple_of(MEMORY_CHECK_INTERVAL)
-            && let Some(limit) = self.limits.max_memory_bytes
-            && let Some(base) = self.start_rss_bytes
-            && let Some(current) = current_rss_bytes()
-            && current.saturating_sub(base) > limit
+        if let Some(limit) = self.limits.max_memory_bytes
+            && let Some((probe, baseline)) = self.mem_baseline
+            && probe.net_allocated() - baseline > limit as i128
         {
             return Some(format!(
                 "JS tracer exceeded memory limit of {} MiB",
@@ -550,18 +541,50 @@ impl JsTracer {
     }
 }
 
-/// Current resident set size of this process, in bytes. `None` on platforms without
-/// `/proc/self/status` (e.g. macOS), in which case the memory limit is not enforced.
-fn current_rss_bytes() -> Option<usize> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    for line in status.lines() {
-        if let Some(rest) = line.strip_prefix("VmRSS:") {
-            // "VmRSS:\t  191234 kB"
-            let kb: usize = rest.split_whitespace().next()?.parse().ok()?;
-            return Some(kb * 1024);
-        }
+/// Reads jemalloc's exact per-thread allocation counters via raw thread-local pointers; both the
+/// probe and its readings are only valid on the thread that created it — the tracer is constructed
+/// and driven synchronously on one thread, which guarantees that.
+#[cfg(feature = "jemalloc")]
+#[derive(Clone, Copy)]
+struct ThreadMemoryProbe {
+    allocated: tikv_jemalloc_ctl::thread::ThreadLocal<u64>,
+    deallocated: tikv_jemalloc_ctl::thread::ThreadLocal<u64>,
+}
+
+#[cfg(feature = "jemalloc")]
+impl ThreadMemoryProbe {
+    /// `None` when jemalloc's thread stats are unavailable, in which case the memory limit is
+    /// not enforced.
+    fn new() -> Option<Self> {
+        let allocated = tikv_jemalloc_ctl::thread::allocatedp::read().ok()?;
+        let deallocated = tikv_jemalloc_ctl::thread::deallocatedp::read().ok()?;
+        Some(Self {
+            allocated,
+            deallocated,
+        })
     }
-    None
+
+    /// Net bytes currently allocated by this thread.
+    fn net_allocated(&self) -> i128 {
+        i128::from(self.allocated.get()) - i128::from(self.deallocated.get())
+    }
+}
+
+/// Without jemalloc there is no reliable per-thread allocation accounting; the memory limit is not
+/// enforced.
+#[cfg(not(feature = "jemalloc"))]
+#[derive(Clone, Copy)]
+struct ThreadMemoryProbe;
+
+#[cfg(not(feature = "jemalloc"))]
+impl ThreadMemoryProbe {
+    fn new() -> Option<Self> {
+        None
+    }
+
+    fn net_allocated(&self) -> i128 {
+        0
+    }
 }
 
 /// Resolves the invoker functions for the hooks the user tracer defines; a missing entry means
