@@ -16,6 +16,13 @@ pub struct L1WatcherConfig {
     /// Note: Finalization advances at epoch boundaries. Which is every ~6.4 minutes on L1.
     pub finalized_poll_interval: Duration,
 
+    /// Max duration to process a single `max_blocks_to_process` chunk before the watcher restarts.
+    /// Bounds per-chunk progress, not the whole catch-up.
+    pub poll_iteration_timeout: Duration,
+
+    /// Max time to wait for a priority op to appear on the settlement layer.
+    pub sl_wait_timeout: Duration,
+
     /// Number of recent blocks retained in the shared logs cache.
     pub logs_cache_capacity: usize,
 }

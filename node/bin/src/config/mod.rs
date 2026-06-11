@@ -1222,6 +1222,15 @@ pub struct L1WatcherConfig {
     #[config(default_t = 1 * TimeUnit::Minutes)]
     pub finalized_poll_interval: Duration,
 
+    /// Max duration to process a single `max_blocks_to_process` chunk before the watcher restarts.
+    /// Bounds per-chunk progress, not the whole catch-up.
+    #[config(default_t = 600 * TimeUnit::Seconds)]
+    pub poll_iteration_timeout: Duration,
+
+    /// Max time to wait for a priority op to appear on the settlement layer.
+    #[config(default_t = 300 * TimeUnit::Seconds)]
+    pub sl_wait_timeout: Duration,
+
     /// Number of recent blocks retained in the shared logs cache.
     /// The value should be based on the depth at which blocks are finalized. Which could be >60 on L1.
     #[config(default_t = 128)]
@@ -2059,6 +2068,8 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
             confirmations: c.confirmations,
             poll_interval: c.poll_interval,
             finalized_poll_interval: c.finalized_poll_interval,
+            poll_iteration_timeout: c.poll_iteration_timeout,
+            sl_wait_timeout: c.sl_wait_timeout,
             logs_cache_capacity: c.logs_cache_capacity,
         }
     }
