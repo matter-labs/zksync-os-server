@@ -1056,6 +1056,10 @@ pub struct L1SenderConfig {
     #[config(nest, default)]
     pub force_transaction_resubmission: ForceTransactionResubmissionConfig,
 
+    /// RPC retry overrides for the provider used by L1 sender components.
+    #[config(nest, default)]
+    pub rpc_retry: L1SenderRpcRetryConfig,
+
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
     pub command_limit: usize,
@@ -1117,6 +1121,27 @@ pub struct ForceTransactionResubmissionConfig {
     pub max_fee_per_blob_gas_replacement_multiplier: f64,
 }
 
+#[derive(Clone, Copy, Debug, Default, DescribeConfig, DeserializeConfig, ConfigValidate)]
+pub struct L1SenderRpcRetryConfig {
+    /// Retry every transport and JSON-RPC error returned to L1 sender components.
+    ///
+    /// This includes non-rate-limit JSON-RPC errors, so only enable it when the sender should keep
+    /// waiting for the RPC endpoint instead of surfacing any RPC failure.
+    #[config(default_t = false)]
+    pub retry_all_errors: bool,
+
+    /// Retry sender RPC calls forever instead of using `l1_provider.max_retries` or
+    /// `gateway_provider.max_retries`.
+    #[config(default_t = false)]
+    pub infinite_retries: bool,
+}
+
+impl L1SenderRpcRetryConfig {
+    pub(crate) fn overrides_default(self) -> bool {
+        self.retry_all_errors || self.infinite_retries
+    }
+}
+
 fn rate_limits_within_global(limits: &HashMap<String, NonZeroU32>) -> bool {
     let Some(&global) = limits.get("*") else {
         return true;
@@ -1170,6 +1195,10 @@ pub struct GatewaySenderConfig {
     /// Force transaction resubmission options.
     #[config(nest, default)]
     pub force_transaction_resubmission: ForceTransactionResubmissionConfig,
+
+    /// RPC retry overrides for the provider used by Gateway sender components.
+    #[config(nest, default)]
+    pub rpc_retry: L1SenderRpcRetryConfig,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
@@ -2392,6 +2421,7 @@ mod tests {
                 max_priority_fee_per_gas: 1 * EtherUnit::Gwei,
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
                 force_transaction_resubmission: ForceTransactionResubmissionConfig::default(),
+                rpc_retry: L1SenderRpcRetryConfig::default(),
                 command_limit: 16,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),

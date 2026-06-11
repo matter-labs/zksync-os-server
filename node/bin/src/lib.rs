@@ -40,7 +40,7 @@ use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_api::snark_proving_pipeline_step::SnarkProvingPipelineStep;
 use crate::prover_input_generator::ProverInputGenerator;
-use crate::provider::{ProviderKind, build_node_provider};
+use crate::provider::{ProviderKind, ProviderRetryConfig, build_node_provider};
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
@@ -198,6 +198,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.l1_watcher_config.finalized_poll_interval,
         config.l1_watcher_config.logs_cache_capacity,
         ProviderKind::L1,
+        None,
     )
     .await;
     let gateway_provider = if let Some(gw_config) = &config.gateway_provider_config {
@@ -208,6 +209,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 config.l1_watcher_config.finalized_poll_interval,
                 config.l1_watcher_config.logs_cache_capacity,
                 ProviderKind::Gateway,
+                None,
             )
             .await,
         )
@@ -1277,6 +1279,9 @@ async fn run_main_node_pipeline(
         );
     }
 
+    let l1_sender_provider =
+        build_l1_sender_provider(config, &sl_provider, settles_on_gateway).await;
+
     // Pick the L1Sender config based on whether the chain is currently settling on Gateway:
     // when it is, gateway_sender operator keys (funded on Gateway) and gateway_sender fee caps are used;
     // otherwise the L1-targeted l1_sender config is used.
@@ -1352,7 +1357,7 @@ async fn run_main_node_pipeline(
             ReplayArchiveGateComponent::new(replay_archiver, block_replay_storage.clone())
         }))
         .pipe(L1Sender::<CommitCommand> {
-            provider: sl_provider.clone(),
+            provider: l1_sender_provider.clone(),
             config: commit_sender_config,
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: settles_on_gateway,
@@ -1364,7 +1369,7 @@ async fn run_main_node_pipeline(
             node_state_on_startup.l1_state.last_executed_batch + 1,
         ))
         .pipe(L1Sender::<ProofCommand> {
-            provider: sl_provider.clone(),
+            provider: l1_sender_provider.clone(),
             config: prove_sender_config,
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: settles_on_gateway,
@@ -1381,7 +1386,7 @@ async fn run_main_node_pipeline(
             .unwrap(),
         )
         .pipe(L1Sender {
-            provider: sl_provider,
+            provider: l1_sender_provider,
             config: execute_sender_config,
             to_address: node_state_on_startup.l1_state.validator_timelock_sl,
             gateway: settles_on_gateway,
@@ -1395,6 +1400,56 @@ async fn run_main_node_pipeline(
     pipeline.spawn();
     let snapshot_rx = PipelineTracker::spawn(runtime, components);
     monitor.spawn(runtime, snapshot_rx)
+}
+
+async fn build_l1_sender_provider(
+    config: &Config,
+    sl_provider: &NodeProvider,
+    settles_on_gateway: bool,
+) -> NodeProvider {
+    let rpc_retry_config = if settles_on_gateway {
+        config.gateway_sender_config.rpc_retry
+    } else {
+        config.l1_sender_config.rpc_retry
+    };
+
+    if !rpc_retry_config.overrides_default() {
+        return sl_provider.clone();
+    }
+
+    let (provider_config, provider_kind) = if settles_on_gateway {
+        (
+            config
+                .gateway_provider_config
+                .as_ref()
+                .expect("gateway_provider config must be set when settling on Gateway"),
+            ProviderKind::GatewayCustomRetries,
+        )
+    } else {
+        (&config.l1_provider_config, ProviderKind::L1CustomRetries)
+    };
+
+    tracing::info!(
+        "using dedicated {provider_kind:?} settlement provider with RPC retry overrides: \
+         retry_all_errors={}, infinite_retries={}",
+        rpc_retry_config.retry_all_errors,
+        rpc_retry_config.infinite_retries,
+    );
+
+    build_node_provider(
+        provider_config,
+        config.l1_watcher_config.poll_interval,
+        config.l1_watcher_config.finalized_poll_interval,
+        0,
+        provider_kind,
+        Some(ProviderRetryConfig {
+            max_retries: (!rpc_retry_config.infinite_retries)
+                .then_some(provider_config.max_retries),
+            retry_all_errors: rpc_retry_config.retry_all_errors,
+            backoff: provider_config.retry_backoff,
+        }),
+    )
+    .await
 }
 
 /// Only for EN - we still populate channels destined for the batcher subsystem -

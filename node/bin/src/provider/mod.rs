@@ -17,6 +17,25 @@ use zksync_os_provider::NodeProvider;
 pub(crate) enum ProviderKind {
     L1,
     Gateway,
+    L1CustomRetries,
+    GatewayCustomRetries,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProviderRetryConfig {
+    pub(crate) max_retries: Option<u32>,
+    pub(crate) retry_all_errors: bool,
+    pub(crate) backoff: Duration,
+}
+
+impl ProviderRetryConfig {
+    pub(crate) fn from_provider_config(config: &ProviderConfig) -> Self {
+        Self {
+            max_retries: Some(config.max_retries),
+            retry_all_errors: false,
+            backoff: config.retry_backoff,
+        }
+    }
 }
 
 pub(crate) async fn build_node_provider(
@@ -25,16 +44,18 @@ pub(crate) async fn build_node_provider(
     finalized_poll_interval: Duration,
     log_cache_capacity: usize,
     provider: ProviderKind,
+    retry_config: Option<ProviderRetryConfig>,
 ) -> NodeProvider {
-    let max_retries = config.max_retries;
-    let retry_backoff = config.retry_backoff;
+    let retry_config =
+        retry_config.unwrap_or_else(|| ProviderRetryConfig::from_provider_config(config));
     let provider_layers = ServiceBuilder::new()
         .layer_fn(move |inner| latency::LatencyService { inner, provider })
         .layer_fn(move |inner| retry::RetryService {
             inner,
             provider,
-            max_retries,
-            backoff: retry_backoff,
+            max_retries: retry_config.max_retries,
+            retry_all_errors: retry_config.retry_all_errors,
+            backoff: retry_config.backoff,
         });
 
     let client = RpcClient::builder()
