@@ -66,10 +66,6 @@ const METHOD_NOT_FOUND_CODE: i64 = -32601;
 type TransactionReceiptFuture = BoxFuture<'static, anyhow::Result<TransactionReceipt>>;
 type PendingTx<Input> = (TransactionReceiptFuture, Input, Instant);
 
-const REQUIRED_CONFIRMATIONS_L1: u64 = 3;
-/// In case there's only one chain connected to gateway, it is very likely that there will be not enough block production
-/// to reach 3 confirmations for such transactions
-const REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
 const OPERATOR_METRICS_POLL_INTERVAL: Duration = Duration::from_secs(60);
 /// Per-tx gas limit used when `eth_simulateV1` cannot produce a usable estimate.
 /// Sized to cover the bounded set of commit/prove/execute calls.
@@ -413,11 +409,7 @@ where
 
     fn wait_for_confirmed_receipt(&self, tx_hash: B256) -> TransactionReceiptFuture {
         let provider = self.provider.clone();
-        let required_confirmations = if self.gateway {
-            REQUIRED_CONFIRMATIONS_GATEWAY
-        } else {
-            REQUIRED_CONFIRMATIONS_L1
-        };
+        let required_confirmations = self.config.required_confirmations;
         let timeout = self.config.transaction_timeout;
         async move {
             let started_at = Instant::now();

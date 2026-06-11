@@ -1,11 +1,16 @@
 use crate::metrics::METRICS;
-use crate::{BlockBoundary, BlockUpdates, L1WatcherConfig, LogsCache, ProcessRawEvents};
+use crate::{L1WatcherConfig, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
 use std::time::Duration;
-use tokio::sync::watch;
 use zksync_os_provider::NodeProvider;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockBoundary {
+    Confirmed { confirmations: BlockNumber },
+    Finalized,
+}
 
 /// An abstract watcher for events.
 /// Handles polling for new blocks and extracting logs,
@@ -15,14 +20,12 @@ use zksync_os_provider::NodeProvider;
 /// [`SlAwareL1Watcher`](crate::SlAwareL1Watcher) to scan a closed segment to completion).
 pub struct L1Watcher {
     provider: NodeProvider,
-    logs_cache: LogsCache,
     address: ValueOrArray<Address>,
     next_block: BlockNumber,
     /// `Some(eb)` makes the watcher exit `run` once `next_block > eb`. `None` runs forever.
     end_block: Option<BlockNumber>,
     max_blocks_to_process: u64,
     block_boundary: BlockBoundary,
-    block_updates: watch::Receiver<BlockUpdates>,
     poll_iteration_timeout: Duration,
     pub(crate) processor: Box<dyn ProcessRawEvents>,
 }
@@ -32,8 +35,6 @@ impl L1Watcher {
     pub(crate) async fn new(
         config: L1WatcherConfig,
         provider: NodeProvider,
-        logs_cache: LogsCache,
-        block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
         end_block: Option<BlockNumber>,
@@ -49,13 +50,11 @@ impl L1Watcher {
 
         Ok(Self {
             provider,
-            logs_cache,
             address,
             next_block,
             end_block,
             max_blocks_to_process: config.max_blocks_to_process,
             block_boundary: BlockBoundary::Confirmed { confirmations },
-            block_updates,
             poll_iteration_timeout: config.poll_iteration_timeout,
             processor,
         })
@@ -65,8 +64,6 @@ impl L1Watcher {
     pub(crate) fn new_finalized(
         config: L1WatcherConfig,
         provider: NodeProvider,
-        logs_cache: LogsCache,
-        block_updates: watch::Receiver<BlockUpdates>,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
         end_block: Option<BlockNumber>,
@@ -74,13 +71,11 @@ impl L1Watcher {
     ) -> Self {
         Self {
             provider,
-            logs_cache,
             address,
             next_block,
             end_block,
             max_blocks_to_process: config.max_blocks_to_process,
             block_boundary: BlockBoundary::Finalized,
-            block_updates,
             poll_iteration_timeout: config.poll_iteration_timeout,
             processor,
         }
@@ -98,22 +93,45 @@ impl L1Watcher {
 
     /// Non-consuming version of `run`, intended for internal usage in this crate.
     pub(crate) async fn run_inner(&mut self) {
+        let mut headers = match self.block_boundary {
+            BlockBoundary::Confirmed { .. } => self.provider.latest_header_watcher().await,
+            BlockBoundary::Finalized => self.provider.finalized_header_watcher().await,
+        };
+
         loop {
-            if let Err(e) = self.poll().await {
+            let cap = match self.end_block {
+                // Closed segment: `end_block` was already resolved against a finalized/executed
+                // batch, so the confirmation/finalization window doesn't apply and we don't need
+                // an additional RPC.
+                Some(end_block) => end_block,
+                None => {
+                    let number = headers.borrow_and_update().number;
+                    match self.block_boundary {
+                        BlockBoundary::Confirmed { confirmations } => {
+                            number.saturating_sub(confirmations)
+                        }
+                        BlockBoundary::Finalized => number,
+                    }
+                }
+            };
+
+            if let Err(e) = self.poll(cap).await {
                 tracing::error!(
                     event_name = self.processor.name(),
                     "l1 watcher fatal error: {e}"
                 );
                 panic!("watcher failed: {e}");
             }
-            if let Some(eb) = self.end_block
-                && self.next_block > eb
+
+            if let Some(end_block) = self.end_block
+                && self.next_block > end_block
             {
                 return;
             }
-            if let Err(e) = self.block_updates.changed().await {
-                tracing::error!("l1 watcher block update channel closed: {e}");
-                panic!("l1 watcher block update channel closed: {e}");
+
+            if let Err(e) = headers.changed().await {
+                tracing::error!("l1 watcher header watcher closed unexpectedly: {e}");
+                panic!("l1 watcher header watcher closed unexpectedly: {e}");
             }
         }
     }
@@ -123,20 +141,9 @@ impl L1Watcher {
     /// Each `max_blocks_to_process` chunk has its own `poll_iteration_timeout`, so a long but
     /// healthy catch-up (e.g. an EN syncing from genesis) never trips the watchdog; only a stalled
     /// chunk does, erroring out to restart the watcher.
-    async fn poll(&mut self) -> Result<(), L1WatcherError> {
+    async fn poll(&mut self, cap: BlockNumber) -> Result<(), L1WatcherError> {
         let event_name = self.processor.name();
         let chunk_timeout = self.poll_iteration_timeout;
-        let cap = match self.end_block {
-            // Closed segment: `end_block` was already resolved against a finalized/executed batch,
-            // so the confirmation/finalization window doesn't apply and we don't need an
-            // additional RPC.
-            Some(eb) => eb,
-            None => self
-                .block_updates
-                .borrow()
-                .get_block_number(self.block_boundary),
-        };
-
         while self.next_block <= cap {
             // Heartbeat: one increment per processed chunk. A flat counter means a stuck chunk.
             METRICS.poll_iterations[&event_name].inc();
@@ -196,7 +203,7 @@ impl L1Watcher {
         if let Some(topic1) = self.processor.topic1_filter() {
             filter = filter.topic1(topic1);
         }
-        let new_logs = self.logs_cache.get_logs(&filter).await?;
+        let new_logs = self.provider.get_logs(&filter).await?;
 
         if new_logs.is_empty() {
             tracing::trace!(
