@@ -1,9 +1,9 @@
-use zksync_os_contract_interface::l1_discovery::L1State;
-use backon::{ConstantBuilder, Retryable};
-use alloy::providers::Provider;
-use zksync_os_alloy_ext::provider::ZksyncApi;
-use crate::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL};
 use crate::Tester;
+use crate::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL};
+use alloy::providers::Provider;
+use backon::{ConstantBuilder, Retryable};
+use zksync_os_alloy_ext::provider::ZksyncApi;
+use zksync_os_contract_interface::l1_discovery::L1State;
 
 /// Fetches the current L1 state from the given tester.
 pub async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
