@@ -1074,8 +1074,7 @@ pub struct L1SenderConfig {
     #[config(default_t = 600 * TimeUnit::Seconds)]
     pub transaction_timeout: Duration,
 
-    /// Number of confirmations (L1 blocks, inclusive of the inclusion block) a transaction must
-    /// accumulate before it is treated as confirmed.
+    /// L1 blocks (inclusive of the inclusion block) before a transaction is confirmed.
     #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_L1)]
     pub required_confirmations: u64,
 
@@ -1191,8 +1190,7 @@ pub struct GatewaySenderConfig {
     #[config(default_t = 600 * TimeUnit::Seconds)]
     pub transaction_timeout: Duration,
 
-    /// Number of confirmations (Gateway blocks, inclusive of the inclusion block) a transaction
-    /// must accumulate before it is treated as confirmed.
+    /// Gateway blocks (inclusive of the inclusion block) before a transaction is confirmed.
     #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY)]
     pub required_confirmations: u64,
 }
