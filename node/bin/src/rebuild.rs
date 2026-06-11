@@ -81,9 +81,10 @@ async fn perform_l1_revert(
     let reverted_batch = last_l1_batch_to_keep
         .checked_add(1)
         .expect("last_l1_batch_to_keep overflow");
-    let already_executed = persistent_batch_storage.get_batch_by_number(reverted_batch)?;
     anyhow::ensure!(
-        already_executed.is_none(),
+        persistent_batch_storage
+            .get_batch_by_number(reverted_batch)?
+            .is_none(),
         "cannot revert batch {reverted_batch}: it is already executed (finalized) on L1"
     );
 
