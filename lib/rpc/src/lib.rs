@@ -25,6 +25,7 @@ mod monitoring_middleware;
 mod net_impl;
 mod rate_limit_middleware;
 mod sandbox;
+mod trace_filter;
 mod tx_forwarder;
 pub use tx_forwarder::{TxForwardEndpoint, TxForwarder};
 mod tx_handler;

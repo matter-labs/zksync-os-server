@@ -1,4 +1,4 @@
-use crate::watcher::{L1Watcher, L1WatcherError};
+use crate::watcher::{L1WatcherError, StartResolver};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
@@ -30,8 +30,7 @@ impl L1TxWatcher {
         zk_chain_l1: ZkChain<NodeProvider>,
         zk_chain_sl: ZkChain<NodeProvider>,
         l1_subpool: L1Subpool,
-        next_l1_priority_id: u64,
-    ) -> anyhow::Result<L1Watcher> {
+    ) -> anyhow::Result<StartResolver<u64, Self>> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
@@ -40,27 +39,24 @@ impl L1TxWatcher {
             "initializing L1 transaction watcher"
         );
 
-        let next_l1_block =
-            find_l1_block_by_priority_id(zk_chain_l1.clone(), next_l1_priority_id).await?;
+        let provider = zk_chain_l1.provider().clone();
+        let address = (*zk_chain_l1.address()).into();
+        let l1_chain_id = provider.get_chain_id().await?;
 
-        tracing::info!(next_l1_block, "resolved on L1");
-
-        let this = Self {
-            next_l1_priority_id,
-            zk_chain_sl,
-            cached_total_priority_ops_resp: None,
-            l1_subpool,
+        let resolve_start = move |next_l1_priority_id: u64| async move {
+            let next_l1_block =
+                find_l1_block_by_priority_id(zk_chain_l1.clone(), next_l1_priority_id).await?;
+            tracing::info!(next_l1_block, "resolved on L1");
+            let processor = Self {
+                next_l1_priority_id,
+                zk_chain_sl,
+                cached_total_priority_ops_resp: None,
+                l1_subpool,
+            };
+            Ok((next_l1_block, processor))
         };
-        L1Watcher::new(
-            config,
-            zk_chain_l1.provider().clone(),
-            (*zk_chain_l1.address()).into(),
-            next_l1_block,
-            None,
-            zk_chain_l1.provider().get_chain_id().await?,
-            Box::new(this),
-        )
-        .await
+
+        StartResolver::new(config, provider, address, None, l1_chain_id, resolve_start).await
     }
 }
 

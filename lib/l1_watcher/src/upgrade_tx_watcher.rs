@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::util::ANVIL_L1_CHAIN_ID;
-use crate::watcher::{L1Watcher, L1WatcherError};
+use crate::watcher::{L1WatcherError, StartResolver};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
 use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
@@ -69,9 +69,8 @@ impl L1UpgradeTxWatcher {
         zk_chain_l1: ZkChain<NodeProvider>,
         zk_chain_sl: ZkChain<NodeProvider>,
         bytecode_supplier_address: Address,
-        current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
-    ) -> anyhow::Result<L1Watcher> {
+    ) -> anyhow::Result<StartResolver<ProtocolSemanticVersion, Self>> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
@@ -89,45 +88,53 @@ impl L1UpgradeTxWatcher {
         let ctm_sl = zk_chain_sl.get_chain_type_manager().await?;
         tracing::info!(ctm_sl = ?ctm_sl, "resolved SL chain type manager");
 
-        let last_l1_block = find_l1_block_by_protocol_version(
-            zk_chain_l1.clone(),
-            current_protocol_version.clone(),
-        )
-        .await?;
+        let provider_l1 = zk_chain_l1.provider().clone();
+        let provider_sl = zk_chain_sl.provider().clone();
+
         // The configured bytecode supplier address is used as fallback for pre-v31 CTMs.
         // On v31+ CTMs, `resolve_active_bytecode_supplier` discovers the address dynamically.
         // Sanity check: make sure the fallback address has code deployed.
         anyhow::ensure!(
-            !zk_chain_l1
-                .provider()
+            !provider_l1
                 .get_code_at(bytecode_supplier_address)
                 .await?
                 .is_empty(),
             "Bytecode supplier contract is not deployed at expected address {bytecode_supplier_address:?}"
         );
 
-        tracing::info!(last_l1_block, "checking block starting from");
+        let watcher_provider = provider_l1.clone();
+        let l1_chain_id = provider_l1.get_chain_id().await?;
+        let bridgehub_l1 = *bridgehub_l1.address();
+        let max_blocks_to_process = config.max_blocks_to_process;
 
-        let this = Self {
-            l2_chain_id,
-            provider_l1: zk_chain_l1.provider().clone(),
-            provider_sl: zk_chain_sl.provider().clone(),
-            bridgehub_l1: *bridgehub_l1.address(),
-            bytecode_supplier_address,
-            ctm_l1,
-            ctm_sl,
-            current_protocol_version,
-            upgrade_subpool,
-            max_blocks_to_process: config.max_blocks_to_process,
+        let resolve_start = move |current_protocol_version: ProtocolSemanticVersion| async move {
+            let last_l1_block =
+                find_l1_block_by_protocol_version(zk_chain_l1, current_protocol_version.clone())
+                    .await?;
+            tracing::info!(last_l1_block, "checking block starting from");
+
+            let processor = Self {
+                l2_chain_id,
+                provider_l1,
+                provider_sl,
+                bridgehub_l1,
+                bytecode_supplier_address,
+                ctm_l1,
+                ctm_sl,
+                current_protocol_version,
+                upgrade_subpool,
+                max_blocks_to_process,
+            };
+            Ok((last_l1_block, processor))
         };
-        L1Watcher::new(
+
+        StartResolver::new(
             config,
-            zk_chain_l1.provider().clone(),
+            watcher_provider,
             server_notifier_l1.into(),
-            last_l1_block,
             None,
-            zk_chain_l1.provider().get_chain_id().await?,
-            Box::new(this),
+            l1_chain_id,
+            resolve_start,
         )
         .await
     }
