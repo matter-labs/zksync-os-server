@@ -504,6 +504,15 @@ pub struct GeneralConfig {
     #[config(default_t = 512)]
     pub blocks_to_retain_in_memory: usize,
 
+    /// [external node] Max number of blocks whose commitment data the L1 consistency checker
+    /// may hold while waiting for the corresponding L1 commit events. Bounds the gap between
+    /// local replay and L1 verification: once full, the checker stops consuming and the
+    /// pipeline fails fast ("consumer is catastrophically behind"), so it must comfortably
+    /// cover the L1 watcher's lag during a fresh sync. Entries are small (~0.3KB plus the
+    /// block's pubdata), so large values are affordable.
+    #[config(default_t = 100_000)]
+    pub consistency_checker_max_cached_blocks: usize,
+
     /// **IMPORTANT: It must be set for an external node. However, setting this DOES NOT make the node into an external node.
     /// [`GeneralConfig::node_role`] is the source of truth for node type. **
     #[config(default_t = None)]

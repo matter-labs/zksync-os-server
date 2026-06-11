@@ -995,7 +995,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
         tree_for_rpc,
     );
-    let (local_batch_data_cache, _) = watch::channel(TreeBlockCache::new());
+    let (local_batch_data_cache, _) = watch::channel(TreeBlockCache::with_max_blocks(
+        config.general_config.consistency_checker_max_cached_blocks,
+    ));
     let (l1_consistency_event_tx, l1_consistency_event_rx) =
         tokio::sync::mpsc::channel::<L1CommittedBatch>(4096);
     let (latest_verified_batch_tx, latest_verified_batch_rx) =
