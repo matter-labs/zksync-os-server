@@ -1,7 +1,27 @@
+use crate::limits::Limits;
 use alloy::primitives::Address;
-use std::collections::{HashMap, HashSet};
-use std::num::NonZeroU32;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::time::Duration;
+
+/// How the JSON-RPC server gates incoming requests.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum RateLimitPolicy {
+    /// No rate limiting.
+    #[default]
+    Disabled,
+    /// Hardcoded per-node buckets. Scale capacity by adding nodes behind a load balancer.
+    Tiered,
+}
+
+impl RateLimitPolicy {
+    pub(crate) fn to_limits(self) -> Limits {
+        match self {
+            Self::Disabled => Limits::default(),
+            Self::Tiered => Limits::tiered(),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct RpcConfig {
@@ -49,9 +69,8 @@ pub struct RpcConfig {
     /// because pubdata price increase in-between estimation and sequencing.
     pub estimate_gas_pubdata_price_factor: f64,
 
-    /// Per-method rate limits. Use `"*"` as the method name for a global limit applied before
-    /// per-method limits. Empty means no rate limiting.
-    pub rate_limits: HashMap<String, NonZeroU32>,
+    /// Rate-limiting policy for incoming requests.
+    pub rate_limit_policy: RateLimitPolicy,
 }
 
 impl RpcConfig {
