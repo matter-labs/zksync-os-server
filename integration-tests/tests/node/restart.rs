@@ -9,9 +9,9 @@ use std::str::FromStr;
 use std::time::Duration;
 use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
-use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL, ReceiptAssert};
 use zksync_os_integration_tests::config::load_chain_config;
+use zksync_os_integration_tests::l1_helpers::wait_for_l1_state;
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
 use zksync_os_integration_tests::test_config::{
@@ -56,37 +56,6 @@ fn configure_failing_block(config: &Config, failing_block: u64) {
         serde_json::to_vec(&internal_config).expect("failed to serialize internal config"),
     )
     .expect("failed to write internal config");
-}
-
-async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
-    let chain_id = tester.l2_provider.get_chain_id().await?;
-    let bridgehub_address = tester.l2_zk_provider.get_bridgehub_contract().await?;
-    L1State::fetch(
-        tester.l1_provider().clone(),
-        tester.gateway_eth_provider(),
-        bridgehub_address,
-        chain_id,
-    )
-    .await
-}
-
-async fn wait_for_l1_state(
-    tester: &Tester,
-    description: &str,
-    predicate: impl Fn(&L1State) -> bool,
-) -> anyhow::Result<L1State> {
-    let mut retries = DEFAULT_TIMEOUT.div_duration_f64(POLL_INTERVAL).floor() as u64;
-    while retries > 0 {
-        let state = fetch_l1_state(tester).await?;
-        if predicate(&state) {
-            return Ok(state);
-        }
-        retries -= 1;
-        tokio::time::sleep(POLL_INTERVAL).await;
-    }
-    Err(anyhow::anyhow!(
-        "timed out waiting for L1 state: {description}"
-    ))
 }
 
 async fn block_number_by_id(tester: &Tester, block_id: BlockId) -> anyhow::Result<u64> {

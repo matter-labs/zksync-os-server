@@ -10,9 +10,9 @@ use backon::{ConstantBuilder, Retryable};
 use std::str::FromStr;
 use std::time::Duration;
 use std::time::Instant;
-use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::l1_discovery::L1State;
-use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL, ReceiptAssert};
+use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert};
+use zksync_os_integration_tests::l1_helpers::{fetch_l1_state, wait_for_l1_state};
 use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
 use zksync_os_integration_tests::test_config::{
     make_commit_only_config, make_full_pipeline_config,
@@ -28,18 +28,6 @@ use zksync_os_server::config::{RebuildBounds, RebuildConfig};
 const BLOCKS_TO_MINE_BEFORE_REBUILD: u64 = 10;
 const BLOCKS_FROM_TIP_TO_EMPTY: u64 = 4;
 const TRANSACTION_SEND_INTERVAL: Duration = Duration::from_millis(5);
-
-async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
-    let chain_id = tester.l2_provider.get_chain_id().await?;
-    let bridgehub_address = tester.l2_zk_provider.get_bridgehub_contract().await?;
-    L1State::fetch(
-        tester.l1_provider().clone(),
-        tester.gateway_eth_provider(),
-        bridgehub_address,
-        chain_id,
-    )
-    .await
-}
 
 /// Fetches committed batch `batch_number` from L1, returning `(batch_hash, first_block, last_block)`.
 async fn fetch_committed_batch(
@@ -113,6 +101,20 @@ async fn wait_for_block_hash_change(
     .await
 }
 
+fn make_reverter_config(stopped: &StoppedTester) -> anyhow::Result<SignerConfig> {
+    let chain_id = stopped
+        .config()
+        .genesis_config
+        .chain_id
+        .context("chain_id missing from config")?;
+    let operator_sk = load_operator_private_key(stopped.chain_layout(), chain_id)?;
+    Ok(SignerConfig::Local(
+        PrivateKeySigner::from_str(&operator_sk)?
+            .credential()
+            .clone(),
+    ))
+}
+
 /// Sends throwaway L2 transactions on `tester` until `predicate` holds for the L1 state, polling
 /// after each send. Used to drive enough blocks/batches onto L1 for the revert scenarios.
 ///
@@ -137,42 +139,6 @@ async fn mine_until_l1_state(
     Err(anyhow::anyhow!(
         "timed out mining for L1 state: {description}"
     ))
-}
-
-fn make_reverter_config(stopped: &StoppedTester) -> anyhow::Result<SignerConfig> {
-    let chain_id = stopped
-        .config()
-        .genesis_config
-        .chain_id
-        .context("chain_id missing from config")?;
-    let operator_sk = load_operator_private_key(stopped.chain_layout(), chain_id)?;
-    Ok(SignerConfig::Local(
-        PrivateKeySigner::from_str(&operator_sk)?
-            .credential()
-            .clone(),
-    ))
-}
-
-async fn wait_for_l1_state(
-    tester: &Tester,
-    description: &str,
-    predicate: impl Fn(&L1State) -> bool,
-) -> anyhow::Result<L1State> {
-    let max_times = DEFAULT_TIMEOUT.div_duration_f64(POLL_INTERVAL).floor() as usize;
-    (|| async {
-        let state = fetch_l1_state(tester).await?;
-        if predicate(&state) {
-            Ok(state)
-        } else {
-            anyhow::bail!("waiting for L1 state: {description}")
-        }
-    })
-    .retry(
-        ConstantBuilder::default()
-            .with_delay(POLL_INTERVAL)
-            .with_max_times(max_times),
-    )
-    .await
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
