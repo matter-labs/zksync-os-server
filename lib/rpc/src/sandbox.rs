@@ -679,11 +679,12 @@ pub(crate) fn fmt_error_msg(error: &EvmError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trace_filter::{ASSET_TRACKER_ADDRESS, ASSET_TRACKER_ROOT_SELECTOR};
+    use crate::trace_filter::{
+        ASSET_TRACKER_ADDRESS, ASSET_TRACKER_ROOT_SELECTOR, L2_BASE_TOKEN_ADDRESS,
+    };
     use alloy::sol_types::{Revert, SolError};
     use zksync_os_interface::tracing::EvmTracer;
     use zksync_os_interface::types::ExecutionOutput;
-    use zksync_os_types::BOOTLOADER_FORMAL_ADDRESS;
 
     #[derive(Default)]
     struct TestStack;
@@ -906,7 +907,7 @@ mod tests {
         let mut actual_root = make_empty_call_frame();
         actual_root.to = Some(Address::from([0x11; 20]));
         let mut asset_tracker_root = make_empty_call_frame();
-        asset_tracker_root.from = BOOTLOADER_FORMAL_ADDRESS;
+        asset_tracker_root.from = L2_BASE_TOKEN_ADDRESS;
         asset_tracker_root.to = Some(ASSET_TRACKER_ADDRESS);
         asset_tracker_root.input = Bytes::copy_from_slice(&ASSET_TRACKER_ROOT_SELECTOR);
 

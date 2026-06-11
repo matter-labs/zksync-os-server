@@ -1056,8 +1056,9 @@ pub fn trace_block<V: ViewState + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trace_filter::{ASSET_TRACKER_ADDRESS, ASSET_TRACKER_ROOT_SELECTOR};
-    use zksync_os_types::BOOTLOADER_FORMAL_ADDRESS;
+    use crate::trace_filter::{
+        ASSET_TRACKER_ADDRESS, ASSET_TRACKER_ROOT_SELECTOR, L2_BASE_TOKEN_ADDRESS,
+    };
 
     fn tx_context(to: Address, gas: u64, gas_used: u64) -> TxContext {
         TxContext {
@@ -1093,7 +1094,7 @@ mod tests {
         };
         let actual = tx_context(Address::from([0x11; 20]), 10, 3);
         let mut asset_tracker = tx_context(ASSET_TRACKER_ADDRESS, 20, 7);
-        asset_tracker.from = BOOTLOADER_FORMAL_ADDRESS;
+        asset_tracker.from = L2_BASE_TOKEN_ADDRESS;
         asset_tracker.input = Bytes::copy_from_slice(&ASSET_TRACKER_ROOT_SELECTOR);
 
         let roots = without_asset_tracker_root_contexts(vec![actual, asset_tracker]);
