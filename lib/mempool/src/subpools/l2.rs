@@ -128,7 +128,7 @@ impl L2TransactionsStreamMarker {
         // Reth provides `TxTypeNotSupported` and we do the same just in case.
         inner.txs.mark_invalid(
             &tx,
-            &InvalidPoolTransactionError::Consensus(InvalidTransactionError::TxTypeNotSupported),
+            InvalidPoolTransactionError::Consensus(InvalidTransactionError::TxTypeNotSupported),
         );
     }
 }

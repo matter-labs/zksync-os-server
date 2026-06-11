@@ -8,6 +8,7 @@ use crate::js_tracer::{
     utils::{extract_js_source_and_config, gas_used_from_resources, wrap_js_invocation},
 };
 use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
+use crate::trace_filter::{is_asset_tracker_root_call, without_ignored_roots};
 use alloy::hex::ToHexExt;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use boa_engine::{Context as BoaContext, Source};
@@ -23,6 +24,12 @@ use zksync_os_storage_api::ViewState;
 use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
 const MAX_JS_TRACER_PAYLOAD_BYTES: usize = 512 * 1024;
+
+fn without_asset_tracker_root_contexts(roots: Vec<TxContext>) -> Vec<TxContext> {
+    without_ignored_roots(roots, |root| {
+        is_asset_tracker_root_call(root.from, Some(root.to), root.input.as_ref())
+    })
+}
 
 /// JS tracer implementation
 /// Holds a Boa JS runtime and calls user-provided JS tracer methods when the hooks of zksync-os
@@ -68,7 +75,7 @@ pub struct JsTracer {
     pending_create_type: Option<CreateType>,
 
     frame_stack: Vec<FrameState>,
-    last_finished_frame: Option<TxContext>,
+    finished_root_frames: Vec<TxContext>,
     tx_failed: bool,
 
     error: Option<anyhow::Error>,
@@ -114,7 +121,7 @@ impl JsTracer {
             pending_create_type: None,
             error: None,
             frame_stack: Vec::new(),
-            last_finished_frame: None,
+            finished_root_frames: Vec::new(),
             tx_failed: false,
         })
     }
@@ -465,6 +472,20 @@ impl JsTracer {
         self.error.take()
     }
 
+    fn tx_result_context(&self, roots: Vec<TxContext>) -> anyhow::Result<TxContext> {
+        // A transaction always produces exactly one genuine root frame; the bootloader's
+        // asset-tracker root (the only other depth-1 frame) is filtered out before this call.
+        anyhow::ensure!(
+            roots.len() <= 1,
+            "unexpected multi-root trace: {} roots remain after stripping asset-tracker roots",
+            roots.len()
+        );
+        roots
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No finished frame found at transaction end"))
+    }
+
     /// `call_result` is called at the end of the transaction to get the final result from the tracer.
     fn call_result(&mut self, ctx: &TxContext) -> anyhow::Result<JsonValue> {
         let ctx = serde_json::json!({
@@ -718,11 +739,12 @@ impl EvmTracer for JsTracer {
                 self.revert_overlays_to_checkpoint(frame_state.checkpoint);
             }
 
-            if self.frame_stack.is_empty() && frame_failed {
-                self.tx_failed = true;
+            if self.frame_stack.is_empty() {
+                if frame_failed {
+                    self.tx_failed = true;
+                }
+                self.finished_root_frames.push(frame_state.ctx);
             }
-
-            self.last_finished_frame = Some(frame_state.ctx);
         } else {
             tracing::error!("Execution frame completed but no frame context found");
         }
@@ -841,7 +863,7 @@ impl EvmTracer for JsTracer {
         self.current_depth = 0;
         self.pending_step = None;
         self.pending_create_type = None;
-        self.last_finished_frame = None;
+        self.finished_root_frames.clear();
         self.frame_stack.clear();
         self.clear_overlay_journals();
 
@@ -855,23 +877,21 @@ impl EvmTracer for JsTracer {
             self.clear_overlay_journals();
             self.frame_stack.clear();
             self.tx_failed = false;
-            self.last_finished_frame = None;
+            self.finished_root_frames.clear();
             return;
         }
 
-        let ctx = match self.last_finished_frame.clone() {
-            Some(frame) => frame,
-            None => {
+        let roots =
+            without_asset_tracker_root_contexts(std::mem::take(&mut self.finished_root_frames));
+        let ctx = match self.tx_result_context(roots) {
+            Ok(ctx) => ctx,
+            Err(err) => {
                 tracing::error!("No finished frame found at transaction end");
-                self.record_error(
-                    TracerMethod::Result,
-                    anyhow::anyhow!("No finished frame found at transaction end"),
-                );
+                self.record_error(TracerMethod::Result, err);
                 self.rollback_overlays();
                 self.clear_overlay_journals();
                 self.frame_stack.clear();
                 self.tx_failed = false;
-                self.last_finished_frame = None;
 
                 return;
             }
@@ -898,7 +918,6 @@ impl EvmTracer for JsTracer {
         self.clear_overlay_journals();
         self.frame_stack.clear();
         self.tx_failed = false;
-        self.last_finished_frame = None;
     }
 
     fn before_evm_interpreter_execution_step(
@@ -1032,4 +1051,57 @@ pub fn trace_block<V: ViewState + 'static>(
     }
 
     Ok(tracer.results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::trace_filter::{
+        ASSET_TRACKER_ADDRESS, ASSET_TRACKER_ROOT_SELECTOR, L2_BASE_TOKEN_ADDRESS,
+    };
+
+    fn tx_context(to: Address, gas: u64, gas_used: u64) -> TxContext {
+        TxContext {
+            typ: "CALL".to_string(),
+            from: Address::from([0x10; 20]),
+            to,
+            input: Bytes::from(vec![0xab]),
+            gas: U256::from(gas),
+            value: U256::ZERO,
+            gas_used: Some(U256::from(gas_used)),
+            output: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn tx_result_context_ignores_asset_tracker_roots_when_actual_root_exists() {
+        let tracer = JsTracer {
+            ctx: BoaContext::default(),
+            tracer_config: JsonValue::Null,
+            storage_overlay: OverlayState::<(Address, B256), B256>::new(),
+            code_overlay: OverlayState::<Address, Option<Vec<u8>>>::new(),
+            balance_overlay: OverlayState::<Address, BalanceDelta>::new(),
+            selfdestruct_overlay: OverlayState::<Address, SelfdestructEntry>::new(),
+            current_depth: 0,
+            results: vec![],
+            pending_step: None,
+            pending_create_type: None,
+            frame_stack: vec![],
+            finished_root_frames: vec![],
+            tx_failed: false,
+            error: None,
+        };
+        let actual = tx_context(Address::from([0x11; 20]), 10, 3);
+        let mut asset_tracker = tx_context(ASSET_TRACKER_ADDRESS, 20, 7);
+        asset_tracker.from = L2_BASE_TOKEN_ADDRESS;
+        asset_tracker.input = Bytes::copy_from_slice(&ASSET_TRACKER_ROOT_SELECTOR);
+
+        let roots = without_asset_tracker_root_contexts(vec![actual, asset_tracker]);
+        let ctx = tracer.tx_result_context(roots).unwrap();
+
+        assert_eq!(ctx.to, Address::from([0x11; 20]));
+        assert_eq!(ctx.gas, U256::from(10));
+        assert_eq!(ctx.gas_used, Some(U256::from(3)));
+    }
 }
