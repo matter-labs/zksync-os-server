@@ -25,11 +25,22 @@ use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
 const MAX_JS_TRACER_PAYLOAD_BYTES: usize = 512 * 1024;
 
-/// Wall-clock ceiling for a single tracer's total execution. Checked between EVM opcode steps; if
-/// exceeded the tracer aborts with an error instead of running unbounded. This bounds the
-/// "millions of cheap steps, each doing some JS work" case (and any genuinely long trace), so a
-/// `debug_trace*` request can no longer pin a blocking worker indefinitely.
-const JS_TRACER_EXECUTION_DEADLINE: Duration = Duration::from_secs(30);
+/// Default wall-clock ceiling for a single tracer's total execution (overridable via config).
+/// Checked between EVM opcode steps; if exceeded the tracer aborts with an error instead of
+/// running unbounded. This bounds the "millions of cheap steps, each doing some JS work" case (and
+/// any genuinely long trace), so a `debug_trace*` request can no longer pin a blocking worker
+/// indefinitely.
+const DEFAULT_JS_TRACER_EXECUTION_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Default cap on process-RSS *growth* tolerated during a single tracer run (overridable via
+/// config). A user tracer that accumulates JS heap across steps (e.g. pushing a record per step)
+/// is otherwise bounded only by the deadline; this aborts it once it has grown process memory by
+/// the configured amount.
+const DEFAULT_JS_TRACER_MAX_MEMORY_BYTES: usize = 512 * 1024 * 1024;
+
+/// How often (in steps) the memory limit is checked. Reading `/proc/self/status` costs ~µs, so we
+/// sample periodically rather than every step; the wall-clock deadline is checked every step.
+const MEMORY_CHECK_INTERVAL: u64 = 64;
 
 /// Per-invocation cap on JS loop iterations (Boa runtime limit). Boa's counter is reset per
 /// top-level call, so this bounds an infinite/runaway loop *inside a single* hook (e.g.
@@ -37,6 +48,36 @@ const JS_TRACER_EXECUTION_DEADLINE: Duration = Duration::from_secs(30);
 /// since control never returns to the Rust side mid-loop. Set generously so legitimate tracers
 /// iterating over collected per-step data are unaffected.
 const JS_TRACER_MAX_LOOP_ITERATIONS: u64 = 50_000_000;
+
+/// Runtime limits for a JS tracer, resolved from `RpcConfig`.
+#[derive(Clone, Copy, Debug)]
+pub struct JsTracerLimits {
+    /// Abort the trace once it has been running this long.
+    pub execution_deadline: Duration,
+    /// Abort the trace once process RSS has grown by more than this many bytes since the tracer
+    /// started. `None` disables the (best-effort) memory check.
+    pub max_memory_bytes: Option<usize>,
+}
+
+impl Default for JsTracerLimits {
+    fn default() -> Self {
+        Self {
+            execution_deadline: DEFAULT_JS_TRACER_EXECUTION_DEADLINE,
+            max_memory_bytes: Some(DEFAULT_JS_TRACER_MAX_MEMORY_BYTES),
+        }
+    }
+}
+
+impl JsTracerLimits {
+    /// Builds limits from the RPC config. A configured memory limit of `0` disables the check.
+    pub fn from_config(config: &crate::config::RpcConfig) -> Self {
+        Self {
+            execution_deadline: config.js_tracer_timeout,
+            max_memory_bytes: (config.js_tracer_max_memory_bytes != 0)
+                .then_some(config.js_tracer_max_memory_bytes),
+        }
+    }
+}
 
 // Names of the per-hook invoker functions installed once in `host::install_invocation_helpers`.
 const INVOKE_SETUP: &str = "__zkjs_invoke_setup";
@@ -85,8 +126,14 @@ pub struct JsTracer {
     // than a per-step `typeof` eval. The hot path calls these instead of re-`eval`ing JS source.
     invokers: HashMap<&'static str, JsObject>,
 
-    // Execution bound: start time for the wall-clock deadline (see `JS_TRACER_EXECUTION_DEADLINE`).
+    // Execution bounds.
+    limits: JsTracerLimits,
     started_at: Instant,
+    // Baseline process RSS captured at construction; `None` if `/proc` is unavailable, in which
+    // case the memory check is skipped. Used as the reference point for `max_memory_bytes`.
+    start_rss_bytes: Option<usize>,
+    // Number of steps observed, used to throttle memory sampling.
+    step_count: u64,
 
     // Overlays for storage and code modifications
     storage_overlay: OverlayState<(Address, B256), B256>,
@@ -108,7 +155,11 @@ pub struct JsTracer {
 }
 
 impl JsTracer {
-    pub fn new(state_view: impl ViewState + 'static, js_cfg: String) -> anyhow::Result<Self> {
+    pub fn new(
+        state_view: impl ViewState + 'static,
+        js_cfg: String,
+        limits: JsTracerLimits,
+    ) -> anyhow::Result<Self> {
         if js_cfg.len() > MAX_JS_TRACER_PAYLOAD_BYTES {
             return Err(anyhow::anyhow!(format!(
                 "JS tracer payload exceeds limit of {} bytes",
@@ -145,7 +196,10 @@ impl JsTracer {
             ctx,
             tracer_config,
             invokers,
+            limits,
             started_at: Instant::now(),
+            start_rss_bytes: current_rss_bytes(),
+            step_count: 0,
             storage_overlay,
             code_overlay,
             balance_overlay,
@@ -189,10 +243,35 @@ impl JsTracer {
         Ok(())
     }
 
-    /// Returns true once the tracer has been running longer than `JS_TRACER_EXECUTION_DEADLINE`.
-    /// Checked between EVM opcode steps so a long/heavy trace aborts instead of hanging.
-    fn execution_budget_exceeded(&self) -> bool {
-        self.started_at.elapsed() >= JS_TRACER_EXECUTION_DEADLINE
+    /// Advances the step counter and checks the per-tracer execution budget. Returns an error
+    /// reason once the tracer has run longer than its deadline or grown process memory past its
+    /// limit, in which case the caller aborts the trace. Called between EVM opcode steps.
+    fn budget_exceeded(&mut self) -> Option<String> {
+        self.step_count = self.step_count.wrapping_add(1);
+
+        if self.started_at.elapsed() >= self.limits.execution_deadline {
+            return Some(format!(
+                "JS tracer exceeded execution time limit of {}s",
+                self.limits.execution_deadline.as_secs()
+            ));
+        }
+
+        // Memory is sampled periodically (reading /proc is ~µs) and only when both a limit and a
+        // baseline RSS are available. RSS growth from baseline catches a tracer that accumulates
+        // JS heap across steps before it can OOM the (shared) process.
+        if self.step_count.is_multiple_of(MEMORY_CHECK_INTERVAL)
+            && let Some(limit) = self.limits.max_memory_bytes
+            && let Some(base) = self.start_rss_bytes
+            && let Some(current) = current_rss_bytes()
+            && current.saturating_sub(base) > limit
+        {
+            return Some(format!(
+                "JS tracer exceeded memory limit of {} MiB",
+                limit / (1024 * 1024)
+            ));
+        }
+
+        None
     }
 
     fn commit_overlays(&self) {
@@ -502,6 +581,21 @@ impl JsTracer {
 
         Ok(())
     }
+}
+
+/// Best-effort current resident set size (RSS) of this process, in bytes. Reads `/proc/self/status`
+/// and returns `None` on platforms without it (e.g. macOS) or on any parse failure — in which case
+/// the memory limit is simply not enforced rather than falsely tripping.
+fn current_rss_bytes() -> Option<usize> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            // Format: "VmRSS:\t  191234 kB"
+            let kb: usize = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
 }
 
 /// Resolves the per-hook invoker functions installed by `host::install_invocation_helpers`, but
@@ -864,14 +958,8 @@ impl EvmTracer for JsTracer {
         if self.error.is_some() {
             return;
         }
-        if self.execution_budget_exceeded() {
-            self.record_error(
-                TracerMethod::Step,
-                anyhow::anyhow!(
-                    "JS tracer exceeded execution time limit of {}s",
-                    JS_TRACER_EXECUTION_DEADLINE.as_secs()
-                ),
-            );
+        if let Some(reason) = self.budget_exceeded() {
+            self.record_error(TracerMethod::Step, anyhow::anyhow!(reason));
             return;
         }
         // Nothing to do (and no point snapshotting memory/stack) if the tracer has no `step` hook.
@@ -972,8 +1060,9 @@ pub fn trace_block<V: ViewState + 'static>(
     block_context: zksync_os_storage_api::BlockContext,
     state_view: V,
     js_tracer_config: String,
+    limits: JsTracerLimits,
 ) -> anyhow::Result<Vec<JsonValue>> {
-    let mut tracer = JsTracer::new(state_view.clone(), js_tracer_config)?;
+    let mut tracer = JsTracer::new(state_view.clone(), js_tracer_config, limits)?;
 
     let tx_source = zksync_os_interface::traits::TxListSource {
         transactions: txs.into_iter().map(|tx| tx.encode()).collect(),
