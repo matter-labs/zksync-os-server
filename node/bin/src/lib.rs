@@ -1407,13 +1407,13 @@ async fn build_l1_sender_provider(
     sl_provider: &NodeProvider,
     settles_on_gateway: bool,
 ) -> NodeProvider {
-    let rpc_retry_config = if settles_on_gateway {
-        config.gateway_sender_config.rpc_retry
+    let rpc_retry_forever = if settles_on_gateway {
+        config.gateway_sender_config.rpc_retry_forever
     } else {
-        config.l1_sender_config.rpc_retry
+        config.l1_sender_config.rpc_retry_forever
     };
 
-    if !rpc_retry_config.overrides_default() {
+    if !rpc_retry_forever {
         return sl_provider.clone();
     }
 
@@ -1430,10 +1430,7 @@ async fn build_l1_sender_provider(
     };
 
     tracing::info!(
-        "using dedicated {provider_kind:?} settlement provider with RPC retry overrides: \
-         retry_all_errors={}, infinite_retries={}",
-        rpc_retry_config.retry_all_errors,
-        rpc_retry_config.infinite_retries,
+        "using dedicated {provider_kind:?} settlement provider with RPC retry forever enabled"
     );
 
     build_node_provider(
@@ -1443,9 +1440,8 @@ async fn build_l1_sender_provider(
         0,
         provider_kind,
         Some(ProviderRetryConfig {
-            max_retries: (!rpc_retry_config.infinite_retries)
-                .then_some(provider_config.max_retries),
-            retry_all_errors: rpc_retry_config.retry_all_errors,
+            max_retries: None,
+            retry_all_errors: true,
             backoff: provider_config.retry_backoff,
         }),
     )
