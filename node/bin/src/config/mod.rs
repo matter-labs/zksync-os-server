@@ -948,15 +948,11 @@ pub struct RpcConfig {
     #[config(default_t = 10000000)]
     pub eth_call_gas: usize,
 
-    /// Wall-clock ceiling for a single JS tracer run (`debug_trace*` with a JS tracer). The trace
-    /// aborts with an error once exceeded, so a complex tracer can no longer pin a worker
-    /// indefinitely.
+    /// Maximum execution time of a single JS tracer run
     #[config(default_t = 10 * TimeUnit::Seconds)]
     pub js_tracer_timeout: Duration,
 
-    /// Maximum process resident-memory (RSS) growth tolerated during a single JS tracer run before
-    /// it is aborted. Best-effort, measured via `/proc` (not enforced on platforms without it).
-    /// Set to `0` to disable the memory check.
+    /// Maximum memory growth allowed during a single JS tracer run. Set to `0` to disable the check.
     #[config(default_t = 512 * SizeUnit::MiB)]
     pub js_tracer_max_memory: ByteSize,
 

@@ -25,37 +25,24 @@ use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
 const MAX_JS_TRACER_PAYLOAD_BYTES: usize = 512 * 1024;
 
-/// Default wall-clock ceiling for a single tracer's total execution (overridable via config).
-/// Checked between EVM opcode steps; if exceeded the tracer aborts with an error instead of
-/// running unbounded. This bounds the "millions of cheap steps, each doing some JS work" case (and
-/// any genuinely long trace), so a `debug_trace*` request can no longer pin a blocking worker
-/// indefinitely.
 const DEFAULT_JS_TRACER_EXECUTION_DEADLINE: Duration = Duration::from_secs(10);
-
-/// Default cap on process-RSS *growth* tolerated during a single tracer run (overridable via
-/// config). A user tracer that accumulates JS heap across steps (e.g. pushing a record per step)
-/// is otherwise bounded only by the deadline; this aborts it once it has grown process memory by
-/// the configured amount.
 const DEFAULT_JS_TRACER_MAX_MEMORY_BYTES: usize = 512 * 1024 * 1024;
 
-/// How often (in steps) the memory limit is checked. Reading `/proc/self/status` costs ~µs, so we
-/// sample periodically rather than every step; the wall-clock deadline is checked every step.
+/// How often (in steps) the memory limit is checked; the deadline is checked every step.
 const MEMORY_CHECK_INTERVAL: u64 = 64;
 
-/// Per-invocation cap on JS loop iterations (Boa runtime limit). Boa's counter is reset per
-/// top-level call, so this bounds an infinite/runaway loop *inside a single* hook (e.g.
-/// `while (true) {}` in `step`/`result`) — the one runaway the wall-clock deadline can't catch,
-/// since control never returns to the Rust side mid-loop. Set generously so legitimate tracers
-/// iterating over collected per-step data are unaffected.
+/// Boa loop-iteration limit per hook invocation — catches a runaway loop inside a single hook
+/// (e.g. `while (true) {}`), which the wall-clock deadline can't since control never returns to
+/// the Rust side.
 const JS_TRACER_MAX_LOOP_ITERATIONS: u64 = 50_000_000;
 
-/// Runtime limits for a JS tracer, resolved from `RpcConfig`.
+/// Runtime limits for a JS tracer.
 #[derive(Clone, Copy, Debug)]
 pub struct JsTracerLimits {
     /// Abort the trace once it has been running this long.
     pub execution_deadline: Duration,
-    /// Abort the trace once process RSS has grown by more than this many bytes since the tracer
-    /// started. `None` disables the (best-effort) memory check.
+    /// Abort the trace once process RSS has grown by more than this many bytes.
+    /// `None` disables the check.
     pub max_memory_bytes: Option<usize>,
 }
 
@@ -69,7 +56,6 @@ impl Default for JsTracerLimits {
 }
 
 impl JsTracerLimits {
-    /// Builds limits from the RPC config. A configured memory limit of `0` disables the check.
     pub fn from_config(config: &crate::config::RpcConfig) -> Self {
         Self {
             execution_deadline: config.js_tracer_timeout,
@@ -79,7 +65,7 @@ impl JsTracerLimits {
     }
 }
 
-// Names of the per-hook invoker functions installed once in `host::install_invocation_helpers`.
+// Per-hook invoker functions installed by `host::install_invocation_helpers`.
 const INVOKE_SETUP: &str = "__zkjs_invoke_setup";
 const INVOKE_STEP: &str = "__zkjs_invoke_step";
 const INVOKE_STEP_ERR: &str = "__zkjs_invoke_step_err";
@@ -121,18 +107,13 @@ pub struct JsTracer {
     // User-provided tracer config
     tracer_config: JsonValue,
 
-    // Pre-resolved invoker functions, keyed by invoker name. Populated once in `new` only for the
-    // hooks the user tracer actually defines, so a missing hook is a cheap map miss (no-op) rather
-    // than a per-step `typeof` eval. The hot path calls these instead of re-`eval`ing JS source.
+    // Pre-resolved invoker functions for the hooks the user tracer defines
     invokers: HashMap<&'static str, JsObject>,
 
-    // Execution bounds.
+    // Execution bounds
     limits: JsTracerLimits,
     started_at: Instant,
-    // Baseline process RSS captured at construction; `None` if `/proc` is unavailable, in which
-    // case the memory check is skipped. Used as the reference point for `max_memory_bytes`.
     start_rss_bytes: Option<usize>,
-    // Number of steps observed, used to throttle memory sampling.
     step_count: u64,
 
     // Overlays for storage and code modifications
@@ -171,8 +152,6 @@ impl JsTracer {
 
         let mut ctx = BoaContext::default();
 
-        // Bound runaway JS loops inside a single hook invocation. Boa's recursion/stack limits are
-        // already finite by default; only the loop-iteration limit defaults to unbounded.
         ctx.runtime_limits_mut()
             .set_loop_iteration_limit(JS_TRACER_MAX_LOOP_ITERATIONS);
 
@@ -215,12 +194,8 @@ impl JsTracer {
         })
     }
 
-    /// Calls a pre-installed invoker function (e.g. `__zkjs_invoke_step`) with the per-hook data.
-    ///
-    /// `arg` is converted to a `JsValue` via `JsValue::from_json` (GC-heap allocation, no source
-    /// parsing and no interner growth) and passed to the invoker, which builds the geth-shaped
-    /// `log`/`frame` wrapper and calls the user's tracer method. If the invoker is absent (the user
-    /// tracer doesn't define that hook) this is a no-op, matching the previous existence check.
+    /// Calls a pre-installed invoker function with the per-hook data. No-op if the user tracer
+    /// doesn't define the corresponding hook.
     fn invoke_named(
         &mut self,
         invoker: &'static str,
@@ -243,9 +218,8 @@ impl JsTracer {
         Ok(())
     }
 
-    /// Advances the step counter and checks the per-tracer execution budget. Returns an error
-    /// reason once the tracer has run longer than its deadline or grown process memory past its
-    /// limit, in which case the caller aborts the trace. Called between EVM opcode steps.
+    /// Returns an error reason once the tracer has run longer than its deadline or grown process
+    /// memory past its limit.
     fn budget_exceeded(&mut self) -> Option<String> {
         self.step_count = self.step_count.wrapping_add(1);
 
@@ -256,9 +230,6 @@ impl JsTracer {
             ));
         }
 
-        // Memory is sampled periodically (reading /proc is ~µs) and only when both a limit and a
-        // baseline RSS are available. RSS growth from baseline catches a tracer that accumulates
-        // JS heap across steps before it can OOM the (shared) process.
         if self.step_count.is_multiple_of(MEMORY_CHECK_INTERVAL)
             && let Some(limit) = self.limits.max_memory_bytes
             && let Some(base) = self.start_rss_bytes
@@ -384,9 +355,7 @@ impl JsTracer {
             TracerMethod::Enter => self.invoke_named(INVOKE_ENTER, arg, method),
             TracerMethod::Exit => self.invoke_named(INVOKE_EXIT, arg, method),
             TracerMethod::Step | TracerMethod::Fault => {
-                // Geth exposes a richer `log` to `step`, but only `{getError, getDepth}` when an
-                // error is present. Preserve that split by picking the matching invoker (which
-                // builds the appropriate wrapper shape).
+                // Geth exposes only `{getError, getDepth}` on the log when an error is present
                 let has_error = arg.get("error").map(|e| !e.is_null()).unwrap_or(false);
                 let invoker = match (method, has_error) {
                     (TracerMethod::Step, false) => INVOKE_STEP,
@@ -450,8 +419,6 @@ impl JsTracer {
         let method_name = TracerMethod::Result.as_str();
         let arg = JsValue::from_json(&ctx, &mut self.ctx)
             .map_err(|e| anyhow::anyhow!("JS tracer result ctx conversion failed: {e}"))?;
-        // The invoker returns `JSON.stringify(tracer.result(ctx, db))`, i.e. a JS string, matching
-        // the previous behaviour exactly.
         let value = f
             .call(&JsValue::undefined(), &[arg], &mut self.ctx)
             .map_err(|e| anyhow::anyhow!("JS tracer method {method_name} failed: {e}"))?;
@@ -583,14 +550,13 @@ impl JsTracer {
     }
 }
 
-/// Best-effort current resident set size (RSS) of this process, in bytes. Reads `/proc/self/status`
-/// and returns `None` on platforms without it (e.g. macOS) or on any parse failure — in which case
-/// the memory limit is simply not enforced rather than falsely tripping.
+/// Current resident set size of this process, in bytes. `None` on platforms without
+/// `/proc/self/status` (e.g. macOS), in which case the memory limit is not enforced.
 fn current_rss_bytes() -> Option<usize> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     for line in status.lines() {
         if let Some(rest) = line.strip_prefix("VmRSS:") {
-            // Format: "VmRSS:\t  191234 kB"
+            // "VmRSS:\t  191234 kB"
             let kb: usize = rest.split_whitespace().next()?.parse().ok()?;
             return Some(kb * 1024);
         }
@@ -598,13 +564,11 @@ fn current_rss_bytes() -> Option<usize> {
     None
 }
 
-/// Resolves the per-hook invoker functions installed by `host::install_invocation_helpers`, but
-/// only for the hooks the user tracer actually defines. A missing entry means the hook is absent,
-/// so the hot path simply skips it (no per-step `typeof` eval needed).
+/// Resolves the invoker functions for the hooks the user tracer defines; a missing entry means
+/// the hook is absent.
 fn resolve_invokers(ctx: &mut BoaContext) -> anyhow::Result<HashMap<&'static str, JsObject>> {
     let mut invokers = HashMap::new();
 
-    // (tracer method name, invoker functions that drive it)
     let hooks: &[(&str, &[&'static str])] = &[
         ("setup", &[INVOKE_SETUP]),
         ("step", &[INVOKE_STEP, INVOKE_STEP_ERR]),
@@ -627,7 +591,6 @@ fn resolve_invokers(ctx: &mut BoaContext) -> anyhow::Result<HashMap<&'static str
     Ok(invokers)
 }
 
-/// Checks once (at construction) whether the user tracer defines a callable hook of the given name.
 fn tracer_has_method(ctx: &mut BoaContext, method: &str) -> anyhow::Result<bool> {
     let snippet = format!(
         "(typeof tracer === 'object' && tracer !== null && typeof tracer.{method} === 'function')"
@@ -638,9 +601,6 @@ fn tracer_has_method(ctx: &mut BoaContext, method: &str) -> anyhow::Result<bool>
     Ok(value.to_boolean())
 }
 
-/// Resolves a global function (installed in the Boa context) into a reusable callable handle.
-/// The handle stays valid for the life of the tracer because the function is reachable from the
-/// global object (a GC root), so it is never collected.
 fn resolve_callable(ctx: &mut BoaContext, name: &str) -> anyhow::Result<JsObject> {
     let global = ctx.global_object();
     let value = global
@@ -953,8 +913,6 @@ impl EvmTracer for JsTracer {
         opcode: u8,
         frame_state: impl EvmFrameInterface,
     ) {
-        // Once an error is recorded the tracer is done; skip all per-step work (including the
-        // expensive heap/stack snapshot in `prepare_log_input`) so the EVM can unwind cheaply.
         if self.error.is_some() {
             return;
         }
@@ -962,7 +920,7 @@ impl EvmTracer for JsTracer {
             self.record_error(TracerMethod::Step, anyhow::anyhow!(reason));
             return;
         }
-        // Nothing to do (and no point snapshotting memory/stack) if the tracer has no `step` hook.
+        // No `step` hook — skip the memory/stack snapshot entirely
         if !self.invokers.contains_key(INVOKE_STEP) {
             self.pending_step = None;
             return;

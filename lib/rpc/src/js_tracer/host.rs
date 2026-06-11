@@ -74,24 +74,11 @@ pub(crate) fn init_host_env_in_boa_context(
     Ok(())
 }
 
-/// Installs the per-hook wrapper functions exactly once.
-///
-/// Historically the tracer rebuilt and re-`eval`'d a fresh JS source string for *every* EVM
-/// opcode step (embedding the full memory dump and stack as a string literal). Re-parsing that
-/// source on each step both pinned a CPU core and grew Boa's append-only string interner without
-/// bound (the interner is never reclaimed for the life of the `Context`), so a long or
-/// memory-growing trace would exhaust memory and hang the node.
-///
-/// Instead we install the *structural* wrappers (the objects that expose `op`/`memory`/`stack`/...
-/// with their geth-compatible methods) and the small invoker functions once, here. The hot path
-/// then only converts the per-step data into a `JsValue` (via `JsValue::from_json`, which allocates
-/// on the GC heap, not the interner) and calls the already-compiled invoker — no per-step parsing.
-///
-/// The invokers call the user methods as property calls on `tracer` (e.g. `tracer.step(log, db)`)
-/// so that `this` inside the user's tracer is the tracer object, matching the previous behaviour.
+/// Installs the geth-shaped `log`/`frame` wrapper builders and per-hook invoker functions once,
+/// so the hot path only converts step data to a `JsValue` and calls a pre-compiled function
+/// instead of parsing fresh JS source on every step (which also grows Boa's string interner
+/// without bound).
 fn install_invocation_helpers(ctx: &mut BoaContext) -> anyhow::Result<()> {
-    // The object shapes below are kept byte-for-byte identical to the ones the tracer used to build
-    // inline per step, so tracers observe exactly the same `log`/`frame` interface.
     let helpers = r#"
         function __zkjs_build_step_log(raw) {
             let op = {
