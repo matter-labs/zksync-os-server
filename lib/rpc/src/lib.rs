@@ -12,6 +12,7 @@ mod eth_fill_transaction_handler;
 mod eth_filter;
 mod eth_impl;
 mod eth_pubsub_impl;
+mod finality_impl;
 mod metrics;
 mod ots_impl;
 mod result;
@@ -38,6 +39,7 @@ use crate::debug_impl::DebugNamespace;
 use crate::eth_filter::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
+use crate::finality_impl::FinalityNamespace;
 use crate::monitoring_middleware::Monitoring;
 use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
@@ -61,6 +63,7 @@ use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
+use zksync_os_rpc_api::finality::ZksFinalityApiServer;
 use zksync_os_rpc_api::net::NetApiServer;
 use zksync_os_rpc_api::ots::OtsApiServer;
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
@@ -130,6 +133,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         )
         .into_rpc(),
     )?;
+    rpc.merge(FinalityNamespace::new(storage.clone()).into_rpc())?;
     rpc.merge(OtsNamespace::new(storage.clone()).into_rpc())?;
     rpc.merge(DebugNamespace::new(storage.clone(), eth_call_handler).into_rpc())?;
     rpc.merge(TxpoolNamespace::new(mempool.clone()).into_rpc())?;

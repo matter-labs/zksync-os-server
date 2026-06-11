@@ -1,10 +1,12 @@
 use crate::network::Zksync;
+use alloy::eips::BlockNumberOrTag;
 use alloy::primitives::{Address, BlockNumber, StorageKey, TxHash};
 use alloy::providers::Provider;
 use alloy::transports::TransportResult;
 use serde::Deserialize;
 use std::time::Duration;
 use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_rpc_api::finality::{FinalityResponse, NodeFinalityStatus};
 use zksync_os_rpc_api::types::{BatchStorageProof, L2ToL1LogProof, LogProofTarget};
 
 /// RPC interface that gives access to methods specific to ZKsync OS.
@@ -61,6 +63,34 @@ pub trait ZksyncApi: Provider<Zksync> {
             .await?;
         tracing::debug!(block_number, ?batch_info, "got batch info for block");
         Ok(batch_info.batch_number)
+    }
+
+    async fn get_block_finality(
+        &self,
+        block: BlockNumberOrTag,
+    ) -> TransportResult<Option<FinalityResponse>> {
+        self.client()
+            .request("zks_getBlockFinality", (block,))
+            .await
+    }
+
+    async fn get_transaction_finality(
+        &self,
+        tx_hash: TxHash,
+    ) -> TransportResult<Option<FinalityResponse>> {
+        self.client()
+            .request("zks_getTransactionFinality", (tx_hash,))
+            .await
+    }
+
+    async fn get_batch_finality(&self, batch_number: u64) -> TransportResult<FinalityResponse> {
+        self.client()
+            .request("zks_getBatchFinality", (batch_number,))
+            .await
+    }
+
+    async fn get_finality_status(&self) -> TransportResult<NodeFinalityStatus> {
+        self.client().request("zks_getFinalityStatus", ()).await
     }
 
     async fn wait_batch_number_by_block_number(
