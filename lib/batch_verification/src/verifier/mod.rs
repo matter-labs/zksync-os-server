@@ -91,26 +91,12 @@ impl BatchVerificationResponder {
                 BatchVerificationError::MissingBlock(request.first_block_number)
             })?;
 
-        let last_block = blocks.last().unwrap();
-
         let (batch_info, _) = ExtendedCommitBatchInfo::build(
-            blocks
-                .iter()
-                .map(|block| {
-                    (
-                        &block.output,
-                        block.record.transactions.as_slice(),
-                        &block.tree_output,
-                    )
-                })
-                .collect(),
+            &blocks,
             self.chain_id,
             request.batch_number,
             request.pubdata_mode,
             self.l1_state.sl_chain_id,
-            last_block.multichain_root,
-            &blocks.first().unwrap().record.protocol_version,
-            &last_block.record.block_context.block_hashes.0,
         );
 
         let expected_commit_data = normalized_commit_data(
@@ -127,7 +113,7 @@ impl BatchVerificationResponder {
             self.diamond_proxy_sl,
             self.l1_state.sl_chain_id,
             self.l1_state.validator_timelock_sl,
-            &blocks.first().unwrap().record.protocol_version,
+            &blocks.first().unwrap().protocol_version,
             &self.signer,
         )
         .await;

@@ -1,8 +1,8 @@
-use crate::cache::{LocalBatchBlockData, TreeBlockCache};
+use crate::cache::TreeBlockCache;
 use async_trait::async_trait;
 use std::ops::RangeInclusive;
 use tokio::sync::{mpsc, watch};
-use zksync_os_batch_types::ExtendedCommitBatchInfo;
+use zksync_os_batch_types::{BlockCommitmentData, ExtendedCommitBatchInfo};
 use zksync_os_contract_interface::models::{DACommitmentScheme, StoredBatchInfo};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
@@ -77,7 +77,8 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         }
     }
 
-    /// Inserts a block into the shared cache
+    /// Inserts a block into the shared cache, pre-folded into its commitment ingredients so the
+    /// cache holds a few hundred bytes per block (plus pubdata) instead of full block data.
     fn insert_tree_block(&self, tree_block: TreeBlock) -> anyhow::Result<()> {
         let block_number = tree_block.record.block_context.block_number;
         if block_number <= self.last_persisted_block_on_start {
@@ -85,12 +86,14 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
         }
         let state_view = self.read_state.state_view_at(block_number)?;
         let multichain_root = read_multichain_root(state_view);
-        let data = LocalBatchBlockData {
-            output: tree_block.output,
-            record: tree_block.record,
-            tree_output: tree_block.tree.output,
+        let data = BlockCommitmentData::new(
+            &tree_block.output,
+            &tree_block.record.transactions,
+            &tree_block.tree.output,
+            &tree_block.record.block_context.block_hashes.0,
             multichain_root,
-        };
+            tree_block.record.protocol_version,
+        );
 
         let mut result = Ok(());
         self.cache
@@ -116,31 +119,12 @@ impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
             return Ok(false);
         };
 
-        // The protocol version is uniform within a batch (a batch is sealed whenever it changes),
-        // so the last block carries everything we need: its protocol version, multichain root, and
-        // the trailing block hashes.
-        let last_block = blocks
-            .last()
-            .expect("L1 committed batch block range cannot be empty");
-
         let (local_batch_info, _) = ExtendedCommitBatchInfo::build(
-            blocks
-                .iter()
-                .map(|block| {
-                    (
-                        &block.output,
-                        block.record.transactions.as_slice(),
-                        &block.tree_output,
-                    )
-                })
-                .collect(),
+            &blocks,
             self.chain_id,
             commit.batch_number(),
             PubdataMode::from_da_commitment_scheme(commit.l2_da_commitment_scheme),
             self.sl_chain_id,
-            last_block.multichain_root,
-            &last_block.record.protocol_version,
-            &last_block.record.block_context.block_hashes.0,
         );
 
         let local_stored = local_batch_info.into_stored();

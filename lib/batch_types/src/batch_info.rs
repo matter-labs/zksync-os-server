@@ -9,11 +9,118 @@ use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_merkle_tree_api::TreeBatchOutput;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_types::{
-    BlockOutput, L2_TO_L1_TREE_SIZE, L2ToL1Log, ProtocolSemanticVersion, PubdataMode, ZkEnvelope,
-    ZkTransaction,
+    BlockOutput, InteropRoot, L2_TO_L1_LOG_SERIALIZE_SIZE, L2_TO_L1_TREE_SIZE, L2ToL1Log,
+    ProtocolSemanticVersion, PubdataMode, ZkEnvelope, ZkTransaction,
 };
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
+
+/// Per-block inputs to a batch commitment, pre-folded from full block data.
+///
+/// Carries exactly what [`ExtendedCommitBatchInfo::build`] needs from each block, so callers
+/// that hold blocks for a while (the EN L1 consistency checker, the batch verification
+/// responder) can cache a few hundred bytes per block (plus pubdata) instead of the full
+/// `BlockOutput`/`ReplayRecord` pair. The bulky inputs — full transactions, tx results and
+/// the 8KB block-hashes ring — are reduced to hashes and counters at construction time.
+#[derive(Clone, Debug)]
+pub struct BlockCommitmentData {
+    pub block_number: u64,
+    pub timestamp: u64,
+    /// Onchain-data hashes of the block's L1 (priority) transactions, in execution order.
+    pub l1_tx_onchain_hashes: Vec<B256>,
+    pub num_l2_txs: u64,
+    pub interop_roots: Vec<InteropRoot>,
+    pub upgrade_tx_hash: Option<B256>,
+    /// Encoded L2->L1 logs emitted by the block, in emission order.
+    pub encoded_l2_l1_logs: Vec<[u8; L2_TO_L1_LOG_SERIALIZE_SIZE]>,
+    pub pubdata: Vec<u8>,
+    /// Blake2s over the previous 255 block hashes plus this block's own hash — the value
+    /// `new_state_commitment` needs if this block ends up last in its batch.
+    pub last_256_block_hashes_blake: B256,
+    pub tree_root_hash: B256,
+    pub tree_leaf_count: u64,
+    pub multichain_root: B256,
+    pub protocol_version: ProtocolSemanticVersion,
+}
+
+impl BlockCommitmentData {
+    pub fn new(
+        block_output: &BlockOutput,
+        transactions: &[ZkTransaction],
+        tree_output: &TreeBatchOutput,
+        last_256_block_hashes: &[U256; 256],
+        multichain_root: B256,
+        protocol_version: ProtocolSemanticVersion,
+    ) -> Self {
+        let mut l1_tx_onchain_hashes = Vec::new();
+        let mut num_l2_txs = 0;
+        let mut interop_roots = Vec::new();
+        let mut upgrade_tx_hash = None;
+        for tx in transactions {
+            match tx.envelope() {
+                ZkEnvelope::System(envelope) => {
+                    num_l2_txs += 1;
+                    if let Some(roots) = envelope.interop_roots() {
+                        interop_roots.extend(roots);
+                    }
+                }
+                ZkEnvelope::L2(_) => num_l2_txs += 1,
+                ZkEnvelope::L1(l1_tx) => l1_tx_onchain_hashes.push(*l1_tx.hash()),
+                ZkEnvelope::Upgrade(_) => {
+                    assert!(
+                        upgrade_tx_hash.is_none(),
+                        "more than one upgrade tx in a block: first {upgrade_tx_hash:?}, second {}",
+                        tx.hash()
+                    );
+                    upgrade_tx_hash = Some(*tx.hash());
+                }
+            }
+        }
+
+        let encoded_l2_l1_logs = block_output
+            .tx_results
+            .iter()
+            .flatten()
+            .flat_map(|tx_output| &tx_output.l2_to_l1_logs)
+            .map(|log_with_preimage| {
+                L2ToL1Log {
+                    l2_shard_id: log_with_preimage.log.l2_shard_id,
+                    is_service: log_with_preimage.log.is_service,
+                    tx_number_in_block: log_with_preimage.log.tx_number_in_block,
+                    sender: log_with_preimage.log.sender,
+                    key: log_with_preimage.log.key,
+                    value: log_with_preimage.log.value,
+                }
+                .encode()
+            })
+            .collect();
+
+        let last_256_block_hashes_blake = {
+            let mut blocks_hasher = Blake2s256::new();
+            for block_hash in &last_256_block_hashes[1..] {
+                blocks_hasher.update(block_hash.to_be_bytes::<32>());
+            }
+            blocks_hasher.update(block_output.header.hash());
+            B256::from_slice(&blocks_hasher.finalize())
+        };
+
+        Self {
+            block_number: block_output.header.number,
+            timestamp: block_output.header.timestamp,
+            l1_tx_onchain_hashes,
+            num_l2_txs,
+            interop_roots,
+            upgrade_tx_hash,
+            encoded_l2_l1_logs,
+            pubdata: block_output.pubdata.clone(),
+            last_256_block_hashes_blake,
+            tree_root_hash: tree_output.root_hash,
+            tree_leaf_count: tree_output.leaf_count,
+            multichain_root,
+            protocol_version,
+        }
+    }
+}
 
 /// Commitment information about a batch.
 /// Contains enough data to restore `StoredBatchInfo` that got applied on-chain.
@@ -30,98 +137,57 @@ pub struct ExtendedCommitBatchInfo {
 }
 
 impl ExtendedCommitBatchInfo {
-    #[allow(clippy::too_many_arguments)]
     pub fn build(
-        blocks: Vec<(&BlockOutput, &[ZkTransaction], &TreeBatchOutput)>,
+        blocks: &[BlockCommitmentData],
         chain_id: u64,
         batch_number: u64,
         pubdata_mode: PubdataMode,
         sl_chain_id: u64,
-        multichain_root: B256,
-        protocol_version: &ProtocolSemanticVersion,
-        last_256_block_hashes: &[U256; 256],
     ) -> (Self, Option<BlobTransactionSidecar>) {
+        let first_block = blocks.first().expect("batch cannot be empty");
+        let last_block = blocks.last().expect("batch cannot be empty");
+        // The protocol version (and the multichain root we compare against) is uniform within
+        // a batch — a batch is sealed whenever it changes — so the last block's values stand
+        // in for the whole batch.
+        let protocol_version = &last_block.protocol_version;
+
         let mut priority_operations_hash = keccak256([]);
         let mut number_of_layer1_txs = 0;
         let mut number_of_layer2_txs = 0;
         let mut total_pubdata = vec![];
         let mut encoded_l2_l1_logs = vec![];
-
-        let (first_block_output, _, _) = *blocks.first().unwrap();
-        let (last_block_output, _, last_block_tree) = *blocks.last().unwrap();
-
         let mut upgrade_tx_hash = None;
-
         let mut dependency_roots_rolling_hash = B256::ZERO;
 
-        for (block_output, transactions, _) in blocks {
-            total_pubdata.extend(block_output.pubdata.clone());
+        for block in blocks {
+            total_pubdata.extend_from_slice(&block.pubdata);
+            number_of_layer1_txs += block.l1_tx_onchain_hashes.len() as u64;
+            number_of_layer2_txs += block.num_l2_txs;
+            encoded_l2_l1_logs.extend(block.encoded_l2_l1_logs.iter().copied());
 
-            for tx in transactions {
-                match tx.envelope() {
-                    ZkEnvelope::System(envelope) => {
-                        number_of_layer2_txs += 1;
-
-                        if let Some(roots) = envelope.interop_roots() {
-                            for root in roots {
-                                dependency_roots_rolling_hash = keccak256(
-                                    (
-                                        dependency_roots_rolling_hash,
-                                        root.chainId,
-                                        root.blockOrBatchNumber,
-                                        root.sides,
-                                    )
-                                        .abi_encode_packed(),
-                                );
-                            }
-                        }
-                    }
-                    ZkEnvelope::L2(_) => {
-                        number_of_layer2_txs += 1;
-                    }
-                    ZkEnvelope::L1(l1_tx) => {
-                        let onchain_data_hash = l1_tx.hash();
-                        priority_operations_hash =
-                            keccak256([priority_operations_hash.0, onchain_data_hash.0].concat());
-                        number_of_layer1_txs += 1;
-                    }
-                    ZkEnvelope::Upgrade(_) => {
-                        assert!(
-                            upgrade_tx_hash.is_none(),
-                            "more than one upgrade tx in a batch: first {upgrade_tx_hash:?}, second {}",
-                            tx.hash()
-                        );
-                        upgrade_tx_hash = Some(*tx.hash());
-                    }
-                }
+            for onchain_data_hash in &block.l1_tx_onchain_hashes {
+                priority_operations_hash =
+                    keccak256([priority_operations_hash.0, onchain_data_hash.0].concat());
             }
-
-            for tx_output in block_output.tx_results.clone().into_iter().flatten() {
-                encoded_l2_l1_logs.extend(tx_output.l2_to_l1_logs.into_iter().map(
-                    |log_with_preimage| {
-                        let log = L2ToL1Log {
-                            l2_shard_id: log_with_preimage.log.l2_shard_id,
-                            is_service: log_with_preimage.log.is_service,
-                            tx_number_in_block: log_with_preimage.log.tx_number_in_block,
-                            sender: log_with_preimage.log.sender,
-                            key: log_with_preimage.log.key,
-                            value: log_with_preimage.log.value,
-                        };
-                        log.encode()
-                    },
-                ));
+            for root in &block.interop_roots {
+                dependency_roots_rolling_hash = keccak256(
+                    (
+                        dependency_roots_rolling_hash,
+                        root.chainId,
+                        root.blockOrBatchNumber,
+                        root.sides.clone(),
+                    )
+                        .abi_encode_packed(),
+                );
+            }
+            if let Some(hash) = block.upgrade_tx_hash {
+                assert!(
+                    upgrade_tx_hash.is_none(),
+                    "more than one upgrade tx in a batch: first {upgrade_tx_hash:?}, second {hash}"
+                );
+                upgrade_tx_hash = Some(hash);
             }
         }
-
-        let last_256_block_hashes_blake = {
-            let mut blocks_hasher = Blake2s256::new();
-            for block_hash in &last_256_block_hashes[1..] {
-                blocks_hasher.update(block_hash.to_be_bytes::<32>());
-            }
-            blocks_hasher.update(last_block_output.header.hash());
-
-            blocks_hasher.finalize()
-        };
 
         /* ---------- operator DA input ---------- */
         let da_fields = calculate_da_fields(&total_pubdata, pubdata_mode);
@@ -129,11 +195,11 @@ impl ExtendedCommitBatchInfo {
         /* ---------- new state commitment ---------- */
         // FIXME: extract to a type common batch types?
         let mut hasher = Blake2s256::new();
-        hasher.update(last_block_tree.root_hash.as_slice());
-        hasher.update(last_block_tree.leaf_count.to_be_bytes());
-        hasher.update(last_block_output.header.number.to_be_bytes());
-        hasher.update(last_256_block_hashes_blake);
-        hasher.update(last_block_output.header.timestamp.to_be_bytes());
+        hasher.update(last_block.tree_root_hash.as_slice());
+        hasher.update(last_block.tree_leaf_count.to_be_bytes());
+        hasher.update(last_block.block_number.to_be_bytes());
+        hasher.update(last_block.last_256_block_hashes_blake);
+        hasher.update(last_block.timestamp.to_be_bytes());
         let new_state_commitment = B256::from_slice(&hasher.finalize());
 
         /* ---------- root hash of l2->l1 logs ---------- */
@@ -145,7 +211,7 @@ impl ExtendedCommitBatchInfo {
 
         let l2_to_l1_logs_root_hash = if protocol_version.is_post_v31() {
             // The result should be Keccak(l2_l1_local_root, multichain_root).
-            keccak256([l2_l1_local_root.0, multichain_root.0].concat())
+            keccak256([l2_l1_local_root.0, last_block.multichain_root.0].concat())
         } else {
             // For older protocol versions, multichain root should be set to zero.
             keccak256([l2_l1_local_root.0, [0u8; 32]].concat())
@@ -161,10 +227,10 @@ impl ExtendedCommitBatchInfo {
             l2_to_l1_logs_root_hash,
             l2_da_commitment_scheme: pubdata_mode.da_commitment_scheme(),
             da_commitment: da_fields.da_commitment,
-            first_block_timestamp: first_block_output.header.timestamp,
-            first_block_number: Some(first_block_output.header.number),
-            last_block_timestamp: last_block_output.header.timestamp,
-            last_block_number: Some(last_block_output.header.number),
+            first_block_timestamp: first_block.timestamp,
+            first_block_number: Some(first_block.block_number),
+            last_block_timestamp: last_block.timestamp,
+            last_block_number: Some(last_block.block_number),
             chain_id,
             operator_da_input: da_fields.operator_da_input,
             sl_chain_id,
