@@ -194,9 +194,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .expect("Cannot load remote config from Main Node")
         };
 
-    let persistent_batch_storage =
-        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
-
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
     let l1_provider = build_node_provider(
@@ -267,7 +264,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             &mut config,
             &repositories,
             &l1_state,
-            &persistent_batch_storage,
+            chain_id,
             &sl_provider,
         )
         .await
@@ -922,6 +919,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // ========== Start L1 Persist Batch Watcher ===========
 
+    let persistent_batch_storage =
+        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
     let rpc_storage = RpcStorage::new(
         repositories.clone(),
         block_replay_storage.clone(),

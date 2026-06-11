@@ -1,28 +1,44 @@
 use anyhow::Context as _;
 use ruint::aliases::U256;
+use zksync_os_contract_interface::IValidatorTimelock;
 use zksync_os_contract_interface::l1_discovery::L1State;
-use zksync_os_contract_interface::{IValidatorTimelock, ZkChain};
 use zksync_os_l1_watcher::fetch_batch;
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_provider::{EthWalletProvider, NodeProvider};
-use zksync_os_storage::db::ExecutedBatchStorage;
-use zksync_os_storage_api::{ReadBatch, ReadRepository};
+use zksync_os_storage_api::ReadRepository;
 
 use crate::config::{Config, RebuildConfig};
 
-/// Derives `last_l1_batch_to_keep` from `from_block` by scanning committed-only batches.
+/// What the startup rebuild/revert config asks us to do, decided by [`plan_startup_rebuild`]
+/// before any L1 transaction is sent.
+enum RebuildAction {
+    /// The `from_block_hash` guard says the operation already ran (or `from_block` is unknown
+    /// locally): drop the rebuild config so the local block rebuild is skipped too.
+    SkipAndClearConfig,
+    /// Nothing to do on L1: either a local-only `block_rebuild`, or a standalone `l1_revert`
+    /// whose skip conditions hold (already reverted / hash mismatch).
+    NoL1Revert,
+    /// Revert all committed batches above `last_l1_batch_to_keep` on the settlement layer.
+    RevertL1 {
+        last_l1_batch_to_keep: u64,
+        l1_reverter_sk: SignerConfig,
+    },
+}
+
+/// Derives `last_l1_batch_to_keep` from `from_block` by scanning committed-only batches on L1.
 ///
 /// Returns an error if:
 /// - there are no committed batches on L1,
-/// - all committed batches are already executed (finalized), or
-/// - `from_block` is beyond the last committed block (no batch to revert).
+/// - all committed batches are already executed (finalized),
+/// - `from_block` is beyond the last committed block (no batch to revert), or
+/// - `from_block` lies within an executed (finalized) batch.
 async fn derive_last_l1_batch_to_keep(
     from_block: u64,
-    last_committed_batch: u64,
-    last_executed_batch: u64,
-    diamond_proxy_sl: &ZkChain<NodeProvider>,
+    l1_state: &L1State,
     max_blocks_to_process: u64,
 ) -> anyhow::Result<u64> {
+    let last_committed_batch = l1_state.last_committed_batch;
+    let last_executed_batch = l1_state.last_executed_batch;
     anyhow::ensure!(
         last_committed_batch > 0,
         "no committed batches on L1; nothing to revert"
@@ -32,62 +48,53 @@ async fn derive_last_l1_batch_to_keep(
         "all committed batches are already executed (finalized); nothing to revert"
     );
 
-    let first_committed_unexecuted_batch = last_executed_batch + 1;
-    let mut batch = last_committed_batch;
-
-    while batch >= first_committed_unexecuted_batch {
-        let committed = fetch_batch(diamond_proxy_sl, batch, max_blocks_to_process)
+    let fetch_committed = |batch: u64| async move {
+        fetch_batch(&l1_state.diamond_proxy_sl, batch, max_blocks_to_process)
             .await
-            .with_context(|| format!("failed to fetch committed batch {batch} from L1"))?;
-        let first_block = committed.first_block_number();
+            .with_context(|| format!("failed to fetch committed batch {batch} from L1"))
+    };
 
-        if first_block <= from_block {
-            if batch == last_committed_batch && first_block < from_block {
-                // from_block is either inside the last committed batch or beyond it entirely.
-                let last_block = committed.last_block_number();
-                anyhow::ensure!(
-                    from_block <= last_block,
-                    "from_block ({from_block}) is beyond the last committed batch {batch} \
-                     (blocks {first_block}..={last_block}); nothing to revert"
-                );
-            }
-            // from_block is inside this batch (or exactly at its start).
-            // This batch is the first to revert; last_to_keep is one below it.
+    // Precondition: from_block must not be past the tip of the last committed batch.
+    let top = fetch_committed(last_committed_batch).await?;
+    anyhow::ensure!(
+        from_block <= top.last_block_number(),
+        "from_block ({from_block}) is beyond the last committed batch {last_committed_batch} \
+         (blocks {}..={}); nothing to revert",
+        top.first_block_number(),
+        top.last_block_number(),
+    );
+
+    // The first batch (scanning from the top) that starts at or before `from_block` is the
+    // batch containing it — i.e. the first batch to revert; last_to_keep is one below it.
+    if top.first_block_number() <= from_block {
+        return Ok(last_committed_batch - 1);
+    }
+    for batch in (last_executed_batch + 1..last_committed_batch).rev() {
+        if fetch_committed(batch).await?.first_block_number() <= from_block {
             return Ok(batch - 1);
         }
-
-        batch -= 1;
     }
 
     anyhow::bail!(
         "from_block ({from_block}) is at or before the first committed-only batch \
-         ({first_committed_unexecuted_batch}); it lies within an executed (finalized) batch \
-         and cannot be reverted"
+         ({}); it lies within an executed (finalized) batch and cannot be reverted",
+        last_executed_batch + 1,
     );
 }
 
 /// Calls `revertBatchesSharedBridge` on the validator timelock to roll back all committed batches
 /// above `last_l1_batch_to_keep`. Verifies the reverter has the required role before submitting.
+///
+/// Reverting executed (finalized) batches is impossible: [`plan_startup_rebuild`] checks the
+/// target against the on-chain `last_executed_batch`, and the Executor contract itself rejects
+/// reverts below `totalBatchesExecuted`.
 async fn perform_l1_revert(
     last_l1_batch_to_keep: u64,
     l1_state: &L1State,
     chain_id: u64,
     sl_provider: &NodeProvider,
     reverter_sk: &SignerConfig,
-    persistent_batch_storage: &ExecutedBatchStorage,
 ) -> anyhow::Result<()> {
-    // if the first batch to revert is already in executed storage, it has been finalized on L1
-    // and cannot be rolled back.
-    let reverted_batch = last_l1_batch_to_keep
-        .checked_add(1)
-        .expect("last_l1_batch_to_keep overflow");
-    anyhow::ensure!(
-        persistent_batch_storage
-            .get_batch_by_number(reverted_batch)?
-            .is_none(),
-        "cannot revert batch {reverted_batch}: it is already executed (finalized) on L1"
-    );
-
     let mut sl_provider = sl_provider.clone();
 
     let reverter_address = reverter_sk
@@ -189,60 +196,29 @@ fn from_block_hash_matches(
     }
 }
 
-/// Handles the startup rebuild/revert config and performs L1 revert.
-///
-/// Returns `true` if an L1 revert was performed and the caller should refresh `L1State`.
-/// Returns `false` if no revert was needed (skipped or `BlockRebuild` which never touches L1).
-pub async fn handle_startup_rebuild(
-    config: &mut Config,
+/// Decides what to do for the given rebuild config without performing any L1 transaction.
+async fn plan_startup_rebuild(
+    rebuild: &RebuildConfig,
     repositories: &dyn ReadRepository,
     l1_state: &L1State,
-    persistent_batch_storage: &ExecutedBatchStorage,
-    sl_provider: &NodeProvider,
-) -> anyhow::Result<bool> {
-    let Some(rebuild) = config.sequencer_config.rebuild.clone() else {
-        return Ok(false);
-    };
-
-    let chain_id = config
-        .genesis_config
-        .chain_id
-        .expect("`genesis.chain_id` is required");
-    let max_blocks = config.l1_watcher_config.max_blocks_to_process;
-
+    max_blocks_to_process: u64,
+) -> anyhow::Result<RebuildAction> {
     match rebuild {
-        RebuildConfig::BlockRebuild { bounds } => {
-            if !from_block_hash_matches(repositories, bounds.from_block, bounds.from_block_hash) {
-                config.sequencer_config.rebuild = None;
-            }
-            // No L1 revert for this mode.
-            Ok(false)
-        }
+        RebuildConfig::BlockRebuild { bounds } => Ok(
+            if from_block_hash_matches(repositories, bounds.from_block, bounds.from_block_hash) {
+                // No L1 revert for this mode.
+                RebuildAction::NoL1Revert
+            } else {
+                RebuildAction::SkipAndClearConfig
+            },
+        ),
 
         RebuildConfig::DangerBlockRebuildWithL1Revert {
             bounds,
             l1_reverter_sk,
         } => {
             if !from_block_hash_matches(repositories, bounds.from_block, bounds.from_block_hash) {
-                config.sequencer_config.rebuild = None;
-                return Ok(false);
-            }
-
-            // Fail fast: from_block must lie beyond all finalized (executed) batches.
-            if l1_state.last_executed_batch > 0
-                && let Some(last_executed) =
-                    persistent_batch_storage.get_batch_by_number(l1_state.last_executed_batch)?
-            {
-                let last_executed_block = last_executed.last_block_number();
-                anyhow::ensure!(
-                    bounds.from_block > last_executed_block,
-                    "from_block ({}) is at or before the last executed batch {} \
-                     (blocks {}..={last_executed_block}); executed batches are finalized on \
-                     L1 and cannot be reverted",
-                    bounds.from_block,
-                    l1_state.last_executed_batch,
-                    last_executed.first_block_number(),
-                );
+                return Ok(RebuildAction::SkipAndClearConfig);
             }
 
             tracing::warn!(
@@ -251,28 +227,15 @@ pub async fn handle_startup_rebuild(
                 "DangerBlockRebuildWithL1Revert: deriving batch to revert from from_block"
             );
 
-            let last_l1_batch_to_keep = derive_last_l1_batch_to_keep(
-                bounds.from_block,
-                l1_state.last_committed_batch,
-                l1_state.last_executed_batch,
-                &l1_state.diamond_proxy_sl,
-                max_blocks,
-            )
-            .await
-            .context("failed to derive last_l1_batch_to_keep")?;
+            let last_l1_batch_to_keep =
+                derive_last_l1_batch_to_keep(bounds.from_block, l1_state, max_blocks_to_process)
+                    .await
+                    .context("failed to derive last_l1_batch_to_keep")?;
 
-            perform_l1_revert(
+            Ok(RebuildAction::RevertL1 {
                 last_l1_batch_to_keep,
-                l1_state,
-                chain_id,
-                sl_provider,
-                &l1_reverter_sk,
-                persistent_batch_storage,
-            )
-            .await
-            .context("failed to perform startup L1 revert")?;
-
-            Ok(true)
+                l1_reverter_sk: l1_reverter_sk.clone(),
+            })
         }
 
         RebuildConfig::L1Revert {
@@ -280,11 +243,11 @@ pub async fn handle_startup_rebuild(
             from_batch_hash,
             l1_reverter_sk,
         } => {
+            let from_batch = *from_batch;
             anyhow::ensure!(
                 from_batch >= 1,
                 "`l1_revert.from_batch` must be >= 1 (batch 0 is genesis and cannot be reverted)"
             );
-            let last_l1_batch_to_keep = from_batch - 1;
 
             if l1_state.last_committed_batch < from_batch {
                 tracing::info!(
@@ -292,7 +255,7 @@ pub async fn handle_startup_rebuild(
                     last_committed_batch = l1_state.last_committed_batch,
                     "skipping L1Revert: already reverted or no batches to revert"
                 );
-                return Ok(false);
+                return Ok(RebuildAction::NoL1Revert);
             }
 
             anyhow::ensure!(
@@ -302,40 +265,76 @@ pub async fn handle_startup_rebuild(
                 l1_state.last_executed_batch,
             );
 
-            let on_chain_hash = fetch_batch(&l1_state.diamond_proxy_sl, from_batch, max_blocks)
-                .await
-                .context("failed to fetch on-chain hash for L1Revert from_batch")?
-                .batch_info
-                .hash();
+            let on_chain_hash = fetch_batch(
+                &l1_state.diamond_proxy_sl,
+                from_batch,
+                max_blocks_to_process,
+            )
+            .await
+            .context("failed to fetch on-chain hash for L1Revert from_batch")?
+            .batch_info
+            .hash();
 
-            if on_chain_hash != from_batch_hash {
+            if on_chain_hash != *from_batch_hash {
                 tracing::info!(
                     from_batch,
                     ?on_chain_hash,
                     ?from_batch_hash,
                     "skipping L1Revert: from_batch_hash mismatch"
                 );
-                return Ok(false);
+                return Ok(RebuildAction::NoL1Revert);
             }
 
             tracing::warn!(
                 from_batch,
-                last_l1_batch_to_keep,
+                last_l1_batch_to_keep = from_batch - 1,
                 last_committed_batch = l1_state.last_committed_batch,
                 "L1Revert: performing standalone L1 revert"
             );
 
+            Ok(RebuildAction::RevertL1 {
+                last_l1_batch_to_keep: from_batch - 1,
+                l1_reverter_sk: l1_reverter_sk.clone(),
+            })
+        }
+    }
+}
+
+/// Handles the startup rebuild/revert config and performs L1 revert.
+///
+/// Returns `true` if an L1 revert was performed and the caller should refresh `L1State`.
+/// Returns `false` if no revert was needed (skipped or `BlockRebuild` which never touches L1).
+pub async fn handle_startup_rebuild(
+    config: &mut Config,
+    repositories: &dyn ReadRepository,
+    l1_state: &L1State,
+    chain_id: u64,
+    sl_provider: &NodeProvider,
+) -> anyhow::Result<bool> {
+    let Some(rebuild) = config.sequencer_config.rebuild.clone() else {
+        return Ok(false);
+    };
+    let max_blocks = config.l1_watcher_config.max_blocks_to_process;
+
+    match plan_startup_rebuild(&rebuild, repositories, l1_state, max_blocks).await? {
+        RebuildAction::SkipAndClearConfig => {
+            config.sequencer_config.rebuild = None;
+            Ok(false)
+        }
+        RebuildAction::NoL1Revert => Ok(false),
+        RebuildAction::RevertL1 {
+            last_l1_batch_to_keep,
+            l1_reverter_sk,
+        } => {
             perform_l1_revert(
                 last_l1_batch_to_keep,
                 l1_state,
                 chain_id,
                 sl_provider,
                 &l1_reverter_sk,
-                persistent_batch_storage,
             )
             .await
-            .context("failed to perform standalone startup L1 revert")?;
-
+            .context("failed to perform startup L1 revert")?;
             Ok(true)
         }
     }
