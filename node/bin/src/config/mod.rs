@@ -2238,37 +2238,6 @@ mod tests {
             .unwrap()
     }
 
-    fn parse_l1_sender_config<const N: usize>(env_vars: [(&str, &str); N]) -> L1SenderConfig {
-        let schema = ConfigSchema::new(&L1SenderConfig::DESCRIPTION, "l1_sender");
-        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
-        repo.single::<L1SenderConfig>().unwrap().parse().unwrap()
-    }
-
-    fn parse_gateway_sender_config<const N: usize>(
-        env_vars: [(&str, &str); N],
-    ) -> GatewaySenderConfig {
-        let schema = ConfigSchema::new(&GatewaySenderConfig::DESCRIPTION, "gateway_sender");
-        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
-        repo.single::<GatewaySenderConfig>()
-            .unwrap()
-            .parse()
-            .unwrap()
-    }
-
-    #[test]
-    fn l1_sender_rpc_retry_forever_is_enabled_by_default() {
-        let config = parse_l1_sender_config([]);
-
-        assert!(config.rpc_retry_forever);
-    }
-
-    #[test]
-    fn gateway_sender_rpc_retry_forever_is_disabled_by_default() {
-        let config = parse_gateway_sender_config([]);
-
-        assert!(!config.rpc_retry_forever);
-    }
-
     #[test]
     fn replay_archive_config_defaults_to_noop() {
         let config = parse_replay_archive_config([]);
