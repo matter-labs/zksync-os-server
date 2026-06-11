@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::util::ANVIL_L1_CHAIN_ID;
-use crate::watcher::{L1Watcher, L1WatcherError, resolver};
-use crate::{L1WatcherConfig, ProcessL1Event, ProcessRawEvents, util};
+use crate::watcher::{L1WatcherError, StartResolver};
+use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
 use alloy::primitives::{Address, B256, BlockNumber, ChainId, U256};
 use alloy::providers::Provider;
@@ -70,7 +70,7 @@ impl L1UpgradeTxWatcher {
         zk_chain_sl: ZkChain<NodeProvider>,
         bytecode_supplier_address: Address,
         upgrade_subpool: UpgradeSubpool,
-    ) -> anyhow::Result<L1Watcher<ProtocolSemanticVersion>> {
+    ) -> anyhow::Result<StartResolver<ProtocolSemanticVersion, Self>> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
@@ -107,32 +107,28 @@ impl L1UpgradeTxWatcher {
         let bridgehub_l1 = *bridgehub_l1.address();
         let max_blocks_to_process = config.max_blocks_to_process;
 
-        let resolve_start = resolver(
-            move |current_protocol_version: ProtocolSemanticVersion| async move {
-                let last_l1_block = find_l1_block_by_protocol_version(
-                    zk_chain_l1,
-                    current_protocol_version.clone(),
-                )
-                .await?;
-                tracing::info!(last_l1_block, "checking block starting from");
+        let resolve_start = move |current_protocol_version: ProtocolSemanticVersion| async move {
+            let last_l1_block =
+                find_l1_block_by_protocol_version(zk_chain_l1, current_protocol_version.clone())
+                    .await?;
+            tracing::info!(last_l1_block, "checking block starting from");
 
-                let processor: Box<dyn ProcessRawEvents> = Box::new(Self {
-                    l2_chain_id,
-                    provider_l1,
-                    provider_sl,
-                    bridgehub_l1,
-                    bytecode_supplier_address,
-                    ctm_l1,
-                    ctm_sl,
-                    current_protocol_version,
-                    upgrade_subpool,
-                    max_blocks_to_process,
-                });
-                Ok((last_l1_block, processor))
-            },
-        );
+            let processor = Self {
+                l2_chain_id,
+                provider_l1,
+                provider_sl,
+                bridgehub_l1,
+                bytecode_supplier_address,
+                ctm_l1,
+                ctm_sl,
+                current_protocol_version,
+                upgrade_subpool,
+                max_blocks_to_process,
+            };
+            Ok((last_l1_block, processor))
+        };
 
-        L1Watcher::new(
+        StartResolver::new(
             config,
             watcher_provider,
             server_notifier_l1.into(),

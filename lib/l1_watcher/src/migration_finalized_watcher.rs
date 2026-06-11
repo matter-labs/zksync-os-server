@@ -1,4 +1,4 @@
-use crate::watcher::{L1Watcher, L1WatcherError, resolver};
+use crate::watcher::{L1WatcherError, StartResolver};
 use crate::{L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, U256};
 use alloy::rpc::types::{Log, Topic};
@@ -36,7 +36,7 @@ impl MigrationFinalizedWatcher {
         l1_chain_id: u64,
         config: L1WatcherConfig,
         last_finalized_migration: watch::Sender<u64>,
-    ) -> anyhow::Result<Option<L1Watcher<()>>> {
+    ) -> anyhow::Result<Option<StartResolver<(), Self>>> {
         let active_migration_number = (intervals.intervals().len() - 1) as u64;
         let sl_migration_number: u64 = bridgehub_sl
             .migration_number(l2_chain_id)
@@ -64,7 +64,7 @@ impl MigrationFinalizedWatcher {
         let chain_asset_handler = bridgehub_sl.chain_asset_handler_address().await?;
         let provider = zk_chain.provider().clone();
 
-        let resolve_start = resolver(move |()| async move {
+        let resolve_start = move |()| async move {
             // todo: not necessary to run binary search here, just use latest
             let starting_block = util::find_block_by_migration_number(
                 zk_chain,
@@ -82,14 +82,14 @@ impl MigrationFinalizedWatcher {
                 "migration finalized watcher starting"
             );
 
-            let processor: Box<dyn ProcessRawEvents> = Box::new(Self {
+            let processor = Self {
                 l2_chain_id,
                 last_finalized_migration,
-            });
+            };
             Ok((starting_block, processor))
-        });
+        };
 
-        let watcher = L1Watcher::new(
+        let resolver = StartResolver::new(
             config,
             provider,
             chain_asset_handler.into(),
@@ -98,7 +98,7 @@ impl MigrationFinalizedWatcher {
             resolve_start,
         )
         .await?;
-        Ok(Some(watcher))
+        Ok(Some(resolver))
     }
 }
 

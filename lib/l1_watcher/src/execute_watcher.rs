@@ -1,6 +1,5 @@
-use crate::watcher::{L1Watcher, L1WatcherError, resolver};
-use crate::{CommittedBatchProvider, L1WatcherConfig, ProcessL1Event,
-    ProcessRawEvents, util};
+use crate::watcher::{L1WatcherError, StartResolver};
+use crate::{CommittedBatchProvider, L1WatcherConfig, ProcessL1Event, util};
 use alloy::providers::Provider;
 use alloy::rpc::types::Log;
 use zksync_os_contract_interface::IExecutor::BlockExecution;
@@ -42,7 +41,7 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
         l1_chain_id: u64,
-    ) -> anyhow::Result<L1Watcher<()>> {
+    ) -> anyhow::Result<StartResolver<(), Self>> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
@@ -53,7 +52,7 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         let provider = zk_chain.provider().clone();
         let address = (*zk_chain.address()).into();
 
-        let resolve_start = resolver(move |()| async move {
+        let resolve_start = move |()| async move {
             let current_l1_block = zk_chain.provider().get_block_number().await?;
             let last_executed_batch = finality.get_finality_status().last_executed_batch;
             let last_l1_block =
@@ -65,27 +64,19 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
                 "resolved on L1"
             );
 
-            let processor: Box<dyn ProcessRawEvents> = Box::new(Self {
+            let processor = Self {
                 inner: ExecuteWatcherState {
                     next_batch_number: last_executed_batch + 1,
                     committed_batch_provider,
                     finality,
                 },
-            });
+            };
             // We start from the last L1 block as it may contain more executed batches apart
             // from the last one.
             Ok((last_l1_block, processor))
-        });
+        };
 
-        L1Watcher::new(
-            config,
-            provider,
-            address,
-            None,
-            l1_chain_id,
-            resolve_start,
-        )
-        .await
+        StartResolver::new(config, provider, address, None, l1_chain_id, resolve_start).await
     }
 }
 
@@ -95,7 +86,7 @@ impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
         zk_chain: ZkChain<NodeProvider>,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
-    ) -> anyhow::Result<L1Watcher<()>> {
+    ) -> anyhow::Result<StartResolver<(), Self>> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
@@ -106,7 +97,7 @@ impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
         let provider = zk_chain.provider().clone();
         let address = (*zk_chain.address()).into();
 
-        let resolve_start = resolver(move |()| async move {
+        let resolve_start = move |()| async move {
             let current_l1_block = zk_chain.provider().get_block_number().await?;
             let last_finalized_executed_batch =
                 finality.get_finality_status().last_finalized_executed_batch;
@@ -122,17 +113,17 @@ impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
                 "resolved on L1"
             );
 
-            let processor: Box<dyn ProcessRawEvents> = Box::new(Self {
+            let processor = Self {
                 inner: ExecuteWatcherState {
                     next_batch_number: last_finalized_executed_batch + 1,
                     committed_batch_provider,
                     finality,
                 },
-            });
+            };
             Ok((last_l1_block, processor))
-        });
+        };
 
-        Ok(L1Watcher::new_finalized(
+        Ok(StartResolver::new_finalized(
             config,
             provider,
             address,

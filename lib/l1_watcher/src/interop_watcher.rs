@@ -14,7 +14,7 @@ use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
 use zksync_os_provider::NodeProvider;
 use zksync_os_types::IndexedInteropRoot;
 
-use crate::sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher, segment_resolver};
+use crate::sl_aware_watcher::{SegmentResolver, SegmentSpec};
 use crate::util::{find_l1_block_by_interop_root_id, find_l1_execute_block_by_batch_number};
 use crate::watcher::L1WatcherError;
 use crate::{L1WatcherConfig, ProcessRawEvents};
@@ -26,8 +26,9 @@ use crate::{L1WatcherConfig, ProcessRawEvents};
 /// `IndexedInteropRoot` into `InteropRootsSubpool`.
 ///
 /// To support a chain that has migrated GW → L1 (or GW → L1 → GW → …), the watcher walks every
-/// Gateway interval — historical and active — via [`SlAwareL1Watcher`]. Each historical Gateway
-/// segment is bounded by the L1/SL block where the last included interop root was emitted.
+/// Gateway interval — historical and active — via [`SlAwareL1Watcher`](crate::SlAwareL1Watcher).
+/// Each historical Gateway segment is bounded by the L1/SL block where the last included interop
+/// root was emitted.
 pub struct InteropWatcher {
     starting_interop_root_id: u64,
     interop_roots_subpool: InteropRootsSubpool,
@@ -41,7 +42,7 @@ impl InteropWatcher {
         config: L1WatcherConfig,
         l2_chain_id: u64,
         interop_roots_subpool: InteropRootsSubpool,
-    ) -> anyhow::Result<Option<SlAwareL1Watcher<u64>>> {
+    ) -> anyhow::Result<Option<SegmentResolver<u64, Self>>> {
         // Whether there is anything to watch depends only on the (static) interval layout, so we
         // can decide Some/None up front without resolving any block windows.
         let has_gateway_segment = intervals.intervals().iter().any(|interval| {
@@ -57,7 +58,7 @@ impl InteropWatcher {
             return Ok(None);
         }
 
-        let resolve_segments = segment_resolver(move |starting_interop_root_id: u64| async move {
+        let resolve_segments = move |starting_interop_root_id: u64| async move {
             let mut segments = Vec::new();
             for interval in intervals.intervals() {
                 // L1 intervals never emit interop roots; skip them outright.
@@ -72,7 +73,6 @@ impl InteropWatcher {
                 {
                     continue;
                 }
-
 
                 let gw_zk_chain = &interval.proxy;
                 let bridgehub = Bridgehub::new(
@@ -127,21 +127,20 @@ impl InteropWatcher {
                 );
                 segments.push(SegmentSpec {
                     provider: gw_zk_chain.provider().clone(),
-
                     address: message_root.into(),
                     start_block,
                     end_block,
                 });
             }
 
-            let processor: Box<dyn ProcessRawEvents> = Box::new(Self {
+            let processor = Self {
                 starting_interop_root_id,
                 interop_roots_subpool,
-            });
+            };
             Ok((segments, processor))
-        });
+        };
 
-        Ok(Some(SlAwareL1Watcher::new(config, resolve_segments)))
+        Ok(Some(SegmentResolver::new(config, resolve_segments)))
     }
 }
 

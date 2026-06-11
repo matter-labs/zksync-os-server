@@ -12,53 +12,42 @@ enum BlockBoundary {
     Finalized,
 }
 
-/// Resolves a watcher's starting state once the starting point `S` is finally known.
-///
-/// Construction of a watcher only requires its static dependencies; the provider-dependent
-/// binary search that turns a starting point (a priority id, batch number, protocol version, …)
-/// into a concrete `next_block` — together with the processor that consumes the resolved start
-/// point — is deferred into this closure and invoked lazily by [`L1Watcher::run`].
-pub(crate) type StartResolver<S> = Box<
-    dyn FnOnce(S) -> BoxFuture<'static, anyhow::Result<(BlockNumber, Box<dyn ProcessRawEvents>)>>
-        + Send,
->;
+/// Boxed async closure that turns a starting point `S` into a concrete start block and the
+/// processor `P` that consumes it.
+type ResolveStartFn<S, P> =
+    Box<dyn FnOnce(S) -> BoxFuture<'static, anyhow::Result<(BlockNumber, P)>> + Send>;
 
-/// Builds a [`StartResolver`] from an async closure, hiding the `Box::new`/`Box::pin` ceremony.
-pub(crate) fn resolver<S, Fut>(f: impl FnOnce(S) -> Fut + Send + 'static) -> StartResolver<S>
-where
-    Fut: std::future::Future<Output = anyhow::Result<(BlockNumber, Box<dyn ProcessRawEvents>)>>
-        + Send
-        + 'static,
-{
-    Box::new(move |s| Box::pin(f(s)))
-}
-
-/// An abstract, *unstarted* watcher for events.
+/// Deferred constructor for an [`L1Watcher`]: holds the watcher's static dependencies and turns
+/// a starting point `S` into a ready-to-run watcher once that starting point is finally known.
 ///
-/// Holds only the static dependencies needed to poll for blocks and extract logs; the starting
-/// point is supplied later to [`run`](Self::run), which resolves it (via [`StartResolver`]) into
-/// a concrete start block plus processor and then runs the poll loop. This lets watchers be
-/// created in one place and started in another, once the first replayed block is known.
-pub struct L1Watcher<S> {
+/// Constructing a resolver only requires static dependencies; the provider-dependent binary
+/// search that turns a starting point (a priority id, batch number, protocol version, …) into a
+/// concrete `next_block` — together with the processor `P` that consumes the resolved start
+/// point — is deferred into the `resolve_start` closure and invoked by
+/// [`resolve`](Self::resolve). This lets watchers be created in one place and started in
+/// another, once the first replayed block is known.
+pub struct StartResolver<S, P> {
     provider: NodeProvider,
     address: ValueOrArray<Address>,
     /// `Some(eb)` makes the watcher exit once the cursor passes `eb`. `None` runs forever.
     end_block: Option<BlockNumber>,
     max_blocks_to_process: u64,
     block_boundary: BlockBoundary,
-    resolve_start: StartResolver<S>,
+    resolve_start: ResolveStartFn<S, P>,
 }
 
-impl<S> L1Watcher<S> {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn new(
+impl<S, P: ProcessRawEvents> StartResolver<S, P> {
+    pub(crate) async fn new<Fut>(
         config: L1WatcherConfig,
         provider: NodeProvider,
         address: ValueOrArray<Address>,
         end_block: Option<BlockNumber>,
         l1_chain_id: u64,
-        resolve_start: StartResolver<S>,
-    ) -> anyhow::Result<Self> {
+        resolve_start: impl FnOnce(S) -> Fut + Send + 'static,
+    ) -> anyhow::Result<Self>
+    where
+        Fut: Future<Output = anyhow::Result<(BlockNumber, P)>> + Send + 'static,
+    {
         let confirmations = if provider.get_chain_id().await? != l1_chain_id {
             // Gateway case, zero out confirmations.
             0
@@ -72,38 +61,35 @@ impl<S> L1Watcher<S> {
             end_block,
             max_blocks_to_process: config.max_blocks_to_process,
             block_boundary: BlockBoundary::Confirmed { confirmations },
-            resolve_start,
+            resolve_start: Box::new(move |start| Box::pin(resolve_start(start))),
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_finalized(
+    /// Like [`new`](Self::new), but tails the finalized boundary so the produced watcher only
+    /// reacts to irreversibly observed events.
+    pub(crate) fn new_finalized<Fut>(
         config: L1WatcherConfig,
         provider: NodeProvider,
         address: ValueOrArray<Address>,
         end_block: Option<BlockNumber>,
-        resolve_start: StartResolver<S>,
-    ) -> Self {
+        resolve_start: impl FnOnce(S) -> Fut + Send + 'static,
+    ) -> Self
+    where
+        Fut: Future<Output = anyhow::Result<(BlockNumber, P)>> + Send + 'static,
+    {
         Self {
             provider,
             address,
             end_block,
             max_blocks_to_process: config.max_blocks_to_process,
             block_boundary: BlockBoundary::Finalized,
-            resolve_start,
+            resolve_start: Box::new(move |start| Box::pin(resolve_start(start))),
         }
     }
 
-    /// Resolves the starting point into a concrete start block and processor, then polls for
-    /// new events.
-    ///
-    /// For unbounded watchers (`end_block = None`) this never returns; for bounded watchers it
-    /// returns once the cursor passes `end_block`. A failure to resolve the start block is fatal
-    /// (panics), matching the previous behavior where resolution happened at construction.
-    pub async fn run(self, start: S)
-    where
-        S: Send + 'static,
-    {
+    /// Resolves the starting point into a concrete start block and processor, producing a
+    /// ready-to-run [`L1Watcher`].
+    pub async fn resolve(self, start: S) -> anyhow::Result<L1Watcher<P>> {
         let Self {
             provider,
             address,
@@ -112,10 +98,8 @@ impl<S> L1Watcher<S> {
             block_boundary,
             resolve_start,
         } = self;
-        let (next_block, processor) = resolve_start(start)
-            .await
-            .expect("failed to resolve L1 watcher start block");
-        let mut running = RunningL1Watcher {
+        let (next_block, processor) = resolve_start(start).await?;
+        Ok(L1Watcher {
             provider,
             address,
             next_block,
@@ -123,38 +107,51 @@ impl<S> L1Watcher<S> {
             max_blocks_to_process,
             block_boundary,
             processor,
-        };
-        running.run_inner().await;
+        })
+    }
+
+    /// Resolves the starting point and runs the produced watcher. A failure to resolve the
+    /// start block is fatal (panics), matching the previous behavior where resolution happened
+    /// at construction.
+    pub async fn run(self, start: S) {
+        self.resolve(start)
+            .await
+            .expect("failed to resolve L1 watcher start block")
+            .run()
+            .await;
     }
 }
 
-/// Running state of a watcher whose starting point has already been resolved into a concrete
-/// `next_block` and processor. Owns the poll loop; produced by [`L1Watcher::run`] and used
-/// directly by [`SlAwareL1Watcher`](crate::SlAwareL1Watcher) to scan a single pre-resolved
-/// segment.
-pub(crate) struct RunningL1Watcher {
+/// An abstract watcher for events.
+/// Handles polling for new blocks and extracting logs,
+/// while delegating the actual event processing to the processor `P`.
+///
+/// Produced by [`StartResolver::resolve`] once the starting point has been resolved into a
+/// concrete `next_block` and processor. May be run unbounded (live tail) or bounded by
+/// `end_block` (used by [`SlAwareL1Watcher`](crate::SlAwareL1Watcher) to scan a closed segment
+/// to completion).
+pub struct L1Watcher<P> {
     provider: NodeProvider,
     address: ValueOrArray<Address>,
     next_block: BlockNumber,
-    /// `Some(eb)` makes the watcher exit `run_inner` once `next_block > eb`. `None` runs forever.
+    /// `Some(eb)` makes the watcher exit `run` once `next_block > eb`. `None` runs forever.
     end_block: Option<BlockNumber>,
     max_blocks_to_process: u64,
     block_boundary: BlockBoundary,
-    pub(crate) processor: Box<dyn ProcessRawEvents>,
+    pub(crate) processor: P,
 }
 
-impl RunningL1Watcher {
-    /// Builds a running watcher for a single pre-resolved segment, tailing the finalized boundary
+impl<P: ProcessRawEvents> L1Watcher<P> {
+    /// Builds a watcher for a single pre-resolved segment, tailing the finalized boundary
     /// (closed segments are dominated by `end_block`, so the boundary mode only matters for the
     /// open-ended segment).
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_finalized(
         config: L1WatcherConfig,
         provider: NodeProvider,
         address: ValueOrArray<Address>,
         next_block: BlockNumber,
         end_block: Option<BlockNumber>,
-        processor: Box<dyn ProcessRawEvents>,
+        processor: P,
     ) -> Self {
         Self {
             provider,
@@ -167,7 +164,15 @@ impl RunningL1Watcher {
         }
     }
 
-    /// Runs the poll loop, intended for internal usage in this crate.
+    /// Polls for new events.
+    ///
+    /// For unbounded watchers (`end_block = None`) this never returns; for bounded watchers
+    /// it returns once the cursor passes `end_block`.
+    pub async fn run(mut self) {
+        self.run_inner().await;
+    }
+
+    /// Non-consuming version of `run`, intended for internal usage in this crate.
     pub(crate) async fn run_inner(&mut self) {
         let mut headers = match self.block_boundary {
             BlockBoundary::Confirmed { .. } => self.provider.latest_header_watcher().await,

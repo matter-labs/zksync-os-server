@@ -1,4 +1,4 @@
-use crate::watcher::{L1Watcher, L1WatcherError, resolver};
+use crate::watcher::{L1WatcherError, StartResolver};
 use crate::{L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, ChainId, U256};
 use alloy::rpc::types::{Log, Topic};
@@ -38,7 +38,7 @@ impl GatewayMigrationWatcher {
         gw_chain_id: ChainId,
         config: L1WatcherConfig,
         sl_chain_id_subpool: SlChainIdSubpool,
-    ) -> anyhow::Result<L1Watcher<u64>> {
+    ) -> anyhow::Result<StartResolver<u64, Self>> {
         let server_notifier_contract = zk_chain.get_server_notifier_address().await?;
         let provider = zk_chain.provider().clone();
 
@@ -49,7 +49,7 @@ impl GatewayMigrationWatcher {
             "initializing gateway migration watcher"
         );
 
-        let resolve_start = resolver(move |next_migration_number: u64| async move {
+        let resolve_start = move |next_migration_number: u64| async move {
             let chain_asset_handler_address = bridgehub.chain_asset_handler_address().await?;
             let next_l1_block = util::find_block_by_migration_number(
                 zk_chain.clone(),
@@ -64,7 +64,7 @@ impl GatewayMigrationWatcher {
                 "gateway migration watcher starting from migration #{next_migration_number}"
             );
 
-            let processor: Box<dyn ProcessRawEvents> = Box::new(Self {
+            let processor = Self {
                 l2_chain_id,
                 l1_chain_id,
                 gw_chain_id,
@@ -72,11 +72,11 @@ impl GatewayMigrationWatcher {
                 // Due to legacy reasons we saved first migration number as 0 when it should
                 // have been 1.
                 next_migration_number: next_migration_number.max(1),
-            });
+            };
             Ok((next_l1_block, processor))
-        });
+        };
 
-        L1Watcher::new(
+        StartResolver::new(
             config,
             provider,
             server_notifier_contract.into(),

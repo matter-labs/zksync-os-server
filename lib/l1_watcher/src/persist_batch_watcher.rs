@@ -1,7 +1,7 @@
-use crate::sl_aware_watcher::segment_resolver;
+use crate::sl_aware_watcher::SegmentResolver;
 use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
-use crate::{L1WatcherConfig, SegmentSpec, SlAwareL1Watcher, util};
+use crate::{L1WatcherConfig, SegmentSpec, util};
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
@@ -34,9 +34,9 @@ pub struct L1PersistBatchWatcher<BatchStorage> {
 }
 
 impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
-    /// Builds an [`SlAwareL1Watcher`] that walks every settlement-layer interval still relevant
-    /// to persistence, in order. Per-segment block resolution happens here; event scanning
-    /// happens lazily inside the watcher's `run()` loop.
+    /// Builds an [`SlAwareL1Watcher`](crate::SlAwareL1Watcher) that walks every settlement-layer
+    /// interval still relevant to persistence, in order. Per-segment block resolution happens
+    /// here; event scanning happens lazily inside the watcher's `run()` loop.
     ///
     /// The migration contract requires `totalBatchesCommitted == totalBatchesExecuted` before a
     /// chain can migrate off an SL (`Migrator.sol`), so each closed interval is self-contained:
@@ -46,7 +46,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         config: L1WatcherConfig,
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
-    ) -> SlAwareL1Watcher<()> {
+    ) -> SegmentResolver<(), Self> {
         tracing::info!(
             num_intervals = intervals.intervals().len(),
             config.max_blocks_to_process,
@@ -58,7 +58,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
         // Per-segment block resolution (and the starting `last_persisted_batch`) are deferred to
         // the watcher's `run()`; only static dependencies are captured here.
-        let resolve_segments = segment_resolver(move |()| async move {
+        let resolve_segments = move |()| async move {
             let last_persisted_batch = batch_storage.latest_batch();
             tracing::info!(
                 last_persisted_batch,
@@ -129,7 +129,6 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
                 segments.push(SegmentSpec {
                     provider: zk_chain.provider().clone(),
-
                     address: (*zk_chain.address()).into(),
                     start_block,
                     end_block,
@@ -141,16 +140,16 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 "no settlement layer intervals are pending persistence"
             );
 
-            let processor: Box<dyn ProcessRawEvents> = Box::new(Self {
+            let processor = Self {
                 batch_storage,
                 committed_batches: HashMap::new(),
                 last_processed_commit_batch: last_persisted_batch,
                 last_persisted_batch_on_start: last_persisted_batch,
-            });
+            };
             Ok((segments, processor))
-        });
+        };
 
-        SlAwareL1Watcher::new(config, resolve_segments)
+        SegmentResolver::new(config, resolve_segments)
     }
 
     async fn parse_committed_batch(
