@@ -5,14 +5,15 @@ use crate::js_tracer::{
         BalanceDelta, CreateType, FrameState, OverlayCheckpoint, OverlayEntry, OverlayState,
         StepCtx, TracerMethod, TxContext,
     },
-    utils::{extract_js_source_and_config, gas_used_from_resources, wrap_js_invocation},
+    utils::{extract_js_source_and_config, gas_used_from_resources},
 };
 use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
 use alloy::hex::ToHexExt;
 use alloy::primitives::{Address, B256, Bytes, U256};
-use boa_engine::{Context as BoaContext, Source};
+use boa_engine::{Context as BoaContext, JsValue, Source, js_string, object::JsObject};
 use serde_json::Value as JsonValue;
-use std::ops::Not;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use std::{cell::RefCell, collections::hash_map::Entry};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::tracing::{
@@ -23,6 +24,30 @@ use zksync_os_storage_api::ViewState;
 use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
 const MAX_JS_TRACER_PAYLOAD_BYTES: usize = 512 * 1024;
+
+/// Wall-clock ceiling for a single tracer's total execution. Checked between EVM opcode steps; if
+/// exceeded the tracer aborts with an error instead of running unbounded. This bounds the
+/// "millions of cheap steps, each doing some JS work" case (and any genuinely long trace), so a
+/// `debug_trace*` request can no longer pin a blocking worker indefinitely.
+const JS_TRACER_EXECUTION_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Per-invocation cap on JS loop iterations (Boa runtime limit). Boa's counter is reset per
+/// top-level call, so this bounds an infinite/runaway loop *inside a single* hook (e.g.
+/// `while (true) {}` in `step`/`result`) — the one runaway the wall-clock deadline can't catch,
+/// since control never returns to the Rust side mid-loop. Set generously so legitimate tracers
+/// iterating over collected per-step data are unaffected.
+const JS_TRACER_MAX_LOOP_ITERATIONS: u64 = 50_000_000;
+
+// Names of the per-hook invoker functions installed once in `host::install_invocation_helpers`.
+const INVOKE_SETUP: &str = "__zkjs_invoke_setup";
+const INVOKE_STEP: &str = "__zkjs_invoke_step";
+const INVOKE_STEP_ERR: &str = "__zkjs_invoke_step_err";
+const INVOKE_FAULT: &str = "__zkjs_invoke_fault";
+const INVOKE_FAULT_ERR: &str = "__zkjs_invoke_fault_err";
+const INVOKE_ENTER: &str = "__zkjs_invoke_enter";
+const INVOKE_EXIT: &str = "__zkjs_invoke_exit";
+const INVOKE_WRITE: &str = "__zkjs_invoke_write";
+const INVOKE_RESULT: &str = "__zkjs_invoke_result";
 
 /// JS tracer implementation
 /// Holds a Boa JS runtime and calls user-provided JS tracer methods when the hooks of zksync-os
@@ -54,6 +79,14 @@ pub struct JsTracer {
     ctx: BoaContext,
     // User-provided tracer config
     tracer_config: JsonValue,
+
+    // Pre-resolved invoker functions, keyed by invoker name. Populated once in `new` only for the
+    // hooks the user tracer actually defines, so a missing hook is a cheap map miss (no-op) rather
+    // than a per-step `typeof` eval. The hot path calls these instead of re-`eval`ing JS source.
+    invokers: HashMap<&'static str, JsObject>,
+
+    // Execution bound: start time for the wall-clock deadline (see `JS_TRACER_EXECUTION_DEADLINE`).
+    started_at: Instant,
 
     // Overlays for storage and code modifications
     storage_overlay: OverlayState<(Address, B256), B256>,
@@ -87,6 +120,11 @@ impl JsTracer {
 
         let mut ctx = BoaContext::default();
 
+        // Bound runaway JS loops inside a single hook invocation. Boa's recursion/stack limits are
+        // already finite by default; only the loop-iteration limit defaults to unbounded.
+        ctx.runtime_limits_mut()
+            .set_loop_iteration_limit(JS_TRACER_MAX_LOOP_ITERATIONS);
+
         let storage_overlay = OverlayState::<(Address, B256), B256>::new();
         let code_overlay = OverlayState::<Address, Option<Vec<u8>>>::new();
         let balance_overlay = OverlayState::<Address, BalanceDelta>::new();
@@ -101,9 +139,13 @@ impl JsTracer {
             balance_overlay.handle(),
         )?;
 
+        let invokers = resolve_invokers(&mut ctx)?;
+
         Ok(Self {
             ctx,
             tracer_config,
+            invokers,
+            started_at: Instant::now(),
             storage_overlay,
             code_overlay,
             balance_overlay,
@@ -119,50 +161,38 @@ impl JsTracer {
         })
     }
 
-    /// `call_method` invokes a method on the JS tracer object with the given argument.
-    fn call_method(
+    /// Calls a pre-installed invoker function (e.g. `__zkjs_invoke_step`) with the per-hook data.
+    ///
+    /// `arg` is converted to a `JsValue` via `JsValue::from_json` (GC-heap allocation, no source
+    /// parsing and no interner growth) and passed to the invoker, which builds the geth-shaped
+    /// `log`/`frame` wrapper and calls the user's tracer method. If the invoker is absent (the user
+    /// tracer doesn't define that hook) this is a no-op, matching the previous existence check.
+    fn invoke_named(
         &mut self,
-        method: TracerMethod,
+        invoker: &'static str,
         arg: &JsonValue,
-        with_db: bool,
+        method: TracerMethod,
     ) -> anyhow::Result<()> {
-        if !self.method_exists(method)? {
+        let Some(f) = self.invokers.get(invoker).cloned() else {
             return Ok(());
-        }
+        };
 
-        let method_name = method.as_str();
-        let mut arg_json = serde_json::to_string(arg).unwrap_or("null".to_string());
-        if with_db {
-            arg_json = format!("{arg_json}, db");
-        }
-        let snippet = wrap_js_invocation(format!("tracer.{method_name}({arg_json});"));
-
-        let _ = self
-            .ctx
-            .eval(Source::from_bytes(snippet.as_bytes()))
-            .map_err(|e| {
-                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
-            })?;
+        let js_arg = JsValue::from_json(arg, &mut self.ctx).map_err(|e| {
+            anyhow::anyhow!(
+                "JS tracer argument conversion for {} failed: {e}",
+                method.as_str()
+            )
+        })?;
+        f.call(&JsValue::undefined(), &[js_arg], &mut self.ctx)
+            .map_err(|e| anyhow::anyhow!("JS tracer method {} failed: {e}", method.as_str()))?;
 
         Ok(())
     }
 
-    fn method_exists(&mut self, method: TracerMethod) -> anyhow::Result<bool> {
-        let method_name = method.as_str();
-        Ok(self
-            .ctx
-            .eval(Source::from_bytes(
-                format!(
-                    "(function(){{ return typeof tracer === 'object' && typeof tracer.{method_name} === 'function' }})()"
-                )
-                    .as_bytes(),
-            ))
-            .map_err(|e| {
-                anyhow::anyhow!(format!(
-                    "JS tracer method existence check failed: {e:?}"
-                ))
-            })?
-            .to_boolean())
+    /// Returns true once the tracer has been running longer than `JS_TRACER_EXECUTION_DEADLINE`.
+    /// Checked between EVM opcode steps so a long/heavy trace aborts instead of hanging.
+    fn execution_budget_exceeded(&self) -> bool {
+        self.started_at.elapsed() >= JS_TRACER_EXECUTION_DEADLINE
     }
 
     fn commit_overlays(&self) {
@@ -264,187 +294,39 @@ impl JsTracer {
         }
     }
 
-    fn call_enter(&mut self, call_frame: &JsonValue) -> anyhow::Result<()> {
-        if !self.method_exists(TracerMethod::Enter)? {
-            return Ok(());
-        }
-
-        let raw_frame_input = serde_json::to_string(call_frame).map_err(|e| {
-            anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
-        })?;
-
-        let method_name = TracerMethod::Enter.as_str();
-        let body = format!(
-            r#"
-                let raw = {raw_frame_input};
-                let frame = {{
-                    getType() {{ return raw.type; }},
-                    getFrom() {{ return raw.from; }},
-                    getTo() {{ return raw.to; }},
-                    getInput() {{ return hexToBytes(raw.input); }},
-                    getGas() {{ return raw.gas; }},
-                    getValue() {{ return raw.value; }},
-                }};
-                tracer.{method_name}(frame);
-            "#
-        );
-
-        let _ = self
-            .ctx
-            .eval(Source::from_bytes(wrap_js_invocation(body).as_bytes()))
-            .map_err(|e| {
-                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
-            })?;
-
-        Ok(())
-    }
-
-    fn call_exit(&mut self, call_frame: &JsonValue) -> anyhow::Result<()> {
-        if !self.method_exists(TracerMethod::Exit)? {
-            return Ok(());
-        }
-
-        let raw_frame_input = serde_json::to_string(call_frame).map_err(|e| {
-            anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
-        })?;
-
-        let method_name = TracerMethod::Exit.as_str();
-        let body = format!(
-            r#"
-                let raw = {raw_frame_input};
-                let frame = {{
-                    getGasUsed() {{ return raw.gasUsed; }},
-                    getOutput() {{ return raw.output ? hexToBytes(raw.output) : null; }},
-                    getError() {{ return raw.error; }},
-                }};
-                tracer.{method_name}(frame);
-            "#
-        );
-
-        let _ = self
-            .ctx
-            .eval(Source::from_bytes(wrap_js_invocation(body).as_bytes()))
-            .map_err(|e| {
-                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
-            })?;
-
-        Ok(())
-    }
-
-    fn call_step_or_fault(
-        &mut self,
-        method: TracerMethod,
-        raw_log: &JsonValue,
-    ) -> anyhow::Result<()> {
-        if !self.method_exists(method)? {
-            return Ok(());
-        }
-
-        let raw_log_input = serde_json::to_string(raw_log).map_err(|e| {
-            anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
-        })?;
-        let method_name = method.as_str();
-
-        let has_error = raw_log
-            .as_object()
-            .and_then(|obj| obj.get("error"))
-            .unwrap_or(&JsonValue::Null)
-            .is_null()
-            .not();
-
-        let snippet = if has_error {
-            format!(
-                r#"
-                    let raw = {raw_log_input};
-                    let log = {{
-                        getError() {{ return raw.error; }},
-                        getDepth() {{ return raw.depth; }},
-                    }};
-                    tracer.{method_name}(log, db);
-                "#
-            )
-        } else {
-            format!(
-                r#"
-                    let raw = {raw_log_input};
-                    let op = {{
-                        toString() {{ return raw.op.name; }},
-                        toNumber() {{ return raw.op.code; }},
-                        isPush() {{ return raw.op.isPush; }},
-                    }};
-                    let memory = {{
-                        __buffer: hexToBytes(raw.memory),
-                        slice(start, stop) {{
-                            const from = start >>> 0;
-                            const to = stop === undefined ? this.__buffer.length : stop >>> 0;
-                            return this.__buffer.slice(from, to);
-                        }},
-                        getUint(offset) {{
-                            const from = offset >>> 0;
-                            const end = from + 32;
-                            const out = new Uint8Array(32);
-                            const available = this.__buffer.slice(from, end);
-                            out.set(available, 0);
-                            return out;
-                        }},
-                        length() {{
-                            return this.__buffer.length;
-                        }},
-                    }};
-                    let contract = {{
-                        __input: hexToBytes(raw.contract.input),
-                        getCaller() {{ return raw.contract.caller; }},
-                        getAddress() {{ return raw.contract.address; }},
-                        getValue() {{ return raw.contract.value; }},
-                        getInput() {{ return this.__input.slice(); }},
-                    }};
-                    let stack = {{
-                        __entries: raw.stack,
-                        length() {{ return this.__entries.length; }},
-                        peek(n) {{ return this.__entries[n]; }},
-                    }};
-                    let log = {{
-                        op,
-                        memory,
-                        contract,
-                        stack,
-                        getPC() {{ return raw.pc; }},
-                        getGas() {{ return raw.gas; }},
-                        getCost() {{ return raw.cost }},
-                        getDepth() {{ return raw.depth; }},
-                        getRefund() {{ return raw.refund; }},
-                        getError() {{ return raw.error; }},
-                    }};
-                    tracer.{method_name}(log, db);
-                "#
-            )
-        };
-
-        let _ = self
-            .ctx
-            .eval(Source::from_bytes(wrap_js_invocation(snippet).as_bytes()))
-            .map_err(|e| {
-                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
-            })?;
-
-        Ok(())
-    }
-
     fn invoke_method(&mut self, method: TracerMethod, arg: &JsonValue) {
         if self.error.is_some() {
             return;
         }
 
-        if let Err(err) = match method {
-            TracerMethod::Step | TracerMethod::Fault => self.call_step_or_fault(method, arg),
-            TracerMethod::Setup | TracerMethod::Write => self.call_method(method, arg, false),
-            TracerMethod::Enter => self.call_enter(arg),
-            TracerMethod::Exit => self.call_exit(arg),
-            TracerMethod::Result => self.call_method(method, arg, true),
+        let result = match method {
+            TracerMethod::Setup => self.invoke_named(INVOKE_SETUP, arg, method),
+            TracerMethod::Write => self.invoke_named(INVOKE_WRITE, arg, method),
+            TracerMethod::Enter => self.invoke_named(INVOKE_ENTER, arg, method),
+            TracerMethod::Exit => self.invoke_named(INVOKE_EXIT, arg, method),
+            TracerMethod::Step | TracerMethod::Fault => {
+                // Geth exposes a richer `log` to `step`, but only `{getError, getDepth}` when an
+                // error is present. Preserve that split by picking the matching invoker (which
+                // builds the appropriate wrapper shape).
+                let has_error = arg.get("error").map(|e| !e.is_null()).unwrap_or(false);
+                let invoker = match (method, has_error) {
+                    (TracerMethod::Step, false) => INVOKE_STEP,
+                    (TracerMethod::Step, true) => INVOKE_STEP_ERR,
+                    (TracerMethod::Fault, false) => INVOKE_FAULT,
+                    (TracerMethod::Fault, true) => INVOKE_FAULT_ERR,
+                    _ => unreachable!(),
+                };
+                self.invoke_named(invoker, arg, method)
+            }
+            TracerMethod::Result => Err(anyhow::anyhow!(
+                "Result must be invoked via call_result, not invoke_method"
+            )),
             TracerMethod::StorageRead => Err(anyhow::anyhow!(
                 "Storage read is not supported by JS tracer"
             )),
-        } {
+        };
+
+        if let Err(err) = result {
             self.record_error(method, err);
         }
     }
@@ -482,16 +364,18 @@ impl JsTracer {
             "error": ctx.error,
         });
 
+        let Some(f) = self.invokers.get(INVOKE_RESULT).cloned() else {
+            return Err(anyhow::anyhow!("JS tracer must define a 'result' function"));
+        };
+
         let method_name = TracerMethod::Result.as_str();
-        let snippet = wrap_js_invocation(format!(
-            "return JSON.stringify(tracer.{method_name}({ctx}, db));"
-        ));
-        let value = self
-            .ctx
-            .eval(Source::from_bytes(snippet.as_bytes()))
-            .map_err(|e| {
-                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
-            })?;
+        let arg = JsValue::from_json(&ctx, &mut self.ctx)
+            .map_err(|e| anyhow::anyhow!("JS tracer result ctx conversion failed: {e}"))?;
+        // The invoker returns `JSON.stringify(tracer.result(ctx, db))`, i.e. a JS string, matching
+        // the previous behaviour exactly.
+        let value = f
+            .call(&JsValue::undefined(), &[arg], &mut self.ctx)
+            .map_err(|e| anyhow::anyhow!("JS tracer method {method_name} failed: {e}"))?;
 
         let out = value
             .to_string(&mut self.ctx)
@@ -618,6 +502,59 @@ impl JsTracer {
 
         Ok(())
     }
+}
+
+/// Resolves the per-hook invoker functions installed by `host::install_invocation_helpers`, but
+/// only for the hooks the user tracer actually defines. A missing entry means the hook is absent,
+/// so the hot path simply skips it (no per-step `typeof` eval needed).
+fn resolve_invokers(ctx: &mut BoaContext) -> anyhow::Result<HashMap<&'static str, JsObject>> {
+    let mut invokers = HashMap::new();
+
+    // (tracer method name, invoker functions that drive it)
+    let hooks: &[(&str, &[&'static str])] = &[
+        ("setup", &[INVOKE_SETUP]),
+        ("step", &[INVOKE_STEP, INVOKE_STEP_ERR]),
+        ("fault", &[INVOKE_FAULT, INVOKE_FAULT_ERR]),
+        ("enter", &[INVOKE_ENTER]),
+        ("exit", &[INVOKE_EXIT]),
+        ("write", &[INVOKE_WRITE]),
+        ("result", &[INVOKE_RESULT]),
+    ];
+
+    for (method, invoker_names) in hooks {
+        if !tracer_has_method(ctx, method)? {
+            continue;
+        }
+        for name in *invoker_names {
+            invokers.insert(*name, resolve_callable(ctx, name)?);
+        }
+    }
+
+    Ok(invokers)
+}
+
+/// Checks once (at construction) whether the user tracer defines a callable hook of the given name.
+fn tracer_has_method(ctx: &mut BoaContext, method: &str) -> anyhow::Result<bool> {
+    let snippet = format!(
+        "(typeof tracer === 'object' && tracer !== null && typeof tracer.{method} === 'function')"
+    );
+    let value = ctx
+        .eval(Source::from_bytes(snippet.as_bytes()))
+        .map_err(|e| anyhow::anyhow!(format!("JS tracer method existence check failed: {e:?}")))?;
+    Ok(value.to_boolean())
+}
+
+/// Resolves a global function (installed in the Boa context) into a reusable callable handle.
+/// The handle stays valid for the life of the tracer because the function is reachable from the
+/// global object (a GC root), so it is never collected.
+fn resolve_callable(ctx: &mut BoaContext, name: &str) -> anyhow::Result<JsObject> {
+    let global = ctx.global_object();
+    let value = global
+        .get(js_string!(name), ctx)
+        .map_err(|e| anyhow::anyhow!(format!("failed to resolve {name}: {e:?}")))?;
+    value
+        .as_callable()
+        .ok_or_else(|| anyhow::anyhow!(format!("{name} is not callable")))
 }
 
 impl AnyTracer for JsTracer {
@@ -922,6 +859,27 @@ impl EvmTracer for JsTracer {
         opcode: u8,
         frame_state: impl EvmFrameInterface,
     ) {
+        // Once an error is recorded the tracer is done; skip all per-step work (including the
+        // expensive heap/stack snapshot in `prepare_log_input`) so the EVM can unwind cheaply.
+        if self.error.is_some() {
+            return;
+        }
+        if self.execution_budget_exceeded() {
+            self.record_error(
+                TracerMethod::Step,
+                anyhow::anyhow!(
+                    "JS tracer exceeded execution time limit of {}s",
+                    JS_TRACER_EXECUTION_DEADLINE.as_secs()
+                ),
+            );
+            return;
+        }
+        // Nothing to do (and no point snapshotting memory/stack) if the tracer has no `step` hook.
+        if !self.invokers.contains_key(INVOKE_STEP) {
+            self.pending_step = None;
+            return;
+        }
+
         let pending = self.pending_step.take().unwrap_or_else(|| StepCtx {
             opcode,
             pc: frame_state.instruction_pointer() as u64,
@@ -934,6 +892,9 @@ impl EvmTracer for JsTracer {
     }
 
     fn on_opcode_error(&mut self, error: &EvmError, frame_state: impl EvmFrameInterface) {
+        if self.error.is_some() {
+            return;
+        }
         let message = fmt_error_msg(error);
         let log = if let Some(pending) = self.pending_step.take() {
             self.prepare_log_input(pending, &frame_state, Some(message.clone()))

@@ -69,6 +69,118 @@ pub(crate) fn init_host_env_in_boa_context(
     install_host_bindings(ctx, host_env)?;
     install_db_wrapper(ctx)?;
     install_step_helpers(ctx)?;
+    install_invocation_helpers(ctx)?;
+
+    Ok(())
+}
+
+/// Installs the per-hook wrapper functions exactly once.
+///
+/// Historically the tracer rebuilt and re-`eval`'d a fresh JS source string for *every* EVM
+/// opcode step (embedding the full memory dump and stack as a string literal). Re-parsing that
+/// source on each step both pinned a CPU core and grew Boa's append-only string interner without
+/// bound (the interner is never reclaimed for the life of the `Context`), so a long or
+/// memory-growing trace would exhaust memory and hang the node.
+///
+/// Instead we install the *structural* wrappers (the objects that expose `op`/`memory`/`stack`/...
+/// with their geth-compatible methods) and the small invoker functions once, here. The hot path
+/// then only converts the per-step data into a `JsValue` (via `JsValue::from_json`, which allocates
+/// on the GC heap, not the interner) and calls the already-compiled invoker — no per-step parsing.
+///
+/// The invokers call the user methods as property calls on `tracer` (e.g. `tracer.step(log, db)`)
+/// so that `this` inside the user's tracer is the tracer object, matching the previous behaviour.
+fn install_invocation_helpers(ctx: &mut BoaContext) -> anyhow::Result<()> {
+    // The object shapes below are kept byte-for-byte identical to the ones the tracer used to build
+    // inline per step, so tracers observe exactly the same `log`/`frame` interface.
+    let helpers = r#"
+        function __zkjs_build_step_log(raw) {
+            let op = {
+                toString() { return raw.op.name; },
+                toNumber() { return raw.op.code; },
+                isPush() { return raw.op.isPush; },
+            };
+            let memory = {
+                __buffer: hexToBytes(raw.memory),
+                slice(start, stop) {
+                    const from = start >>> 0;
+                    const to = stop === undefined ? this.__buffer.length : stop >>> 0;
+                    return this.__buffer.slice(from, to);
+                },
+                getUint(offset) {
+                    const from = offset >>> 0;
+                    const end = from + 32;
+                    const out = new Uint8Array(32);
+                    const available = this.__buffer.slice(from, end);
+                    out.set(available, 0);
+                    return out;
+                },
+                length() { return this.__buffer.length; },
+            };
+            let contract = {
+                __input: hexToBytes(raw.contract.input),
+                getCaller() { return raw.contract.caller; },
+                getAddress() { return raw.contract.address; },
+                getValue() { return raw.contract.value; },
+                getInput() { return this.__input.slice(); },
+            };
+            let stack = {
+                __entries: raw.stack,
+                length() { return this.__entries.length; },
+                peek(n) { return this.__entries[n]; },
+            };
+            return {
+                op,
+                memory,
+                contract,
+                stack,
+                getPC() { return raw.pc; },
+                getGas() { return raw.gas; },
+                getCost() { return raw.cost; },
+                getDepth() { return raw.depth; },
+                getRefund() { return raw.refund; },
+                getError() { return raw.error; },
+            };
+        }
+
+        function __zkjs_build_error_log(raw) {
+            return {
+                getError() { return raw.error; },
+                getDepth() { return raw.depth; },
+            };
+        }
+
+        function __zkjs_build_enter_frame(raw) {
+            return {
+                getType() { return raw.type; },
+                getFrom() { return raw.from; },
+                getTo() { return raw.to; },
+                getInput() { return hexToBytes(raw.input); },
+                getGas() { return raw.gas; },
+                getValue() { return raw.value; },
+            };
+        }
+
+        function __zkjs_build_exit_frame(raw) {
+            return {
+                getGasUsed() { return raw.gasUsed; },
+                getOutput() { return raw.output ? hexToBytes(raw.output) : null; },
+                getError() { return raw.error; },
+            };
+        }
+
+        function __zkjs_invoke_setup(cfg) { return tracer.setup(cfg); }
+        function __zkjs_invoke_step(raw) { return tracer.step(__zkjs_build_step_log(raw), db); }
+        function __zkjs_invoke_step_err(raw) { return tracer.step(__zkjs_build_error_log(raw), db); }
+        function __zkjs_invoke_fault(raw) { return tracer.fault(__zkjs_build_step_log(raw), db); }
+        function __zkjs_invoke_fault_err(raw) { return tracer.fault(__zkjs_build_error_log(raw), db); }
+        function __zkjs_invoke_enter(raw) { return tracer.enter(__zkjs_build_enter_frame(raw)); }
+        function __zkjs_invoke_exit(raw) { return tracer.exit(__zkjs_build_exit_frame(raw)); }
+        function __zkjs_invoke_write(modification) { return tracer.write(modification); }
+        function __zkjs_invoke_result(ctx) { return JSON.stringify(tracer.result(ctx, db)); }
+    "#;
+
+    ctx.eval(Source::from_bytes(helpers.as_bytes()))
+        .map_err(|e| anyhow::anyhow!(format!("install invocation helpers failed: {e:?}")))?;
 
     Ok(())
 }
