@@ -113,6 +113,17 @@ struct SetupRecord {
     deposited_amount: String,
 }
 
+struct BridgeDepositBaseTokenArgs<'a> {
+    bridgehub_address: Address,
+    chain_id: u64,
+    chain_rpc: &'a str,
+    target: Address,
+    amount: U256,
+    max_fee_per_gas: u128,
+    max_priority_fee_per_gas: u128,
+    label: String,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -209,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
             chain_a_recipient,
             shared_bridge_address,
             U256::ZERO,
-            second_bridge_calldata.into(),
+            second_bridge_calldata,
         )
         .value(tx_base_cost)
         .max_fee_per_gas(max_fee_per_gas)
@@ -249,7 +260,7 @@ async fn main() -> anyhow::Result<()> {
             .abi_encode();
         keccak256(&encoded)
     };
-    let erc20_asset_id = FixedBytes::<32>::from(asset_id_bytes);
+    let erc20_asset_id = asset_id_bytes;
     println!("Computed ERC20 asset_id: {erc20_asset_id}");
 
     let vault_a = IL2NativeTokenVault::new(L2_NATIVE_TOKEN_VAULT_ADDRESS, chain_a_provider.clone());
@@ -275,7 +286,7 @@ async fn main() -> anyhow::Result<()> {
             .abi_encode();
         keccak256(&encoded)
     };
-    let base_token_asset_id = FixedBytes::<32>::from(base_token_asset_id_bytes);
+    let base_token_asset_id = base_token_asset_id_bytes;
     println!("Computed base-token asset_id: {base_token_asset_id}");
 
     let recipient_deployer_fund_amount = U256::from(100_000_000_000_000_000_u128); // 0.1 ETH
@@ -286,14 +297,16 @@ async fn main() -> anyhow::Result<()> {
         bridge_deposit_base_token(
             &l1_provider,
             &chain_a_provider,
-            args.bridgehub,
-            chain_a_id,
-            &args.chain_a_rpc,
-            chain_a_recipient,
-            rich_base_token_fund_amount,
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            "chain A recipient",
+            BridgeDepositBaseTokenArgs {
+                bridgehub_address: args.bridgehub,
+                chain_id: chain_a_id,
+                chain_rpc: &args.chain_a_rpc,
+                target: chain_a_recipient,
+                amount: rich_base_token_fund_amount,
+                max_fee_per_gas,
+                max_priority_fee_per_gas,
+                label: "chain A recipient".to_owned(),
+            },
         )
         .await?;
     }
@@ -464,14 +477,16 @@ async fn main() -> anyhow::Result<()> {
             bridge_deposit_base_token(
                 &l1_provider,
                 &extra_provider,
-                args.bridgehub,
-                extra_chain_id,
-                extra_rpc,
-                l1_signer.address(),
-                rich_base_token_fund_amount,
-                max_fee_per_gas,
-                max_priority_fee_per_gas,
-                &format!("chain {extra_chain_id} sender"),
+                BridgeDepositBaseTokenArgs {
+                    bridgehub_address: args.bridgehub,
+                    chain_id: extra_chain_id,
+                    chain_rpc: extra_rpc,
+                    target: l1_signer.address(),
+                    amount: rich_base_token_fund_amount,
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                    label: format!("chain {extra_chain_id} sender"),
+                },
             )
             .await?;
         }
@@ -535,19 +550,22 @@ async fn get_chain_id(rpc_url: &str) -> anyhow::Result<u64> {
 async fn bridge_deposit_base_token<L1P, L2P>(
     l1_provider: &L1P,
     l2_provider: &L2P,
-    bridgehub_address: Address,
-    chain_id: u64,
-    chain_rpc: &str,
-    target: Address,
-    amount: U256,
-    max_fee_per_gas: u128,
-    max_priority_fee_per_gas: u128,
-    label: &str,
+    args: BridgeDepositBaseTokenArgs<'_>,
 ) -> anyhow::Result<()>
 where
     L1P: Provider + Clone,
     L2P: Provider + Clone,
 {
+    let BridgeDepositBaseTokenArgs {
+        bridgehub_address,
+        chain_id,
+        chain_rpc,
+        target,
+        amount,
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+        label,
+    } = args;
     let bridgehub = Bridgehub::new(bridgehub_address, l1_provider.clone(), chain_id);
     let l2_gas_limit = l2_provider
         .estimate_gas(

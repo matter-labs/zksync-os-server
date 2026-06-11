@@ -143,6 +143,17 @@ enum FailureStage {
     RootImport,
 }
 
+#[derive(Clone)]
+struct PropagationTailContext {
+    source_rpc: Arc<String>,
+    destination_rpc: Arc<String>,
+    http: Arc<Client>,
+    proof_rpc_window: Arc<Semaphore>,
+    root_storage: IL2InteropRootStorage::IL2InteropRootStorageInstance<DynProvider>,
+    gateway_chain_id: u64,
+    outcomes: mpsc::UnboundedSender<BundleOutcome>,
+}
+
 impl FailureStage {
     fn reason_class(self) -> &'static str {
         match self {
@@ -1137,35 +1148,31 @@ async fn run_wallet_worker(
             wallet_idx,
             source_lane_idx,
         });
-        let source_rpc_t = source_rpc.clone();
-        let destination_rpc_t = destination_rpc.clone();
-        let http_t = http.clone();
-        let root_storage_t = root_storage.clone();
-        let outcomes_t = outcomes.clone();
-        let proof_rpc_window_t = proof_rpc_window.clone();
         tokio::spawn(run_propagation_tail(
             progress,
-            source_rpc_t,
-            destination_rpc_t,
-            http_t,
-            proof_rpc_window_t,
-            root_storage_t,
-            gateway_chain_id,
-            outcomes_t,
+            PropagationTailContext {
+                source_rpc: source_rpc.clone(),
+                destination_rpc: destination_rpc.clone(),
+                http: http.clone(),
+                proof_rpc_window: proof_rpc_window.clone(),
+                root_storage: root_storage.clone(),
+                gateway_chain_id,
+                outcomes: outcomes.clone(),
+            },
         ));
     }
 }
 
-async fn run_propagation_tail(
-    mut progress: BundleProgress,
-    source_rpc: Arc<String>,
-    destination_rpc: Arc<String>,
-    http: Arc<Client>,
-    proof_rpc_window: Arc<Semaphore>,
-    root_storage: IL2InteropRootStorage::IL2InteropRootStorageInstance<DynProvider>,
-    gateway_chain_id: u64,
-    outcomes: mpsc::UnboundedSender<BundleOutcome>,
-) {
+async fn run_propagation_tail(mut progress: BundleProgress, ctx: PropagationTailContext) {
+    let PropagationTailContext {
+        source_rpc,
+        destination_rpc,
+        http,
+        proof_rpc_window,
+        root_storage,
+        gateway_chain_id,
+        outcomes,
+    } = ctx;
     let tx_hash = progress.source_tx_hash.expect("set before tail");
     let proof = match wait_message_root_proof(&http, &source_rpc, tx_hash, &proof_rpc_window).await
     {
