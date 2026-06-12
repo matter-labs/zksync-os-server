@@ -25,34 +25,25 @@ impl L1CommittedBatch {
     }
 }
 
-/// Outcome of verifying one committed batch, carried back to the run loop so it can evict the
-/// batch's blocks and advance the verified-batch watermark.
+/// Verified batch returned by a worker task.
 struct VerifiedBatch {
     batch_number: u64,
     range: RangeInclusive<u64>,
 }
 
-/// Background task that checks L1-committed batches against locally replayed blocks.
+/// Checks L1-committed batches against locally replayed blocks.
 ///
-/// It runs off the pipeline (unlike the [`LocalBatchDataCacher`](crate::cacher::LocalBatchDataCacher)
-/// that fills the cache) so that its CPU-heavy commitment rebuild cannot starve block intake.
-/// Committed batches arrive in order, but each is verified in its own bounded-concurrency task so
-/// that one batch waiting for its blocks (or rebuilding its commitment) does not hold up batches
-/// behind it. As each batch is verified its blocks are evicted from the shared cache — restoring
-/// intake capacity — and the latest-verified-batch watermark is advanced (see [`Self::run`] for
-/// why the watermark only moves along the contiguous verified prefix).
+/// Verification is concurrent, but the published watermark advances only across the contiguous
+/// verified prefix.
 pub struct L1ConsistencyChecker {
     chain_id: u64,
     sl_chain_id: u64,
     last_persisted_block_on_start: u64,
-    /// Shared with the cacher (which inserts) and the batch verification responder (which reads).
-    /// We hold the sender to evict verified blocks and a receiver to await freshly cached ones.
+    /// Shared with the cacher and batch verification responder.
     cache: watch::Sender<TreeBlockCache>,
     cache_rx: watch::Receiver<TreeBlockCache>,
     latest_verified_batch_tx: watch::Sender<u64>,
-    /// Receives L1-committed batches to verify against locally replayed blocks.
     l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
-    /// Upper bound on batches verified concurrently (and thus on parallel commitment rebuilds).
     verification_concurrency: usize,
 }
 
@@ -79,12 +70,7 @@ impl L1ConsistencyChecker {
         }
     }
 
-    /// Verifies a single committed batch against locally replayed blocks, blocking until the
-    /// cacher has the batch's blocks available. Batches already covered by a persisted batch were
-    /// verified by a previous run and are trusted without rebuilding.
-    ///
-    /// Takes everything by value so it can run as an independent task; the CPU-heavy commitment
-    /// rebuild is offloaded to a blocking thread so it parallelizes across cores.
+    /// Verifies one committed batch once its local blocks are cached.
     async fn verify_commit(
         cache_rx: watch::Receiver<TreeBlockCache>,
         chain_id: u64,
@@ -149,11 +135,7 @@ impl L1ConsistencyChecker {
         let semaphore = Arc::new(Semaphore::new(self.verification_concurrency));
         let mut tasks: JoinSet<anyhow::Result<VerifiedBatch>> = JoinSet::new();
 
-        // Verifications complete out of order, but downstream (the persist batch watcher) must not
-        // see batch N marked verified before batch N-1 is. We therefore stage verified batch
-        // numbers and only advance the published watermark across the contiguous prefix that is
-        // fully verified. Eviction has no such constraint — a batch's blocks belong to it alone,
-        // so they are dropped as soon as that batch is verified, regardless of order.
+        // Stage out-of-order completions; publish only the contiguous verified prefix.
         let mut verified_ahead: BTreeSet<u64> = BTreeSet::new();
         let mut next_batch_to_confirm = *self.latest_verified_batch_tx.borrow() + 1;
 
@@ -161,7 +143,6 @@ impl L1ConsistencyChecker {
             tokio::select! {
                 maybe_commit = self.l1_events_rx.recv() => {
                     let Some(commit) = maybe_commit else {
-                        // Channel closed: stop accepting work and drain what is in flight.
                         break;
                     };
                     tracing::debug!(
@@ -169,8 +150,7 @@ impl L1ConsistencyChecker {
                         commit.batch_number(),
                         commit.range,
                     );
-                    // Acquiring the permit here bounds in-flight verifications, providing
-                    // backpressure on intake of new commits.
+                    // Bound in-flight commitment rebuilds.
                     let permit = semaphore
                         .clone()
                         .acquire_owned()
@@ -199,7 +179,6 @@ impl L1ConsistencyChecker {
             }
         }
 
-        // Finish the verifications that were still in flight when the channel closed.
         while let Some(joined) = tasks.join_next().await {
             let verified = joined.context("verification task panicked")??;
             self.handle_verified(verified, &mut verified_ahead, &mut next_batch_to_confirm);
@@ -207,20 +186,16 @@ impl L1ConsistencyChecker {
         Ok(())
     }
 
-    /// Applies one completed verification: evicts the batch's now-redundant blocks and advances the
-    /// verified-batch watermark across the contiguous prefix that is fully verified.
+    /// Evicts verified blocks and advances the contiguous verified-batch watermark.
     fn handle_verified(
         &self,
         verified: VerifiedBatch,
         verified_ahead: &mut BTreeSet<u64>,
         next_batch_to_confirm: &mut u64,
     ) {
-        // Drop the now-verified blocks from the cache, restoring intake capacity for the cacher.
         self.cache
             .send_modify(|cache| cache.remove_range(verified.range));
 
-        // Batches at or below the current watermark were already verified on a previous run; only
-        // track the ones that can move it forward.
         if verified.batch_number >= *next_batch_to_confirm {
             verified_ahead.insert(verified.batch_number);
         }

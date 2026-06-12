@@ -15,27 +15,20 @@ use zksync_os_types::{
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 
-/// Per-block inputs to a batch commitment, pre-folded from full block data.
-///
-/// Carries exactly what [`ExtendedCommitBatchInfo::build`] needs from each block, so callers
-/// that hold blocks for a while (the EN L1 consistency checker, the batch verification
-/// responder) can cache a few hundred bytes per block (plus pubdata) instead of the full
-/// `BlockOutput`/`ReplayRecord` pair. The bulky inputs — full transactions, tx results and
-/// the 8KB block-hashes ring — are reduced to hashes and counters at construction time.
+/// Compact per-block inputs for batch commitment reconstruction.
 #[derive(Clone, Debug)]
 pub struct BlockCommitmentData {
     pub block_number: u64,
     pub timestamp: u64,
-    /// Onchain-data hashes of the block's L1 (priority) transactions, in execution order.
+    /// L1 priority transaction hashes in execution order.
     pub l1_tx_onchain_hashes: Vec<B256>,
     pub num_l2_txs: u64,
     pub interop_roots: Vec<InteropRoot>,
     pub upgrade_tx_hash: Option<B256>,
-    /// Encoded L2->L1 logs emitted by the block, in emission order.
+    /// Encoded L2->L1 logs in emission order.
     pub encoded_l2_l1_logs: Vec<[u8; L2_TO_L1_LOG_SERIALIZE_SIZE]>,
     pub pubdata: Vec<u8>,
-    /// Blake2s over the previous 255 block hashes plus this block's own hash — the value
-    /// `new_state_commitment` needs if this block ends up last in its batch.
+    /// Blake2s over the previous 255 block hashes plus this block hash.
     pub last_256_block_hashes_blake: B256,
     pub tree_root_hash: B256,
     pub tree_leaf_count: u64,
@@ -146,9 +139,7 @@ impl ExtendedCommitBatchInfo {
     ) -> (Self, Option<BlobTransactionSidecar>) {
         let first_block = blocks.first().expect("batch cannot be empty");
         let last_block = blocks.last().expect("batch cannot be empty");
-        // The protocol version (and the multichain root we compare against) is uniform within
-        // a batch — a batch is sealed whenever it changes — so the last block's values stand
-        // in for the whole batch.
+        // Batch sealing keeps these uniform within a batch.
         let protocol_version = &last_block.protocol_version;
 
         let mut priority_operations_hash = keccak256([]);

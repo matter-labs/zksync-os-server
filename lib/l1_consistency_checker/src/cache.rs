@@ -6,19 +6,13 @@ use zksync_os_batch_types::BlockCommitmentData;
 
 pub const DEFAULT_MAX_CACHED_TREE_BLOCKS: usize = 4096;
 
-/// Cache of per-block commitment data keyed by block number.
+/// Cache of per-block commitment data.
 ///
-/// Blocks must be inserted consecutively (each block number exactly one greater than the last).
-/// Eviction is the caller's responsibility via [`TreeBlockCache::remove_range`]; because the
-/// L1 consistency checker verifies batches concurrently, batches can be verified — and their
-/// blocks evicted — out of order, leaving gaps in the otherwise consecutive key space. A
-/// [`BTreeMap`] (rather than a `VecDeque`) lets us represent those gaps.
+/// Inserts are sequential, while concurrent verification can evict completed ranges out of order.
 #[derive(Debug)]
 pub struct TreeBlockCache {
     data: BTreeMap<u64, BlockCommitmentData>,
-    /// Block number expected on the next [`insert`](Self::insert). Monotonically increasing and
-    /// unaffected by eviction, so it doubles as the boundary between "was inserted (and possibly
-    /// already evicted)" and "not cached yet" when serving range reads.
+    /// Next block expected on insert; also marks ranges that are not cached yet.
     next_expected_block: Option<u64>,
     max_blocks: usize,
 }
@@ -42,8 +36,7 @@ impl TreeBlockCache {
         }
     }
 
-    /// Insert a block into the cache. Blocks must arrive consecutively (each block number exactly
-    /// one greater than the last), regardless of any gaps left behind by eviction.
+    /// Inserts the next sequential block.
     pub fn insert(&mut self, block_number: u64, block: BlockCommitmentData) -> anyhow::Result<()> {
         if let Some(expected) = self.next_expected_block
             && block_number != expected
@@ -56,20 +49,13 @@ impl TreeBlockCache {
     }
 
     /// Whether the cache is still below its soft bound.
-    ///
-    /// The bound counts blocks actually held, so gaps left by out-of-order eviction free up
-    /// capacity. It must comfortably exceed the combined block span of all batches verified
-    /// concurrently, otherwise intake stalls and the upstream pipeline channel eventually
-    /// overflows.
     pub fn has_capacity(&self) -> bool {
         self.data.len() < self.max_blocks
     }
 
-    /// Removes every block in the given (inclusive) range. Used to evict a single batch's blocks
-    /// once it has been verified; ranges of distinct batches never overlap.
+    /// Removes every block in the given inclusive range.
     pub fn remove_range(&mut self, range: RangeInclusive<u64>) {
-        // Split out the keys `>= start`, then split the remaining-to-keep keys `> end` back off,
-        // leaving only `[start, end]` to drop. Avoids an O(n) scan of the whole map.
+        // Drop [start, end] without scanning the whole map.
         let mut at_or_above_start = self.data.split_off(range.start());
         let above_end = at_or_above_start.split_off(&(range.end() + 1));
         self.data.extend(above_end);
@@ -81,16 +67,12 @@ impl TreeBlockCache {
         range: RangeInclusive<u64>,
     ) -> anyhow::Result<Option<Vec<BlockCommitmentData>>> {
         let Some(next_expected_block) = self.next_expected_block else {
-            // Nothing has ever been inserted; the blocks are simply not cached yet.
             return Ok(None);
         };
         if *range.end() >= next_expected_block {
-            // The tail of the range hasn't been folded into the cache yet.
             return Ok(None);
         }
 
-        // Every block in the range was inserted at some point (its end is below `next_expected_block`),
-        // so a missing block means it was already evicted after its batch was verified.
         let mut blocks = Vec::with_capacity(range.clone().count());
         for block_number in range {
             let Some(block) = self.data.get(&block_number) else {
@@ -122,7 +104,6 @@ impl TreeBlockCacheReceiverExt for watch::Receiver<TreeBlockCache> {
         let mut cache_rx = self.clone();
         loop {
             {
-                // if block range is available already - return it. If not - wait until the cache is updated and check again
                 if let Some(blocks) = cache_rx.borrow_and_update().get_range(range.clone())? {
                     return Ok(blocks);
                 }
