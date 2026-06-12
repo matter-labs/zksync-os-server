@@ -28,6 +28,11 @@ pub struct Pool<T> {
     interop_roots_subpool: InteropRootsSubpool,
     l1_subpool: L1Subpool,
     l2_subpool: T,
+    /// When `false`, replayed L1-originated transactions (priority, upgrade, interop,
+    /// SL-chain-id, interop-fee) are trusted as-is instead of being matched against locally
+    /// watched L1 events. False on external nodes, which don't run the L1 watchers feeding
+    /// these subpools and verify whole batches against L1 commitments instead.
+    verify_l1_origin_txs: bool,
 }
 
 impl<T: L2Subpool> Pool<T> {
@@ -38,6 +43,7 @@ impl<T: L2Subpool> Pool<T> {
         interop_roots_subpool: InteropRootsSubpool,
         l1_subpool: L1Subpool,
         l2_subpool: T,
+        verify_l1_origin_txs: bool,
     ) -> Self {
         Self {
             upgrade_subpool,
@@ -46,6 +52,7 @@ impl<T: L2Subpool> Pool<T> {
             interop_roots_subpool,
             l1_subpool,
             l2_subpool,
+            verify_l1_origin_txs,
         }
     }
 
@@ -228,25 +235,36 @@ impl<T: L2Subpool> Pool<T> {
                 }
             }
         }
-        self.upgrade_subpool
-            .on_canonical_state_change(&replay_record.protocol_version, upgrade_txs)
-            .await;
-        let last_interop_log_id = self
-            .interop_roots_subpool
-            .on_canonical_state_change(interop_txs)
-            .await;
-        let last_interop_fee_number = self
-            .interop_fee_subpool
-            .on_canonical_state_change(interop_fee_txs, strict_subpool_cleanup)
-            .await;
-        let sl_chain_id_outcome = self
-            .sl_chain_id_subpool
-            .on_canonical_state_change(sl_chain_id_txs)
-            .await;
-        let last_l1_priority_id = self
-            .l1_subpool
-            .on_canonical_state_change(l1_transactions)
-            .await;
+        // With verification disabled there is nothing to match the replayed transactions
+        // against (the L1 watchers feeding these subpools are off). The cursors the subpools
+        // would produce only matter for block production, which never happens in that mode,
+        // so they are simply left unset.
+        let (
+            last_interop_log_id,
+            last_interop_fee_number,
+            sl_chain_id_outcome,
+            last_l1_priority_id,
+        ) = if self.verify_l1_origin_txs {
+            self.upgrade_subpool
+                .on_canonical_state_change(&replay_record.protocol_version, upgrade_txs)
+                .await;
+            (
+                self.interop_roots_subpool
+                    .on_canonical_state_change(interop_txs)
+                    .await,
+                self.interop_fee_subpool
+                    .on_canonical_state_change(interop_fee_txs, strict_subpool_cleanup)
+                    .await,
+                self.sl_chain_id_subpool
+                    .on_canonical_state_change(sl_chain_id_txs)
+                    .await,
+                self.l1_subpool
+                    .on_canonical_state_change(l1_transactions)
+                    .await,
+            )
+        } else {
+            (None, None, None, None)
+        };
 
         let (header, hash) = header.into_parts();
         let body = BlockBody::default();
