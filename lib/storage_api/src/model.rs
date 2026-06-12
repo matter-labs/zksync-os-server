@@ -173,6 +173,20 @@ pub struct BlockContext {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BlockHashes(pub [U256; 256]);
 
+impl BlockHashes {
+    pub fn push(self, block_hash: B256) -> Self {
+        Self(
+            self.0
+                .into_iter()
+                .skip(1)
+                .chain([U256::from_be_bytes(block_hash.0)])
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap(),
+        )
+    }
+}
+
 impl Default for BlockHashes {
     fn default() -> Self {
         Self([U256::ZERO; 256])

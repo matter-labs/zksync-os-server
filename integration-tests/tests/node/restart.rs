@@ -313,6 +313,9 @@ async fn node_recovers_from_l1_batch_revert_after_restart_v30() -> anyhow::Resul
     let mut restarted_config = restarted.config().clone();
     make_full_pipeline_config(&mut restarted_config);
     let restarted = restarted.restart_with_config(restarted_config).await?;
+    // The initial L1->L2 deposit was in the reverted batch, so the wallet balance is 0 after
+    // the revert. Wait for the priority operation to be re-included before sending transactions.
+    restarted.wait_for_initial_deposit().await?;
 
     let executed_receipt = restarted
         .l2_provider

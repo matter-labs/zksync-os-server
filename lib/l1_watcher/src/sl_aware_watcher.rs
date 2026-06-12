@@ -1,9 +1,9 @@
 use crate::watcher::L1Watcher;
-use crate::{BlockUpdates, L1WatcherConfig, LogsCache, ProcessRawEvents};
+use crate::{L1WatcherConfig, ProcessRawEvents};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::rpc::types::ValueOrArray;
+use futures::future::BoxFuture;
 use std::collections::VecDeque;
-use tokio::sync::watch;
 use zksync_os_provider::NodeProvider;
 
 /// Description of a single settlement-layer segment that [`SlAwareL1Watcher`] should scan, in
@@ -15,10 +15,6 @@ use zksync_os_provider::NodeProvider;
 pub struct SegmentSpec {
     /// Provider for the settlement layer this segment is scanned on.
     pub provider: NodeProvider,
-    /// Block updates for the segment's settlement-layer provider.
-    pub block_updates: watch::Receiver<BlockUpdates>,
-    /// Shared logs cache for the segment's settlement-layer provider.
-    pub logs_cache: LogsCache,
     /// Contract address(es) whose logs the segment scans (e.g. the chain's diamond proxy or a
     /// bridgehub's message-root contract).
     pub address: ValueOrArray<Address>,
@@ -29,6 +25,55 @@ pub struct SegmentSpec {
     pub end_block: Option<BlockNumber>,
 }
 
+/// Boxed async closure that turns a starting point `S` into the full segment list and the
+/// processor `P` that consumes it.
+type ResolveSegmentsFn<S, P> =
+    Box<dyn FnOnce(S) -> BoxFuture<'static, anyhow::Result<(Vec<SegmentSpec>, P)>> + Send>;
+
+/// Deferred constructor for an [`SlAwareL1Watcher`]: turns a starting point `S` into a
+/// ready-to-run watcher once that starting point is finally known.
+///
+/// Mirrors [`StartResolver`](crate::watcher::StartResolver) but yields the full segment list
+/// (each segment's `start_block`/`end_block` resolved via per-segment binary searches) instead
+/// of a single block.
+pub struct SegmentResolver<S, P> {
+    config: L1WatcherConfig,
+    resolve_segments: ResolveSegmentsFn<S, P>,
+}
+
+impl<S, P: ProcessRawEvents> SegmentResolver<S, P> {
+    pub(crate) fn new<Fut>(
+        config: L1WatcherConfig,
+        resolve_segments: impl FnOnce(S) -> Fut + Send + 'static,
+    ) -> Self
+    where
+        Fut: Future<Output = anyhow::Result<(Vec<SegmentSpec>, P)>> + Send + 'static,
+    {
+        Self {
+            config,
+            resolve_segments: Box::new(move |start| Box::pin(resolve_segments(start))),
+        }
+    }
+
+    /// Resolves the starting point into a segment list and processor, producing a ready-to-run
+    /// [`SlAwareL1Watcher`].
+    pub async fn resolve(self, start: S) -> anyhow::Result<SlAwareL1Watcher<P>> {
+        let (segments, processor) = (self.resolve_segments)(start).await?;
+        SlAwareL1Watcher::new(self.config, segments, processor)
+    }
+
+    /// Resolves the starting point and runs the produced watcher. A failure to resolve the
+    /// segments is fatal (panics), matching the previous behavior where resolution happened at
+    /// construction.
+    pub async fn run(self, start: S) {
+        self.resolve(start)
+            .await
+            .expect("failed to resolve SL-aware watcher segments")
+            .run()
+            .await;
+    }
+}
+
 /// Settlement-layer-aware variant of [`L1Watcher`] that walks a chain of SL segments
 /// (L1 → Gateway → L1 → …) in order. Historical segments are scanned to completion once their
 /// `start_block`..=`end_block` window is exhausted; if the final segment is open-ended
@@ -37,17 +82,17 @@ pub struct SegmentSpec {
 /// watcher drains them in order and then exits cleanly — useful for scenarios where the active
 /// settlement layer no longer emits events of interest (e.g. an interop-root watcher on a chain
 /// that has migrated back to L1).
-pub struct SlAwareL1Watcher {
+pub struct SlAwareL1Watcher<P> {
     config: L1WatcherConfig,
     segments: VecDeque<SegmentSpec>,
-    processor: Box<dyn ProcessRawEvents>,
+    processor: P,
 }
 
-impl SlAwareL1Watcher {
-    pub fn new(
+impl<P: ProcessRawEvents> SlAwareL1Watcher<P> {
+    pub(crate) fn new(
         config: L1WatcherConfig,
         segments: Vec<SegmentSpec>,
-        processor: Box<dyn ProcessRawEvents>,
+        processor: P,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             !segments.is_empty(),
@@ -84,11 +129,11 @@ impl SlAwareL1Watcher {
     }
 }
 
-async fn run_segment(
+async fn run_segment<P: ProcessRawEvents>(
     config: L1WatcherConfig,
     segment: SegmentSpec,
-    processor: Box<dyn ProcessRawEvents>,
-) -> Box<dyn ProcessRawEvents> {
+    processor: P,
+) -> P {
     tracing::info!(
         "sl-aware watcher activated segment at {:?} for SL blocks=({}-{})",
         segment.address,
@@ -106,8 +151,6 @@ async fn run_segment(
     let mut watcher = L1Watcher::new_finalized(
         config,
         segment.provider,
-        segment.logs_cache,
-        segment.block_updates,
         segment.address,
         segment.start_block,
         segment.end_block,
