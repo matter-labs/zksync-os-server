@@ -21,41 +21,22 @@ pub(crate) enum ProviderKind {
     GatewayCustomRetries,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ProviderRetryConfig {
-    pub(crate) max_retries: Option<u32>,
-    pub(crate) retry_all_errors: bool,
-    pub(crate) backoff: Duration,
-}
-
-impl ProviderRetryConfig {
-    pub(crate) fn from_provider_config(config: &ProviderConfig) -> Self {
-        Self {
-            max_retries: Some(config.max_retries),
-            retry_all_errors: false,
-            backoff: config.retry_backoff,
-        }
-    }
-}
-
 pub(crate) async fn build_node_provider(
     config: &ProviderConfig,
     latest_poll_interval: Duration,
     finalized_poll_interval: Duration,
     log_cache_capacity: usize,
     provider: ProviderKind,
-    retry_config: Option<ProviderRetryConfig>,
+    infinite_retries: bool,
 ) -> NodeProvider {
-    let retry_config =
-        retry_config.unwrap_or_else(|| ProviderRetryConfig::from_provider_config(config));
     let provider_layers = ServiceBuilder::new()
         .layer_fn(move |inner| latency::LatencyService { inner, provider })
         .layer_fn(move |inner| retry::RetryService {
             inner,
             provider,
-            max_retries: retry_config.max_retries,
-            retry_all_errors: retry_config.retry_all_errors,
-            backoff: retry_config.backoff,
+            max_retries: config.max_retries,
+            infinite_retries,
+            backoff: config.retry_backoff,
         });
 
     let client = RpcClient::builder()

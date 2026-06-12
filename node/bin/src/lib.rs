@@ -40,7 +40,7 @@ use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_api::snark_proving_pipeline_step::SnarkProvingPipelineStep;
 use crate::prover_input_generator::ProverInputGenerator;
-use crate::provider::{ProviderKind, ProviderRetryConfig, build_node_provider};
+use crate::provider::{ProviderKind, build_node_provider};
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
@@ -198,7 +198,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.l1_watcher_config.finalized_poll_interval,
         config.l1_watcher_config.logs_cache_capacity,
         ProviderKind::L1,
-        None,
+        false,
     )
     .await;
     let gateway_provider = if let Some(gw_config) = &config.gateway_provider_config {
@@ -209,7 +209,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 config.l1_watcher_config.finalized_poll_interval,
                 config.l1_watcher_config.logs_cache_capacity,
                 ProviderKind::Gateway,
-                None,
+                false,
             )
             .await,
         )
@@ -1439,11 +1439,7 @@ async fn build_l1_sender_provider(
         config.l1_watcher_config.finalized_poll_interval,
         0,
         provider_kind,
-        Some(ProviderRetryConfig {
-            max_retries: None,
-            retry_all_errors: true,
-            backoff: provider_config.retry_backoff,
-        }),
+        true,
     )
     .await
 }

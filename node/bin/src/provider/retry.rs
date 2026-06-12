@@ -13,14 +13,14 @@ use tower::Service;
 pub(super) struct RetryService<S> {
     pub(super) inner: S,
     pub(super) provider: ProviderKind,
-    pub(super) max_retries: Option<u32>,
-    pub(super) retry_all_errors: bool,
+    pub(super) max_retries: u32,
+    pub(super) infinite_retries: bool,
     pub(super) backoff: Duration,
 }
 
 impl<S> RetryService<S> {
-    fn should_retry(error: &TransportError, retry_all_errors: bool) -> bool {
-        if retry_all_errors {
+    fn should_retry(error: &TransportError, infinite_retries: bool) -> bool {
+        if infinite_retries {
             return true;
         }
         if RateLimitRetryPolicy::default().should_retry(error) {
@@ -71,7 +71,7 @@ where
         let mut inner = std::mem::replace(&mut self.inner, inner);
         let provider = self.provider;
         let max_retries = self.max_retries;
-        let retry_all_errors = self.retry_all_errors;
+        let infinite_retries = self.infinite_retries;
         let backoff = self.backoff;
         Box::pin(async move {
             let mut retry_number = 0;
@@ -90,9 +90,9 @@ where
                     Err(e) => err = e,
                 }
 
-                if Self::should_retry(&err, retry_all_errors) {
+                if Self::should_retry(&err, infinite_retries) {
                     retry_number += 1;
-                    if max_retries.is_some_and(|max_retries| retry_number > max_retries) {
+                    if !infinite_retries && retry_number > max_retries {
                         return Err(TransportErrorKind::custom_str(&format!(
                             "Max retries exceeded {err}"
                         )));
@@ -143,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_all_errors_policy_retries_any_transport_error() {
+    fn infinite_retries_policy_retries_any_transport_error() {
         assert!(RetryService::<()>::should_retry(
             &error_response(-32001),
             true
