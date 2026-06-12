@@ -259,15 +259,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
 
     if node_role.is_main() && config.sequencer_config.rebuild.is_some() {
-        let l1_revert_ran = handle_startup_rebuild(
-            &mut config,
-            &repositories,
-            &l1_state,
-            chain_id,
-            &sl_provider,
-        )
-        .await
-        .expect("startup l1 revert failed");
+        let l1_revert_ran =
+            handle_startup_rebuild(&mut config, &repositories, &l1_state, &sl_provider)
+                .await
+                .expect("startup l1 revert failed");
 
         if l1_revert_ran {
             l1_state = L1State::fetch_with_finality(

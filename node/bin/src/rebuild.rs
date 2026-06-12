@@ -308,12 +308,15 @@ pub async fn handle_startup_rebuild(
     config: &mut Config,
     repositories: &dyn ReadRepository,
     l1_state: &L1State,
-    chain_id: u64,
     sl_provider: &NodeProvider,
 ) -> anyhow::Result<bool> {
     let Some(rebuild) = config.sequencer_config.rebuild.clone() else {
         return Ok(false);
     };
+    let chain_id = config
+        .genesis_config
+        .chain_id
+        .context("`genesis.chain_id` is required for startup rebuild")?;
     let max_blocks = config.l1_watcher_config.max_blocks_to_process;
 
     match plan_startup_rebuild(&rebuild, repositories, l1_state, max_blocks).await? {
