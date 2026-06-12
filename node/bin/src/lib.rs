@@ -730,39 +730,25 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (migration_triggered_sender, migration_triggered_receiver) =
         watch::channel::<Option<u64>>(None);
 
-    // The watchers that feed L1-originated transactions into the mempool (priority txs,
-    // protocol upgrades, interop roots, gateway migrations) only run on the main node, which
-    // sources produced blocks from them. External nodes don't produce blocks, and they don't
-    // verify replayed transactions one-by-one against L1 events either — they verify whole
-    // batches against L1 commitments in the L1 consistency checker instead.
-    let l1_watchers_enabled = node_role.is_main();
-    if !l1_watchers_enabled {
-        tracing::info!(
-            "L1 transaction watchers are not started on an external node; replayed blocks are verified against L1 batch commitments instead"
-        );
-    }
-
     if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
-        if l1_watchers_enabled {
-            runtime.spawn_critical_task(
-                "gateway migration watcher",
-                GatewayMigrationWatcher::create_watcher(
-                    node_startup_state.l1_state.diamond_proxy_l1.clone(),
-                    node_startup_state.l1_state.bridgehub_l1.clone(),
-                    chain_id,
-                    node_startup_state.l1_state.l1_chain_id,
-                    config.general_config.gateway_chain_id,
-                    next_cursors.migration_number,
-                    config.l1_watcher_config.clone().into(),
-                    sl_chain_id_subpool.clone(),
-                    l1_block_updates.clone(),
-                    l1_logs_cache.clone(),
-                )
-                .await
-                .expect("failed to start gateway migration watcher")
-                .run(),
-            );
-        }
+        runtime.spawn_critical_task(
+            "gateway migration watcher",
+            GatewayMigrationWatcher::create_watcher(
+                node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                node_startup_state.l1_state.bridgehub_l1.clone(),
+                chain_id,
+                node_startup_state.l1_state.l1_chain_id,
+                config.general_config.gateway_chain_id,
+                next_cursors.migration_number,
+                config.l1_watcher_config.clone().into(),
+                sl_chain_id_subpool.clone(),
+                l1_block_updates.clone(),
+                l1_logs_cache.clone(),
+            )
+            .await
+            .expect("failed to start gateway migration watcher")
+            .run(),
+        );
 
         // Initializes `last_finalized_migration` from the SL's `migrationNumber(chainId)` and,
         // if the current SL interval migration has not yet finalized, spawns a watcher to track
@@ -798,44 +784,41 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .run(),
         );
 
-        if l1_watchers_enabled
-            && let Some(interop_watcher) = InteropWatcher::create_watcher(
-                node_startup_state
-                    .l1_state
-                    .settlement_layer_intervals
-                    .clone(),
-                config.l1_watcher_config.clone().into(),
-                chain_id,
-                next_cursors.interop_root_id,
-                interop_roots_subpool.clone(),
-                gateway_block_updates.clone(),
-                gateway_logs_cache.clone(),
-            )
-            .await
-            .expect("failed to start L1 interop roots watcher")
+        if let Some(interop_watcher) = InteropWatcher::create_watcher(
+            node_startup_state
+                .l1_state
+                .settlement_layer_intervals
+                .clone(),
+            config.l1_watcher_config.clone().into(),
+            chain_id,
+            next_cursors.interop_root_id,
+            interop_roots_subpool.clone(),
+            gateway_block_updates.clone(),
+            gateway_logs_cache.clone(),
+        )
+        .await
+        .expect("failed to start L1 interop roots watcher")
         {
             runtime.spawn_critical_task("interop roots watcher", interop_watcher.run());
         }
     }
 
     let l1_subpool = L1Subpool::new(10);
-    if l1_watchers_enabled {
-        runtime.spawn_critical_task(
-            "L1 transaction watcher",
-            L1TxWatcher::create_watcher(
-                config.l1_watcher_config.clone().into(),
-                node_startup_state.l1_state.diamond_proxy_l1.clone(),
-                node_startup_state.l1_state.diamond_proxy_sl.clone(),
-                l1_subpool.clone(),
-                next_cursors.l1_priority_id,
-                l1_block_updates.clone(),
-                l1_logs_cache.clone(),
-            )
-            .await
-            .expect("failed to start L1 transaction watcher")
-            .run(),
-        );
-    }
+    runtime.spawn_critical_task(
+        "L1 transaction watcher",
+        L1TxWatcher::create_watcher(
+            config.l1_watcher_config.clone().into(),
+            node_startup_state.l1_state.diamond_proxy_l1.clone(),
+            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            l1_subpool.clone(),
+            next_cursors.l1_priority_id,
+            l1_block_updates.clone(),
+            l1_logs_cache.clone(),
+        )
+        .await
+        .expect("failed to start L1 transaction watcher")
+        .run(),
+    );
 
     // Transaction acceptance state - tracks whether we're accepting new transactions
     // Main nodes: accepts, but may switch to reject when `sequencer_max_blocks_to_produce` blocks are produced
@@ -940,7 +923,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         interop_roots_subpool,
         l1_subpool,
         l2_subpool.clone(),
-        l1_watchers_enabled,
     );
     let block_context_provider = BlockContextProvider::new(
         next_cursors,
@@ -966,26 +948,24 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // ========== Start L1 Upgrade Watcher ===========
 
-    if l1_watchers_enabled {
-        runtime.spawn_critical_task(
-            "l1 upgrade transaction watcher",
-            L1UpgradeTxWatcher::create_watcher(
-                config.l1_watcher_config.clone().into(),
-                chain_id,
-                node_startup_state.l1_state.bridgehub_l1.clone(),
-                node_startup_state.l1_state.diamond_proxy_l1.clone(),
-                node_startup_state.l1_state.diamond_proxy_sl.clone(),
-                bytecode_supplier_address,
-                current_protocol_version.clone(),
-                upgrade_subpool,
-                l1_block_updates.clone(),
-                l1_logs_cache.clone(),
-            )
-            .await
-            .expect("failed to start L1 upgrade transaction watcher")
-            .run(),
-        );
-    }
+    runtime.spawn_critical_task(
+        "l1 upgrade transaction watcher",
+        L1UpgradeTxWatcher::create_watcher(
+            config.l1_watcher_config.clone().into(),
+            chain_id,
+            node_startup_state.l1_state.bridgehub_l1.clone(),
+            node_startup_state.l1_state.diamond_proxy_l1.clone(),
+            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            bytecode_supplier_address,
+            current_protocol_version.clone(),
+            upgrade_subpool,
+            l1_block_updates.clone(),
+            l1_logs_cache.clone(),
+        )
+        .await
+        .expect("failed to start L1 upgrade transaction watcher")
+        .run(),
+    );
 
     // ========== Start L1 Persist Batch Watcher ===========
 
