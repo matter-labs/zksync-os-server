@@ -1646,12 +1646,12 @@ async fn run_en_pipeline(
             local_batch_data_cache,
             latest_verified_batch_tx,
             l1_consistency_event_rx,
+            config
+                .general_config
+                .consistency_checker_verification_concurrency,
         );
         async move {
-            checker
-                .run()
-                .await
-                .expect("L1 consistency checker failed");
+            checker.run().await.expect("L1 consistency checker failed");
         }
     });
 

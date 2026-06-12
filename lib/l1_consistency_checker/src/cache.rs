@@ -1,20 +1,25 @@
 use async_trait::async_trait;
-use std::collections::VecDeque;
+use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 use tokio::sync::watch;
 use zksync_os_batch_types::BlockCommitmentData;
 
 pub const DEFAULT_MAX_CACHED_TREE_BLOCKS: usize = 4096;
 
-/// Ordered cache of per-block commitment data keyed by block number.
+/// Cache of per-block commitment data keyed by block number.
 ///
 /// Blocks must be inserted consecutively (each block number exactly one greater than the last).
-/// Eviction is the caller's responsibility; they decide when to call
-/// [`TreeBlockCache::remove_lower_or_equal_than`]
+/// Eviction is the caller's responsibility via [`TreeBlockCache::remove_range`]; because the
+/// L1 consistency checker verifies batches concurrently, batches can be verified — and their
+/// blocks evicted — out of order, leaving gaps in the otherwise consecutive key space. A
+/// [`BTreeMap`] (rather than a `VecDeque`) lets us represent those gaps.
 #[derive(Debug)]
 pub struct TreeBlockCache {
-    data: VecDeque<BlockCommitmentData>,
-    first_block: Option<u64>,
+    data: BTreeMap<u64, BlockCommitmentData>,
+    /// Block number expected on the next [`insert`](Self::insert). Monotonically increasing and
+    /// unaffected by eviction, so it doubles as the boundary between "was inserted (and possibly
+    /// already evicted)" and "not cached yet" when serving range reads.
+    next_expected_block: Option<u64>,
     max_blocks: usize,
 }
 
@@ -31,62 +36,43 @@ impl TreeBlockCache {
 
     pub fn with_max_blocks(max_blocks: usize) -> Self {
         Self {
-            data: VecDeque::new(),
-            first_block: None,
+            data: BTreeMap::new(),
+            next_expected_block: None,
             max_blocks,
         }
     }
 
     /// Insert a block into the cache. Blocks must arrive consecutively (each block number exactly
-    /// one greater than the last).
+    /// one greater than the last), regardless of any gaps left behind by eviction.
     pub fn insert(&mut self, block_number: u64, block: BlockCommitmentData) -> anyhow::Result<()> {
-        if let Some((_, last_block)) = self.range() {
-            if block_number != last_block + 1 {
-                anyhow::bail!("Out of order block received. This should never happen");
-            }
-        } else {
-            self.first_block = Some(block_number);
+        if let Some(expected) = self.next_expected_block
+            && block_number != expected
+        {
+            anyhow::bail!("Out of order block received. This should never happen");
         }
-        self.data.push_back(block);
+        self.data.insert(block_number, block);
+        self.next_expected_block = Some(block_number + 1);
         Ok(())
     }
 
     /// Whether the cache is still below its soft bound.
     ///
-    /// The bound is *soft*: the sole writer (the L1 consistency checker) is allowed to
-    /// overshoot it to finish caching the blocks an oversized pending batch needs. See
-    /// [`L1ConsistencyChecker::can_accept_tree_block`](crate::checker::L1ConsistencyChecker).
+    /// The bound counts blocks actually held, so gaps left by out-of-order eviction free up
+    /// capacity. It must comfortably exceed the combined block span of all batches verified
+    /// concurrently, otherwise intake stalls and the upstream pipeline channel eventually
+    /// overflows.
     pub fn has_capacity(&self) -> bool {
         self.data.len() < self.max_blocks
     }
 
-    /// Currently cached block-number range (inclusive bounds), or `None` if empty.
-    pub fn range(&self) -> Option<(u64, u64)> {
-        if self.data.is_empty() {
-            None
-        } else {
-            self.first_block
-                .map(|block| (block, block + self.data.len() as u64 - 1))
-        }
-    }
-
-    /// Removes all blocks lower than or equal to the given block number.
-    pub fn remove_lower_or_equal_than(&mut self, block_number: u64) {
-        if let Some((first_block, last_block)) = self.range() {
-            if block_number < first_block {
-                return;
-            }
-
-            let amount_to_remove = (block_number.min(last_block) - first_block + 1) as usize;
-            self.data.drain(0..amount_to_remove);
-
-            // Keep `first_block` aligned with the deque; an empty cache has no valid range.
-            if self.data.is_empty() {
-                self.first_block = None;
-            } else {
-                self.first_block = Some(first_block + amount_to_remove as u64);
-            }
-        }
+    /// Removes every block in the given (inclusive) range. Used to evict a single batch's blocks
+    /// once it has been verified; ranges of distinct batches never overlap.
+    pub fn remove_range(&mut self, range: RangeInclusive<u64>) {
+        // Split out the keys `>= start`, then split the remaining-to-keep keys `> end` back off,
+        // leaving only `[start, end]` to drop. Avoids an O(n) scan of the whole map.
+        let mut at_or_above_start = self.data.split_off(range.start());
+        let above_end = at_or_above_start.split_off(&(range.end() + 1));
+        self.data.extend(above_end);
     }
 
     /// Returns a complete cached block range, or `None` if it is not fully available yet.
@@ -94,31 +80,27 @@ impl TreeBlockCache {
         &self,
         range: RangeInclusive<u64>,
     ) -> anyhow::Result<Option<Vec<BlockCommitmentData>>> {
-        let Some((first_block, last_block)) = self.range() else {
+        let Some(next_expected_block) = self.next_expected_block else {
+            // Nothing has ever been inserted; the blocks are simply not cached yet.
             return Ok(None);
         };
-        if *range.start() < first_block {
-            anyhow::bail!(
-                "requested local batch data range {}..={} was already evicted; cached range is {}..={}",
-                range.start(),
-                range.end(),
-                first_block,
-                last_block
-            );
-        }
-        if *range.end() > last_block {
+        if *range.end() >= next_expected_block {
+            // The tail of the range hasn't been folded into the cache yet.
             return Ok(None);
         }
-        let start = (*range.start() - first_block) as usize;
 
-        Ok(Some(
-            self.data
-                .iter()
-                .skip(start)
-                .take(range.count())
-                .cloned()
-                .collect(),
-        ))
+        // Every block in the range was inserted at some point (its end is below `next_expected_block`),
+        // so a missing block means it was already evicted after its batch was verified.
+        let mut blocks = Vec::with_capacity(range.clone().count());
+        for block_number in range {
+            let Some(block) = self.data.get(&block_number) else {
+                anyhow::bail!(
+                    "requested local batch data block {block_number} was already evicted"
+                );
+            };
+            blocks.push(block.clone());
+        }
+        Ok(Some(blocks))
     }
 }
 
