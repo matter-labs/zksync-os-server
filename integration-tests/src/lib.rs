@@ -607,6 +607,33 @@ impl Tester {
         .await
     }
 
+    pub(crate) async fn prepare_stopped_node_with_ports(
+        l1: AnvilL1,
+        config_overrides: Option<impl FnOnce(&mut Config)>,
+        chain_layout: ChainLayout<'static>,
+        ports: Ports,
+    ) -> anyhow::Result<StoppedTester> {
+        let tempdir = Arc::new(tempfile::tempdir()?);
+        let mut config = build_node_config(&l1, chain_layout, false).await?;
+        if !prover_input_generation_enabled() {
+            disable_prover_input_generation(&mut config);
+        }
+        Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config, &ports);
+        if let Some(config_overrides) = config_overrides {
+            config_overrides(&mut config);
+        }
+        let log_state = NodeLogState::fresh(config.general_config.node_role);
+        Ok(StoppedTester {
+            l1,
+            config,
+            ports,
+            tempdir,
+            log_state,
+            chain_layout,
+            owned_supporting_nodes: Vec::new(),
+        })
+    }
+
     fn bind_runtime_config(l1: &AnvilL1, tempdir: &TempDir, config: &mut Config, ports: &Ports) {
         config.general_config.rocks_db_path = tempdir.path().join("rocksdb");
         config.l1_provider_config.rpc_url = l1.address.clone();

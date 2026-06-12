@@ -6,6 +6,7 @@ mod batch_sink;
 pub mod batcher;
 mod command_source;
 pub mod config;
+mod consensus_catchup;
 pub mod default_protocol_version;
 mod en_remote_config;
 mod init_tx_forwarder;
@@ -27,6 +28,7 @@ use crate::config::{
     Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
     report_static_config_metrics,
 };
+use crate::consensus_catchup::run_consensus_pre_bootstrap_catchup;
 use crate::en_remote_config::load_remote_config;
 use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -305,6 +307,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     )
     .await;
 
+    run_consensus_pre_bootstrap_catchup(&config, block_replay_storage.clone())
+        .await
+        .expect("failed to run consensus pre-bootstrap catchup");
+
     tracing::info!("Initializing Tree RocksDB");
     let tree_db = TreeManager::load_or_initialize_tree(
         Path::new(&config.general_config.rocks_db_path.join(STATE_TREE_DB_NAME)),
@@ -527,10 +533,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to create network service");
         network_service.spawn(runtime, node_role.is_main().then_some(verify_request_rx));
         if let Some(bootstrapper) = raft_bootstrapper {
-            bootstrapper
-                .bootstrap_if_needed()
-                .await
-                .expect("failed to run raft bootstrap process");
+            // Do not block node startup here: stale peers may need this node's JSON-RPC
+            // to run pre-bootstrap catchup before they can connect and finish Raft bootstrap.
+            runtime.spawn_critical_task("raft bootstrap", async move {
+                bootstrapper
+                    .bootstrap_if_needed()
+                    .await
+                    .expect("failed to run raft bootstrap process");
+            });
         }
     } else if node_role.is_main() {
         tracing::info!(

@@ -46,7 +46,7 @@ pub async fn build_consensus_tx_forwarder(
     TxForwarder::consensus_leader(node_id, status_rx, providers)
 }
 
-fn parse_consensus_rpc_forwarder(endpoint: &str) -> anyhow::Result<(String, String)> {
+pub(crate) fn parse_consensus_rpc_forwarder(endpoint: &str) -> anyhow::Result<(String, String)> {
     let endpoint = endpoint.trim();
     let endpoint = if endpoint.contains("://") {
         endpoint.to_owned()

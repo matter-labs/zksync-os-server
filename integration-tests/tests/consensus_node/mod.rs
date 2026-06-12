@@ -548,6 +548,64 @@ async fn consensus_cluster_fully_restarts_and_recovers() -> anyhow::Result<()> {
 }
 
 #[test_log::test(tokio::test)]
+async fn consensus_bootstraps_when_initial_node_already_has_wal_blocks() -> anyhow::Result<()> {
+    let mut cluster = MultiNodeTester::builder()
+        .with_consensus_secret_keys(consensus_test_keys(3))
+        .spawn_consensus_nodes(1)
+        .with_unspawned_nodes_as_suspended()
+        .with_consensus_enabled_on_initial_launch(false)
+        .build()
+        .await?;
+    let result = async {
+        let initial_node_idx = 0;
+
+        wait_for_l2_block(cluster.node(initial_node_idx), 2, REPLICATION_TIMEOUT).await?;
+        let pre_consensus_head = latest_l2_block(cluster.node(initial_node_idx)).await?;
+        assert!(
+            pre_consensus_head >= 2,
+            "single node should have produced the initial WAL blocks before consensus starts"
+        );
+
+        cluster.suspend_node(initial_node_idx).await?;
+        cluster
+            .start_node_with_overrides(initial_node_idx, |config| {
+                config.consensus_config.enabled = true;
+                config.consensus_config.pre_bootstrap_catchup = false;
+            })
+            .await?;
+
+        for node_idx in 1..cluster.len() {
+            cluster
+                .start_node_with_overrides(node_idx, |config| {
+                    config.consensus_config.enabled = true;
+                    config.consensus_config.pre_bootstrap_catchup = true;
+                    config.batcher_config.enabled = false;
+                })
+                .await?;
+        }
+
+        let leader_idx = cluster
+            .wait_for_raft_cluster_formation(CLUSTER_FORMATION_TIMEOUT)
+            .await?;
+        cluster
+            .wait_for_active_l2_block(pre_consensus_head, REPLICATION_TIMEOUT)
+            .await?;
+
+        let post_bootstrap_block =
+            send_transfer_and_wait_for_active_replication(&mut cluster, leader_idx).await?;
+        assert!(
+            post_bootstrap_block > pre_consensus_head,
+            "cluster should continue producing raft-canonized blocks after bootstrap"
+        );
+
+        Ok(())
+    }
+    .await;
+    let shutdown_result = cluster.shutdown_all().await;
+    result.and(shutdown_result)
+}
+
+#[test_log::test(tokio::test)]
 async fn consensus_late_node_joins_and_catches_up() -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::builder()
         .with_consensus_secret_keys(consensus_test_keys(3))

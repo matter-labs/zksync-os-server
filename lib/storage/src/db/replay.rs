@@ -488,6 +488,13 @@ impl ReadReplay for BlockReplayStorage {
         self.latest_record_checked()
             .expect("no blocks in BlockReplayStorage")
     }
+
+    fn get_canonical_block_hash(&self, block_number: BlockNumber) -> Option<BlockHash> {
+        Some(BlockReplayStorage::get_canonical_block_hash(
+            self,
+            block_number,
+        ))
+    }
 }
 
 impl WriteReplay for BlockReplayStorage {

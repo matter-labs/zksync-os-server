@@ -30,6 +30,14 @@ Requirements:
 - Local Raft node ID is always derived from `network_secret_key`.
 - `consensus_peer_ids` must include that derived local ID.
 
+Optional stale-node admission:
+- `consensus_pre_bootstrap_catchup=true` makes a node pull missing replay records from the
+  configured `consensus_tx_forwarding_rpc_urls` before Raft is initialized. The node verifies
+  that its local WAL tip matches the selected peer, appends missing replay records to the WAL, and
+  then rebuilds local state through normal startup replay.
+- Use this for admitting a node behind an already-running peer. Leave it disabled for the initial
+  cluster bootstrap unless at least one configured peer is already serving RPC.
+
 Example: three-node consensus (local dev, leader failover)
 
 Use three enodes in `network_boot_nodes` and three peer IDs in `consensus_peer_ids__json`.
@@ -45,6 +53,11 @@ PEER_IDS_JSON='[
   "0xd2db8005d59694a5b79b7c58d4d375c60c9323837e852bbbfd05819621c48a4218cefa37baf39a164e2a6f6c1b34c379c4a72c7480b5fbcc379d1befb881e8fc",
   "0x2991880ae3ff81b881c86f54d2af0ee85a325231bb75f903f06f432020101614dbfbc75ddec885f5e101fed272bee661f492fb6dd80147b656da990635a7e581"
 ]'
+CONSENSUS_TX_FORWARDING_RPC_URLS_JSON='[
+  "0x246e07030b4c48b8f28ab1fdf797a02308b0ca724696b695aabee48ea48298ff221144a0c0f14ebf030aea6d5fb6b31bd3a02676204bb13e78336bb824e32f1d@127.0.0.1:3050",
+  "0xd2db8005d59694a5b79b7c58d4d375c60c9323837e852bbbfd05819621c48a4218cefa37baf39a164e2a6f6c1b34c379c4a72c7480b5fbcc379d1befb881e8fc@127.0.0.1:3051",
+  "0x2991880ae3ff81b881c86f54d2af0ee85a325231bb75f903f06f432020101614dbfbc75ddec885f5e101fed272bee661f492fb6dd80147b656da990635a7e581@127.0.0.1:3052"
+]'
 BOOT_NODES="${ENODE_1},${ENODE_2},${ENODE_3}"
 ```
 
@@ -59,6 +72,7 @@ CONSENSUS_ENABLED=true \
 CONSENSUS_BOOTSTRAP=true \
 CONSENSUS_PEER_IDS__JSON="${PEER_IDS_JSON}" \
 GENERAL_ROCKS_DB_PATH="db/en-1" \
+CONSENSUS_TX_FORWARDING_RPC_URLS__JSON="${CONSENSUS_TX_FORWARDING_RPC_URLS_JSON}" \
 cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v30.2/default/config.yaml
 ```
 
@@ -78,6 +92,7 @@ STATUS_SERVER_ADDRESS=0.0.0.0:3072 \
 RPC_ADDRESS=0.0.0.0:3051 \
 OBSERVABILITY_PROMETHEUS_PORT=3313 \
 GENERAL_ROCKS_DB_PATH="db/en-2" \
+CONSENSUS_TX_FORWARDING_RPC_URLS__JSON="${CONSENSUS_TX_FORWARDING_RPC_URLS_JSON}" \
 cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v30.2/default/config.yaml
 ```
 
@@ -97,8 +112,13 @@ STATUS_SERVER_ADDRESS=0.0.0.0:3073 \
 RPC_ADDRESS=0.0.0.0:3052 \
 OBSERVABILITY_PROMETHEUS_PORT=3314 \
 GENERAL_ROCKS_DB_PATH="db/en-3" \
+CONSENSUS_TX_FORWARDING_RPC_URLS__JSON="${CONSENSUS_TX_FORWARDING_RPC_URLS_JSON}" \
 cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v30.2/default/config.yaml
 ```
+
+For a node that is added or restarted after the cluster has already produced blocks, set
+`CONSENSUS_PRE_BOOTSTRAP_CATCHUP=true` only on that joining node and point
+`CONSENSUS_TX_FORWARDING_RPC_URLS__JSON` at at least one already-running consensus node RPC.
 
 Failover check:
 1. Start all three nodes and wait until one is leader.

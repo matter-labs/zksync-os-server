@@ -504,11 +504,24 @@ impl MultiNodeTester {
     }
 }
 
-#[derive(Default)]
 pub struct MultiNodeTesterBuilder {
     consensus_secret_keys: Vec<zksync_os_network::SecretKey>,
     consensus_nodes_to_spawn: Option<usize>,
     batcher_node_index: Option<usize>,
+    consensus_enabled_on_initial_launch: bool,
+    keep_unspawned_nodes_as_suspended: bool,
+}
+
+impl Default for MultiNodeTesterBuilder {
+    fn default() -> Self {
+        Self {
+            consensus_secret_keys: Vec::new(),
+            consensus_nodes_to_spawn: None,
+            batcher_node_index: None,
+            consensus_enabled_on_initial_launch: true,
+            keep_unspawned_nodes_as_suspended: false,
+        }
+    }
 }
 
 impl MultiNodeTesterBuilder {
@@ -529,6 +542,16 @@ impl MultiNodeTesterBuilder {
         self
     }
 
+    pub fn with_consensus_enabled_on_initial_launch(mut self, enabled: bool) -> Self {
+        self.consensus_enabled_on_initial_launch = enabled;
+        self
+    }
+
+    pub fn with_unspawned_nodes_as_suspended(mut self) -> Self {
+        self.keep_unspawned_nodes_as_suspended = true;
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<MultiNodeTester> {
         let membership_nodes = self.consensus_secret_keys.len();
         assert!(
@@ -545,6 +568,12 @@ impl MultiNodeTesterBuilder {
             batcher_node_index < num_nodes,
             "batcher_node_index must be in 0..{num_nodes}"
         );
+        let consensus_enabled_on_initial_launch = self.consensus_enabled_on_initial_launch;
+        let nodes_to_prepare = if self.keep_unspawned_nodes_as_suspended {
+            membership_nodes
+        } else {
+            num_nodes
+        };
 
         let mut node_ports = Vec::with_capacity(membership_nodes);
         for _ in 0..membership_nodes {
@@ -580,7 +609,7 @@ impl MultiNodeTesterBuilder {
         let launches = self
             .consensus_secret_keys
             .into_iter()
-            .take(num_nodes)
+            .take(nodes_to_prepare)
             .zip(node_ports.into_iter())
             .enumerate()
             .map(|(i, (secret, ports))| {
@@ -602,32 +631,46 @@ impl MultiNodeTesterBuilder {
                     .id;
                     tracing::info!("starting node... (node_index={i}, node_id={expected_node_id}, network_port={network_port}, bootstrap={bootstrap}, batcher_enabled={batcher_enabled})");
 
+                    let config_overrides = move |config: &mut Config| {
+                        config.general_config.node_role = NodeRole::MainNode;
+                        config.general_config.main_node_rpc_url = None;
+                        config.batcher_config.enabled = batcher_enabled;
+                        config.network_config.enabled = true;
+                        config.network_config.secret_key = Some(secret);
+                        config.network_config.address = Ipv4Addr::LOCALHOST;
+                        config.network_config.port = network_port;
+                        config.network_config.boot_nodes = boot_nodes.clone();
+                        config.consensus_config.enabled = consensus_enabled_on_initial_launch;
+                        config.consensus_config.bootstrap = bootstrap;
+                        config.consensus_config.peer_ids = peers.clone();
+                        config.consensus_config.tx_forwarding_rpc_urls =
+                            tx_forwarding_rpc_urls.clone();
+                        // Keep elections reasonably fast while leaving enough room for
+                        // batcher-enabled nodes to finish in-flight block work before a
+                        // transient election can displace the current leader.
+                        config.consensus_config.election_timeout_min = TEST_ELECTION_TIMEOUT_MIN;
+                        config.consensus_config.election_timeout_max = TEST_ELECTION_TIMEOUT_MAX;
+                        config.consensus_config.heartbeat_interval = TEST_HEARTBEAT_INTERVAL;
+                    };
+
+                    if i >= num_nodes {
+                        let node = Tester::prepare_stopped_node_with_ports(
+                            l1,
+                            Some(config_overrides),
+                            ChainLayout::Default {
+                                protocol_version: PROTOCOL_VERSION,
+                            },
+                            ports,
+                        )
+                        .await?;
+                        tracing::info!("node prepared as stopped with tempfile: {} (node_index={i}, node_id={expected_node_id})", node.config().general_config.rocks_db_path.display());
+                        return anyhow::Ok(NodeSlot::Suspended(Box::new(node)));
+                    }
+
                     let node = Tester::launch_node_with_ports(
                         l1,
                         false,
-                        Some(move |config: &mut Config| {
-                            config.general_config.node_role = NodeRole::MainNode;
-                            config.general_config.main_node_rpc_url = None;
-                            config.batcher_config.enabled = batcher_enabled;
-                            config.network_config.enabled = true;
-                            config.network_config.secret_key = Some(secret);
-                            config.network_config.address = Ipv4Addr::LOCALHOST;
-                            config.network_config.port = network_port;
-                            config.network_config.boot_nodes = boot_nodes.clone();
-                            config.consensus_config.enabled = true;
-                            config.consensus_config.bootstrap = bootstrap;
-                            config.consensus_config.peer_ids = peers.clone();
-                            config.consensus_config.tx_forwarding_rpc_urls =
-                                tx_forwarding_rpc_urls.clone();
-                            // Keep elections reasonably fast while leaving enough room for
-                            // batcher-enabled nodes to finish in-flight block work before a
-                            // transient election can displace the current leader.
-                            config.consensus_config.election_timeout_min =
-                                TEST_ELECTION_TIMEOUT_MIN;
-                            config.consensus_config.election_timeout_max =
-                                TEST_ELECTION_TIMEOUT_MAX;
-                            config.consensus_config.heartbeat_interval = TEST_HEARTBEAT_INTERVAL;
-                        }),
+                        Some(config_overrides),
                         ChainLayout::Default {
                             protocol_version: PROTOCOL_VERSION,
                         },

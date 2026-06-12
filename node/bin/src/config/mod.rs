@@ -678,8 +678,8 @@ pub struct ConsensusConfig {
     #[config(default, with = Serde![*])]
     pub tx_forwarding_rpc_urls: Vec<String>,
     /// WARNING: Assumes all configured consensus nodes are already caught up to the same
-    /// canonical L2 state. Bootstrap does not catch up stale nodes before admitting them
-    /// to the cluster.
+    /// canonical L2 state unless `pre_bootstrap_catchup` is enabled and can catch this node up
+    /// from a configured peer first.
     /// Attempt to initialize cluster membership on startup.
     /// Safe to enable on every consensus node; only one initializer will win.
     #[config(default_t = false)]
@@ -693,6 +693,19 @@ pub struct ConsensusConfig {
     /// Raft heartbeat interval.
     #[config(default_t = Duration::from_millis(1000))]
     pub heartbeat_interval: Duration,
+    /// Before starting Raft, pull missing replay records from the configured consensus RPC peers.
+    ///
+    /// This is intended for admitting a node whose WAL is behind an already-running consensus
+    /// peer. It verifies the local tip against the selected peer, appends missing replay records
+    /// to the local WAL, and then lets normal startup replay rebuild local state/tree/repositories.
+    ///
+    /// This must not be enabled on every node in a brand-new simultaneous bootstrap unless at
+    /// least one configured peer is already serving RPC.
+    #[config(default_t = false)]
+    pub pre_bootstrap_catchup: bool,
+    /// Timeout for each peer RPC request made by `consensus.pre_bootstrap_catchup`.
+    #[config(default_t = Duration::from_secs(10))]
+    pub pre_bootstrap_catchup_request_timeout: Duration,
 }
 
 impl ConsensusConfig {

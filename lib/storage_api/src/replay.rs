@@ -1,5 +1,5 @@
 use crate::{BlockContext, ReplayRecord};
-use alloy::primitives::{BlockNumber, Sealed};
+use alloy::primitives::{BlockHash, BlockNumber, Sealed};
 use futures::Stream;
 use futures::stream::BoxStream;
 use pin_project::pin_project;
@@ -68,6 +68,20 @@ pub trait ReadReplay: Debug + Send + Sync + Unpin + 'static {
     /// [`get_replay_record`](Self::get_replay_record) or [`get_context`](Self::get_context), both of
     /// which MUST return `Some(_)`.
     fn latest_record(&self) -> BlockNumber;
+
+    /// Returns the canonical block hash for a replay record, if it is available.
+    ///
+    /// Implementations that store canonical hashes should override this method. The default can
+    /// recover hashes for non-tip blocks from the next block's historical hash window, but it
+    /// cannot recover the latest block hash.
+    fn get_canonical_block_hash(&self, block_number: BlockNumber) -> Option<BlockHash> {
+        if block_number >= self.latest_record() {
+            return None;
+        }
+        self.get_context(block_number + 1)
+            .and_then(|ctx| ctx.block_hashes.0.last().copied())
+            .map(BlockHash::from)
+    }
 }
 
 /// Extension methods for [`ReadReplay`].

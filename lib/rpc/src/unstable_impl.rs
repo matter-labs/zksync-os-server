@@ -3,7 +3,7 @@ use crate::result::ToRpcResult;
 use alloy::primitives::{B256, BlockNumber, TxHash};
 use jsonrpsee::core::RpcResult;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
-use zksync_os_rpc_api::unstable::UnstableApiServer;
+use zksync_os_rpc_api::unstable::{SealedReplayHead, SealedReplayRecord, UnstableApiServer};
 use zksync_os_storage_api::{PersistedBatch, RepositoryError};
 use zksync_os_types::L2_TO_L1_TREE_SIZE;
 
@@ -58,6 +58,35 @@ impl<RpcStorage: ReadRpcStorage> UnstableNamespace<RpcStorage> {
 
         Ok(local_root)
     }
+
+    fn get_replay_record_impl(
+        &self,
+        block_number: u64,
+    ) -> UnstableResult<Option<SealedReplayRecord>> {
+        let Some(record) = self
+            .storage
+            .replay_storage()
+            .get_replay_record(block_number)
+        else {
+            return Ok(None);
+        };
+        let hash = self
+            .storage
+            .replay_storage()
+            .get_canonical_block_hash(block_number)
+            .ok_or(UnstableError::BlockHashNotAvailable(block_number))?;
+        Ok(Some(SealedReplayRecord { hash, record }))
+    }
+
+    fn get_replay_head_impl(&self) -> UnstableResult<SealedReplayHead> {
+        let block_number = self.storage.replay_storage().latest_record();
+        let hash = self
+            .storage
+            .replay_storage()
+            .get_canonical_block_hash(block_number)
+            .ok_or(UnstableError::BlockHashNotAvailable(block_number))?;
+        Ok(SealedReplayHead { block_number, hash })
+    }
 }
 
 impl<RpcStorage: ReadRpcStorage> UnstableApiServer for UnstableNamespace<RpcStorage> {
@@ -68,6 +97,14 @@ impl<RpcStorage: ReadRpcStorage> UnstableApiServer for UnstableNamespace<RpcStor
 
     fn get_local_root(&self, batch_number: u64) -> RpcResult<B256> {
         self.get_local_root_impl(batch_number).to_rpc_result()
+    }
+
+    fn get_replay_record(&self, block_number: u64) -> RpcResult<Option<SealedReplayRecord>> {
+        self.get_replay_record_impl(block_number).to_rpc_result()
+    }
+
+    fn get_replay_head(&self) -> RpcResult<SealedReplayHead> {
+        self.get_replay_head_impl().to_rpc_result()
     }
 }
 
@@ -86,6 +123,8 @@ pub enum UnstableError {
     /// Historical block could not be found on this node (e.g., pruned).
     #[error("historical block {0} is not available")]
     BlockNotAvailable(BlockNumber),
+    #[error("canonical hash for replay block {0} is not available")]
+    BlockHashNotAvailable(BlockNumber),
     /// Historical transaction could not be found on this node (e.g., pruned).
     #[error("historical transaction {0} is not available")]
     TxNotAvailable(TxHash),

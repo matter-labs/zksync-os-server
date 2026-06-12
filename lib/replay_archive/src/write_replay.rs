@@ -45,6 +45,13 @@ where
     fn latest_record(&self) -> BlockNumber {
         self.replay.latest_record()
     }
+
+    fn get_canonical_block_hash(
+        &self,
+        block_number: BlockNumber,
+    ) -> Option<alloy::primitives::BlockHash> {
+        self.replay.get_canonical_block_hash(block_number)
+    }
 }
 
 impl<Replay> WriteReplay for ReplayArchivingWriteReplay<Replay>
