@@ -402,7 +402,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
     let last_persisted_block_on_start = persistent_batch_storage.last_persisted_block_number();
 
-    // First block to replay; 0 is valid because genesis is always present.
+    // `starting_block` - the first block to go through the pipeline. Invariant: a replay record for
+    // this block must already exist. Note that this holds for `starting_block=0` as genesis is
+    // always present in the system.
     let mut starting_block = if node_startup_state.l1_state.last_committed_batch > 0 {
         // todo: ideally this should be searched through p2p networking instead of RPC
         //       but too many things depend on this being initialized here right now
@@ -1423,7 +1425,8 @@ async fn run_main_node_pipeline(
     monitor.spawn(runtime, snapshot_rx)
 }
 
-/// EN pipeline. Drains batcher channels even though ENs do not produce batches.
+/// Only for EN - we still populate channels destined for the batcher subsystem -
+/// need to drain them to not get stuck
 #[allow(clippy::too_many_arguments)]
 async fn run_en_pipeline(
     config: &Config,

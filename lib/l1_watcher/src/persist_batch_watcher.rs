@@ -16,7 +16,19 @@ use zksync_os_l1_consistency_checker::L1CommittedBatch;
 use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 
-/// Persists only batches whose commit and execute events were finalized.
+/// Watches finalized commit and execute events together and persists only irreversibly executed
+/// batches.
+///
+/// This component keeps committed batches in memory until the matching `BlockExecution` event
+/// arrives in a finalized settlement-layer block, and only then writes a `PersistedBatch` through
+/// `WriteBatch`. That split avoids having to roll back persistent storage for batches that were
+/// committed or executed but later reverted on L1.
+///
+/// Depended on by:
+/// - `ExecutedBatchStorage`, which is the concrete persistent store typically passed into this
+///   watcher;
+/// - `RpcStorage` and RPC namespaces, which read persisted batch data to answer batch- and
+///   proof-related requests;
 pub struct L1PersistBatchWatcher<BatchStorage> {
     batch_storage: BatchStorage,
     consistency_checker_tx: Option<mpsc::Sender<L1CommittedBatch>>,
@@ -27,7 +39,14 @@ pub struct L1PersistBatchWatcher<BatchStorage> {
 }
 
 impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
-    /// Builds an SL-aware watcher over the intervals still relevant to persistence.
+    /// Builds an [`SlAwareL1Watcher`](crate::SlAwareL1Watcher) that walks every settlement-layer
+    /// interval still relevant to persistence, in order. Per-segment block resolution happens
+    /// here; event scanning happens lazily inside the watcher's `run()` loop.
+    ///
+    /// The migration contract requires `totalBatchesCommitted == totalBatchesExecuted` before a
+    /// chain can migrate off an SL (`Migrator.sol`), so each closed interval is self-contained:
+    /// every commit on that SL has a matching execute on the same SL, and the in-memory
+    /// `committed_batches` map is empty at interval boundaries.
     #[allow(clippy::too_many_arguments)]
     pub fn create_watcher(
         config: L1WatcherConfig,
@@ -50,7 +69,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
         let max_blocks_to_process = config.max_blocks_to_process;
 
-        // Defer segment resolution until the starting batch is known.
+        // Per-segment block resolution (and the starting `last_persisted_batch`) are deferred to
+        // the watcher's `run()`; only static dependencies are captured here.
         let resolve_segments = move |()| async move {
             let last_persisted_batch = batch_storage.latest_batch();
             tracing::info!(
@@ -58,15 +78,21 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 "resolving L1 persist batch watcher segments"
             );
 
+            // Build segment specs from the relevant intervals. The first non-skipped segment
+            // is adjusted to start at `last_persisted_batch` (so we re-validate it on resume),
+            // unless we're at genesis — in which case `0` triggers the batch-0 fast path
+            // inside `find_l1_commit_block_by_batch_number`.
             let mut segments = Vec::new();
             let mut is_first = true;
             for interval in intervals.intervals() {
+                // Empty interval: a migration can close without any new batches on the SL.
                 if interval
                     .last_batch
                     .is_some_and(|lb| interval.first_batch > lb)
                 {
                     continue;
                 }
+                // Wholly behind `last_persisted_batch`: nothing left to validate or persist.
                 if interval
                     .last_batch
                     .is_some_and(|lb| last_persisted_batch > lb)
@@ -94,6 +120,9 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                         last_persisted_batch
                     }
                 } else {
+                    // First batch in the interval might not have been committed yet. We
+                    // resolve the canonical start of the segment from the previous batch's
+                    // import block.
                     interval.first_batch - 1
                 };
                 is_first = false;
@@ -203,13 +232,18 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         } else {
             if batch_number > latest_processed_batch + 1 {
                 if latest_processed_batch == 0 {
-                    // Older chains may have unreported legacy batches.
+                    // We did not have `ReportCommittedBatchRangeZKsyncOS` event on some of the older
+                    // testnet chains (e.g. `stage`, `testnet-alpha`). These batches are considered to
+                    // be legacy and are not persisted in batch storage. Users will not be able to
+                    // generate L2->L1 log proofs for those batches through RPC.
                     tracing::warn!(
                         batch_number,
                         "first discovered batch #{batch_number} is not batch #1; assuming batches #1-#{} are legacy and skipping them",
                         batch_number - 1
                     );
                 } else {
+                    // This should only be possible if we skipped reverted batch previously and are now
+                    // discovering more reverted batches.
                     tracing::warn!(
                         batch_number,
                         latest_processed_batch,
@@ -337,7 +371,8 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                         });
                     } else if self.last_processed_commit_batch == self.last_persisted_batch_on_start
                     {
-                        // Likely a legacy batch without a reported block range.
+                        // No `ReportCommittedBatchRangeZKsyncOS` event was processed yet, it is very likely that the batch is legacy
+                        // i.e. block range was not reported for it. Skip this batch.
                         tracing::info!("assuming batch #{batch_number} is legacy and skipping it");
                     } else {
                         return Err(L1WatcherError::Other(anyhow::anyhow!(
