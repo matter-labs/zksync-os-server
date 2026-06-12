@@ -3,13 +3,17 @@ use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
 use crate::{L1WatcherConfig, SegmentSpec, util};
 use alloy::eips::BlockId;
+use alloy::primitives::B256;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::{Context, anyhow};
 use std::collections::HashMap;
-use tokio::sync::{mpsc, watch};
+use std::ops::RangeInclusive;
+use tokio::sync::mpsc;
 use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
-use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
+use zksync_os_contract_interface::IExecutor::{
+    BlockCommit, BlockExecution, ReportCommittedBatchRangeZKsyncOS,
+};
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_l1_consistency_checker::L1CommittedBatch;
@@ -31,8 +35,19 @@ use zksync_os_storage_api::{PersistedBatch, WriteBatch};
 ///   proof-related requests;
 pub struct L1PersistBatchWatcher<BatchStorage> {
     batch_storage: BatchStorage,
+    /// EN-only. When set, the watcher dispatches committed batches to the L1 consistency checker
+    /// (built from `BlockCommit` + `ReportCommittedBatchRange` events, no commit calldata) and
+    /// persists the locally-rebuilt batch the checker returns via `verified_batch_rx`. When unset
+    /// (main node), the watcher rebuilds the batch from commit calldata instead.
     consistency_checker_tx: Option<mpsc::Sender<L1CommittedBatch>>,
-    latest_verified_batch_rx: Option<watch::Receiver<u64>>,
+    /// EN-only. Verified, locally-rebuilt batches returned by the consistency checker, keyed into
+    /// `committed_batches` as they arrive (out of order) and consumed at execute time.
+    verified_batch_rx: Option<mpsc::Receiver<DiscoveredCommittedBatch>>,
+    /// EN-only buffers for pairing the two commit events by batch number, since their emission
+    /// order within the commit tx is not guaranteed: `(state_commitment, commitment)` from
+    /// `BlockCommit`, and the block range from `ReportCommittedBatchRange`.
+    pending_commit_hashes: HashMap<u64, (B256, B256)>,
+    pending_commit_ranges: HashMap<u64, RangeInclusive<u64>>,
     committed_batches: HashMap<u64, DiscoveredCommittedBatch>,
     last_processed_commit_batch: u64,
     last_persisted_batch_on_start: u64,
@@ -53,12 +68,12 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
         consistency_checker_tx: Option<mpsc::Sender<L1CommittedBatch>>,
-        latest_verified_batch_rx: Option<watch::Receiver<u64>>,
+        verified_batch_rx: Option<mpsc::Receiver<DiscoveredCommittedBatch>>,
     ) -> SegmentResolver<(), Self> {
         assert_eq!(
             consistency_checker_tx.is_some(),
-            latest_verified_batch_rx.is_some(),
-            "L1 consistency checker sender and latest verified batch receiver must be configured together"
+            verified_batch_rx.is_some(),
+            "L1 consistency checker sender and verified-batch receiver must be configured together"
         );
         tracing::info!(
             num_intervals = intervals.intervals().len(),
@@ -167,7 +182,9 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             let processor = Self {
                 batch_storage,
                 consistency_checker_tx,
-                latest_verified_batch_rx,
+                verified_batch_rx,
+                pending_commit_hashes: HashMap::new(),
+                pending_commit_ranges: HashMap::new(),
                 committed_batches: HashMap::new(),
                 last_processed_commit_batch: last_persisted_batch,
                 last_persisted_batch_on_start: last_persisted_batch,
@@ -258,44 +275,100 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 );
             }
             tracing::debug!(batch_number, "discovered committed batch");
-            let (batch_info, committed_batch) =
-                self.parse_committed_batch(provider, report, &log).await?;
 
-            // EN-only consistency checker input.
-            if let Some(tx) = &self.consistency_checker_tx {
-                let l1_commit = L1CommittedBatch {
-                    stored_batch_info: committed_batch.batch_info.clone(),
-                    l2_da_commitment_scheme: batch_info.l2_da_commitment_scheme,
-                    range: committed_batch.block_range.clone(),
-                };
-
-                tx.send(l1_commit).await.map_err(|_| {
-                    L1WatcherError::Other(anyhow::anyhow!(
-                        "L1 consistency checker event channel closed"
-                    ))
-                })?;
+            match &self.consistency_checker_tx {
+                // EN: dispatch to the consistency checker, pairing this report's block range with
+                // the `BlockCommit` hashes. The rebuilt batch comes back via `verified_batch_rx`
+                // and is persisted at execute time — no commit calldata is fetched.
+                Some(_) => {
+                    self.pending_commit_ranges.insert(
+                        batch_number,
+                        report.firstBlockNumber..=report.lastBlockNumber,
+                    );
+                    self.try_dispatch_commit(batch_number).await?;
+                }
+                // Main node: rebuild the batch from commit calldata and buffer it for persistence.
+                None => {
+                    let (_, committed_batch) =
+                        self.parse_committed_batch(provider, report, &log).await?;
+                    self.committed_batches.insert(batch_number, committed_batch);
+                }
             }
 
-            self.committed_batches.insert(batch_number, committed_batch);
             self.last_processed_commit_batch = batch_number;
         }
         Ok(())
     }
 
-    async fn wait_until_batch_verified(&mut self, batch_number: u64) -> Result<(), L1WatcherError> {
-        let Some(latest_verified_batch_rx) = self.latest_verified_batch_rx.as_mut() else {
+    /// Records a `BlockCommit` event's hashes and tries to pair them with an already-seen report.
+    /// EN-only.
+    async fn record_block_commit(&mut self, log: &Log) -> Result<(), L1WatcherError> {
+        let event = BlockCommit::decode_log(&log.inner)?.data;
+        let batch_number = event.batchNumber.to::<u64>();
+        // `batchHash` carries the post-batch state commitment for ZKsync OS batches.
+        self.pending_commit_hashes
+            .insert(batch_number, (event.batchHash, event.commitment));
+        self.try_dispatch_commit(batch_number).await
+    }
+
+    /// Dispatches a committed batch to the consistency checker once both of its commit events
+    /// (`BlockCommit` hashes and `ReportCommittedBatchRange` block range) have been seen. No-op
+    /// until then. EN-only.
+    async fn try_dispatch_commit(&mut self, batch_number: u64) -> Result<(), L1WatcherError> {
+        let (Some(&(state_commitment, commitment)), Some(range)) = (
+            self.pending_commit_hashes.get(&batch_number),
+            self.pending_commit_ranges.get(&batch_number),
+        ) else {
             return Ok(());
         };
+        let range = range.clone();
+        self.pending_commit_hashes.remove(&batch_number);
+        self.pending_commit_ranges.remove(&batch_number);
 
+        let Some(tx) = &self.consistency_checker_tx else {
+            return Ok(());
+        };
+        tx.send(L1CommittedBatch {
+            batch_number,
+            state_commitment,
+            commitment,
+            range,
+        })
+        .await
+        .map_err(|_| {
+            L1WatcherError::Other(anyhow::anyhow!(
+                "L1 consistency checker event channel closed"
+            ))
+        })
+    }
+
+    /// Waits for the consistency checker to return the verified, locally-rebuilt batch, buffering
+    /// any earlier-arriving batches into `committed_batches`. EN-only; the main node never calls
+    /// this (it rebuilds from calldata and buffers directly).
+    async fn wait_for_verified_batch(
+        &mut self,
+        batch_number: u64,
+    ) -> Result<DiscoveredCommittedBatch, L1WatcherError> {
+        if let Some(committed_batch) = self.committed_batches.remove(&batch_number) {
+            return Ok(committed_batch);
+        }
         loop {
-            if *latest_verified_batch_rx.borrow_and_update() >= batch_number {
-                return Ok(());
+            let verified = self
+                .verified_batch_rx
+                .as_mut()
+                .expect("verified-batch receiver is configured on the external node")
+                .recv()
+                .await
+                .ok_or_else(|| {
+                    L1WatcherError::Other(anyhow::anyhow!(
+                        "L1 consistency checker stopped before verifying batch #{batch_number}"
+                    ))
+                })?;
+            let verified_number = verified.batch_info.batch_number;
+            if verified_number == batch_number {
+                return Ok(verified);
             }
-            latest_verified_batch_rx.changed().await.map_err(|_| {
-                L1WatcherError::Other(anyhow::anyhow!(
-                    "L1 consistency checker stopped before verifying batch #{batch_number}"
-                ))
-            })?;
+            self.committed_batches.insert(verified_number, verified);
         }
     }
 }
@@ -307,9 +380,16 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
     }
 
     fn event_signatures(&self) -> Topic {
-        Topic::default()
+        let topic = Topic::default()
             .extend(ReportCommittedBatchRangeZKsyncOS::SIGNATURE_HASH)
-            .extend(BlockExecution::SIGNATURE_HASH)
+            .extend(BlockExecution::SIGNATURE_HASH);
+        // On the EN the batch is rebuilt locally and matched against the `BlockCommit` hashes
+        // (commitment + state commitment), avoiding the commit calldata fetch.
+        if self.consistency_checker_tx.is_some() {
+            topic.extend(BlockCommit::SIGNATURE_HASH)
+        } else {
+            topic
+        }
     }
 
     fn filter_events(&self, logs: Vec<Log>) -> Vec<Log> {
@@ -327,20 +407,34 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                 let report = ReportCommittedBatchRangeZKsyncOS::decode_log(&log.inner)?.data;
                 self.process_commit(provider, report, log).await?;
             }
+            s if s == BlockCommit::SIGNATURE_HASH => {
+                self.record_block_commit(&log).await?;
+            }
             s if s == BlockExecution::SIGNATURE_HASH => {
                 let execute = BlockExecution::decode_log(&log.inner)?.data;
                 let batch_number = execute.batchNumber.to::<u64>();
                 if batch_number > self.last_persisted_batch_on_start {
                     let batch_hash = execute.batchHash;
-                    if let Some(committed_batch) = self.committed_batches.remove(&batch_number) {
+                    // Legacy batches (older testnet chains) never produced a
+                    // `ReportCommittedBatchRangeZKsyncOS`, so no commit was ever processed.
+                    let is_legacy =
+                        self.last_processed_commit_batch == self.last_persisted_batch_on_start;
+                    // Obtain the batch to persist: the consistency checker's locally-rebuilt batch
+                    // on the EN, or the calldata-rebuilt buffer on the main node.
+                    let committed_batch = if is_legacy {
+                        None
+                    } else if self.consistency_checker_tx.is_some() {
                         tracing::debug!(
                             batch_number,
                             ?batch_hash,
                             "discovered executed batch, waiting for consistency check"
                         );
+                        Some(self.wait_for_verified_batch(batch_number).await?)
+                    } else {
+                        self.committed_batches.remove(&batch_number)
+                    };
 
-                        self.wait_until_batch_verified(batch_number).await?;
-
+                    if let Some(committed_batch) = committed_batch {
                         if execute.commitment != committed_batch.batch_info.commitment {
                             return Err(L1WatcherError::Other(anyhow!(
                                 "Commitment is not matching for batch #{}, commit: {:?}, execute: {:?}",
@@ -369,8 +463,7 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                                 log.block_number.expect("Missing block number in log"),
                             ),
                         });
-                    } else if self.last_processed_commit_batch == self.last_persisted_batch_on_start
-                    {
+                    } else if is_legacy {
                         // No `ReportCommittedBatchRangeZKsyncOS` event was processed yet, it is very likely that the batch is legacy
                         // i.e. block range was not reported for it. Skip this batch.
                         tracing::info!("assuming batch #{batch_number} is legacy and skipping it");
