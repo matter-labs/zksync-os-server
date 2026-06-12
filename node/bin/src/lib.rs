@@ -137,9 +137,8 @@ pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 #[allow(clippy::too_many_arguments)]
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
     runtime: &Runtime,
-    config: Config,
+    mut config: Config,
 ) {
-    let mut config = config;
     report_static_config_metrics(&config);
 
     let node_role = config.general_config.node_role;

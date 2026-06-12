@@ -192,11 +192,14 @@ async fn node_recovers_from_l1_batch_revert_after_restart_v30() -> anyhow::Resul
         .expect_successful_receipt()
         .await?;
 
-    let committed_state =
-        wait_for_l1_state(&tester, "a committed but not executed batch", |state| {
-            state.last_committed_batch >= 1 && state.last_executed_batch == 0
-        })
-        .await?;
+    let committed_state = wait_for_l1_state(&tester, "a committed batch", |state| {
+        state.last_committed_batch >= 1
+    })
+    .await?;
+    assert_eq!(
+        committed_state.last_executed_batch, 0,
+        "batch execution is disabled, so no batch should be executed"
+    );
     assert_eq!(
         committed_state.last_proved_batch, 0,
         "fake SNARK provers are disabled, so no batch should be proved"

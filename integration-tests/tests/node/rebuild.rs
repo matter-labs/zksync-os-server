@@ -432,14 +432,17 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
     // real content and trigger a batch commit quickly.
     send_throwaway_tx(&tester).await?;
 
-    // last_executed_batch == 0 is a safety measure: since batch execution is disabled, it
-    // should always satisfy.
     let committed_state = wait_for_l1_state(
         &tester,
-        "a committed but not yet executed batch on L1",
-        |state| state.last_committed_batch >= 1 && state.last_executed_batch == 0,
+        "a committed batch on L1",
+        |state| state.last_committed_batch >= 1,
     )
     .await?;
+    // Batch execution is disabled, so nothing should ever be executed.
+    assert_eq!(
+        committed_state.last_executed_batch, 0,
+        "batch execution is disabled, so no batch should be executed"
+    );
 
     // last_executed_batch == 0 so we want to keep batch 0, reverting all committed batches
     // (batch 1+). Batch 1 always starts at block 1, so from_block = 1.
@@ -498,12 +501,16 @@ async fn danger_block_rebuild_with_l1_revert_hash_guard_prevents_double_revert(
 
     send_throwaway_tx(&tester).await?;
 
-    wait_for_l1_state(
+    let committed_state = wait_for_l1_state(
         &tester,
-        "at least one committed but unexecuted batch",
-        |state| state.last_committed_batch >= 1 && state.last_executed_batch == 0,
+        "at least one committed batch",
+        |state| state.last_committed_batch >= 1,
     )
     .await?;
+    assert_eq!(
+        committed_state.last_executed_batch, 0,
+        "batch execution is disabled, so no batch should be executed"
+    );
 
     // Snapshot block 1's hash before any rebuild; this is stored as the guard value.
     let original_block1_hash = block_hash(&tester, 1).await?;
@@ -577,12 +584,16 @@ async fn revert_l1_commits_without_rebuild_leaves_local_blocks_intact(
 
     send_throwaway_tx(&tester).await?;
 
-    wait_for_l1_state(
+    let committed_state = wait_for_l1_state(
         &tester,
-        "at least one committed but unexecuted batch",
-        |state| state.last_committed_batch >= 1 && state.last_executed_batch == 0,
+        "at least one committed batch",
+        |state| state.last_committed_batch >= 1,
     )
     .await?;
+    assert_eq!(
+        committed_state.last_executed_batch, 0,
+        "batch execution is disabled, so no batch should be executed"
+    );
 
     // Snapshot the current tip hash; it must survive the standalone L1 revert unchanged.
     let tip_block = tester.l2_provider.get_block_number().await?;
@@ -640,12 +651,16 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
 
     send_throwaway_tx(&tester).await?;
 
-    wait_for_l1_state(
+    let committed_state = wait_for_l1_state(
         &tester,
-        "at least one committed but unexecuted batch",
-        |state| state.last_committed_batch >= 1 && state.last_executed_batch == 0,
+        "at least one committed batch",
+        |state| state.last_committed_batch >= 1,
     )
     .await?;
+    assert_eq!(
+        committed_state.last_executed_batch, 0,
+        "batch execution is disabled, so no batch should be executed"
+    );
 
     // Fetch the on-chain hash of batch 1 for the revert guard.
     let batch1_on_chain_hash = fetch_on_chain_batch_hash(&tester, 1).await?;
@@ -714,12 +729,16 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
 
     // Drive at least three committed (still unexecuted) batches onto L1 so batch 2 is a non-last
     // committed batch (batch 1 below to keep, batches >= 3 above to skip during the scan).
-    mine_until_l1_state(
+    let committed_state = mine_until_l1_state(
         &tester,
-        "at least three committed but unexecuted batches",
-        |state| state.last_committed_batch >= 3 && state.last_executed_batch == 0,
+        "at least three committed batches",
+        |state| state.last_committed_batch >= 3,
     )
     .await?;
+    assert_eq!(
+        committed_state.last_executed_batch, 0,
+        "batch execution is disabled, so no batch should be executed"
+    );
 
     // Target batch 2: a non-last committed batch. Place `from_block` strictly inside it when it
     // spans multiple blocks, otherwise at its single block — either way it resolves to batch 2.
