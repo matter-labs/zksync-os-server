@@ -901,8 +901,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
         tree_for_rpc,
     );
-    let (local_batch_data_cache, _) = watch::channel(TreeBlockCache::with_max_blocks(
-        config.general_config.consistency_checker_max_cached_blocks,
+    let (local_batch_data_cache, _) = watch::channel(TreeBlockCache::with_max_cached_bytes(
+        usize::try_from(config.general_config.consistency_checker_max_cached_bytes.0)
+            .expect("consistency checker cache byte limit does not fit usize"),
     ));
     let (l1_consistency_event_tx, l1_consistency_event_rx) =
         tokio::sync::mpsc::channel::<L1CommittedBatch>(4096);

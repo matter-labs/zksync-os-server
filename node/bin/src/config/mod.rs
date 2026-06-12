@@ -507,20 +507,15 @@ pub struct GeneralConfig {
     #[config(default_t = 512)]
     pub blocks_to_retain_in_memory: usize,
 
-    /// [external node] Max number of blocks whose commitment data the L1 consistency checker
-    /// may hold while waiting for the corresponding L1 commit events. Bounds the gap between
-    /// local replay and L1 verification: once full, the checker stops consuming and the
-    /// pipeline fails fast ("consumer is catastrophically behind"), so it must comfortably
-    /// cover the L1 watcher's lag during a fresh sync. Entries are small (~0.3KB plus the
-    /// block's pubdata), so large values are affordable.
-    #[config(default_t = 100_000)]
-    pub consistency_checker_max_cached_blocks: usize,
+    /// [external node] Max retained bytes for commitment data cached while waiting for L1 commit
+    /// events. This is a soft cap: one block may exceed it before intake waits for eviction.
+    #[config(default_t = 512 * SizeUnit::MiB)]
+    pub consistency_checker_max_cached_bytes: ByteSize,
 
     /// [external node] Upper bound on how many L1-committed batches the consistency checker
     /// verifies concurrently (and thus on parallel commitment rebuilds, each offloaded to a
-    /// blocking thread). Note that `consistency_checker_max_cached_blocks` must comfortably
-    /// exceed the combined block span of this many batches, otherwise intake stalls waiting for
-    /// eviction.
+    /// blocking thread). The cache byte cap must comfortably cover the combined retained data
+    /// for this many in-flight batches, otherwise intake stalls waiting for eviction.
     #[config(default_t = 16)]
     pub consistency_checker_verification_concurrency: usize,
 

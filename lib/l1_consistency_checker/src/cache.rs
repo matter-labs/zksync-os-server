@@ -1,20 +1,37 @@
 use async_trait::async_trait;
-use std::collections::BTreeMap;
-use std::ops::RangeInclusive;
+use std::{collections::BTreeMap, mem, ops::RangeInclusive};
 use tokio::sync::watch;
 use zksync_os_batch_types::BlockCommitmentData;
 
-pub const DEFAULT_MAX_CACHED_TREE_BLOCKS: usize = 4096;
+pub const DEFAULT_MAX_CACHED_TREE_BLOCK_BYTES: usize = 512 * 1024 * 1024;
+
+#[derive(Debug)]
+struct CachedBlockCommitmentData {
+    block: BlockCommitmentData,
+    retained_bytes: usize,
+}
+
+impl CachedBlockCommitmentData {
+    fn new(block_number: u64, block: BlockCommitmentData) -> Self {
+        let retained_bytes =
+            mem::size_of_val(&block_number) + mem::size_of::<usize>() + block.retained_size_bytes();
+        Self {
+            block,
+            retained_bytes,
+        }
+    }
+}
 
 /// Cache of per-block commitment data.
 ///
 /// Inserts are sequential, while concurrent verification can evict completed ranges out of order.
 #[derive(Debug)]
 pub struct TreeBlockCache {
-    data: BTreeMap<u64, BlockCommitmentData>,
+    data: BTreeMap<u64, CachedBlockCommitmentData>,
     /// Next block expected on insert; also marks ranges that are not cached yet.
     next_expected_block: Option<u64>,
-    max_blocks: usize,
+    cached_bytes: usize,
+    max_cached_bytes: usize,
 }
 
 impl Default for TreeBlockCache {
@@ -25,14 +42,15 @@ impl Default for TreeBlockCache {
 
 impl TreeBlockCache {
     pub fn new() -> Self {
-        Self::with_max_blocks(DEFAULT_MAX_CACHED_TREE_BLOCKS)
+        Self::with_max_cached_bytes(DEFAULT_MAX_CACHED_TREE_BLOCK_BYTES)
     }
 
-    pub fn with_max_blocks(max_blocks: usize) -> Self {
+    pub fn with_max_cached_bytes(max_cached_bytes: usize) -> Self {
         Self {
             data: BTreeMap::new(),
             next_expected_block: None,
-            max_blocks,
+            cached_bytes: 0,
+            max_cached_bytes,
         }
     }
 
@@ -43,14 +61,22 @@ impl TreeBlockCache {
         {
             anyhow::bail!("Out of order block received. This should never happen");
         }
-        self.data.insert(block_number, block);
+        let cached_block = CachedBlockCommitmentData::new(block_number, block);
+        let retained_bytes = cached_block.retained_bytes;
+        if let Some(replaced) = self.data.insert(block_number, cached_block) {
+            self.cached_bytes = self
+                .cached_bytes
+                .checked_sub(replaced.retained_bytes)
+                .expect("cached bytes underflow while replacing block");
+        }
+        self.cached_bytes += retained_bytes;
         self.next_expected_block = Some(block_number + 1);
         Ok(())
     }
 
     /// Whether the cache is still below its soft bound.
     pub fn has_capacity(&self) -> bool {
-        self.data.len() < self.max_blocks
+        self.data.is_empty() || self.cached_bytes < self.max_cached_bytes
     }
 
     /// Removes every block in the given inclusive range.
@@ -58,6 +84,14 @@ impl TreeBlockCache {
         // Drop [start, end] without scanning the whole map.
         let mut at_or_above_start = self.data.split_off(range.start());
         let above_end = at_or_above_start.split_off(&(range.end() + 1));
+        let removed_bytes = at_or_above_start
+            .values()
+            .map(|block| block.retained_bytes)
+            .sum::<usize>();
+        self.cached_bytes = self
+            .cached_bytes
+            .checked_sub(removed_bytes)
+            .expect("cached bytes underflow while removing blocks");
         self.data.extend(above_end);
     }
 
@@ -80,9 +114,49 @@ impl TreeBlockCache {
                     "requested local batch data block {block_number} was already evicted"
                 );
             };
-            blocks.push(block.clone());
+            blocks.push(block.block.clone());
         }
         Ok(Some(blocks))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::B256;
+    use zksync_os_types::ProtocolSemanticVersion;
+
+    fn block_commitment_data(block_number: u64, pubdata: Vec<u8>) -> BlockCommitmentData {
+        BlockCommitmentData {
+            block_number,
+            timestamp: 0,
+            l1_tx_onchain_hashes: Vec::new(),
+            num_l2_txs: 0,
+            interop_roots: Vec::new(),
+            upgrade_tx_hash: None,
+            encoded_l2_l1_logs: Vec::new(),
+            pubdata,
+            last_256_block_hashes_blake: B256::ZERO,
+            tree_root_hash: B256::ZERO,
+            tree_leaf_count: 0,
+            multichain_root: B256::ZERO,
+            protocol_version: ProtocolSemanticVersion::new(0, 31, 0),
+        }
+    }
+
+    #[test]
+    fn capacity_is_based_on_retained_bytes() {
+        let mut cache = TreeBlockCache::with_max_cached_bytes(256);
+        assert!(cache.has_capacity());
+
+        cache
+            .insert(1, block_commitment_data(1, vec![0; 1024]))
+            .unwrap();
+        assert!(!cache.has_capacity());
+
+        cache.remove_range(1..=1);
+        assert!(cache.has_capacity());
+        assert_eq!(cache.cached_bytes, 0);
     }
 }
 

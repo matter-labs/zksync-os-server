@@ -3,8 +3,8 @@ use alloy::primitives::{B256, BlockNumber, U256, keccak256};
 use alloy::sol_types::SolValue;
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
-use std::ops;
 use std::ops::{Deref, DerefMut};
+use std::{mem, ops};
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_merkle_tree_api::TreeBatchOutput;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
@@ -37,6 +37,20 @@ pub struct BlockCommitmentData {
 }
 
 impl BlockCommitmentData {
+    pub fn retained_size_bytes(&self) -> usize {
+        mem::size_of::<Self>()
+            + self.l1_tx_onchain_hashes.capacity() * mem::size_of::<B256>()
+            + self.interop_roots.capacity() * mem::size_of::<InteropRoot>()
+            + self
+                .interop_roots
+                .iter()
+                .map(|root| root.sides.capacity() * mem::size_of::<B256>())
+                .sum::<usize>()
+            + self.encoded_l2_l1_logs.capacity()
+                * mem::size_of::<[u8; L2_TO_L1_LOG_SERIALIZE_SIZE]>()
+            + self.pubdata.capacity()
+    }
+
     pub fn new(
         block_output: &BlockOutput,
         transactions: &[ZkTransaction],
