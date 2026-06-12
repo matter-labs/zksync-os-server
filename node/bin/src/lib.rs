@@ -68,7 +68,9 @@ use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
-use zksync_os_l1_consistency_checker::{L1CommittedBatch, L1ConsistencyChecker, TreeBlockCache};
+use zksync_os_l1_consistency_checker::{
+    L1CommittedBatch, L1ConsistencyChecker, LocalBatchDataCacher, TreeBlockCache,
+};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -728,25 +730,39 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (migration_triggered_sender, migration_triggered_receiver) =
         watch::channel::<Option<u64>>(None);
 
-    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
-        runtime.spawn_critical_task(
-            "gateway migration watcher",
-            GatewayMigrationWatcher::create_watcher(
-                node_startup_state.l1_state.diamond_proxy_l1.clone(),
-                node_startup_state.l1_state.bridgehub_l1.clone(),
-                chain_id,
-                node_startup_state.l1_state.l1_chain_id,
-                config.general_config.gateway_chain_id,
-                next_cursors.migration_number,
-                config.l1_watcher_config.clone().into(),
-                sl_chain_id_subpool.clone(),
-                l1_block_updates.clone(),
-                l1_logs_cache.clone(),
-            )
-            .await
-            .expect("failed to start gateway migration watcher")
-            .run(),
+    // The watchers that feed L1-originated transactions into the mempool (priority txs,
+    // protocol upgrades, interop roots, gateway migrations) only run on the main node, which
+    // sources produced blocks from them. External nodes don't produce blocks, and they don't
+    // verify replayed transactions one-by-one against L1 events either — they verify whole
+    // batches against L1 commitments in the L1 consistency checker instead.
+    let l1_watchers_enabled = node_role.is_main();
+    if !l1_watchers_enabled {
+        tracing::info!(
+            "L1 transaction watchers are not started on an external node; replayed blocks are verified against L1 batch commitments instead"
         );
+    }
+
+    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
+        if l1_watchers_enabled {
+            runtime.spawn_critical_task(
+                "gateway migration watcher",
+                GatewayMigrationWatcher::create_watcher(
+                    node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                    node_startup_state.l1_state.bridgehub_l1.clone(),
+                    chain_id,
+                    node_startup_state.l1_state.l1_chain_id,
+                    config.general_config.gateway_chain_id,
+                    next_cursors.migration_number,
+                    config.l1_watcher_config.clone().into(),
+                    sl_chain_id_subpool.clone(),
+                    l1_block_updates.clone(),
+                    l1_logs_cache.clone(),
+                )
+                .await
+                .expect("failed to start gateway migration watcher")
+                .run(),
+            );
+        }
 
         // Initializes `last_finalized_migration` from the SL's `migrationNumber(chainId)` and,
         // if the current SL interval migration has not yet finalized, spawns a watcher to track
@@ -782,41 +798,44 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .run(),
         );
 
-        if let Some(interop_watcher) = InteropWatcher::create_watcher(
-            node_startup_state
-                .l1_state
-                .settlement_layer_intervals
-                .clone(),
-            config.l1_watcher_config.clone().into(),
-            chain_id,
-            next_cursors.interop_root_id,
-            interop_roots_subpool.clone(),
-            gateway_block_updates.clone(),
-            gateway_logs_cache.clone(),
-        )
-        .await
-        .expect("failed to start L1 interop roots watcher")
+        if l1_watchers_enabled
+            && let Some(interop_watcher) = InteropWatcher::create_watcher(
+                node_startup_state
+                    .l1_state
+                    .settlement_layer_intervals
+                    .clone(),
+                config.l1_watcher_config.clone().into(),
+                chain_id,
+                next_cursors.interop_root_id,
+                interop_roots_subpool.clone(),
+                gateway_block_updates.clone(),
+                gateway_logs_cache.clone(),
+            )
+            .await
+            .expect("failed to start L1 interop roots watcher")
         {
             runtime.spawn_critical_task("interop roots watcher", interop_watcher.run());
         }
     }
 
     let l1_subpool = L1Subpool::new(10);
-    runtime.spawn_critical_task(
-        "L1 transaction watcher",
-        L1TxWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            l1_subpool.clone(),
-            next_cursors.l1_priority_id,
-            l1_block_updates.clone(),
-            l1_logs_cache.clone(),
-        )
-        .await
-        .expect("failed to start L1 transaction watcher")
-        .run(),
-    );
+    if l1_watchers_enabled {
+        runtime.spawn_critical_task(
+            "L1 transaction watcher",
+            L1TxWatcher::create_watcher(
+                config.l1_watcher_config.clone().into(),
+                node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                l1_subpool.clone(),
+                next_cursors.l1_priority_id,
+                l1_block_updates.clone(),
+                l1_logs_cache.clone(),
+            )
+            .await
+            .expect("failed to start L1 transaction watcher")
+            .run(),
+        );
+    }
 
     // Transaction acceptance state - tracks whether we're accepting new transactions
     // Main nodes: accepts, but may switch to reject when `sequencer_max_blocks_to_produce` blocks are produced
@@ -921,6 +940,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         interop_roots_subpool,
         l1_subpool,
         l2_subpool.clone(),
+        l1_watchers_enabled,
     );
     let block_context_provider = BlockContextProvider::new(
         next_cursors,
@@ -946,24 +966,26 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // ========== Start L1 Upgrade Watcher ===========
 
-    runtime.spawn_critical_task(
-        "l1 upgrade transaction watcher",
-        L1UpgradeTxWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            chain_id,
-            node_startup_state.l1_state.bridgehub_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            bytecode_supplier_address,
-            current_protocol_version.clone(),
-            upgrade_subpool,
-            l1_block_updates.clone(),
-            l1_logs_cache.clone(),
-        )
-        .await
-        .expect("failed to start L1 upgrade transaction watcher")
-        .run(),
-    );
+    if l1_watchers_enabled {
+        runtime.spawn_critical_task(
+            "l1 upgrade transaction watcher",
+            L1UpgradeTxWatcher::create_watcher(
+                config.l1_watcher_config.clone().into(),
+                chain_id,
+                node_startup_state.l1_state.bridgehub_l1.clone(),
+                node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                bytecode_supplier_address,
+                current_protocol_version.clone(),
+                upgrade_subpool,
+                l1_block_updates.clone(),
+                l1_logs_cache.clone(),
+            )
+            .await
+            .expect("failed to start L1 upgrade transaction watcher")
+            .run(),
+        );
+    }
 
     // ========== Start L1 Persist Batch Watcher ===========
 
@@ -975,7 +997,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
         tree_for_rpc,
     );
-    let (local_batch_data_cache, _) = watch::channel(TreeBlockCache::new());
+    let (local_batch_data_cache, _) = watch::channel(TreeBlockCache::with_max_blocks(
+        config.general_config.consistency_checker_max_cached_blocks,
+    ));
     let (l1_consistency_event_tx, l1_consistency_event_rx) =
         tokio::sync::mpsc::channel::<L1CommittedBatch>(4096);
     let (latest_verified_batch_tx, latest_verified_batch_rx) =
@@ -1605,15 +1629,31 @@ async fn run_en_pipeline(
                 }),
         )
         .pipe(TreeManager { tree: tree.clone() })
-        .pipe(L1ConsistencyChecker::new(
+        // Block intake (folding replayed blocks into the shared cache) stays on the pipeline;
+        // the CPU-heavy L1 commit verification runs in the separate task spawned below so it
+        // cannot starve intake and overflow the upstream channel.
+        .pipe(LocalBatchDataCacher::new(
+            last_persisted_block_on_start,
+            state.clone(),
+            local_batch_data_cache.clone(),
+        ));
+
+    runtime.spawn_critical_task("l1 consistency checker", {
+        let checker = L1ConsistencyChecker::new(
             chain_id,
             node_state_on_startup.l1_state.sl_chain_id,
             last_persisted_block_on_start,
-            state.clone(),
             local_batch_data_cache,
             latest_verified_batch_tx,
             l1_consistency_event_rx,
-        ));
+            config
+                .general_config
+                .consistency_checker_verification_concurrency,
+        );
+        async move {
+            checker.run().await.expect("L1 consistency checker failed");
+        }
+    });
 
     let components = pipeline.components();
     pipeline.spawn();

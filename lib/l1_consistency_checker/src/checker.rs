@@ -1,12 +1,12 @@
-use crate::cache::{LocalBatchBlockData, TreeBlockCache};
-use async_trait::async_trait;
+use crate::cache::{TreeBlockCache, TreeBlockCacheReceiverExt};
+use anyhow::Context;
+use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
-use tokio::sync::{mpsc, watch};
+use std::sync::Arc;
+use tokio::sync::{Semaphore, mpsc, watch};
+use tokio::task::JoinSet;
 use zksync_os_batch_types::ExtendedCommitBatchInfo;
 use zksync_os_contract_interface::models::{DACommitmentScheme, StoredBatchInfo};
-use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_storage_api::{ReadStateHistory, TreeBlock, read_multichain_root};
 use zksync_os_types::PubdataMode;
 
 pub struct L1CommittedBatch {
@@ -25,214 +25,217 @@ impl L1CommittedBatch {
     }
 }
 
-/// Terminal EN pipeline component that owns local batch data caching and L1 consistency checks.
-pub struct L1ConsistencyChecker<ReadState> {
+/// Outcome of verifying one committed batch, carried back to the run loop so it can evict the
+/// batch's blocks and advance the verified-batch watermark.
+struct VerifiedBatch {
+    batch_number: u64,
+    range: RangeInclusive<u64>,
+}
+
+/// Background task that checks L1-committed batches against locally replayed blocks.
+///
+/// It runs off the pipeline (unlike the [`LocalBatchDataCacher`](crate::cacher::LocalBatchDataCacher)
+/// that fills the cache) so that its CPU-heavy commitment rebuild cannot starve block intake.
+/// Committed batches arrive in order, but each is verified in its own bounded-concurrency task so
+/// that one batch waiting for its blocks (or rebuilding its commitment) does not hold up batches
+/// behind it. As each batch is verified its blocks are evicted from the shared cache — restoring
+/// intake capacity — and the latest-verified-batch watermark is advanced (see [`Self::run`] for
+/// why the watermark only moves along the contiguous verified prefix).
+pub struct L1ConsistencyChecker {
     chain_id: u64,
     sl_chain_id: u64,
     last_persisted_block_on_start: u64,
-    read_state: ReadState,
+    /// Shared with the cacher (which inserts) and the batch verification responder (which reads).
+    /// We hold the sender to evict verified blocks and a receiver to await freshly cached ones.
     cache: watch::Sender<TreeBlockCache>,
+    cache_rx: watch::Receiver<TreeBlockCache>,
     latest_verified_batch_tx: watch::Sender<u64>,
     /// Receives L1-committed batches to verify against locally replayed blocks.
     l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
+    /// Upper bound on batches verified concurrently (and thus on parallel commitment rebuilds).
+    verification_concurrency: usize,
 }
 
-impl<ReadState> L1ConsistencyChecker<ReadState> {
+impl L1ConsistencyChecker {
     pub fn new(
         chain_id: u64,
         sl_chain_id: u64,
         last_persisted_block_on_start: u64,
-        read_state: ReadState,
         cache: watch::Sender<TreeBlockCache>,
         latest_verified_batch_tx: watch::Sender<u64>,
         l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
+        verification_concurrency: usize,
     ) -> Self {
+        let cache_rx = cache.subscribe();
         Self {
             chain_id,
             sl_chain_id,
             last_persisted_block_on_start,
-            read_state,
             cache,
+            cache_rx,
             latest_verified_batch_tx,
             l1_events_rx,
+            verification_concurrency,
         }
     }
-}
 
-impl<ReadState: ReadStateHistory> L1ConsistencyChecker<ReadState> {
-    /// Our backpressure signal: whether to pull another tree block from the input.
+    /// Verifies a single committed batch against locally replayed blocks, blocking until the
+    /// cacher has the batch's blocks available. Batches already covered by a persisted batch were
+    /// verified by a previous run and are trusted without rebuilding.
     ///
-    /// We normally stop accepting once the cache reaches its soft bound. The one exception
-    /// is a pending batch larger than that bound: we must keep caching its blocks, otherwise
-    /// it could never be verified and evicted and the pipeline would deadlock. Once its full
-    /// range is cached it is verified and evicted at the top of the loop, restoring backpressure.
-    fn can_accept_tree_block(&self, pending: Option<&L1CommittedBatch>) -> bool {
-        let cache = self.cache.borrow();
-        if cache.has_capacity() {
-            return true;
-        }
-        match (pending, cache.range()) {
-            (Some(commit), Some((_, last_cached))) => last_cached < commit.last_block_number(),
-            _ => false,
-        }
-    }
+    /// Takes everything by value so it can run as an independent task; the CPU-heavy commitment
+    /// rebuild is offloaded to a blocking thread so it parallelizes across cores.
+    async fn verify_commit(
+        cache_rx: watch::Receiver<TreeBlockCache>,
+        chain_id: u64,
+        sl_chain_id: u64,
+        last_persisted_block_on_start: u64,
+        commit: L1CommittedBatch,
+    ) -> anyhow::Result<VerifiedBatch> {
+        let batch_number = commit.batch_number();
+        let range = commit.range.clone();
 
-    /// Inserts a block into the shared cache
-    fn insert_tree_block(&self, tree_block: TreeBlock) -> anyhow::Result<()> {
-        let block_number = tree_block.record.block_context.block_number;
-        if block_number <= self.last_persisted_block_on_start {
-            return Ok(());
-        }
-        let state_view = self.read_state.state_view_at(block_number)?;
-        let multichain_root = read_multichain_root(state_view);
-        let data = LocalBatchBlockData {
-            output: tree_block.output,
-            record: tree_block.record,
-            tree_output: tree_block.tree.output,
-            multichain_root,
-        };
+        if commit.last_block_number() > last_persisted_block_on_start {
+            let blocks = cache_rx
+                .wait_for_range(range.clone())
+                .await
+                .context("while waiting for a committed batch's blocks to be cached")?;
+            let l2_da_commitment_scheme = commit.l2_da_commitment_scheme;
+            let l1_stored = commit.stored_batch_info;
 
-        let mut result = Ok(());
-        self.cache
-            .send_if_modified(|cache| match cache.insert(block_number, data) {
-                Ok(()) => true,
-                Err(err) => {
-                    result = Err(err);
-                    false
-                }
-            });
-        result
-    }
-
-    /// Verifies whether data received from verification request is consistent with locally replayed data
-    fn verify_commit_if_available(&self, commit: &L1CommittedBatch) -> anyhow::Result<bool> {
-        // In case we received request for batch that was already persisted, we trust that it was verified previously
-        if commit.last_block_number() <= self.last_persisted_block_on_start {
-            return Ok(true);
-        }
-
-        let Some(blocks) = self.cache.borrow().get_range(commit.range.clone())? else {
-            // blocks required for consistency check are not available from cache yet
-            return Ok(false);
-        };
-
-        // The protocol version is uniform within a batch (a batch is sealed whenever it changes),
-        // so the last block carries everything we need: its protocol version, multichain root, and
-        // the trailing block hashes.
-        let last_block = blocks
-            .last()
-            .expect("L1 committed batch block range cannot be empty");
-
-        let (local_batch_info, _) = ExtendedCommitBatchInfo::build(
-            blocks
-                .iter()
-                .map(|block| {
-                    (
-                        &block.output,
-                        block.record.transactions.as_slice(),
-                        &block.tree_output,
-                    )
-                })
-                .collect(),
-            self.chain_id,
-            commit.batch_number(),
-            PubdataMode::from_da_commitment_scheme(commit.l2_da_commitment_scheme),
-            self.sl_chain_id,
-            last_block.multichain_root,
-            &last_block.record.protocol_version,
-            &last_block.record.block_context.block_hashes.0,
-        );
-
-        let local_stored = local_batch_info.into_stored();
-        let l1_stored = &commit.stored_batch_info;
-        if &local_stored != l1_stored {
-            tracing::error!(
-                "L1 committed batch #{} is inconsistent with locally replayed blocks, expected: {:?}, received: {:?}",
-                commit.batch_number(),
-                local_stored,
-                l1_stored,
-            );
-            anyhow::bail!(
-                "L1 committed batch #{} is inconsistent with locally replayed blocks",
-                commit.batch_number()
-            );
-        }
-
-        Ok(true)
-    }
-}
-
-#[async_trait]
-impl<ReadState: ReadStateHistory> PipelineComponent for L1ConsistencyChecker<ReadState> {
-    type Input = TreeBlock;
-    type Output = ();
-
-    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
-        zksync_os_pipeline::ComponentId::L1ConsistencyChecker;
-
-    async fn run(
-        mut self,
-        mut input: PeekableReceiver<Self::Input>,
-        _output: mpsc::Sender<Self::Output>,
-        state_reporter: ComponentStateReporter,
-    ) -> anyhow::Result<()> {
-        tracing::info!("starting L1 consistency checker");
-        // At most one request is held outside the channel at a time; new requests stay queued
-        // in `l1_events_rx` (providing natural backpressure) until this slot is empty again.
-        let mut pending: Option<L1CommittedBatch> = None;
-        loop {
-            if let Some(commit) = &pending
-                && self.verify_commit_if_available(commit)?
-            {
-                tracing::info!(
-                    "verified L1 committed batch #{} against locally replayed blocks {:?}",
-                    commit.batch_number(),
-                    commit.range,
+            tokio::task::spawn_blocking(move || {
+                let (local_batch_info, _) = ExtendedCommitBatchInfo::build(
+                    &blocks,
+                    chain_id,
+                    batch_number,
+                    PubdataMode::from_da_commitment_scheme(l2_da_commitment_scheme),
+                    sl_chain_id,
                 );
-                let last_block_number = commit.last_block_number();
-                let batch_number = commit.batch_number();
-                self.cache
-                    .send_modify(|cache| cache.remove_lower_or_equal_than(last_block_number));
-                self.latest_verified_batch_tx.send_if_modified(|latest| {
-                    if batch_number > *latest {
-                        *latest = batch_number;
-                        true
-                    } else {
-                        false
-                    }
-                });
-                pending = None;
-            }
 
-            state_reporter.enter_state(GenericComponentState::Idle);
-            let can_accept_tree_block = self.can_accept_tree_block(pending.as_ref());
-            tokio::select! {
-                tree_block = input.recv(), if can_accept_tree_block => {
-                    let Some(tree_block) = tree_block else {
-                        if pending.is_some() {
-                            anyhow::bail!("tree block channel closed with pending L1 consistency check");
-                        }
-                        return Ok(());
-                    };
-                    state_reporter.enter_state(GenericComponentState::Active);
-                    let block_number = tree_block.record.block_context.block_number;
-                    let block_timestamp = tree_block.record.block_context.timestamp;
-                    self.insert_tree_block(tree_block)?;
-                    state_reporter.record_processed(block_number, Some(block_timestamp), None);
+                let local_stored = local_batch_info.into_stored();
+                if local_stored != l1_stored {
+                    tracing::error!(
+                        "L1 committed batch #{} is inconsistent with locally replayed blocks, expected: {:?}, received: {:?}",
+                        batch_number,
+                        local_stored,
+                        l1_stored,
+                    );
+                    anyhow::bail!(
+                        "L1 committed batch #{} is inconsistent with locally replayed blocks",
+                        batch_number
+                    );
                 }
-                commit = self.l1_events_rx.recv(), if pending.is_none() => {
-                    let Some(commit) = commit else {
-                        return Ok(());
+                Ok(())
+            })
+            .await
+            .context("while rebuilding a committed batch's commitment")??;
+
+            tracing::info!(
+                "verified L1 committed batch #{} against locally replayed blocks {:?}",
+                batch_number,
+                range,
+            );
+        }
+
+        Ok(VerifiedBatch {
+            batch_number,
+            range,
+        })
+    }
+
+    pub async fn run(mut self) -> anyhow::Result<()> {
+        tracing::info!("starting L1 consistency checker");
+
+        let semaphore = Arc::new(Semaphore::new(self.verification_concurrency));
+        let mut tasks: JoinSet<anyhow::Result<VerifiedBatch>> = JoinSet::new();
+
+        // Verifications complete out of order, but downstream (the persist batch watcher) must not
+        // see batch N marked verified before batch N-1 is. We therefore stage verified batch
+        // numbers and only advance the published watermark across the contiguous prefix that is
+        // fully verified. Eviction has no such constraint — a batch's blocks belong to it alone,
+        // so they are dropped as soon as that batch is verified, regardless of order.
+        let mut verified_ahead: BTreeSet<u64> = BTreeSet::new();
+        let mut next_batch_to_confirm = *self.latest_verified_batch_tx.borrow() + 1;
+
+        loop {
+            tokio::select! {
+                maybe_commit = self.l1_events_rx.recv() => {
+                    let Some(commit) = maybe_commit else {
+                        // Channel closed: stop accepting work and drain what is in flight.
+                        break;
                     };
-                    state_reporter.enter_state(GenericComponentState::Active);
                     tracing::debug!(
                         "received L1 committed batch {} for consistency checking in range {:?}",
                         commit.batch_number(),
                         commit.range,
                     );
-                    pending = Some(commit);
+                    // Acquiring the permit here bounds in-flight verifications, providing
+                    // backpressure on intake of new commits.
+                    let permit = semaphore
+                        .clone()
+                        .acquire_owned()
+                        .await
+                        .expect("verification semaphore is never closed");
+                    let cache_rx = self.cache_rx.clone();
+                    let chain_id = self.chain_id;
+                    let sl_chain_id = self.sl_chain_id;
+                    let last_persisted_block_on_start = self.last_persisted_block_on_start;
+                    tasks.spawn(async move {
+                        let _permit = permit; // held until the verification finishes
+                        Self::verify_commit(
+                            cache_rx,
+                            chain_id,
+                            sl_chain_id,
+                            last_persisted_block_on_start,
+                            commit,
+                        )
+                        .await
+                    });
+                }
+                Some(joined) = tasks.join_next() => {
+                    let verified = joined.context("verification task panicked")??;
+                    self.handle_verified(verified, &mut verified_ahead, &mut next_batch_to_confirm);
                 }
             }
         }
+
+        // Finish the verifications that were still in flight when the channel closed.
+        while let Some(joined) = tasks.join_next().await {
+            let verified = joined.context("verification task panicked")??;
+            self.handle_verified(verified, &mut verified_ahead, &mut next_batch_to_confirm);
+        }
+        Ok(())
+    }
+
+    /// Applies one completed verification: evicts the batch's now-redundant blocks and advances the
+    /// verified-batch watermark across the contiguous prefix that is fully verified.
+    fn handle_verified(
+        &self,
+        verified: VerifiedBatch,
+        verified_ahead: &mut BTreeSet<u64>,
+        next_batch_to_confirm: &mut u64,
+    ) {
+        // Drop the now-verified blocks from the cache, restoring intake capacity for the cacher.
+        self.cache
+            .send_modify(|cache| cache.remove_range(verified.range));
+
+        // Batches at or below the current watermark were already verified on a previous run; only
+        // track the ones that can move it forward.
+        if verified.batch_number >= *next_batch_to_confirm {
+            verified_ahead.insert(verified.batch_number);
+        }
+        while verified_ahead.remove(next_batch_to_confirm) {
+            *next_batch_to_confirm += 1;
+        }
+
+        let confirmed = *next_batch_to_confirm - 1;
+        self.latest_verified_batch_tx.send_if_modified(|latest| {
+            if confirmed > *latest {
+                *latest = confirmed;
+                true
+            } else {
+                false
+            }
+        });
     }
 }

@@ -42,7 +42,7 @@ impl BackpressureConfig {
             ComponentId::BlockCanonizer
             | ComponentId::BlockApplier
             | ComponentId::RevmConsistencyChecker
-            | ComponentId::L1ConsistencyChecker
+            | ComponentId::LocalBatchDataCacher
             | ComponentId::TreeManager
             | ComponentId::ProverInputGenerator => PipelineCondition {
                 max_block_diff_to_upstream: Some(self.default_block_diff_limit),
