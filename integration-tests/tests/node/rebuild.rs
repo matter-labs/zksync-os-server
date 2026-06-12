@@ -432,11 +432,9 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
     // real content and trigger a batch commit quickly.
     send_throwaway_tx(&tester).await?;
 
-    let committed_state = wait_for_l1_state(
-        &tester,
-        "a committed batch on L1",
-        |state| state.last_committed_batch >= 1,
-    )
+    let committed_state = wait_for_l1_state(&tester, "a committed batch on L1", |state| {
+        state.last_committed_batch >= 1
+    })
     .await?;
     // Batch execution is disabled, so nothing should ever be executed.
     assert_eq!(
@@ -501,11 +499,9 @@ async fn danger_block_rebuild_with_l1_revert_hash_guard_prevents_double_revert(
 
     send_throwaway_tx(&tester).await?;
 
-    let committed_state = wait_for_l1_state(
-        &tester,
-        "at least one committed batch",
-        |state| state.last_committed_batch >= 1,
-    )
+    let committed_state = wait_for_l1_state(&tester, "at least one committed batch", |state| {
+        state.last_committed_batch >= 1
+    })
     .await?;
     assert_eq!(
         committed_state.last_executed_batch, 0,
@@ -584,11 +580,9 @@ async fn revert_l1_commits_without_rebuild_leaves_local_blocks_intact(
 
     send_throwaway_tx(&tester).await?;
 
-    let committed_state = wait_for_l1_state(
-        &tester,
-        "at least one committed batch",
-        |state| state.last_committed_batch >= 1,
-    )
+    let committed_state = wait_for_l1_state(&tester, "at least one committed batch", |state| {
+        state.last_committed_batch >= 1
+    })
     .await?;
     assert_eq!(
         committed_state.last_executed_batch, 0,
@@ -651,11 +645,9 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
 
     send_throwaway_tx(&tester).await?;
 
-    let committed_state = wait_for_l1_state(
-        &tester,
-        "at least one committed batch",
-        |state| state.last_committed_batch >= 1,
-    )
+    let committed_state = wait_for_l1_state(&tester, "at least one committed batch", |state| {
+        state.last_committed_batch >= 1
+    })
     .await?;
     assert_eq!(
         committed_state.last_executed_batch, 0,
@@ -729,12 +721,11 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
 
     // Drive at least three committed (still unexecuted) batches onto L1 so batch 2 is a non-last
     // committed batch (batch 1 below to keep, batches >= 3 above to skip during the scan).
-    let committed_state = mine_until_l1_state(
-        &tester,
-        "at least three committed batches",
-        |state| state.last_committed_batch >= 3,
-    )
-    .await?;
+    let committed_state =
+        mine_until_l1_state(&tester, "at least three committed batches", |state| {
+            state.last_committed_batch >= 3
+        })
+        .await?;
     assert_eq!(
         committed_state.last_executed_batch, 0,
         "batch execution is disabled, so no batch should be executed"
