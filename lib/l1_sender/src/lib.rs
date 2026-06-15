@@ -289,10 +289,10 @@ where
                         }
                         tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
 
-                        let pending_block = self.provider.get_block(BlockId::pending()).await?.expect("no pending block");
-                        // todo: make conversion unconditional (and remove respective config) once anvil
-                        //       supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
-                        if self.config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
+                        // Fusaka is active on all real chains, so send the EIP-7594 blob format by
+                        // default. Anvil does not support EIP-7594 yet, so fall back to EIP-4844
+                        // there (see https://github.com/foundry-rs/foundry/issues/12222).
+                        if self.provider.capabilities().supports_eip7594 {
                             tx_request.set_blob_sidecar(BlobTransactionSidecarVariant::Eip7594(
                                 blob_sidecar.try_into_7594(EnvKzgSettings::Default.get())?,
                             ));
@@ -702,16 +702,9 @@ where
             )
             .build();
 
-        let use_eip7594_sidecar = if commands.iter().any(|cmd| cmd.blob_sidecar().is_some()) {
-            let pending_block = self
-                .provider
-                .get_block(BlockId::pending())
-                .await?
-                .expect("no pending block");
-            self.config.fusaka_upgrade_timestamp <= pending_block.header.timestamp
-        } else {
-            false
-        };
+        // Mirror the submission path: EIP-7594 by default, EIP-4844 only on Anvil. Only consumed
+        // by `build_l1_simulation_request` when a command actually carries a blob sidecar.
+        let use_eip7594_sidecar = self.provider.capabilities().supports_eip7594;
 
         let block_state_calls = commands
             .iter()

@@ -1078,13 +1078,6 @@ pub struct L1SenderConfig {
     #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_L1)]
     pub required_confirmations: u64,
 
-    /// Use Fusaka blob transaction format if the timestamp has passed.
-    ///
-    /// Defaults to `2^64-1` which is practically never. This is needed for local setup as anvil
-    /// does not support EIP-7594 yet (https://github.com/foundry-rs/foundry/issues/12222).
-    #[config(default_t = u64::MAX)]
-    pub fusaka_upgrade_timestamp: u64,
-
     /// Whether L1 senders are enabled.
     /// Only affects the Main Node.
     /// Only useful for debug. When L1 senders are disabled,
@@ -1956,7 +1949,6 @@ impl L1SenderConfig {
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
-            fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
             phantom_data: Default::default(),
         }
     }
@@ -2015,8 +2007,6 @@ impl GatewaySenderConfig {
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
-            // Gateway transactions never carry blobs, so the EIP-7594 cutover does not apply.
-            fusaka_upgrade_timestamp: u64::MAX,
             phantom_data: Default::default(),
         }
     }
@@ -2409,7 +2399,6 @@ mod tests {
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
                 required_confirmations: DEFAULT_REQUIRED_CONFIRMATIONS_L1,
-                fusaka_upgrade_timestamp: u64::MAX,
                 enabled: true,
                 pubdata_mode: Some(PubdataMode::Blobs),
                 max_batch_diff_to_upstream: None,
