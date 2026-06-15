@@ -46,6 +46,11 @@ pub struct PolicyClientMetrics {
     /// Count of admit calls bypassed via the `bypass_from` allowlist.
     pub admit_bypassed: Counter,
 
+    /// Count of admit calls skipped because the session runs on the
+    /// block-building (produce) path, where the tx already cleared `admit`
+    /// at RPC mempool entry. `judge` still runs against the real execution.
+    pub admit_skipped: Counter,
+
     /// Latency of the admit round trip.
     /// Buckets span sub-ms to ~1s to cover both healthy localhost/UDS and
     /// worst-case TCP under load.

@@ -15,7 +15,6 @@ use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{OverlayBuffer, ReadStateHistory, WriteState};
 use zksync_os_tx_validators::deployment_filter;
-use zksync_os_tx_validators::policy_client::AccessType;
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
 /// Executes blocks, while only updating local in-memory state (mempool, block context).
@@ -132,11 +131,14 @@ where
             // traffic was already consulted against the policy service at
             // original sequencing, so it always falls back to the deployment
             // filter (with `Unrestricted` config to avoid re-filtering).
+            // The produce-path session skips the `admit` check (the tx
+            // already cleared it at RPC mempool entry) and relies on `judge`
+            // against the real execution.
             let policy_client = is_produce
                 .then_some(self.config.tx_validator.policy_client.as_ref())
                 .flatten();
             let exec_result = if let Some(policy_client) = policy_client {
-                let policy_session = policy_client.session(AccessType::Write);
+                let policy_session = policy_client.session_block_build();
                 let policy_tracer = policy_session.paired_tracer();
                 execute_block_in_vm(
                     prepared_command,
