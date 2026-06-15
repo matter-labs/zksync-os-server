@@ -46,7 +46,7 @@ use crate::rebuild::handle_startup_rebuild;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
-use alloy::primitives::BlockNumber;
+use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
 use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
@@ -122,7 +122,7 @@ use zksync_os_storage_api::{
     WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
-    BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, PubdataMode,
+    BlockStartCursors, ExecutionVersion, NodeRole, ProtocolSemanticVersion, PubdataMode,
     TransactionAcceptanceState, UpgradeInfo, UpgradeMetadata,
 };
 
@@ -218,28 +218,16 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         None
     };
 
-    tracing::info!("Reading L1 state");
-    // The batcher node must wait for any pending L1 commit/prove/execute transactions
-    // (from a prior run) to be mined before starting, so it doesn't conflict with itself.
-    // Non-batcher consensus nodes never submit L1 transactions, so they don't need this
-    // wait: calling fetch_finalized on them would spuriously fail when a concurrently
-    // running batcher node keeps submitting new batch transactions.
-    let use_finalized = node_role.is_main() && config.batcher_config.enabled;
-    let mut l1_state = L1State::fetch_with_finality(
-        use_finalized,
-        l1_provider.clone(),
-        gateway_provider.clone(),
-        bridgehub_address,
-        chain_id,
-    )
-    .await
-    .expect("failed to fetch L1 state");
-
-    // Genesis and the repository manager are initialized here (before any startup revert) so
+    // Genesis and the repository manager are initialized here (before the startup revert) so
     // that the `from_block_hash` guard can read the current local block hash.
+    let diamond_proxy_l1 =
+        L1State::resolve_diamond_proxy_l1(l1_provider.clone(), bridgehub_address, chain_id)
+            .await
+            .expect("failed to resolve L1 diamond proxy");
+
     let genesis = Genesis::new(
         genesis_input_source.clone(),
-        l1_state.diamond_proxy_l1.clone(),
+        diamond_proxy_l1.clone(),
         chain_id,
     );
 
@@ -251,31 +239,26 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     )
     .await;
 
+    // Fetch the L1 state, performing any configured startup L1 revert first.
+    tracing::info!("Reading L1 state");
+    let l1_state = fetch_l1_state_with_startup_revert(
+        &mut config,
+        node_role,
+        &repositories,
+        &l1_provider,
+        gateway_provider.as_ref(),
+        bridgehub_address,
+        chain_id,
+    )
+    .await
+    .expect("failed to determine L1 state");
+
     let settles_on_gateway = l1_state.settles_on_gateway();
     let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
         l1_provider.clone()
     } else {
         gateway_provider.clone().unwrap()
     };
-
-    if node_role.is_main() && config.sequencer_config.rebuild.is_some() {
-        let l1_revert_ran =
-            handle_startup_rebuild(&mut config, &repositories, &l1_state, &sl_provider)
-                .await
-                .expect("startup l1 revert failed");
-
-        if l1_revert_ran {
-            l1_state = L1State::fetch_with_finality(
-                config.batcher_config.enabled,
-                l1_provider.clone(),
-                gateway_provider.clone(),
-                bridgehub_address,
-                chain_id,
-            )
-            .await
-            .expect("failed to fetch L1 state after startup revert");
-        }
-    }
 
     tracing::info!(?l1_state, settles_on_gateway, "L1 state");
     l1_state.report_metrics();
@@ -1147,6 +1130,64 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let startup_time = process_started_at.elapsed();
     GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
     tracing::info!("All components scheduled for initialization in {startup_time:?}");
+}
+
+/// Fetches the L1 state, performing any configured startup L1 revert first, and returns the
+/// post-revert state.
+async fn fetch_l1_state_with_startup_revert(
+    config: &mut Config,
+    node_role: NodeRole,
+    repositories: &dyn ReadRepository,
+    l1_provider: &NodeProvider,
+    gateway_provider: Option<&NodeProvider>,
+    bridgehub_address: Address,
+    chain_id: u64,
+) -> anyhow::Result<L1State> {
+    // The batcher node must wait for any pending L1 commit/prove/execute transactions (from a
+    // prior run) to be mined before starting, so it doesn't conflict with itself. Non-batcher
+    // consensus nodes never submit L1 transactions, so they don't need this wait: calling
+    // fetch_finalized on them would spuriously fail when a concurrently running batcher node keeps
+    // submitting new batch transactions.
+    let use_finalized = node_role.is_main() && config.batcher_config.enabled;
+    let l1_state = L1State::fetch_with_finality(
+        use_finalized,
+        l1_provider.clone(),
+        gateway_provider.cloned(),
+        bridgehub_address,
+        chain_id,
+    )
+    .await
+    .context("failed to fetch L1 state")?;
+
+    if node_role.is_main() && config.sequencer_config.rebuild.is_some() {
+        let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
+            l1_provider.clone()
+        } else {
+            gateway_provider
+                .cloned()
+                .context("chain settles on Gateway but no gateway RPC provider is configured")?
+        };
+
+        let l1_revert_ran = handle_startup_rebuild(config, repositories, &l1_state, &sl_provider)
+            .await
+            .context("startup l1 revert failed")?;
+
+        if l1_revert_ran {
+            // The revert invalidated the batch-finality numbers; re-fetch so the returned state
+            // reflects the post-revert chain.
+            return L1State::fetch_with_finality(
+                use_finalized,
+                l1_provider.clone(),
+                gateway_provider.cloned(),
+                bridgehub_address,
+                chain_id,
+            )
+            .await
+            .context("failed to fetch L1 state after startup revert");
+        }
+    }
+
+    Ok(l1_state)
 }
 
 #[allow(clippy::too_many_arguments)]
