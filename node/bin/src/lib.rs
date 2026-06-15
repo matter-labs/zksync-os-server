@@ -57,6 +57,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
+use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_batch_verification::{
     BatchVerificationConfig as BatchVerificationPolicyConfig, BatchVerificationPipelineStep,
     BatchVerificationResponder, effective_verification_policy,
@@ -907,10 +908,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     ));
     let (l1_consistency_event_tx, l1_consistency_event_rx) =
         tokio::sync::mpsc::channel::<L1CommittedBatch>(4096);
-    let (latest_verified_batch_tx, latest_verified_batch_rx) =
-        tokio::sync::watch::channel(persistent_batch_storage.latest_batch());
+    let (verified_l1_batches_tx, verified_l1_batches_rx) =
+        tokio::sync::mpsc::unbounded_channel::<DiscoveredCommittedBatch>();
     let l1_consistency_event_tx = (!node_role.is_main()).then_some(l1_consistency_event_tx);
-    let latest_verified_batch_rx = (!node_role.is_main()).then_some(latest_verified_batch_rx);
+    let verified_l1_batches_rx = (!node_role.is_main()).then_some(verified_l1_batches_rx);
     runtime.spawn_critical_task("l1 batch persist watcher", {
         let config = config.l1_watcher_config.clone();
         let settlement_layer_intervals = node_startup_state
@@ -919,14 +920,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .clone();
         let persistent_batch_storage = persistent_batch_storage.clone();
         let l1_consistency_event_tx = l1_consistency_event_tx.clone();
-        let latest_verified_batch_rx = latest_verified_batch_rx.clone();
         async move {
             L1PersistBatchWatcher::create_watcher(
                 config.into(),
                 settlement_layer_intervals,
                 persistent_batch_storage,
                 l1_consistency_event_tx,
-                latest_verified_batch_rx,
+                verified_l1_batches_rx,
             )
             .run(())
             .await
@@ -1079,7 +1079,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             last_persisted_block_on_start,
             local_batch_data_cache,
-            latest_verified_batch_tx,
+            verified_l1_batches_tx,
             l1_consistency_event_rx,
             verify_batch_rx,
             outgoing_verify_results.clone(),
@@ -1447,7 +1447,7 @@ async fn run_en_pipeline(
     chain_id: u64,
     last_persisted_block_on_start: u64,
     local_batch_data_cache: watch::Sender<TreeBlockCache>,
-    latest_verified_batch_tx: watch::Sender<u64>,
+    verified_l1_batches_tx: tokio::sync::mpsc::UnboundedSender<DiscoveredCommittedBatch>,
     l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1CommittedBatch>,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
@@ -1537,8 +1537,8 @@ async fn run_en_pipeline(
             node_state_on_startup.l1_state.sl_chain_id,
             last_persisted_block_on_start,
             local_batch_data_cache,
-            latest_verified_batch_tx,
             l1_consistency_event_rx,
+            verified_l1_batches_tx,
             config
                 .general_config
                 .consistency_checker_verification_concurrency,

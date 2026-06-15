@@ -16,6 +16,7 @@ zksync_os_pipeline.workspace = true
 zksync_os_types.workspace = true
 zksync_os_batch_types.workspace = true
 
+alloy = { workspace = true, default-features = false }
 anyhow.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
