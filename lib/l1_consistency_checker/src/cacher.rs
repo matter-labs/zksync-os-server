@@ -16,7 +16,7 @@ pub struct LocalBatchDataCacher<ReadState> {
     cache: watch::Sender<TreeBlockCache>,
 }
 
-impl<ReadState> LocalBatchDataCacher<ReadState> {
+impl<ReadState: ReadStateHistory> LocalBatchDataCacher<ReadState> {
     pub fn new(
         last_persisted_block_on_start: u64,
         read_state: ReadState,
@@ -28,9 +28,7 @@ impl<ReadState> LocalBatchDataCacher<ReadState> {
             cache,
         }
     }
-}
 
-impl<ReadState: ReadStateHistory> LocalBatchDataCacher<ReadState> {
     /// Inserts pre-folded commitment data for one replayed block.
     fn insert_tree_block(&self, tree_block: TreeBlock) -> anyhow::Result<()> {
         let block_number = tree_block.record.block_context.block_number;

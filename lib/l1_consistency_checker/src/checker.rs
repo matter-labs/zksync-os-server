@@ -15,16 +15,6 @@ pub struct L1CommittedBatch {
     pub range: RangeInclusive<u64>,
 }
 
-impl L1CommittedBatch {
-    pub fn batch_number(&self) -> u64 {
-        self.batch_number
-    }
-
-    pub fn last_block_number(&self) -> u64 {
-        *self.range.end()
-    }
-}
-
 /// Checks L1-committed batches against locally replayed blocks.
 ///
 /// Verification is concurrent; reconstructed committed-batch data is sent back to the persist
@@ -72,13 +62,12 @@ impl L1ConsistencyChecker {
         last_persisted_block_on_start: u64,
         commit: L1CommittedBatch,
     ) -> anyhow::Result<DiscoveredCommittedBatch> {
-        let batch_number = commit.batch_number();
         let range = commit.range.clone();
 
         anyhow::ensure!(
-            commit.last_block_number() > last_persisted_block_on_start,
+            commit.range.end() > &last_persisted_block_on_start,
             "L1 committed batch #{} was already persisted on startup",
-            batch_number,
+            commit.batch_number,
         );
 
         let blocks = cache_rx
@@ -95,7 +84,7 @@ impl L1ConsistencyChecker {
                 let (local_batch_info, _) = ExtendedCommitBatchInfo::build(
                     &blocks,
                     chain_id,
-                    batch_number,
+                    commit.batch_number,
                     pubdata_mode,
                     sl_chain_id,
                 );
@@ -110,15 +99,11 @@ impl L1ConsistencyChecker {
                 }
             }
 
-            tracing::error!(
-                "L1 committed batch #{} is inconsistent with locally replayed blocks, state commitment {:?}, commitment {:?}",
-                batch_number,
-                commit.state_commitment,
-                commit.commitment,
-            );
             anyhow::bail!(
-                "L1 committed batch #{} is inconsistent with locally replayed blocks",
-                batch_number
+                "L1 committed batch #{} is inconsistent with locally replayed blocks, state commitment: {:?}, commitment: {:?}",
+                commit.batch_number,
+                commit.state_commitment,
+                commit.commitment
             );
         })
         .await
@@ -126,7 +111,7 @@ impl L1ConsistencyChecker {
 
         tracing::info!(
             "verified L1 committed batch #{} against locally replayed blocks {:?}",
-            batch_number,
+            commit.batch_number,
             verified.block_range,
         );
 
@@ -147,7 +132,7 @@ impl L1ConsistencyChecker {
                     };
                     tracing::debug!(
                         "received L1 committed batch {} for consistency checking in range {:?}",
-                        commit.batch_number(),
+                        commit.batch_number,
                         commit.range,
                     );
                     // Bound in-flight commitment rebuilds.
@@ -188,8 +173,7 @@ impl L1ConsistencyChecker {
 
     /// Evicts verified blocks and publishes reconstructed batch data for persistence.
     fn handle_verified(&self, verified: DiscoveredCommittedBatch) -> anyhow::Result<()> {
-        let range = verified.block_range.clone();
-        self.cache.send_modify(|cache| cache.remove_range(range));
+        self.cache.send_modify(|cache| cache.remove_range( verified.block_range.clone()));
 
         self.verified_batches_tx
             .send(verified)

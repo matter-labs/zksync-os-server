@@ -59,7 +59,10 @@ impl TreeBlockCache {
         if let Some(expected) = self.next_expected_block
             && block_number != expected
         {
-            anyhow::bail!("Out of order block received. This should never happen");
+            assert_eq!(
+                block_number, expected,
+                "Out of order block received. This should never happen"
+            );
         }
         let cached_block = CachedBlockCommitmentData::new(block_number, block);
         let retained_bytes = cached_block.retained_bytes;
@@ -84,14 +87,17 @@ impl TreeBlockCache {
         // Drop [start, end] without scanning the whole map.
         let mut at_or_above_start = self.data.split_off(range.start());
         let above_end = at_or_above_start.split_off(&(range.end() + 1));
+
         let removed_bytes = at_or_above_start
             .values()
             .map(|block| block.retained_bytes)
             .sum::<usize>();
+
         self.cached_bytes = self
             .cached_bytes
             .checked_sub(removed_bytes)
             .expect("cached bytes underflow while removing blocks");
+
         self.data.extend(above_end);
     }
 
@@ -117,6 +123,33 @@ impl TreeBlockCache {
             blocks.push(Arc::clone(&block.block));
         }
         Ok(Some(blocks))
+    }
+}
+
+#[async_trait]
+pub trait TreeBlockCacheReceiverExt {
+    /// Waits until a complete block range is available in the cache.
+    async fn wait_for_range(
+        &self,
+        range: RangeInclusive<u64>,
+    ) -> anyhow::Result<Vec<Arc<BlockCommitmentData>>>;
+}
+
+#[async_trait]
+impl TreeBlockCacheReceiverExt for watch::Receiver<TreeBlockCache> {
+    async fn wait_for_range(
+        &self,
+        range: RangeInclusive<u64>,
+    ) -> anyhow::Result<Vec<Arc<BlockCommitmentData>>> {
+        let mut cache_rx = self.clone();
+        loop {
+            {
+                if let Some(blocks) = cache_rx.borrow_and_update().get_range(&range)? {
+                    return Ok(blocks);
+                }
+            }
+            cache_rx.changed().await?;
+        }
     }
 }
 
@@ -157,32 +190,5 @@ mod tests {
         cache.remove_range(1..=1);
         assert!(cache.has_capacity());
         assert_eq!(cache.cached_bytes, 0);
-    }
-}
-
-#[async_trait]
-pub trait TreeBlockCacheReceiverExt {
-    /// Waits until a complete block range is available in the cache.
-    async fn wait_for_range(
-        &self,
-        range: RangeInclusive<u64>,
-    ) -> anyhow::Result<Vec<Arc<BlockCommitmentData>>>;
-}
-
-#[async_trait]
-impl TreeBlockCacheReceiverExt for watch::Receiver<TreeBlockCache> {
-    async fn wait_for_range(
-        &self,
-        range: RangeInclusive<u64>,
-    ) -> anyhow::Result<Vec<Arc<BlockCommitmentData>>> {
-        let mut cache_rx = self.clone();
-        loop {
-            {
-                if let Some(blocks) = cache_rx.borrow_and_update().get_range(&range)? {
-                    return Ok(blocks);
-                }
-            }
-            cache_rx.changed().await?;
-        }
     }
 }
