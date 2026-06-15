@@ -88,7 +88,7 @@ Block / batch revert options. All live under `sequencer.rebuild`; the required `
 
 **`mode: l1_revert`** — revert committed L1 batches only; local blocks are kept as-is:
 - `from_batch` — required; first batch to revert (>= 1); all committed batches from this number upward are reverted
-- `from_batch_hash` — required; expected on-chain hash of `from_batch` (keccak256 of its ABI-encoded `StoredBatchInfo`); revert is skipped when the hash no longer matches
+- `from_batch_commit_tx_hash` — required; hash of the L1 transaction that committed `from_batch`; acts as an idempotency guard — the revert is skipped unless the transaction currently committing `from_batch` on L1 matches this hash. The simplest way to get the hash is the sequencer's own logs (search for the next line): `commit batch <from_batch> ... succeeded on L1   (tx_hash=0x…)`
 - `l1_reverter_sk` — required; signer (private key or GCP KMS) for `revertBatchesSharedBridge`
 
 ### `genesis.json`

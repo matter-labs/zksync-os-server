@@ -2,7 +2,7 @@ use anyhow::Context as _;
 use ruint::aliases::U256;
 use zksync_os_contract_interface::IValidatorTimelock;
 use zksync_os_contract_interface::l1_discovery::L1State;
-use zksync_os_l1_watcher::fetch_batch;
+use zksync_os_l1_watcher::{fetch_batch, fetch_batch_commit_tx_hash};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_provider::{EthWalletProvider, NodeProvider};
 use zksync_os_storage_api::ReadRepository;
@@ -159,21 +159,20 @@ async fn perform_l1_revert(
 
 /// Checks whether block `from_block` currently has the expected `from_block_hash`.
 ///
-/// Returns `false` (operation should be skipped) when the hashes differ — distinguishing the two
-/// reasons in the logs:
+/// Returns `Ok(false)` (operation should be skipped) when the hashes differ — distinguishing the
+/// two reasons in the logs:
 /// - block missing locally: likely a misconfigured `from_block` (typo / beyond local tip);
 /// - hash changed: the rebuild/revert already ran on a previous startup (the expected case).
 fn from_block_hash_matches(
     repositories: &dyn ReadRepository,
     from_block: u64,
     from_block_hash: alloy::primitives::BlockHash,
-) -> bool {
+) -> anyhow::Result<bool> {
     let current_hash = repositories
         .get_block_by_number(from_block)
-        .ok()
-        .flatten()
+        .with_context(|| format!("failed to read block {from_block} from local repository"))?
         .map(|b| b.hash());
-    match current_hash {
+    Ok(match current_hash {
         Some(hash) if hash == from_block_hash => true,
         Some(hash) => {
             tracing::info!(
@@ -193,7 +192,7 @@ fn from_block_hash_matches(
             );
             false
         }
-    }
+    })
 }
 
 /// Decides what to do for the given rebuild config without performing any L1 transaction.
@@ -205,7 +204,7 @@ async fn plan_startup_rebuild(
 ) -> anyhow::Result<RebuildAction> {
     match rebuild {
         RebuildConfig::BlockRebuild { bounds } => Ok(
-            if from_block_hash_matches(repositories, bounds.from_block, bounds.from_block_hash) {
+            if from_block_hash_matches(repositories, bounds.from_block, bounds.from_block_hash)? {
                 // No L1 revert for this mode.
                 RebuildAction::NoL1Revert
             } else {
@@ -217,7 +216,7 @@ async fn plan_startup_rebuild(
             bounds,
             l1_reverter_sk,
         } => {
-            if !from_block_hash_matches(repositories, bounds.from_block, bounds.from_block_hash) {
+            if !from_block_hash_matches(repositories, bounds.from_block, bounds.from_block_hash)? {
                 return Ok(RebuildAction::SkipAndClearConfig);
             }
 
@@ -240,15 +239,10 @@ async fn plan_startup_rebuild(
 
         RebuildConfig::L1Revert {
             from_batch,
-            from_batch_hash,
+            from_batch_commit_tx_hash,
             l1_reverter_sk,
         } => {
-            let from_batch = *from_batch;
-            anyhow::ensure!(
-                from_batch >= 1,
-                "`l1_revert.from_batch` must be >= 1 (batch 0 is genesis and cannot be reverted)"
-            );
-
+            let from_batch = from_batch.get();
             if l1_state.last_committed_batch < from_batch {
                 tracing::info!(
                     from_batch,
@@ -265,22 +259,21 @@ async fn plan_startup_rebuild(
                 l1_state.last_executed_batch,
             );
 
-            let on_chain_hash = fetch_batch(
+            let on_chain_commit_tx_hash = fetch_batch_commit_tx_hash(
                 &l1_state.diamond_proxy_sl,
                 from_batch,
                 max_blocks_to_process,
             )
             .await
-            .context("failed to fetch on-chain hash for L1Revert from_batch")?
-            .batch_info
-            .hash();
+            .context("failed to fetch on-chain commit tx hash for L1Revert from_batch")?;
 
-            if on_chain_hash != *from_batch_hash {
+            if on_chain_commit_tx_hash != *from_batch_commit_tx_hash {
                 tracing::info!(
                     from_batch,
-                    ?on_chain_hash,
-                    ?from_batch_hash,
-                    "skipping L1Revert: from_batch_hash mismatch"
+                    ?on_chain_commit_tx_hash,
+                    ?from_batch_commit_tx_hash,
+                    "skipping L1Revert: from_batch_commit_tx_hash mismatch (already reverted and \
+                     re-committed, or wrong batch)"
                 );
                 return Ok(RebuildAction::NoL1Revert);
             }

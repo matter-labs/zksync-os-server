@@ -7,6 +7,7 @@ use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
+use std::num::NonZeroU64;
 use std::str::FromStr;
 use std::time::Duration;
 use std::time::Instant;
@@ -21,7 +22,7 @@ use zksync_os_integration_tests::wallets::load_operator_private_key;
 use zksync_os_integration_tests::{
     CURRENT_TO_L1, StoppedTester, TestEnvironment, Tester, test_multisetup,
 };
-use zksync_os_l1_watcher::fetch_batch;
+use zksync_os_l1_watcher::{fetch_batch, fetch_batch_commit_tx_hash};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_server::config::{RebuildBounds, RebuildConfig};
 
@@ -50,6 +51,21 @@ async fn fetch_committed_batch(
 
 async fn fetch_on_chain_batch_hash(tester: &Tester, batch_number: u64) -> anyhow::Result<B256> {
     Ok(fetch_committed_batch(tester, batch_number).await?.0)
+}
+
+/// Fetches the hash of the L1 transaction that currently commits `batch_number`. Used to populate
+/// the `l1_revert` guard (`from_batch_commit_tx_hash`).
+async fn fetch_on_chain_batch_commit_tx_hash(
+    tester: &Tester,
+    batch_number: u64,
+) -> anyhow::Result<B256> {
+    let l1_state = fetch_l1_state(tester).await?;
+    fetch_batch_commit_tx_hash(
+        &l1_state.diamond_proxy_sl,
+        batch_number,
+        tester.config().l1_watcher_config.max_blocks_to_process,
+    )
+    .await
 }
 
 /// Returns the hash of L2 block `block_number`, erroring if the block does not exist.
@@ -593,16 +609,16 @@ async fn revert_l1_commits_without_rebuild_leaves_local_blocks_intact(
     let tip_block = tester.l2_provider.get_block_number().await?;
     let original_tip_hash = block_hash(&tester, tip_block).await?;
 
-    // Fetch the on-chain hash of batch 1 for the revert guard.
-    let batch1_on_chain_hash = fetch_on_chain_batch_hash(&tester, 1).await?;
+    // Fetch the commit tx hash of batch 1 for the revert guard.
+    let batch1_commit_tx_hash = fetch_on_chain_batch_commit_tx_hash(&tester, 1).await?;
 
     let stopped = tester.stop().await?;
     let reverter_signer = make_reverter_config(&stopped)?;
     let mut revert_config = stopped.config().clone();
     // Revert batch 1 and above, keeping no committed batches. L1Revert → no local block rebuild.
     revert_config.sequencer_config.rebuild = Some(RebuildConfig::L1Revert {
-        from_batch: 1,
-        from_batch_hash: batch1_on_chain_hash,
+        from_batch: NonZeroU64::new(1).unwrap(),
+        from_batch_commit_tx_hash: batch1_commit_tx_hash,
         l1_reverter_sk: reverter_signer,
     });
 
@@ -654,8 +670,8 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
         "batch execution is disabled, so no batch should be executed"
     );
 
-    // Fetch the on-chain hash of batch 1 for the revert guard.
-    let batch1_on_chain_hash = fetch_on_chain_batch_hash(&tester, 1).await?;
+    // Fetch the commit tx hash of batch 1 for the revert guard.
+    let batch1_commit_tx_hash = fetch_on_chain_batch_commit_tx_hash(&tester, 1).await?;
 
     let stopped = tester.stop().await?;
     let reverter_signer = make_reverter_config(&stopped)?;
@@ -665,8 +681,8 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
     revert_config.batcher_config.enabled = false;
     // Revert batch 1 and above; L1Revert mode means no local block rebuild runs.
     revert_config.sequencer_config.rebuild = Some(RebuildConfig::L1Revert {
-        from_batch: 1,
-        from_batch_hash: batch1_on_chain_hash,
+        from_batch: NonZeroU64::new(1).unwrap(),
+        from_batch_commit_tx_hash: batch1_commit_tx_hash,
         l1_reverter_sk: reverter_signer,
     });
 
@@ -817,17 +833,17 @@ async fn l1_revert_rejects_already_executed_batch(env: TestEnvironment) -> anyho
     })
     .await?;
 
-    // Pass the real on-chain hash so the test stays meaningful even if the guard order changes:
+    // Pass the real commit tx hash so the test stays meaningful even if the guard order changes:
     // with a matching hash the revert proceeds to the executed-batch check either way.
-    let batch1_on_chain_hash = fetch_on_chain_batch_hash(&tester, 1).await?;
+    let batch1_commit_tx_hash = fetch_on_chain_batch_commit_tx_hash(&tester, 1).await?;
 
     let stopped = tester.stop().await?;
     let reverter_signer = make_reverter_config(&stopped)?;
     let mut revert_config = stopped.config().clone();
     // from_batch = 1 is at or below last_executed_batch, so the revert must be rejected.
     revert_config.sequencer_config.rebuild = Some(RebuildConfig::L1Revert {
-        from_batch: 1,
-        from_batch_hash: batch1_on_chain_hash,
+        from_batch: NonZeroU64::new(1).unwrap(),
+        from_batch_commit_tx_hash: batch1_commit_tx_hash,
         l1_reverter_sk: reverter_signer,
     });
 

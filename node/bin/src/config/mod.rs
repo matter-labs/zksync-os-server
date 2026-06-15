@@ -17,7 +17,7 @@ use smart_config::{
 };
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_config_validation_macros::ConfigValidate;
@@ -818,14 +818,13 @@ pub enum RebuildConfig {
     /// Use this when you want to undo L1 commits while keeping the locally-produced blocks.
     L1Revert {
         /// First batch to revert. All committed batches >= this number are reverted.
-        /// Must be >= 1 (batch 0 is genesis and cannot be reverted).
-        from_batch: u64,
-        /// Expected on-chain hash of batch `from_batch` (keccak256 of its ABI-encoded `StoredBatchInfo`).
+        from_batch: NonZeroU64,
+        /// Hash of the L1 transaction that committed batch `from_batch`.
         ///
-        /// The revert is skipped if the stored batch hash does not match — guards against
-        /// reverting a different batch than intended.
+        /// Used as an idempotency guard: the revert is skipped unless the transaction currently
+        /// committing `from_batch` on L1 matches this hash.
         #[config(with = Serde![str])]
-        from_batch_hash: B256,
+        from_batch_commit_tx_hash: B256,
         /// Signer for `revertBatchesSharedBridge` transactions.
         #[config(secret, with = SignerConfigDeserializer)]
         l1_reverter_sk: SignerConfig,
