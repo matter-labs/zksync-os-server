@@ -1231,6 +1231,7 @@ async fn run_main_node_pipeline(
     );
 
     let monitor = BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver);
+    let pipeline_gate = monitor.subscribe_gate();
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::unbounded_channel();
     let (applied_block_number_sender, applied_block_number_receiver) =
@@ -1246,6 +1247,7 @@ async fn run_main_node_pipeline(
                 .as_ref()
                 .and_then(|r| r.rebuild_options()),
             replays_to_execute,
+            pipeline_gate,
             leadership,
         })
         .pipe(BlockExecutor {
@@ -1499,11 +1501,13 @@ async fn run_en_pipeline(
 
     let monitor =
         BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver.clone());
+    let pipeline_gate = monitor.subscribe_gate();
 
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
             replays_for_sequencer,
             up_to_block: config.sequencer_config.en_sync_up_to_block,
+            pipeline_gate,
         })
         .pipe(BlockExecutor {
             block_context_provider,

@@ -1019,6 +1019,15 @@ pub struct RpcConfig {
     #[config(default_t = 10000000)]
     pub eth_call_gas: usize,
 
+    /// Maximum execution time of a single JS tracer run
+    #[config(default_t = 10 * TimeUnit::Seconds)]
+    pub js_tracer_timeout: Duration,
+
+    /// Maximum memory growth allowed during a single JS tracer run, measured via jemalloc
+    /// per-thread allocation counters. Set to `0` to disable the check.
+    #[config(default_t = 512 * SizeUnit::MiB)]
+    pub js_tracer_max_memory: ByteSize,
+
     /// Maximum block gas limit accepted for an `eth_simulateV1` block override.
     #[config(default_t = 100_000_000)]
     pub eth_simulate_block_gas_limit: u64,
@@ -1148,13 +1157,6 @@ pub struct L1SenderConfig {
     /// L1 blocks (inclusive of the inclusion block) before a transaction is confirmed.
     #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_L1)]
     pub required_confirmations: u64,
-
-    /// Use Fusaka blob transaction format if the timestamp has passed.
-    ///
-    /// Defaults to `2^64-1` which is practically never. This is needed for local setup as anvil
-    /// does not support EIP-7594 yet (https://github.com/foundry-rs/foundry/issues/12222).
-    #[config(default_t = u64::MAX)]
-    pub fusaka_upgrade_timestamp: u64,
 
     /// Whether L1 senders are enabled.
     /// Only affects the Main Node.
@@ -1902,6 +1904,8 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
         Self {
             address: c.address,
             eth_call_gas: c.eth_call_gas,
+            js_tracer_timeout: c.js_tracer_timeout,
+            js_tracer_max_memory_bytes: c.js_tracer_max_memory.0 as usize,
             eth_simulate_block_gas_limit: c.eth_simulate_block_gas_limit,
             max_connections: c.max_connections,
             max_request_size: c.max_request_size,
@@ -2027,7 +2031,6 @@ impl L1SenderConfig {
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
-            fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
             phantom_data: Default::default(),
         }
     }
@@ -2086,8 +2089,6 @@ impl GatewaySenderConfig {
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
-            // Gateway transactions never carry blobs, so the EIP-7594 cutover does not apply.
-            fusaka_upgrade_timestamp: u64::MAX,
             phantom_data: Default::default(),
         }
     }
@@ -2470,7 +2471,6 @@ mod tests {
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
                 required_confirmations: DEFAULT_REQUIRED_CONFIRMATIONS_L1,
-                fusaka_upgrade_timestamp: u64::MAX,
                 enabled: true,
                 pubdata_mode: Some(PubdataMode::Blobs),
                 max_batch_diff_to_upstream: None,

@@ -67,8 +67,3 @@ pub(crate) fn format_hex_u256(v: U256) -> String {
 pub(crate) fn anyhow_error_to_js_error(e: anyhow::Error) -> JsError {
     JsError::from_opaque(JsValue::from(JsString::from(e.to_string())))
 }
-
-pub(crate) fn wrap_js_invocation(body: impl AsRef<str>) -> String {
-    let content = body.as_ref().trim_matches('\n');
-    format!("(function(){{\n{content}\n}})()")
-}

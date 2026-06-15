@@ -395,10 +395,11 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .storage
             .state_at_block_number_or_latest(execution_env.block_context.block_number)?;
 
+        let limits = js_tracer::tracer::JsTracerLimits::from_config(&self.config);
         let mut tracer_output = match state_overrides {
             Some(overrides) => {
                 let view = OverriddenStateView::with_state_overrides(storage_view, overrides);
-                let mut tracer = js_tracer::tracer::JsTracer::new(view.clone(), js_cfg)
+                let mut tracer = js_tracer::tracer::JsTracer::new(view.clone(), js_cfg, limits)
                     .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))?;
 
                 zksync_os_multivm::simulate_tx(
@@ -415,8 +416,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 tracer
             }
             None => {
-                let mut tracer = js_tracer::tracer::JsTracer::new(storage_view.clone(), js_cfg)
-                    .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))?;
+                let mut tracer =
+                    js_tracer::tracer::JsTracer::new(storage_view.clone(), js_cfg, limits)
+                        .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))?;
 
                 zksync_os_multivm::simulate_tx(
                     execution_env.transaction.encode(),

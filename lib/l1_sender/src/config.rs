@@ -36,9 +36,6 @@ pub struct L1SenderConfig<Input> {
     /// Settlement-layer blocks (inclusive of the inclusion block) before a transaction is confirmed.
     pub required_confirmations: u64,
 
-    /// Use Fusaka blob transaction format if the timestamp has passed.
-    pub fusaka_upgrade_timestamp: u64,
-
     pub phantom_data: PhantomData<Input>,
 }
 

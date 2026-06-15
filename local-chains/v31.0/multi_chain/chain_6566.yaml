@@ -3,14 +3,14 @@ general:
 gateway_provider:
   rpc_url: http://localhost:3052
 genesis:
-  bridgehub_address: '0x2884bff314c1b8f4ae42966beedf0350cca05886'
-  bytecode_supplier_address: '0x4ee23e9eaf0310f19b3fd38118a7419da5accd45'
+  bridgehub_address: '0xecedc86a0ba3db9bad21add9a5ddf5f9930298c0'
+  bytecode_supplier_address: '0x5772c32accdb05dc150edb66cc0db18f77c7e2d1'
   genesis_input_path: ./local-chains/v31.0/genesis.json
   chain_id: 6566
 gateway_sender:
-  operator_commit_sk: '0x077b7d874f6401b8f34aba124d12a03241b9a92cbdd53553aec9c3eac1fa6562'
-  operator_prove_sk: '0x7d562aa2524a641044a8674ab012845845ba42923080426ac9b7a384f12b0f5b'
-  operator_execute_sk: '0x922542daab2e39c41b14fa9fbc78843b00de803bb2263241ee54ccff7ee8ba0a'
+  operator_commit_sk: '0xe31fe733489d2b0ea04b3448d21db816573ab7ae6fbf193fcad4065fcc1a1cae'
+  operator_prove_sk: '0x126e6b3885a048d791aac099105cffeb4d0e246a31912c9e531ac8ebdbbb687f'
+  operator_execute_sk: '0x1fcb588c5687feaa092007f882d69b719d6e1c31f6ad433e9bf3a1b77d4e2929'
 rpc:
   address: 0.0.0.0:3051
 

@@ -18,8 +18,6 @@ use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
 use zksync_os_provider::NodeProvider;
 use zksync_os_types::ProtocolSemanticVersion;
 
-pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
-
 /// Finds the first block where `IChainAssetHandler::migrationNumber(chain_id) >= migration_number`
 /// using binary search. Returns latest block if migration number is not reached yet.
 ///

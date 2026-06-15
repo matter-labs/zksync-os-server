@@ -5,15 +5,16 @@ use crate::js_tracer::{
         BalanceDelta, CreateType, FrameState, OverlayCheckpoint, OverlayEntry, OverlayState,
         StepCtx, TracerMethod, TxContext,
     },
-    utils::{extract_js_source_and_config, gas_used_from_resources, wrap_js_invocation},
+    utils::{extract_js_source_and_config, gas_used_from_resources},
 };
 use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
 use crate::trace_filter::{is_asset_tracker_root_call, without_ignored_roots};
 use alloy::hex::ToHexExt;
 use alloy::primitives::{Address, B256, Bytes, U256};
-use boa_engine::{Context as BoaContext, Source};
+use boa_engine::{Context as BoaContext, JsValue, Source, js_string, object::JsObject};
 use serde_json::Value as JsonValue;
-use std::ops::Not;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use std::{cell::RefCell, collections::hash_map::Entry};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::tracing::{
@@ -24,6 +25,54 @@ use zksync_os_storage_api::ViewState;
 use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
 const MAX_JS_TRACER_PAYLOAD_BYTES: usize = 512 * 1024;
+
+const DEFAULT_JS_TRACER_EXECUTION_DEADLINE: Duration = Duration::from_secs(10);
+const DEFAULT_JS_TRACER_MAX_MEMORY_BYTES: usize = 512 * 1024 * 1024;
+
+/// Boa loop-iteration limit per hook invocation — catches a runaway loop inside a single hook
+/// (e.g. `while (true) {}`), which the wall-clock deadline can't since control never returns to
+/// the Rust side.
+const JS_TRACER_MAX_LOOP_ITERATIONS: u64 = 50_000_000;
+
+/// Runtime limits for a JS tracer.
+#[derive(Clone, Copy, Debug)]
+pub struct JsTracerLimits {
+    /// Abort the trace once it has been running this long.
+    pub execution_deadline: Duration,
+    /// Abort the trace once net bytes allocated by the tracing thread have grown by more than
+    /// this. `None` disables the check; only enforced in jemalloc builds (`jemalloc` feature).
+    pub max_memory_bytes: Option<usize>,
+}
+
+impl Default for JsTracerLimits {
+    fn default() -> Self {
+        Self {
+            execution_deadline: DEFAULT_JS_TRACER_EXECUTION_DEADLINE,
+            max_memory_bytes: Some(DEFAULT_JS_TRACER_MAX_MEMORY_BYTES),
+        }
+    }
+}
+
+impl JsTracerLimits {
+    pub fn from_config(config: &crate::config::RpcConfig) -> Self {
+        Self {
+            execution_deadline: config.js_tracer_timeout,
+            max_memory_bytes: (config.js_tracer_max_memory_bytes != 0)
+                .then_some(config.js_tracer_max_memory_bytes),
+        }
+    }
+}
+
+// Per-hook invoker functions installed by `host::install_invocation_helpers`.
+const INVOKE_SETUP: &str = "__zkjs_invoke_setup";
+const INVOKE_STEP: &str = "__zkjs_invoke_step";
+const INVOKE_STEP_ERR: &str = "__zkjs_invoke_step_err";
+const INVOKE_FAULT: &str = "__zkjs_invoke_fault";
+const INVOKE_FAULT_ERR: &str = "__zkjs_invoke_fault_err";
+const INVOKE_ENTER: &str = "__zkjs_invoke_enter";
+const INVOKE_EXIT: &str = "__zkjs_invoke_exit";
+const INVOKE_WRITE: &str = "__zkjs_invoke_write";
+const INVOKE_RESULT: &str = "__zkjs_invoke_result";
 
 fn without_asset_tracker_root_contexts(roots: Vec<TxContext>) -> Vec<TxContext> {
     without_ignored_roots(roots, |root| {
@@ -62,6 +111,14 @@ pub struct JsTracer {
     // User-provided tracer config
     tracer_config: JsonValue,
 
+    // Pre-resolved invoker functions for the hooks the user tracer defines
+    invokers: HashMap<&'static str, JsObject>,
+
+    // Execution bounds
+    limits: JsTracerLimits,
+    started_at: Instant,
+    mem_baseline: Option<(ThreadMemoryProbe, i128)>,
+
     // Overlays for storage and code modifications
     storage_overlay: OverlayState<(Address, B256), B256>,
     code_overlay: OverlayState<Address, Option<Vec<u8>>>,
@@ -82,7 +139,11 @@ pub struct JsTracer {
 }
 
 impl JsTracer {
-    pub fn new(state_view: impl ViewState + 'static, js_cfg: String) -> anyhow::Result<Self> {
+    pub fn new(
+        state_view: impl ViewState + 'static,
+        js_cfg: String,
+        limits: JsTracerLimits,
+    ) -> anyhow::Result<Self> {
         if js_cfg.len() > MAX_JS_TRACER_PAYLOAD_BYTES {
             return Err(anyhow::anyhow!(format!(
                 "JS tracer payload exceeds limit of {} bytes",
@@ -93,6 +154,9 @@ impl JsTracer {
         let (tracer_source, tracer_config) = extract_js_source_and_config(js_cfg)?;
 
         let mut ctx = BoaContext::default();
+
+        ctx.runtime_limits_mut()
+            .set_loop_iteration_limit(JS_TRACER_MAX_LOOP_ITERATIONS);
 
         let storage_overlay = OverlayState::<(Address, B256), B256>::new();
         let code_overlay = OverlayState::<Address, Option<Vec<u8>>>::new();
@@ -108,9 +172,15 @@ impl JsTracer {
             balance_overlay.handle(),
         )?;
 
+        let invokers = resolve_invokers(&mut ctx)?;
+
         Ok(Self {
             ctx,
             tracer_config,
+            invokers,
+            limits,
+            started_at: Instant::now(),
+            mem_baseline: ThreadMemoryProbe::new().map(|probe| (probe, probe.net_allocated())),
             storage_overlay,
             code_overlay,
             balance_overlay,
@@ -126,50 +196,51 @@ impl JsTracer {
         })
     }
 
-    /// `call_method` invokes a method on the JS tracer object with the given argument.
-    fn call_method(
+    /// Calls a pre-installed invoker function with the per-hook data. No-op if the user tracer
+    /// doesn't define the corresponding hook.
+    fn invoke_named(
         &mut self,
-        method: TracerMethod,
+        invoker: &'static str,
         arg: &JsonValue,
-        with_db: bool,
+        method: TracerMethod,
     ) -> anyhow::Result<()> {
-        if !self.method_exists(method)? {
+        let Some(f) = self.invokers.get(invoker).cloned() else {
             return Ok(());
-        }
+        };
 
-        let method_name = method.as_str();
-        let mut arg_json = serde_json::to_string(arg).unwrap_or("null".to_string());
-        if with_db {
-            arg_json = format!("{arg_json}, db");
-        }
-        let snippet = wrap_js_invocation(format!("tracer.{method_name}({arg_json});"));
-
-        let _ = self
-            .ctx
-            .eval(Source::from_bytes(snippet.as_bytes()))
-            .map_err(|e| {
-                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
-            })?;
+        let js_arg = JsValue::from_json(arg, &mut self.ctx).map_err(|e| {
+            anyhow::anyhow!(
+                "JS tracer argument conversion for {} failed: {e}",
+                method.as_str()
+            )
+        })?;
+        f.call(&JsValue::undefined(), &[js_arg], &mut self.ctx)
+            .map_err(|e| anyhow::anyhow!("JS tracer method {} failed: {e}", method.as_str()))?;
 
         Ok(())
     }
 
-    fn method_exists(&mut self, method: TracerMethod) -> anyhow::Result<bool> {
-        let method_name = method.as_str();
-        Ok(self
-            .ctx
-            .eval(Source::from_bytes(
-                format!(
-                    "(function(){{ return typeof tracer === 'object' && typeof tracer.{method_name} === 'function' }})()"
-                )
-                    .as_bytes(),
-            ))
-            .map_err(|e| {
-                anyhow::anyhow!(format!(
-                    "JS tracer method existence check failed: {e:?}"
-                ))
-            })?
-            .to_boolean())
+    /// Returns an error reason once the tracer has run longer than its deadline or its thread has
+    /// allocated more memory than its limit.
+    fn budget_exceeded(&self) -> Option<String> {
+        if self.started_at.elapsed() >= self.limits.execution_deadline {
+            return Some(format!(
+                "JS tracer exceeded execution time limit of {}s",
+                self.limits.execution_deadline.as_secs()
+            ));
+        }
+
+        if let Some(limit) = self.limits.max_memory_bytes
+            && let Some((probe, baseline)) = self.mem_baseline
+            && probe.net_allocated() - baseline > limit as i128
+        {
+            return Some(format!(
+                "JS tracer exceeded memory limit of {} MiB",
+                limit / (1024 * 1024)
+            ));
+        }
+
+        None
     }
 
     fn commit_overlays(&self) {
@@ -271,187 +342,37 @@ impl JsTracer {
         }
     }
 
-    fn call_enter(&mut self, call_frame: &JsonValue) -> anyhow::Result<()> {
-        if !self.method_exists(TracerMethod::Enter)? {
-            return Ok(());
-        }
-
-        let raw_frame_input = serde_json::to_string(call_frame).map_err(|e| {
-            anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
-        })?;
-
-        let method_name = TracerMethod::Enter.as_str();
-        let body = format!(
-            r#"
-                let raw = {raw_frame_input};
-                let frame = {{
-                    getType() {{ return raw.type; }},
-                    getFrom() {{ return raw.from; }},
-                    getTo() {{ return raw.to; }},
-                    getInput() {{ return hexToBytes(raw.input); }},
-                    getGas() {{ return raw.gas; }},
-                    getValue() {{ return raw.value; }},
-                }};
-                tracer.{method_name}(frame);
-            "#
-        );
-
-        let _ = self
-            .ctx
-            .eval(Source::from_bytes(wrap_js_invocation(body).as_bytes()))
-            .map_err(|e| {
-                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
-            })?;
-
-        Ok(())
-    }
-
-    fn call_exit(&mut self, call_frame: &JsonValue) -> anyhow::Result<()> {
-        if !self.method_exists(TracerMethod::Exit)? {
-            return Ok(());
-        }
-
-        let raw_frame_input = serde_json::to_string(call_frame).map_err(|e| {
-            anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
-        })?;
-
-        let method_name = TracerMethod::Exit.as_str();
-        let body = format!(
-            r#"
-                let raw = {raw_frame_input};
-                let frame = {{
-                    getGasUsed() {{ return raw.gasUsed; }},
-                    getOutput() {{ return raw.output ? hexToBytes(raw.output) : null; }},
-                    getError() {{ return raw.error; }},
-                }};
-                tracer.{method_name}(frame);
-            "#
-        );
-
-        let _ = self
-            .ctx
-            .eval(Source::from_bytes(wrap_js_invocation(body).as_bytes()))
-            .map_err(|e| {
-                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
-            })?;
-
-        Ok(())
-    }
-
-    fn call_step_or_fault(
-        &mut self,
-        method: TracerMethod,
-        raw_log: &JsonValue,
-    ) -> anyhow::Result<()> {
-        if !self.method_exists(method)? {
-            return Ok(());
-        }
-
-        let raw_log_input = serde_json::to_string(raw_log).map_err(|e| {
-            anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
-        })?;
-        let method_name = method.as_str();
-
-        let has_error = raw_log
-            .as_object()
-            .and_then(|obj| obj.get("error"))
-            .unwrap_or(&JsonValue::Null)
-            .is_null()
-            .not();
-
-        let snippet = if has_error {
-            format!(
-                r#"
-                    let raw = {raw_log_input};
-                    let log = {{
-                        getError() {{ return raw.error; }},
-                        getDepth() {{ return raw.depth; }},
-                    }};
-                    tracer.{method_name}(log, db);
-                "#
-            )
-        } else {
-            format!(
-                r#"
-                    let raw = {raw_log_input};
-                    let op = {{
-                        toString() {{ return raw.op.name; }},
-                        toNumber() {{ return raw.op.code; }},
-                        isPush() {{ return raw.op.isPush; }},
-                    }};
-                    let memory = {{
-                        __buffer: hexToBytes(raw.memory),
-                        slice(start, stop) {{
-                            const from = start >>> 0;
-                            const to = stop === undefined ? this.__buffer.length : stop >>> 0;
-                            return this.__buffer.slice(from, to);
-                        }},
-                        getUint(offset) {{
-                            const from = offset >>> 0;
-                            const end = from + 32;
-                            const out = new Uint8Array(32);
-                            const available = this.__buffer.slice(from, end);
-                            out.set(available, 0);
-                            return out;
-                        }},
-                        length() {{
-                            return this.__buffer.length;
-                        }},
-                    }};
-                    let contract = {{
-                        __input: hexToBytes(raw.contract.input),
-                        getCaller() {{ return raw.contract.caller; }},
-                        getAddress() {{ return raw.contract.address; }},
-                        getValue() {{ return raw.contract.value; }},
-                        getInput() {{ return this.__input.slice(); }},
-                    }};
-                    let stack = {{
-                        __entries: raw.stack,
-                        length() {{ return this.__entries.length; }},
-                        peek(n) {{ return this.__entries[n]; }},
-                    }};
-                    let log = {{
-                        op,
-                        memory,
-                        contract,
-                        stack,
-                        getPC() {{ return raw.pc; }},
-                        getGas() {{ return raw.gas; }},
-                        getCost() {{ return raw.cost }},
-                        getDepth() {{ return raw.depth; }},
-                        getRefund() {{ return raw.refund; }},
-                        getError() {{ return raw.error; }},
-                    }};
-                    tracer.{method_name}(log, db);
-                "#
-            )
-        };
-
-        let _ = self
-            .ctx
-            .eval(Source::from_bytes(wrap_js_invocation(snippet).as_bytes()))
-            .map_err(|e| {
-                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
-            })?;
-
-        Ok(())
-    }
-
     fn invoke_method(&mut self, method: TracerMethod, arg: &JsonValue) {
         if self.error.is_some() {
             return;
         }
 
-        if let Err(err) = match method {
-            TracerMethod::Step | TracerMethod::Fault => self.call_step_or_fault(method, arg),
-            TracerMethod::Setup | TracerMethod::Write => self.call_method(method, arg, false),
-            TracerMethod::Enter => self.call_enter(arg),
-            TracerMethod::Exit => self.call_exit(arg),
-            TracerMethod::Result => self.call_method(method, arg, true),
+        let result = match method {
+            TracerMethod::Setup => self.invoke_named(INVOKE_SETUP, arg, method),
+            TracerMethod::Write => self.invoke_named(INVOKE_WRITE, arg, method),
+            TracerMethod::Enter => self.invoke_named(INVOKE_ENTER, arg, method),
+            TracerMethod::Exit => self.invoke_named(INVOKE_EXIT, arg, method),
+            TracerMethod::Step | TracerMethod::Fault => {
+                // Geth exposes only `{getError, getDepth}` on the log when an error is present
+                let has_error = arg.get("error").map(|e| !e.is_null()).unwrap_or(false);
+                let invoker = match (method, has_error) {
+                    (TracerMethod::Step, false) => INVOKE_STEP,
+                    (TracerMethod::Step, true) => INVOKE_STEP_ERR,
+                    (TracerMethod::Fault, false) => INVOKE_FAULT,
+                    (TracerMethod::Fault, true) => INVOKE_FAULT_ERR,
+                    _ => unreachable!(),
+                };
+                self.invoke_named(invoker, arg, method)
+            }
+            TracerMethod::Result => Err(anyhow::anyhow!(
+                "Result must be invoked via call_result, not invoke_method"
+            )),
             TracerMethod::StorageRead => Err(anyhow::anyhow!(
                 "Storage read is not supported by JS tracer"
             )),
-        } {
+        };
+
+        if let Err(err) = result {
             self.record_error(method, err);
         }
     }
@@ -503,16 +424,16 @@ impl JsTracer {
             "error": ctx.error,
         });
 
+        let Some(f) = self.invokers.get(INVOKE_RESULT).cloned() else {
+            return Err(anyhow::anyhow!("JS tracer must define a 'result' function"));
+        };
+
         let method_name = TracerMethod::Result.as_str();
-        let snippet = wrap_js_invocation(format!(
-            "return JSON.stringify(tracer.{method_name}({ctx}, db));"
-        ));
-        let value = self
-            .ctx
-            .eval(Source::from_bytes(snippet.as_bytes()))
-            .map_err(|e| {
-                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
-            })?;
+        let arg = JsValue::from_json(&ctx, &mut self.ctx)
+            .map_err(|e| anyhow::anyhow!("JS tracer result ctx conversion failed: {e}"))?;
+        let value = f
+            .call(&JsValue::undefined(), &[arg], &mut self.ctx)
+            .map_err(|e| anyhow::anyhow!("JS tracer method {method_name} failed: {e}"))?;
 
         let out = value
             .to_string(&mut self.ctx)
@@ -639,6 +560,99 @@ impl JsTracer {
 
         Ok(())
     }
+}
+
+/// Reads jemalloc's exact per-thread allocation counters via raw thread-local pointers; both the
+/// probe and its readings are only valid on the thread that created it — the tracer is constructed
+/// and driven synchronously on one thread, which guarantees that.
+#[cfg(feature = "jemalloc")]
+#[derive(Clone, Copy)]
+struct ThreadMemoryProbe {
+    allocated: tikv_jemalloc_ctl::thread::ThreadLocal<u64>,
+    deallocated: tikv_jemalloc_ctl::thread::ThreadLocal<u64>,
+}
+
+#[cfg(feature = "jemalloc")]
+impl ThreadMemoryProbe {
+    /// `None` when jemalloc's thread stats are unavailable, in which case the memory limit is
+    /// not enforced.
+    fn new() -> Option<Self> {
+        let allocated = tikv_jemalloc_ctl::thread::allocatedp::read().ok()?;
+        let deallocated = tikv_jemalloc_ctl::thread::deallocatedp::read().ok()?;
+        Some(Self {
+            allocated,
+            deallocated,
+        })
+    }
+
+    /// Net bytes currently allocated by this thread.
+    fn net_allocated(&self) -> i128 {
+        i128::from(self.allocated.get()) - i128::from(self.deallocated.get())
+    }
+}
+
+/// Without jemalloc there is no reliable per-thread allocation accounting; the memory limit is not
+/// enforced.
+#[cfg(not(feature = "jemalloc"))]
+#[derive(Clone, Copy)]
+struct ThreadMemoryProbe;
+
+#[cfg(not(feature = "jemalloc"))]
+impl ThreadMemoryProbe {
+    fn new() -> Option<Self> {
+        None
+    }
+
+    fn net_allocated(&self) -> i128 {
+        0
+    }
+}
+
+/// Resolves the invoker functions for the hooks the user tracer defines; a missing entry means
+/// the hook is absent.
+fn resolve_invokers(ctx: &mut BoaContext) -> anyhow::Result<HashMap<&'static str, JsObject>> {
+    let mut invokers = HashMap::new();
+
+    let hooks: &[(&str, &[&'static str])] = &[
+        ("setup", &[INVOKE_SETUP]),
+        ("step", &[INVOKE_STEP, INVOKE_STEP_ERR]),
+        ("fault", &[INVOKE_FAULT, INVOKE_FAULT_ERR]),
+        ("enter", &[INVOKE_ENTER]),
+        ("exit", &[INVOKE_EXIT]),
+        ("write", &[INVOKE_WRITE]),
+        ("result", &[INVOKE_RESULT]),
+    ];
+
+    for (method, invoker_names) in hooks {
+        if !tracer_has_method(ctx, method)? {
+            continue;
+        }
+        for name in *invoker_names {
+            invokers.insert(*name, resolve_callable(ctx, name)?);
+        }
+    }
+
+    Ok(invokers)
+}
+
+fn tracer_has_method(ctx: &mut BoaContext, method: &str) -> anyhow::Result<bool> {
+    let snippet = format!(
+        "(typeof tracer === 'object' && tracer !== null && typeof tracer.{method} === 'function')"
+    );
+    let value = ctx
+        .eval(Source::from_bytes(snippet.as_bytes()))
+        .map_err(|e| anyhow::anyhow!(format!("JS tracer method existence check failed: {e:?}")))?;
+    Ok(value.to_boolean())
+}
+
+fn resolve_callable(ctx: &mut BoaContext, name: &str) -> anyhow::Result<JsObject> {
+    let global = ctx.global_object();
+    let value = global
+        .get(js_string!(name), ctx)
+        .map_err(|e| anyhow::anyhow!(format!("failed to resolve {name}: {e:?}")))?;
+    value
+        .as_callable()
+        .ok_or_else(|| anyhow::anyhow!(format!("{name} is not callable")))
 }
 
 impl AnyTracer for JsTracer {
@@ -941,6 +955,19 @@ impl EvmTracer for JsTracer {
         opcode: u8,
         frame_state: impl EvmFrameInterface,
     ) {
+        if self.error.is_some() {
+            return;
+        }
+        if let Some(reason) = self.budget_exceeded() {
+            self.record_error(TracerMethod::Step, anyhow::anyhow!(reason));
+            return;
+        }
+        // No `step` hook — skip the memory/stack snapshot entirely
+        if !self.invokers.contains_key(INVOKE_STEP) {
+            self.pending_step = None;
+            return;
+        }
+
         let pending = self.pending_step.take().unwrap_or_else(|| StepCtx {
             opcode,
             pc: frame_state.instruction_pointer() as u64,
@@ -953,6 +980,9 @@ impl EvmTracer for JsTracer {
     }
 
     fn on_opcode_error(&mut self, error: &EvmError, frame_state: impl EvmFrameInterface) {
+        if self.error.is_some() {
+            return;
+        }
         let message = fmt_error_msg(error);
         let log = if let Some(pending) = self.pending_step.take() {
             self.prepare_log_input(pending, &frame_state, Some(message.clone()))
@@ -1030,8 +1060,9 @@ pub fn trace_block<V: ViewState + 'static>(
     block_context: zksync_os_storage_api::BlockContext,
     state_view: V,
     js_tracer_config: String,
+    limits: JsTracerLimits,
 ) -> anyhow::Result<Vec<JsonValue>> {
-    let mut tracer = JsTracer::new(state_view.clone(), js_tracer_config)?;
+    let mut tracer = JsTracer::new(state_view.clone(), js_tracer_config, limits)?;
 
     let tx_source = zksync_os_interface::traits::TxListSource {
         transactions: txs.into_iter().map(|tx| tx.encode()).collect(),
@@ -1079,6 +1110,10 @@ mod tests {
         let tracer = JsTracer {
             ctx: BoaContext::default(),
             tracer_config: JsonValue::Null,
+            invokers: HashMap::new(),
+            limits: JsTracerLimits::default(),
+            started_at: Instant::now(),
+            mem_baseline: None,
             storage_overlay: OverlayState::<(Address, B256), B256>::new(),
             code_overlay: OverlayState::<Address, Option<Vec<u8>>>::new(),
             balance_overlay: OverlayState::<Address, BalanceDelta>::new(),

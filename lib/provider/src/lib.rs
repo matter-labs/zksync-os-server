@@ -69,6 +69,9 @@ where
     }
 }
 
+/// The chain id used by a local Anvil dev node by default.
+pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
+
 /// Optional RPC features the underlying provider may or may not support, probed once when the
 /// [`NodeProvider`] is constructed.
 #[derive(Debug, Clone, Copy)]
@@ -79,6 +82,8 @@ pub struct ProviderCapabilities {
     /// Whether the RPC implements `eth_getHeaderBy*`. When false, header lookups use
     /// `eth_getBlockBy*` instead.
     pub get_header: bool,
+    /// Whether the underlying node supports the EIP-7594 (Fusaka/PeerDAS) blob format.
+    pub supports_eip7594: bool,
 }
 
 impl ProviderCapabilities {
@@ -101,9 +106,17 @@ impl ProviderCapabilities {
         if !finalized_tag {
             tracing::info!("provider lacks the `finalized` block tag; degrading to latest");
         }
+        // A local Anvil dev node (detected by chain id) does not support EIP-7594 blobs yet. On any
+        // probe failure we assume a real node that does support them.
+        let supports_eip7594 = provider
+            .get_chain_id()
+            .await
+            .map(|id| id != ANVIL_L1_CHAIN_ID)
+            .unwrap_or(true);
         Self {
             get_header,
             finalized_tag,
+            supports_eip7594,
         }
     }
 }
@@ -807,14 +820,16 @@ mod tests {
     async fn uses_get_header_when_supported() {
         let asserter = Asserter::new();
         // Probe: get_header(latest) ok -> get_header supported; get_header(finalized) ok ->
-        // finalized supported.
+        // finalized supported; get_chain_id -> non-anvil.
         asserter.push_success(&header_with_number(1));
         asserter.push_success(&header_with_number(1));
+        asserter.push_success(&U64::from(1));
         let provider = NodeProvider::new(mocked_provider(&asserter))
             .await
             .expect("mocked provider construction should succeed");
         assert!(provider.capabilities().get_header);
         assert!(provider.capabilities().finalized_tag);
+        assert!(provider.capabilities().supports_eip7594);
 
         // The lookup itself resolves via get_header.
         asserter.push_success(&header_with_number(42));
@@ -830,14 +845,16 @@ mod tests {
     async fn falls_back_to_get_block_when_get_header_unsupported() {
         let asserter = Asserter::new();
         // Probe: get_header(latest) fails -> get_header unsupported; get_block(finalized) ok ->
-        // finalized supported.
+        // finalized supported; get_chain_id -> non-anvil.
         asserter.push_failure(unsupported_method());
         asserter.push_success(&block_with_number(1));
+        asserter.push_success(&U64::from(1));
         let provider = NodeProvider::new(mocked_provider(&asserter))
             .await
             .expect("mocked provider construction should succeed");
         assert!(!provider.capabilities().get_header);
         assert!(provider.capabilities().finalized_tag);
+        assert!(provider.capabilities().supports_eip7594);
 
         // The lookup resolves via get_block, never touching get_header.
         asserter.push_success(&block_with_number(42));
@@ -853,14 +870,16 @@ mod tests {
     async fn degrades_to_latest_when_finalized_unsupported() {
         let asserter = Asserter::new();
         // Probe: get_header(latest) ok -> get_header supported; get_header(finalized) fails ->
-        // finalized unsupported.
+        // finalized unsupported; get_chain_id -> non-anvil.
         asserter.push_success(&header_with_number(1));
         asserter.push_failure(unsupported_method());
+        asserter.push_success(&U64::from(1));
         let provider = NodeProvider::new(mocked_provider(&asserter))
             .await
             .expect("mocked provider construction should succeed");
         assert!(provider.capabilities().get_header);
         assert!(!provider.capabilities().finalized_tag);
+        assert!(provider.capabilities().supports_eip7594);
 
         // The lookup degrades straight to get_block_number (latest), issuing no header/block call.
         asserter.push_success(&U64::from(99));
@@ -869,6 +888,20 @@ mod tests {
             .await
             .expect("degraded latest lookup should succeed");
         assert_eq!(result, Some(99));
+        assert!(asserter.read_q().is_empty(), "all responses consumed");
+    }
+
+    #[tokio::test]
+    async fn anvil_chain_id_disables_eip7594() {
+        let asserter = Asserter::new();
+        // Probe: get_header(latest) ok; get_header(finalized) ok; get_chain_id -> anvil.
+        asserter.push_success(&header_with_number(1));
+        asserter.push_success(&header_with_number(1));
+        asserter.push_success(&U64::from(ANVIL_L1_CHAIN_ID));
+        let provider = NodeProvider::new(mocked_provider(&asserter))
+            .await
+            .expect("mocked provider construction should succeed");
+        assert!(!provider.capabilities().supports_eip7594);
         assert!(asserter.read_q().is_empty(), "all responses consumed");
     }
 }
