@@ -1,3 +1,4 @@
+use crate::default_tracer::default_trace;
 use crate::eth_call_handler::{EthCallError, EthCallHandler};
 use crate::result::{ToRpcResult, unimplemented_rpc_err};
 use crate::{ReadRpcStorage, sandbox};
@@ -34,9 +35,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
         opts: Option<GethDebugTracingOptions>,
     ) -> DebugResult<Vec<TraceResult>> {
         let opts = opts.unwrap_or_default();
-        let Some(tracer) = opts.tracer else {
-            return Err(DebugError::UnsupportedDefaultTracer);
-        };
+        let tracer = opts.tracer.clone();
 
         let Some(block) = self.storage.get_block_by_id(block_id)? else {
             return Err(DebugError::BlockNotFound);
@@ -69,7 +68,20 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
         }
         let prev_state_view = self.storage.state_view_at(block.number - 1)?;
         match tracer {
-            GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer) => {
+            None => match default_trace(txs, block_context, prev_state_view, opts.config) {
+                Ok(frames) => Ok(frames
+                    .into_iter()
+                    .zip(&block.body.transactions)
+                    .map(|(frame, tx_hash)| {
+                        TraceResult::new_success(GethTrace::Default(frame), Some(*tx_hash))
+                    })
+                    .collect()),
+                Err(err) => {
+                    tracing::error!(?err, "Failed to trace transaction");
+                    Err(DebugError::InternalError)
+                }
+            },
+            Some(GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer)) => {
                 let call_config = opts
                     .tracer_config
                     .clone()
@@ -90,7 +102,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                     }
                 }
             }
-            GethDebugTracerType::JsTracer(js) => {
+            Some(GethDebugTracerType::JsTracer(js)) => {
                 match crate::js_tracer::tracer::trace_block(txs, block_context, prev_state_view, js)
                 {
                     Ok(outputs) => Ok(outputs
@@ -106,7 +118,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                     }
                 }
             }
-            other => Err(DebugError::UnsupportedTracer(other)),
+            Some(other) => Err(DebugError::UnsupportedTracer(other)),
         }
     }
 
@@ -156,12 +168,19 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
         if tx_index.is_some() {
             return Err(DebugError::UnsupportedTxIndex);
         }
-        let Some(tracer) = tracing_options.tracer else {
-            return Err(DebugError::UnsupportedDefaultTracer);
-        };
+        let tracer = tracing_options.tracer.clone();
         match (tracer, state_overrides, block_overrides) {
+            (None, state_overrides, block_overrides) => {
+                Ok(self.eth_call_handler.default_trace_impl(
+                    request,
+                    block_id,
+                    tracing_options.config,
+                    state_overrides,
+                    block_overrides.map(Box::new),
+                )?)
+            }
             (
-                GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer),
+                Some(GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer)),
                 state_overrides,
                 block_overrides,
             ) => {
@@ -177,7 +196,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                     block_overrides.map(Box::new),
                 )?)
             }
-            (GethDebugTracerType::JsTracer(js_cfg), state_overrides, block_overrides) => {
+            (Some(GethDebugTracerType::JsTracer(js_cfg)), state_overrides, block_overrides) => {
                 let value = self.eth_call_handler.call_js_tracer_impl(
                     request,
                     block_id,
@@ -188,7 +207,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
 
                 Ok(GethTrace::JS(value))
             }
-            (other, ..) => Err(DebugError::UnsupportedTracer(other)),
+            (Some(other), ..) => Err(DebugError::UnsupportedTracer(other)),
         }
     }
 }
@@ -287,10 +306,6 @@ pub type DebugResult<Ok> = Result<Ok, DebugError>;
 /// General `debug` namespace errors.
 #[derive(Debug, thiserror::Error)]
 pub enum DebugError {
-    // todo: support default tracer
-    /// Unsupported default tracer
-    #[error("default struct log tracer is not supported")]
-    UnsupportedDefaultTracer,
     /// Unsupported tracer type
     #[error("tracer {} is not supported", .0.as_str())]
     UnsupportedTracer(GethDebugTracerType),

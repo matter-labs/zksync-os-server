@@ -1,5 +1,6 @@
 use crate::call_fees::{CallFees, CallFeesError};
 use crate::config::RpcConfig;
+use crate::default_tracer::default_trace_simulate;
 use crate::js_tracer;
 use crate::metrics::API_METRICS;
 use crate::result::RevertError;
@@ -11,7 +12,7 @@ use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
-use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
+use alloy::rpc::types::trace::geth::{CallConfig, GethDefaultTracingOptions, GethTrace};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use derive_more::Deref;
 use serde_json::Value as JsonValue;
@@ -379,6 +380,37 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             ),
         }
         .map(GethTrace::CallTracer)
+        .map_err(|err| EthCallError::ForwardSubsystemError(anyhow::anyhow!(err)))
+    }
+
+    pub fn default_trace_impl(
+        &self,
+        request: TransactionRequest,
+        block: Option<BlockId>,
+        opts: GethDefaultTracingOptions,
+        state_overrides: Option<StateOverride>,
+        block_overrides: Option<Box<BlockOverrides>>,
+    ) -> Result<GethTrace, EthCallError> {
+        let execution_env = self.prepare_execution_env(request, block, block_overrides)?;
+        let storage_view = self
+            .storage
+            .state_at_block_number_or_latest(execution_env.block_context.block_number)?;
+
+        match state_overrides {
+            Some(overrides) => default_trace_simulate(
+                execution_env.transaction,
+                execution_env.block_context,
+                OverriddenStateView::with_state_overrides(storage_view, overrides),
+                opts,
+            ),
+            None => default_trace_simulate(
+                execution_env.transaction,
+                execution_env.block_context,
+                storage_view,
+                opts,
+            ),
+        }
+        .map(GethTrace::Default)
         .map_err(|err| EthCallError::ForwardSubsystemError(anyhow::anyhow!(err)))
     }
 
