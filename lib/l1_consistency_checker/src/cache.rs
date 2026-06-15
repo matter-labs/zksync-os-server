@@ -54,11 +54,10 @@ impl TreeBlockCache {
         }
     }
 
-    /// Inserts the next sequential block.
-    pub fn insert(&mut self, block_number: u64, block: BlockCommitmentData) -> anyhow::Result<()> {
-        if let Some(expected) = self.next_expected_block
-            && block_number != expected
-        {
+    /// Inserts the next sequential block. Intake is strictly sequential, so an out-of-order
+    /// block signals a logic error upstream and panics rather than being recoverable.
+    pub fn insert(&mut self, block_number: u64, block: BlockCommitmentData) {
+        if let Some(expected) = self.next_expected_block {
             assert_eq!(
                 block_number, expected,
                 "Out of order block received. This should never happen"
@@ -74,7 +73,6 @@ impl TreeBlockCache {
         }
         self.cached_bytes += retained_bytes;
         self.next_expected_block = Some(block_number + 1);
-        Ok(())
     }
 
     /// Whether the cache is still below its soft bound.
@@ -182,9 +180,7 @@ mod tests {
         let mut cache = TreeBlockCache::with_max_cached_bytes(256);
         assert!(cache.has_capacity());
 
-        cache
-            .insert(1, block_commitment_data(1, vec![0; 1024]))
-            .unwrap();
+        cache.insert(1, block_commitment_data(1, vec![0; 1024]));
         assert!(!cache.has_capacity());
 
         cache.remove_range(1..=1);

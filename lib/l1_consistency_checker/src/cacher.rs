@@ -54,16 +54,9 @@ impl<ReadState: ReadStateHistory> LocalBatchDataCacher<ReadState> {
             tree_block.record.protocol_version,
         );
 
-        let mut result = Ok(());
         self.cache
-            .send_if_modified(|cache| match cache.insert(block_number, data) {
-                Ok(()) => true,
-                Err(err) => {
-                    result = Err(err);
-                    false
-                }
-            });
-        result
+            .send_modify(|cache| cache.insert(block_number, data));
+        Ok(())
     }
 }
 

@@ -56,23 +56,4 @@ impl PubdataMode {
             }
         }
     }
-
-    pub fn from_da_commitment_scheme(
-        commitment_scheme: zksync_os_contract_interface::models::DACommitmentScheme,
-    ) -> Self {
-        match commitment_scheme {
-            zksync_os_contract_interface::models::DACommitmentScheme::BlobsZKsyncOS => {
-                PubdataMode::Blobs
-            }
-            zksync_os_contract_interface::models::DACommitmentScheme::BlobsAndPubdataKeccak256 => {
-                PubdataMode::Calldata
-            }
-            zksync_os_contract_interface::models::DACommitmentScheme::EmptyNoDA => {
-                PubdataMode::Validium
-            }
-            _ => {
-                unreachable!("Tried to convert incompatible DA commitment scheme to pubdata mode")
-            }
-        }
-    }
 }

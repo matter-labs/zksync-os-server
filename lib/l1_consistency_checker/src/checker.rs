@@ -173,7 +173,8 @@ impl L1ConsistencyChecker {
 
     /// Evicts verified blocks and publishes reconstructed batch data for persistence.
     fn handle_verified(&self, verified: DiscoveredCommittedBatch) -> anyhow::Result<()> {
-        self.cache.send_modify(|cache| cache.remove_range( verified.block_range.clone()));
+        self.cache
+            .send_modify(|cache| cache.remove_range(verified.block_range.clone()));
 
         self.verified_batches_tx
             .send(verified)
