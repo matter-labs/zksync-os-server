@@ -64,22 +64,34 @@ async fn derive_last_l1_batch_to_keep(
         top.last_block_number(),
     );
 
-    // The first batch (scanning from the top) that starts at or before `from_block` is the
-    // batch containing it — i.e. the first batch to revert; last_to_keep is one below it.
-    if top.first_block_number() <= from_block {
-        return Ok(last_committed_batch - 1);
-    }
-    for batch in (last_executed_batch + 1..last_committed_batch).rev() {
-        if fetch_committed(batch).await?.first_block_number() <= from_block {
-            return Ok(batch - 1);
+    // Find the highest committed-only batch whose first block is at or before `from_block`: that
+    // batch contains `from_block` and is the first to revert, so `last_to_keep` is one below it.
+    let mut low_batch = last_executed_batch + 1;
+    let mut high_batch = last_committed_batch;
+    let mut first_batch_to_revert: Option<u64> = None;
+    while low_batch <= high_batch {
+        let mid_batch = low_batch + (high_batch - low_batch) / 2;
+        let mid_first_block = if mid_batch == last_committed_batch {
+            top.first_block_number()
+        } else {
+            fetch_committed(mid_batch).await?.first_block_number()
+        };
+        if mid_first_block <= from_block {
+            first_batch_to_revert = Some(mid_batch);
+            low_batch = mid_batch + 1;
+        } else {
+            high_batch = mid_batch - 1;
         }
     }
 
-    anyhow::bail!(
-        "from_block ({from_block}) is at or before the first committed-only batch \
-         ({}); it lies within an executed (finalized) batch and cannot be reverted",
-        last_executed_batch + 1,
-    );
+    match first_batch_to_revert {
+        Some(batch) => Ok(batch - 1),
+        None => anyhow::bail!(
+            "from_block ({from_block}) is at or before the first committed-only batch ({}); it \
+             lies within an executed (finalized) batch and cannot be reverted",
+            last_executed_batch + 1,
+        ),
+    }
 }
 
 /// Calls `revertBatchesSharedBridge` on the validator timelock to roll back all committed batches
