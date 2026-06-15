@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use std::{collections::BTreeMap, mem, ops::RangeInclusive};
+use std::{collections::BTreeMap, mem, ops::RangeInclusive, sync::Arc};
 use tokio::sync::watch;
 use zksync_os_batch_types::BlockCommitmentData;
 
@@ -7,7 +7,7 @@ pub const DEFAULT_MAX_CACHED_TREE_BLOCK_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Debug)]
 struct CachedBlockCommitmentData {
-    block: BlockCommitmentData,
+    block: Arc<BlockCommitmentData>,
     retained_bytes: usize,
 }
 
@@ -16,7 +16,7 @@ impl CachedBlockCommitmentData {
         let retained_bytes =
             mem::size_of_val(&block_number) + mem::size_of::<usize>() + block.retained_size_bytes();
         Self {
-            block,
+            block: Arc::new(block),
             retained_bytes,
         }
     }
@@ -98,8 +98,8 @@ impl TreeBlockCache {
     /// Returns a complete cached block range, or `None` if it is not fully available yet.
     pub fn get_range(
         &self,
-        range: RangeInclusive<u64>,
-    ) -> anyhow::Result<Option<Vec<BlockCommitmentData>>> {
+        range: &RangeInclusive<u64>,
+    ) -> anyhow::Result<Option<Vec<Arc<BlockCommitmentData>>>> {
         let Some(next_expected_block) = self.next_expected_block else {
             return Ok(None);
         };
@@ -108,13 +108,13 @@ impl TreeBlockCache {
         }
 
         let mut blocks = Vec::with_capacity(range.clone().count());
-        for block_number in range {
+        for block_number in range.clone() {
             let Some(block) = self.data.get(&block_number) else {
                 anyhow::bail!(
                     "requested local batch data block {block_number} was already evicted"
                 );
             };
-            blocks.push(block.block.clone());
+            blocks.push(Arc::clone(&block.block));
         }
         Ok(Some(blocks))
     }
@@ -166,7 +166,7 @@ pub trait TreeBlockCacheReceiverExt {
     async fn wait_for_range(
         &self,
         range: RangeInclusive<u64>,
-    ) -> anyhow::Result<Vec<BlockCommitmentData>>;
+    ) -> anyhow::Result<Vec<Arc<BlockCommitmentData>>>;
 }
 
 #[async_trait]
@@ -174,11 +174,11 @@ impl TreeBlockCacheReceiverExt for watch::Receiver<TreeBlockCache> {
     async fn wait_for_range(
         &self,
         range: RangeInclusive<u64>,
-    ) -> anyhow::Result<Vec<BlockCommitmentData>> {
+    ) -> anyhow::Result<Vec<Arc<BlockCommitmentData>>> {
         let mut cache_rx = self.clone();
         loop {
             {
-                if let Some(blocks) = cache_rx.borrow_and_update().get_range(range.clone())? {
+                if let Some(blocks) = cache_rx.borrow_and_update().get_range(&range)? {
                     return Ok(blocks);
                 }
             }

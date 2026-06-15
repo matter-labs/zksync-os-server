@@ -3,6 +3,7 @@ use alloy::primitives::{B256, BlockNumber, U256, keccak256};
 use alloy::sol_types::SolValue;
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::ops::{Deref, DerefMut};
 use std::{mem, ops};
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
@@ -144,15 +145,15 @@ pub struct ExtendedCommitBatchInfo {
 }
 
 impl ExtendedCommitBatchInfo {
-    pub fn build(
-        blocks: &[BlockCommitmentData],
+    pub fn build<T: Borrow<BlockCommitmentData>>(
+        blocks: &[T],
         chain_id: u64,
         batch_number: u64,
         pubdata_mode: PubdataMode,
         sl_chain_id: u64,
     ) -> (Self, Option<BlobTransactionSidecar>) {
-        let first_block = blocks.first().expect("batch cannot be empty");
-        let last_block = blocks.last().expect("batch cannot be empty");
+        let first_block = blocks.first().expect("batch cannot be empty").borrow();
+        let last_block = blocks.last().expect("batch cannot be empty").borrow();
         // Batch sealing keeps these uniform within a batch.
         let protocol_version = &last_block.protocol_version;
 
@@ -165,6 +166,7 @@ impl ExtendedCommitBatchInfo {
         let mut dependency_roots_rolling_hash = B256::ZERO;
 
         for block in blocks {
+            let block = block.borrow();
             total_pubdata.extend_from_slice(&block.pubdata);
             number_of_layer1_txs += block.l1_tx_onchain_hashes.len() as u64;
             number_of_layer2_txs += block.num_l2_txs;

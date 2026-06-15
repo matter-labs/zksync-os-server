@@ -91,7 +91,6 @@ impl L1ConsistencyChecker {
                 PubdataMode::Calldata,
                 PubdataMode::Validium,
                 PubdataMode::Blobs,
-                PubdataMode::RelayedL2Calldata,
             ] {
                 let (local_batch_info, _) = ExtendedCommitBatchInfo::build(
                     &blocks,
