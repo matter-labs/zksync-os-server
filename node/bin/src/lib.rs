@@ -57,6 +57,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
+use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_batch_verification::{
     BatchVerificationConfig as BatchVerificationPolicyConfig, BatchVerificationPipelineStep,
     BatchVerificationResponder, effective_verification_policy,
@@ -696,22 +697,36 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (migration_triggered_sender, migration_triggered_receiver) =
         watch::channel::<Option<u64>>(None);
 
-    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
-        runtime.spawn_critical_task(
-            "gateway migration watcher",
-            GatewayMigrationWatcher::create_watcher(
-                node_startup_state.l1_state.diamond_proxy_l1.clone(),
-                node_startup_state.l1_state.bridgehub_l1.clone(),
-                chain_id,
-                node_startup_state.l1_state.l1_chain_id,
-                config.general_config.gateway_chain_id,
-                config.l1_watcher_config.clone().into(),
-                sl_chain_id_subpool.clone(),
-            )
-            .await
-            .expect("failed to start gateway migration watcher")
-            .run(next_cursors.migration_number),
+    // The watchers that feed L1-originated transactions into the mempool (priority txs,
+    // protocol upgrades, interop roots, gateway migrations) only run on the main node, which
+    // sources produced blocks from them. External nodes don't produce blocks, and they don't
+    // verify replayed transactions one-by-one against L1 events either — they verify whole
+    // batches against L1 commitments in the L1 consistency checker instead.
+    let l1_watchers_enabled = node_role.is_main();
+    if !l1_watchers_enabled {
+        tracing::info!(
+            "L1 transaction watchers are not started on an external node; replayed blocks are verified against L1 batch commitments instead"
         );
+    }
+
+    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
+        if l1_watchers_enabled {
+            runtime.spawn_critical_task(
+                "gateway migration watcher",
+                GatewayMigrationWatcher::create_watcher(
+                    node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                    node_startup_state.l1_state.bridgehub_l1.clone(),
+                    chain_id,
+                    node_startup_state.l1_state.l1_chain_id,
+                    config.general_config.gateway_chain_id,
+                    config.l1_watcher_config.clone().into(),
+                    sl_chain_id_subpool.clone(),
+                )
+                .await
+                .expect("failed to start gateway migration watcher")
+                .run(next_cursors.migration_number),
+            );
+        }
 
         // Initializes `last_finalized_migration` from the SL's `migrationNumber(chainId)` and,
         // if the current SL interval migration has not yet finalized, spawns a watcher to track
@@ -745,16 +760,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .run(),
         );
 
-        if let Some(interop_watcher) = InteropWatcher::create_watcher(
-            node_startup_state
-                .l1_state
-                .settlement_layer_intervals
-                .clone(),
-            config.l1_watcher_config.clone().into(),
-            chain_id,
-            interop_roots_subpool.clone(),
-        )
-        .expect("failed to start L1 interop roots watcher")
+        if l1_watchers_enabled
+            && let Some(interop_watcher) = InteropWatcher::create_watcher(
+                node_startup_state
+                    .l1_state
+                    .settlement_layer_intervals
+                    .clone(),
+                config.l1_watcher_config.clone().into(),
+                chain_id,
+                interop_roots_subpool.clone(),
+            )
+            .expect("failed to start L1 interop roots watcher")
         {
             runtime.spawn_critical_task(
                 "interop roots watcher",
@@ -764,18 +780,20 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     let l1_subpool = L1Subpool::new(10);
-    runtime.spawn_critical_task(
-        "L1 transaction watcher",
-        L1TxWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            l1_subpool.clone(),
-        )
-        .await
-        .expect("failed to start L1 transaction watcher")
-        .run(next_cursors.l1_priority_id),
-    );
+    if l1_watchers_enabled {
+        runtime.spawn_critical_task(
+            "L1 transaction watcher",
+            L1TxWatcher::create_watcher(
+                config.l1_watcher_config.clone().into(),
+                node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                l1_subpool.clone(),
+            )
+            .await
+            .expect("failed to start L1 transaction watcher")
+            .run(next_cursors.l1_priority_id),
+        );
+    }
 
     // Transaction acceptance state - tracks whether we're accepting new transactions
     // Main nodes: accepts, but may switch to reject when `sequencer_max_blocks_to_produce` blocks are produced
@@ -853,6 +871,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         interop_roots_subpool,
         l1_subpool,
         l2_subpool.clone(),
+        l1_watchers_enabled,
     );
     let block_context_provider = BlockContextProvider::new(
         fee_provider,
@@ -875,21 +894,23 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // ========== Start L1 Upgrade Watcher ===========
 
-    runtime.spawn_critical_task(
-        "l1 upgrade transaction watcher",
-        L1UpgradeTxWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            chain_id,
-            node_startup_state.l1_state.bridgehub_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            bytecode_supplier_address,
-            upgrade_subpool,
-        )
-        .await
-        .expect("failed to start L1 upgrade transaction watcher")
-        .run(current_protocol_version.clone()),
-    );
+    if l1_watchers_enabled {
+        runtime.spawn_critical_task(
+            "l1 upgrade transaction watcher",
+            L1UpgradeTxWatcher::create_watcher(
+                config.l1_watcher_config.clone().into(),
+                chain_id,
+                node_startup_state.l1_state.bridgehub_l1.clone(),
+                node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                bytecode_supplier_address,
+                upgrade_subpool,
+            )
+            .await
+            .expect("failed to start L1 upgrade transaction watcher")
+            .run(current_protocol_version.clone()),
+        );
+    }
 
     // ========== Start L1 Persist Batch Watcher ===========
 
@@ -907,10 +928,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     ));
     let (l1_consistency_event_tx, l1_consistency_event_rx) =
         tokio::sync::mpsc::channel::<L1CommittedBatch>(4096);
-    let (latest_verified_batch_tx, latest_verified_batch_rx) =
-        tokio::sync::watch::channel(persistent_batch_storage.latest_batch());
+    // The consistency checker returns the locally-rebuilt batch for the persist watcher to write.
+    let (verified_batch_tx, verified_batch_rx) =
+        tokio::sync::mpsc::channel::<DiscoveredCommittedBatch>(4096);
     let l1_consistency_event_tx = (!node_role.is_main()).then_some(l1_consistency_event_tx);
-    let latest_verified_batch_rx = (!node_role.is_main()).then_some(latest_verified_batch_rx);
+    let verified_batch_rx = (!node_role.is_main()).then_some(verified_batch_rx);
     runtime.spawn_critical_task("l1 batch persist watcher", {
         let config = config.l1_watcher_config.clone();
         let settlement_layer_intervals = node_startup_state
@@ -919,14 +941,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .clone();
         let persistent_batch_storage = persistent_batch_storage.clone();
         let l1_consistency_event_tx = l1_consistency_event_tx.clone();
-        let latest_verified_batch_rx = latest_verified_batch_rx.clone();
         async move {
             L1PersistBatchWatcher::create_watcher(
                 config.into(),
                 settlement_layer_intervals,
                 persistent_batch_storage,
                 l1_consistency_event_tx,
-                latest_verified_batch_rx,
+                verified_batch_rx,
             )
             .run(())
             .await
@@ -1079,7 +1100,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             last_persisted_block_on_start,
             local_batch_data_cache,
-            latest_verified_batch_tx,
+            verified_batch_tx,
             l1_consistency_event_rx,
             verify_batch_rx,
             outgoing_verify_results.clone(),
@@ -1447,7 +1468,7 @@ async fn run_en_pipeline(
     chain_id: u64,
     last_persisted_block_on_start: u64,
     local_batch_data_cache: watch::Sender<TreeBlockCache>,
-    latest_verified_batch_tx: watch::Sender<u64>,
+    verified_batch_tx: tokio::sync::mpsc::Sender<DiscoveredCommittedBatch>,
     l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1CommittedBatch>,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
@@ -1531,13 +1552,28 @@ async fn run_en_pipeline(
             local_batch_data_cache.clone(),
         ));
 
+    // Pubdata-mode candidates the checker rebuilds under. The DA scheme is fully determined by the
+    // settlement layer except for L1+Rollup, where Calldata vs Blobs is the operator's choice — so
+    // we try both (cheapest first) and let the matching commitment identify it.
+    let da_candidates = if node_state_on_startup.l1_state.settles_on_gateway() {
+        match node_state_on_startup.l1_state.da_input_mode {
+            BatchDaInputMode::Rollup => vec![PubdataMode::RelayedL2Calldata],
+            BatchDaInputMode::Validium => vec![PubdataMode::Validium],
+        }
+    } else {
+        match node_state_on_startup.l1_state.da_input_mode {
+            BatchDaInputMode::Rollup => vec![PubdataMode::Calldata, PubdataMode::Blobs],
+            BatchDaInputMode::Validium => vec![PubdataMode::Validium],
+        }
+    };
     runtime.spawn_critical_task("l1 consistency checker", {
         let checker = L1ConsistencyChecker::new(
             chain_id,
             node_state_on_startup.l1_state.sl_chain_id,
             last_persisted_block_on_start,
             local_batch_data_cache,
-            latest_verified_batch_tx,
+            da_candidates,
+            verified_batch_tx,
             l1_consistency_event_rx,
             config
                 .general_config

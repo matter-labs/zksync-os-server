@@ -1,23 +1,27 @@
 use crate::cache::{TreeBlockCache, TreeBlockCacheReceiverExt};
+use alloy::primitives::B256;
 use anyhow::Context;
-use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc, watch};
 use tokio::task::JoinSet;
-use zksync_os_batch_types::ExtendedCommitBatchInfo;
-use zksync_os_contract_interface::models::{DACommitmentScheme, StoredBatchInfo};
+use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
 use zksync_os_types::PubdataMode;
 
+/// An L1-committed batch to check, built purely from `BlockCommit` + `ReportCommittedBatchRange`
+/// events — no commit calldata. The two hashes are all we need to validate a local rebuild:
+/// `commitment` (the batch output hash) binds every other `StoredBatchInfo` field, and
+/// `state_commitment` is the post-batch state root.
 pub struct L1CommittedBatch {
-    pub stored_batch_info: StoredBatchInfo,
-    pub l2_da_commitment_scheme: DACommitmentScheme,
+    pub batch_number: u64,
+    pub state_commitment: B256,
+    pub commitment: B256,
     pub range: RangeInclusive<u64>,
 }
 
 impl L1CommittedBatch {
     pub fn batch_number(&self) -> u64 {
-        self.stored_batch_info.batch_number
+        self.batch_number
     }
 
     pub fn last_block_number(&self) -> u64 {
@@ -25,16 +29,15 @@ impl L1CommittedBatch {
     }
 }
 
-/// Verified batch returned by a worker task.
-struct VerifiedBatch {
-    batch_number: u64,
-    range: RangeInclusive<u64>,
-}
-
-/// Checks L1-committed batches against locally replayed blocks.
+/// Checks L1-committed batches against locally replayed blocks by rebuilding each batch's
+/// commitment from the local block cache and matching it against the on-chain event hashes.
 ///
-/// Verification is concurrent, but the published watermark advances only across the contiguous
-/// verified prefix.
+/// The rebuilt [`StoredBatchInfo`](zksync_os_contract_interface::models::StoredBatchInfo) — which,
+/// once matched, is provably identical to what L1 committed — is sent back to the persist batch
+/// watcher so it can be persisted without ever fetching commit calldata.
+///
+/// Verification is concurrent; verified batches are emitted as soon as they complete (the persist
+/// watcher orders them via execute events).
 pub struct L1ConsistencyChecker {
     chain_id: u64,
     sl_chain_id: u64,
@@ -42,18 +45,25 @@ pub struct L1ConsistencyChecker {
     /// Shared with the cacher and batch verification responder.
     cache: watch::Sender<TreeBlockCache>,
     cache_rx: watch::Receiver<TreeBlockCache>,
-    latest_verified_batch_tx: watch::Sender<u64>,
+    /// Pubdata-mode candidates to try when rebuilding, cheapest first. More than one only when the
+    /// DA scheme can't be derived from settlement config alone (L1 + Rollup: Calldata vs Blobs);
+    /// the candidate whose rebuilt `commitment` matches the event identifies the scheme.
+    da_candidates: Arc<Vec<PubdataMode>>,
+    /// Verified batches, sent back to the persist batch watcher for persistence.
+    verified_batch_tx: mpsc::Sender<DiscoveredCommittedBatch>,
     l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
     verification_concurrency: usize,
 }
 
 impl L1ConsistencyChecker {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_id: u64,
         sl_chain_id: u64,
         last_persisted_block_on_start: u64,
         cache: watch::Sender<TreeBlockCache>,
-        latest_verified_batch_tx: watch::Sender<u64>,
+        da_candidates: Vec<PubdataMode>,
+        verified_batch_tx: mpsc::Sender<DiscoveredCommittedBatch>,
         l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
         verification_concurrency: usize,
     ) -> Self {
@@ -64,68 +74,70 @@ impl L1ConsistencyChecker {
             last_persisted_block_on_start,
             cache,
             cache_rx,
-            latest_verified_batch_tx,
+            da_candidates: Arc::new(da_candidates),
+            verified_batch_tx,
             l1_events_rx,
             verification_concurrency,
         }
     }
 
-    /// Verifies one committed batch once its local blocks are cached.
+    /// Rebuilds one committed batch from its cached blocks and matches it against the event hashes,
+    /// returning the verified local [`StoredBatchInfo`](zksync_os_contract_interface::models::StoredBatchInfo).
     async fn verify_commit(
         cache_rx: watch::Receiver<TreeBlockCache>,
         chain_id: u64,
         sl_chain_id: u64,
-        last_persisted_block_on_start: u64,
+        da_candidates: Arc<Vec<PubdataMode>>,
         commit: L1CommittedBatch,
-    ) -> anyhow::Result<VerifiedBatch> {
-        let batch_number = commit.batch_number();
+    ) -> anyhow::Result<DiscoveredCommittedBatch> {
+        let batch_number = commit.batch_number;
         let range = commit.range.clone();
+        let blocks = cache_rx
+            .wait_for_range(range.clone())
+            .await
+            .context("while waiting for a committed batch's blocks to be cached")?;
+        let state_commitment = commit.state_commitment;
+        let commitment = commit.commitment;
 
-        if commit.last_block_number() > last_persisted_block_on_start {
-            let blocks = cache_rx
-                .wait_for_range(range.clone())
-                .await
-                .context("while waiting for a committed batch's blocks to be cached")?;
-            let l2_da_commitment_scheme = commit.l2_da_commitment_scheme;
-            let l1_stored = commit.stored_batch_info;
-
-            tokio::task::spawn_blocking(move || {
+        let batch_info = tokio::task::spawn_blocking(move || {
+            // Try each DA-scheme candidate; a `commitment` match both verifies the batch and
+            // identifies the scheme it was committed under.
+            for &pubdata_mode in da_candidates.iter() {
                 let (local_batch_info, _) = ExtendedCommitBatchInfo::build(
                     &blocks,
                     chain_id,
                     batch_number,
-                    PubdataMode::from_da_commitment_scheme(l2_da_commitment_scheme),
+                    pubdata_mode,
                     sl_chain_id,
                 );
-
                 let local_stored = local_batch_info.into_stored();
-                if local_stored != l1_stored {
-                    tracing::error!(
-                        "L1 committed batch #{} is inconsistent with locally replayed blocks, expected: {:?}, received: {:?}",
-                        batch_number,
-                        local_stored,
-                        l1_stored,
-                    );
-                    anyhow::bail!(
-                        "L1 committed batch #{} is inconsistent with locally replayed blocks",
-                        batch_number
-                    );
+                if local_stored.state_commitment == state_commitment
+                    && local_stored.commitment == commitment
+                {
+                    return Ok(local_stored);
                 }
-                Ok(())
-            })
-            .await
-            .context("while rebuilding a committed batch's commitment")??;
-
-            tracing::info!(
-                "verified L1 committed batch #{} against locally replayed blocks {:?}",
+            }
+            tracing::error!(
                 batch_number,
-                range,
+                ?state_commitment,
+                ?commitment,
+                "L1 committed batch is inconsistent with locally replayed blocks (no DA-scheme candidate matched)",
             );
-        }
+            anyhow::bail!(
+                "L1 committed batch #{batch_number} is inconsistent with locally replayed blocks"
+            )
+        })
+        .await
+        .context("while rebuilding a committed batch's commitment")??;
 
-        Ok(VerifiedBatch {
+        tracing::info!(
+            "verified L1 committed batch #{} against locally replayed blocks {:?}",
             batch_number,
             range,
+        );
+        Ok(DiscoveredCommittedBatch {
+            batch_info,
+            block_range: range,
         })
     }
 
@@ -133,11 +145,7 @@ impl L1ConsistencyChecker {
         tracing::info!("starting L1 consistency checker");
 
         let semaphore = Arc::new(Semaphore::new(self.verification_concurrency));
-        let mut tasks: JoinSet<anyhow::Result<VerifiedBatch>> = JoinSet::new();
-
-        // Stage out-of-order completions; publish only the contiguous verified prefix.
-        let mut verified_ahead: BTreeSet<u64> = BTreeSet::new();
-        let mut next_batch_to_confirm = *self.latest_verified_batch_tx.borrow() + 1;
+        let mut tasks: JoinSet<anyhow::Result<DiscoveredCommittedBatch>> = JoinSet::new();
 
         loop {
             tokio::select! {
@@ -145,6 +153,11 @@ impl L1ConsistencyChecker {
                     let Some(commit) = maybe_commit else {
                         break;
                     };
+                    // Batches already persisted before startup were verified by a previous run;
+                    // their blocks are not cached, so don't wait for them.
+                    if commit.last_block_number() <= self.last_persisted_block_on_start {
+                        continue;
+                    }
                     tracing::debug!(
                         "received L1 committed batch {} for consistency checking in range {:?}",
                         commit.batch_number(),
@@ -159,58 +172,36 @@ impl L1ConsistencyChecker {
                     let cache_rx = self.cache_rx.clone();
                     let chain_id = self.chain_id;
                     let sl_chain_id = self.sl_chain_id;
-                    let last_persisted_block_on_start = self.last_persisted_block_on_start;
+                    let da_candidates = self.da_candidates.clone();
                     tasks.spawn(async move {
                         let _permit = permit; // held until the verification finishes
-                        Self::verify_commit(
-                            cache_rx,
-                            chain_id,
-                            sl_chain_id,
-                            last_persisted_block_on_start,
-                            commit,
-                        )
-                        .await
+                        Self::verify_commit(cache_rx, chain_id, sl_chain_id, da_candidates, commit)
+                            .await
                     });
                 }
                 Some(joined) = tasks.join_next() => {
                     let verified = joined.context("verification task panicked")??;
-                    self.handle_verified(verified, &mut verified_ahead, &mut next_batch_to_confirm);
+                    self.handle_verified(verified).await?;
                 }
             }
         }
 
         while let Some(joined) = tasks.join_next().await {
             let verified = joined.context("verification task panicked")??;
-            self.handle_verified(verified, &mut verified_ahead, &mut next_batch_to_confirm);
+            self.handle_verified(verified).await?;
         }
         Ok(())
     }
 
-    /// Evicts verified blocks and advances the contiguous verified-batch watermark.
-    fn handle_verified(
-        &self,
-        verified: VerifiedBatch,
-        verified_ahead: &mut BTreeSet<u64>,
-        next_batch_to_confirm: &mut u64,
-    ) {
+    /// Evicts the verified batch's blocks from the cache and hands the rebuilt batch back to the
+    /// persist watcher.
+    async fn handle_verified(&self, verified: DiscoveredCommittedBatch) -> anyhow::Result<()> {
         self.cache
-            .send_modify(|cache| cache.remove_range(verified.range));
-
-        if verified.batch_number >= *next_batch_to_confirm {
-            verified_ahead.insert(verified.batch_number);
-        }
-        while verified_ahead.remove(next_batch_to_confirm) {
-            *next_batch_to_confirm += 1;
-        }
-
-        let confirmed = *next_batch_to_confirm - 1;
-        self.latest_verified_batch_tx.send_if_modified(|latest| {
-            if confirmed > *latest {
-                *latest = confirmed;
-                true
-            } else {
-                false
-            }
-        });
+            .send_modify(|cache| cache.remove_range(verified.block_range.clone()));
+        self.verified_batch_tx
+            .send(verified)
+            .await
+            .context("persist batch watcher closed the verified-batch channel")?;
+        Ok(())
     }
 }
