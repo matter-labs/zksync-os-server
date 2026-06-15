@@ -71,6 +71,17 @@ pub async fn execute_block_in_vm<V: ViewState>(
     let mut interop_roots_count = 0;
     let expect_sl_chain_id_tx_after_upgrade = command.expect_sl_chain_id_tx_after_upgrade;
 
+    if expect_sl_chain_id_tx_after_upgrade
+        && let SealPolicy::Decide(duration, tx_limit) = command.seal_policy
+        && tx_limit < 2
+    {
+        command.seal_policy = SealPolicy::Decide(duration, 2);
+        tracing::warn!(
+            "Upgrade v31 requires two txs (Upgrade and SetSLChainId) to be included in the first v31 block. \
+                `max_transactions_in_block` is ignored"
+        );
+    }
+
     /* ---------- main loop ------------------------------------------ */
     // seal_reason must only be used for observability - handling must remain generic
     let seal_reason = loop {
