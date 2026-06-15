@@ -38,6 +38,13 @@ impl<ReadState: ReadStateHistory> LocalBatchDataCacher<ReadState> {
         if block_number <= self.last_persisted_block_on_start {
             return Ok(());
         }
+        if tree_block.record.protocol_version.is_pre_v30() {
+            tracing::debug!(
+                "skipping local batch data cache for block #{block_number} with protocol version {}: protocol version has no commit block ranges",
+                &tree_block.record.protocol_version
+            );
+            return Ok(());
+        }
         let state_view = self.read_state.state_view_at(block_number)?;
         let multichain_root = read_multichain_root(state_view);
         let data = BlockCommitmentData::new(
