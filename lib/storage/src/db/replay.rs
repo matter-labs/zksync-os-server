@@ -6,8 +6,8 @@ use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
 use zksync_os_genesis::Genesis;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
-use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
+use zksync_os_rocksdb::{RocksDB, RocksDBOptions};
 use zksync_os_storage_api::{BlockContext, ReadReplay, ReplayRecord, WriteReplay};
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
@@ -132,10 +132,83 @@ impl BlockReplayStorage {
     /// This is intended for recovery tooling that rebuilds the DB from archived replay records and
     /// writes the recovered chain from genesis upward.
     pub fn new_without_genesis(db_path: &Path) -> Self {
-        let db = RocksDB::<BlockReplayColumnFamily>::new(db_path)
+        Self::try_new_without_genesis_with_options(db_path, RocksDBOptions::default())
             .expect("Failed to open BlockReplayStorage")
-            .with_sync_writes();
-        Self { db }
+    }
+
+    pub fn try_new_without_genesis_with_options(
+        db_path: &Path,
+        options: RocksDBOptions,
+    ) -> anyhow::Result<Self> {
+        let db =
+            RocksDB::<BlockReplayColumnFamily>::with_options(db_path, options)?.with_sync_writes();
+        Ok(Self { db })
+    }
+
+    /// Returns the canonical block hash if it is present in the replay storage.
+    pub fn canonical_hash(&self, block_number: BlockNumber) -> anyhow::Result<Option<BlockHash>> {
+        let key = block_number.to_be_bytes();
+        let Some(bytes) = self
+            .db
+            .get_cf(BlockReplayColumnFamily::CanonicalHash, &key)?
+        else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            bytes.len() == 32,
+            "canonical hash for block {block_number} must be 32 bytes, got {}",
+            bytes.len()
+        );
+        Ok(Some(BlockHash::from_slice(&bytes)))
+    }
+
+    pub fn try_latest_record(&self) -> Option<BlockNumber> {
+        self.latest_record_checked()
+    }
+
+    /// Truncates canonical replay records after `last_block_to_keep`.
+    ///
+    /// This is intended for operator-triggered storage recovery and should only be called while
+    /// the node is not running normal components.
+    pub fn rollback(&self, last_block_to_keep: BlockNumber) -> anyhow::Result<()> {
+        let Some(latest_record) = self.latest_record_checked() else {
+            return Ok(());
+        };
+        if latest_record <= last_block_to_keep {
+            return Ok(());
+        }
+
+        tracing::warn!(
+            from_block = last_block_to_keep + 1,
+            to_block = latest_record,
+            "rolling back block replay storage"
+        );
+        let mut batch = self.db.new_write_batch();
+        for block_number in (last_block_to_keep + 1)..=latest_record {
+            let key = block_number.to_be_bytes();
+            for cf in [
+                BlockReplayColumnFamily::Context,
+                BlockReplayColumnFamily::StartingL1SerialId,
+                BlockReplayColumnFamily::Txs,
+                BlockReplayColumnFamily::NodeVersion,
+                BlockReplayColumnFamily::ProtocolVersion,
+                BlockReplayColumnFamily::ForcePreimages,
+                BlockReplayColumnFamily::BlockOutputHash,
+                BlockReplayColumnFamily::StartingInteropRootId,
+                BlockReplayColumnFamily::StartingMigrationNumber,
+                BlockReplayColumnFamily::StartingInteropFeeNumber,
+                BlockReplayColumnFamily::CanonicalHash,
+            ] {
+                batch.delete_cf(cf, &key);
+            }
+        }
+        batch.put_cf(
+            BlockReplayColumnFamily::Latest,
+            Self::LATEST_KEY,
+            &last_block_to_keep.to_be_bytes(),
+        );
+        self.db.write(batch)?;
+        Ok(())
     }
 
     fn write_replay_unchecked(&self, sealed_record: Sealed<ReplayRecord>, is_canonical: bool) {

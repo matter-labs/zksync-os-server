@@ -2,7 +2,7 @@ pub use self::cli::ConfigArgs;
 pub(crate) use self::metrics::report_static_config_metrics;
 use self::util::{SecretKeyDeserializer, SignerConfigDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
-use alloy::primitives::{Address, Bytes, U128};
+use alloy::primitives::{Address, B256, Bytes, U128};
 use num::{BigInt, BigUint, rational::Ratio};
 use reth_net_nat::net_if::resolve_net_if_ip;
 use reth_network_peers::TrustedPeer;
@@ -77,6 +77,7 @@ pub struct Config {
     pub prover_input_generator_config: ProverInputGeneratorConfig,
     pub prover_api_config: ProverApiConfig,
     pub status_server_config: StatusServerConfig,
+    pub storage_recovery_config: StorageRecoveryConfig,
     pub observability_config: ObservabilityConfig,
     pub gas_adjuster_config: GasAdjusterConfig,
     pub batch_verification_config: BatchVerificationConfig,
@@ -245,6 +246,9 @@ impl Config {
         schema
             .insert(&StatusServerConfig::DESCRIPTION, "status_server")
             .expect("Failed to insert status server config");
+        schema
+            .insert(&StorageRecoveryConfig::DESCRIPTION, "storage_recovery")
+            .expect("Failed to insert storage recovery config");
         schema
             .insert(&ObservabilityConfig::DESCRIPTION, "observability")
             .expect("Failed to insert observability config");
@@ -758,6 +762,45 @@ pub struct StatusServerConfig {
     /// Status server address to listen on.
     #[config(default_t = "0.0.0.0:3071".into())]
     pub address: String,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+pub struct StorageRecoveryConfig {
+    /// One-shot startup rollback of locally persisted L2 blocks.
+    /// If configured, the node verifies the target block hash and parent hash before deleting
+    /// local data for the target block and all later blocks. This must only be used while the node
+    /// is not participating in consensus.
+    #[config(nest)]
+    #[config_validate(custom(
+        |root: &Config, value: &Option<RollbackL2BlockConfig>| !root.consensus_config.enabled || value.is_none(),
+        "requires `consensus.enabled=false`"
+    ))]
+    #[config_validate(custom(
+        |root: &Config, value: &Option<RollbackL2BlockConfig>| !root.general_config.ephemeral || value.is_none(),
+        "requires `general.ephemeral=false`"
+    ))]
+    #[config_validate(custom(
+        |_root: &Config, value: &Option<RollbackL2BlockConfig>| value.as_ref().is_none_or(|rollback| rollback.number > 0),
+        "number must be greater than 0"
+    ))]
+    pub rollback_l2_block: Option<RollbackL2BlockConfig>,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+pub struct RollbackL2BlockConfig {
+    /// First L2 block to delete.
+    #[config_validate(custom(
+        |_root: &Config, value: &u64| *value > 0,
+        "must be greater than 0"
+    ))]
+    pub number: u64,
+    /// Expected hash of the first L2 block to delete.
+    #[config(with = Serde![str])]
+    pub hash: B256,
+    /// Expected hash of the parent block that will become the local head after rollback.
+    #[config(with = Serde![str])]
+    pub parent_hash: B256,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -2420,6 +2463,7 @@ mod tests {
             prover_input_generator_config: ProverInputGeneratorConfig::default(),
             prover_api_config: ProverApiConfig::default(),
             status_server_config: StatusServerConfig::default(),
+            storage_recovery_config: StorageRecoveryConfig::default(),
             observability_config: ObservabilityConfig::default(),
             gas_adjuster_config: GasAdjusterConfig::default(),
             batch_verification_config: BatchVerificationConfig::default(),
@@ -2563,6 +2607,57 @@ mod tests {
         );
         assert!(
             err.contains("`batch_verification.client_enabled` requires `network.enabled=true`")
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_recovery_requires_consensus_disabled() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.consensus_config.enabled = true;
+        config.network_config.enabled = true;
+        config.network_config.secret_key = Some(SecretKey::from_slice(&[0x44; 32]).unwrap());
+        config.consensus_config.peer_ids = vec![config.network_config.derived_peer_id().unwrap()];
+        config.storage_recovery_config.rollback_l2_block = Some(RollbackL2BlockConfig {
+            number: 1,
+            hash: B256::repeat_byte(0x11),
+            parent_hash: B256::repeat_byte(0x22),
+        });
+
+        let err = config.validate().await.unwrap_err().to_string();
+
+        assert!(
+            err.contains("`storage_recovery.rollback_l2_block` requires `consensus.enabled=false`")
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_recovery_rejects_genesis_rollback() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.storage_recovery_config.rollback_l2_block = Some(RollbackL2BlockConfig {
+            number: 0,
+            hash: B256::repeat_byte(0x11),
+            parent_hash: B256::repeat_byte(0x22),
+        });
+
+        let err = config.validate().await.unwrap_err().to_string();
+
+        assert!(err.contains("`storage_recovery.rollback_l2_block` number must be greater than 0"));
+    }
+
+    #[tokio::test]
+    async fn storage_recovery_rejects_ephemeral_mode() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.general_config.ephemeral = true;
+        config.storage_recovery_config.rollback_l2_block = Some(RollbackL2BlockConfig {
+            number: 1,
+            hash: B256::repeat_byte(0x11),
+            parent_hash: B256::repeat_byte(0x22),
+        });
+
+        let err = config.validate().await.unwrap_err().to_string();
+
+        assert!(
+            err.contains("`storage_recovery.rollback_l2_block` requires `general.ephemeral=false`")
         );
     }
 

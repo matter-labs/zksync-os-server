@@ -46,6 +46,7 @@ pub(crate) fn report_static_config_metrics(config: &Config) {
     );
     report_flat_config_metrics(&config.prover_api_config, "prover_api");
     report_flat_config_metrics(&config.status_server_config, "status_server");
+    report_flat_config_metrics(&config.storage_recovery_config, "storage_recovery");
     report_flat_config_metrics(&config.observability_config, "observability");
     report_flat_config_metrics(&config.gas_adjuster_config, "gas_adjuster");
     report_flat_config_metrics(&config.batch_verification_config, "batch_verification");

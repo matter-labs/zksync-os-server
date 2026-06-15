@@ -71,6 +71,35 @@ impl StateHandle {
         }
     }
 
+    /// Checks whether the compacted state backend can be used after an L2 rollback.
+    ///
+    /// The compacted backend only stores a single persistent base state plus recent in-memory
+    /// diffs. After restart, those diffs are gone, so rollback is possible only if the persistent
+    /// base is not newer than the last block that will be retained.
+    pub fn ensure_rollback_db_possible(
+        rocks_db_path: PathBuf,
+        last_block_to_keep: u64,
+    ) -> anyhow::Result<()> {
+        let state_db_path = rocks_db_path.join(STATE_STORAGE_DB_NAME);
+        anyhow::ensure!(
+            state_db_path.exists(),
+            "compacted state DB path does not exist: {}",
+            state_db_path.display()
+        );
+        let state_db = RocksDB::<StorageMapCF>::new(&state_db_path)?;
+        let compacted_block = state_db
+            .get_cf(StorageMapCF::Meta, StorageMapCF::base_block_key())?
+            .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
+            .unwrap_or(0);
+        anyhow::ensure!(
+            compacted_block <= last_block_to_keep,
+            "cannot roll back compacted state from block {}; persistent state is already compacted through block {}",
+            last_block_to_keep + 1,
+            compacted_block
+        );
+        Ok(())
+    }
+
     pub fn compacted_block_number(&self) -> u64 {
         self.storage_map
             .persistent_storage_map

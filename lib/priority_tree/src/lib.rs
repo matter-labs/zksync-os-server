@@ -34,6 +34,10 @@ pub struct PriorityTreeManager<ReplayStorage, Finality> {
     initial_block_number: u64,
 }
 
+pub fn rollback_cached_tree(db_path: &Path, last_block_to_keep: u64) -> anyhow::Result<()> {
+    PriorityTreeDB::new(db_path).rollback_cached_tree(last_block_to_keep)
+}
+
 impl<ReplayStorage: ReadReplay + Clone, Finality: ReadFinality + Clone>
     PriorityTreeManager<ReplayStorage, Finality>
 {

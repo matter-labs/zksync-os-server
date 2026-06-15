@@ -16686,6 +16686,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_storage_inspector"
+version = "0.20.6"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "bincode 2.0.1",
+ "clap",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "zksync_os_merkle_tree",
+ "zksync_os_rocksdb",
+ "zksync_os_types",
+]
+
+[[package]]
 name = "zksync_os_tx_validators"
 version = "0.20.6"
 dependencies = [

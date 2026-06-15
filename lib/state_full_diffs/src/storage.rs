@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use zksync_os_interface::types::StorageWrite;
-use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
+use zksync_os_rocksdb::{RocksDB, RocksDBOptions};
 
 #[derive(Clone, Copy, Debug)]
 pub enum StorageCF {
@@ -44,7 +44,11 @@ pub struct FullDiffsStorage {
 // entry for our key: the latest write at or before the requested block.
 impl FullDiffsStorage {
     pub fn new(path: &Path) -> anyhow::Result<Self> {
-        let rocks = RocksDB::<StorageCF>::new(path)?;
+        Self::new_with_options(path, RocksDBOptions::default())
+    }
+
+    pub fn new_with_options(path: &Path, options: RocksDBOptions) -> anyhow::Result<Self> {
+        let rocks = RocksDB::<StorageCF>::with_options(path, options)?;
         let latest_block = rocks
             .get_cf(StorageCF::Meta, StorageCF::latest_block_key())
             .ok()
@@ -60,6 +64,35 @@ impl FullDiffsStorage {
 
     pub fn latest_block(&self) -> u64 {
         self.latest_block.load(Ordering::Relaxed)
+    }
+
+    pub fn rollback(&self, last_block_to_keep: u64) -> anyhow::Result<()> {
+        let latest_block = self.latest_block();
+        if latest_block <= last_block_to_keep {
+            return Ok(());
+        }
+
+        tracing::warn!(
+            from_block = last_block_to_keep + 1,
+            to_block = latest_block,
+            "rolling back full diffs state storage"
+        );
+        let mut batch = self.rocks.new_write_batch();
+        for (k, _v) in self.rocks.prefix_iterator_cf(StorageCF::Data, &[]) {
+            let key_block_number = u64::from_be_bytes(k[32..40].try_into()?);
+            if key_block_number > last_block_to_keep {
+                batch.delete_cf(StorageCF::Data, &k);
+            }
+        }
+        batch.put_cf(
+            StorageCF::Meta,
+            StorageCF::latest_block_key(),
+            last_block_to_keep.to_be_bytes().as_ref(),
+        );
+        self.rocks.write(batch)?;
+        self.latest_block
+            .store(last_block_to_keep, Ordering::Relaxed);
+        Ok(())
     }
 
     pub fn add_block(

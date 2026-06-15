@@ -113,4 +113,34 @@ impl PriorityTreeDB {
 
         Ok(())
     }
+
+    pub fn rollback_cached_tree(&self, last_block_to_keep: u64) -> anyhow::Result<()> {
+        let block_number = self
+            .db
+            .get_cf(
+                PriorityTreeCF::CachedTreeData,
+                PriorityTreeCF::block_number_key(),
+            )?
+            .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()));
+        let Some(block_number) = block_number else {
+            return Ok(());
+        };
+        if block_number <= last_block_to_keep {
+            return Ok(());
+        }
+
+        tracing::warn!(
+            cached_block = block_number,
+            last_block_to_keep,
+            "clearing priority tree cache after L2 rollback"
+        );
+        let mut write_batch = self.db.new_write_batch();
+        write_batch.delete_cf(
+            PriorityTreeCF::CachedTreeData,
+            PriorityTreeCF::block_number_key(),
+        );
+        write_batch.delete_cf(PriorityTreeCF::CachedTreeData, PriorityTreeCF::data_key());
+        self.db.write(write_batch)?;
+        Ok(())
+    }
 }
