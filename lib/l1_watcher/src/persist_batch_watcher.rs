@@ -27,17 +27,17 @@ struct L1BatchRangeReport {
 }
 
 #[derive(Clone, Debug)]
-struct PendingExecutedBatch {
-    execute_sl_block_number: BlockNumber,
-    state_commitment: B256,
-    commitment: B256,
-    block_range: RangeInclusive<u64>,
-}
-
-#[derive(Clone, Debug)]
 struct VerifiedExecutedBatch {
     committed_batch: DiscoveredCommittedBatch,
     execute_sl_block_number: BlockNumber,
+}
+
+/// EN-only channels to the L1 consistency checker: outgoing executed-batch verification requests
+/// and incoming verified batches. Passed as a single `Option` so the two ends can't be configured
+/// independently (main node skips verification and passes `None`).
+pub struct ConsistencyCheckerChannels {
+    pub tx: mpsc::Sender<L1ExecutedBatch>,
+    pub verified_rx: mpsc::UnboundedReceiver<DiscoveredCommittedBatch>,
 }
 
 /// Watches finalized batch-range and execute events together and persists only irreversibly
@@ -55,10 +55,11 @@ struct VerifiedExecutedBatch {
 ///   proof-related requests;
 pub struct L1PersistBatchWatcher<BatchStorage> {
     batch_storage: BatchStorage,
-    consistency_checker_tx: Option<mpsc::Sender<L1ExecutedBatch>>,
-    verified_batches_rx: Option<mpsc::UnboundedReceiver<DiscoveredCommittedBatch>>,
+    consistency_checker: Option<ConsistencyCheckerChannels>,
     range_reports: HashMap<u64, L1BatchRangeReport>,
-    pending_executions: HashMap<u64, PendingExecutedBatch>,
+    /// Executed batches awaiting verification by the consistency checker, mapped to the
+    /// settlement-layer block their `BlockExecution` event landed in.
+    pending_executions: HashMap<u64, BlockNumber>,
     verified_executions: HashMap<u64, VerifiedExecutedBatch>,
     last_scheduled_batch: u64,
     last_processed_batch: u64,
@@ -74,19 +75,12 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     /// chain can migrate off an SL (`Migrator.sol`), so each closed interval is self-contained:
     /// every commit on that SL has a matching execute on the same SL, so pending range reports
     /// should be consumed by the interval's execute events.
-    #[allow(clippy::too_many_arguments)]
     pub fn create_watcher(
         config: L1WatcherConfig,
         intervals: SettlementLayerIntervals,
         batch_storage: BatchStorage,
-        consistency_checker_tx: Option<mpsc::Sender<L1ExecutedBatch>>,
-        verified_batches_rx: Option<mpsc::UnboundedReceiver<DiscoveredCommittedBatch>>,
+        consistency_checker: Option<ConsistencyCheckerChannels>,
     ) -> SegmentResolver<(), Self> {
-        assert_eq!(
-            consistency_checker_tx.is_some(),
-            verified_batches_rx.is_some(),
-            "L1 consistency checker sender and verified batch receiver must be configured together"
-        );
         tracing::info!(
             num_intervals = intervals.intervals().len(),
             config.max_blocks_to_process,
@@ -193,8 +187,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
             let processor = Self {
                 batch_storage,
-                consistency_checker_tx,
-                verified_batches_rx,
+                consistency_checker,
                 range_reports: HashMap::new(),
                 pending_executions: HashMap::new(),
                 verified_executions: HashMap::new(),
@@ -281,13 +274,6 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             commit_l1_block_number: log.block_number.expect("indexed log without block number"),
         };
 
-        if let Some(existing) = self.range_reports.get(&batch_number) {
-            // that should happen only if the block revert was done
-            if existing.block_range == range_report.block_range {
-                return Ok(());
-            }
-        }
-
         self.range_reports.insert(batch_number, range_report);
         Ok(())
     }
@@ -295,26 +281,15 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     fn should_schedule_executed_batch(
         &mut self,
         batch_number: u64,
-        state_commitment: B256,
-        commitment: B256,
-        range: &RangeInclusive<u64>,
     ) -> Result<bool, L1WatcherError> {
         let latest_scheduled_batch = self.last_scheduled_batch;
-        let stored_batch = self
+        let already_persisted = self
             .batch_storage
             .get_batch_by_number(batch_number)
-            .map_err(L1WatcherError::Other)?;
-        if batch_number <= latest_scheduled_batch
-            && let Some(stored_batch) = stored_batch
-        {
-            tracing::debug!("discovered already processed batch #{batch_number}, validating");
-            Self::validate_stored_batch(
-                &stored_batch.committed_batch,
-                batch_number,
-                state_commitment,
-                commitment,
-                range,
-            )?;
+            .map_err(L1WatcherError::Other)?
+            .is_some();
+        if batch_number <= latest_scheduled_batch && already_persisted {
+            tracing::debug!("batch #{batch_number} already persisted, skipping");
             return Ok(false);
         }
 
@@ -358,7 +333,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         range_report: &L1BatchRangeReport,
         execute_sl_block_number: BlockNumber,
     ) -> Result<(), L1WatcherError> {
-        if let Some(tx) = &self.consistency_checker_tx {
+        if let Some(consistency_checker) = &self.consistency_checker {
             let l1_execute = L1ExecutedBatch {
                 batch_number,
                 state_commitment,
@@ -366,21 +341,14 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 range: range_report.block_range.clone(),
             };
 
-            tx.send(l1_execute).await.map_err(|_| {
+            consistency_checker.tx.send(l1_execute).await.map_err(|_| {
                 L1WatcherError::Other(anyhow::anyhow!(
                     "L1 consistency checker event channel closed"
                 ))
             })?;
 
-            self.pending_executions.insert(
-                batch_number,
-                PendingExecutedBatch {
-                    execute_sl_block_number,
-                    state_commitment,
-                    commitment,
-                    block_range: range_report.block_range.clone(),
-                },
-            );
+            self.pending_executions
+                .insert(batch_number, execute_sl_block_number);
             self.last_scheduled_batch = batch_number;
             self.drain_verified_batches()?;
             Ok(())
@@ -404,25 +372,17 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         verified: DiscoveredCommittedBatch,
     ) -> Result<(), L1WatcherError> {
         let batch_number = verified.number();
-        let Some(pending) = self.pending_executions.remove(&batch_number) else {
+        let Some(execute_sl_block_number) = self.pending_executions.remove(&batch_number) else {
             return Err(L1WatcherError::Other(anyhow!(
                 "L1 consistency checker verified unexpected batch #{batch_number}"
             )));
         };
 
-        Self::validate_stored_batch(
-            &verified,
-            batch_number,
-            pending.state_commitment,
-            pending.commitment,
-            &pending.block_range,
-        )?;
-
         self.verified_executions.insert(
             batch_number,
             VerifiedExecutedBatch {
                 committed_batch: verified,
-                execute_sl_block_number: pending.execute_sl_block_number,
+                execute_sl_block_number,
             },
         );
         self.flush_verified_batches();
@@ -454,10 +414,10 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     /// when nothing is ready (or the checker isn't configured), and errors only if the checker
     /// stopped while executed batches still await verification.
     fn try_recv_verified(&mut self) -> Result<Option<DiscoveredCommittedBatch>, L1WatcherError> {
-        let Some(verified_batches_rx) = self.verified_batches_rx.as_mut() else {
+        let Some(consistency_checker) = self.consistency_checker.as_mut() else {
             return Ok(None);
         };
-        match verified_batches_rx.try_recv() {
+        match consistency_checker.verified_rx.try_recv() {
             Ok(verified) => Ok(Some(verified)),
             Err(mpsc::error::TryRecvError::Empty) => Ok(None),
             Err(mpsc::error::TryRecvError::Disconnected) if self.pending_executions.is_empty() => {
@@ -479,18 +439,19 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     async fn finish_pending_verifications(&mut self) -> Result<(), L1WatcherError> {
         self.drain_verified_batches()?;
         while !self.pending_executions.is_empty() {
-            let verified = {
-                let Some(verified_batches_rx) = self.verified_batches_rx.as_mut() else {
-                    return Err(L1WatcherError::Other(anyhow!(
-                        "L1 consistency checker is not configured"
-                    )));
-                };
-                verified_batches_rx.recv().await.ok_or_else(|| {
+            let verified =
+                {
+                    let Some(consistency_checker) = self.consistency_checker.as_mut() else {
+                        return Err(L1WatcherError::Other(anyhow!(
+                            "L1 consistency checker is not configured"
+                        )));
+                    };
+                    consistency_checker.verified_rx.recv().await.ok_or_else(|| {
                     L1WatcherError::Other(anyhow::anyhow!(
                         "L1 consistency checker stopped before verifying all executed batches"
                     ))
                 })?
-            };
+                };
             self.handle_verified_batch(verified)?;
         }
         Ok(())
@@ -522,12 +483,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         let commitment = execute.commitment;
         match self.range_reports.remove(&batch_number) {
             Some(range_report) => {
-                if !self.should_schedule_executed_batch(
-                    batch_number,
-                    state_commitment,
-                    commitment,
-                    &range_report.block_range,
-                )? {
+                if !self.should_schedule_executed_batch(batch_number)? {
                     return Ok(());
                 }
                 self.process_executed_batch(

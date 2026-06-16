@@ -81,7 +81,7 @@ use zksync_os_l1_watcher::{
     L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, MigrationFinalizedWatcher,
     SettlementLayerWatcher,
 };
-use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
+use zksync_os_l1_watcher::{ConsistencyCheckerChannels, InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::interop_fee::InteropFeeSubpool;
 use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
@@ -910,8 +910,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         tokio::sync::mpsc::channel::<L1ExecutedBatch>(4096);
     let (verified_l1_batches_tx, verified_l1_batches_rx) =
         tokio::sync::mpsc::unbounded_channel::<DiscoveredCommittedBatch>();
-    let l1_consistency_event_tx = (!node_role.is_main()).then_some(l1_consistency_event_tx);
-    let verified_l1_batches_rx = (!node_role.is_main()).then_some(verified_l1_batches_rx);
+    // External nodes verify L1 consistency; the main node persists directly and skips it.
+    let consistency_checker_channels = (!node_role.is_main()).then(|| ConsistencyCheckerChannels {
+        tx: l1_consistency_event_tx,
+        verified_rx: verified_l1_batches_rx,
+    });
     runtime.spawn_critical_task("l1 batch persist watcher", {
         let config = config.l1_watcher_config.clone();
         let settlement_layer_intervals = node_startup_state
@@ -919,14 +922,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .settlement_layer_intervals
             .clone();
         let persistent_batch_storage = persistent_batch_storage.clone();
-        let l1_consistency_event_tx = l1_consistency_event_tx.clone();
         async move {
             L1PersistBatchWatcher::create_watcher(
                 config.into(),
                 settlement_layer_intervals,
                 persistent_batch_storage,
-                l1_consistency_event_tx,
-                verified_l1_batches_rx,
+                consistency_checker_channels,
             )
             .run(())
             .await
