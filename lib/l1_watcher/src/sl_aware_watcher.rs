@@ -28,7 +28,7 @@ pub struct SegmentSpec {
 /// Boxed async closure that turns a starting point `S` into the full segment list and the
 /// processor `P` that consumes it.
 type ResolveSegmentsFn<S, P> =
-    Box<dyn FnOnce(S) -> BoxFuture<'static, anyhow::Result<(Vec<SegmentSpec>, P)>> + Send>;
+    Box<dyn FnOnce(S) -> BoxFuture<'static, anyhow::Result<(Vec<SegmentSpec>, P)>> + Send + Sync>;
 
 /// Deferred constructor for an [`SlAwareL1Watcher`]: turns a starting point `S` into a
 /// ready-to-run watcher once that starting point is finally known.
@@ -44,7 +44,7 @@ pub struct SegmentResolver<S, P> {
 impl<S, P: ProcessRawEvents> SegmentResolver<S, P> {
     pub(crate) fn new<Fut>(
         config: L1WatcherConfig,
-        resolve_segments: impl FnOnce(S) -> Fut + Send + 'static,
+        resolve_segments: impl FnOnce(S) -> Fut + Send + Sync + 'static,
     ) -> Self
     where
         Fut: Future<Output = anyhow::Result<(Vec<SegmentSpec>, P)>> + Send + 'static,
