@@ -1,5 +1,5 @@
 use crate::watcher::{L1WatcherError, StartResolver};
-use crate::{L1WatcherConfig, ProcessL1Event, util};
+use crate::{EventSink, L1WatcherConfig, ProcessL1Event, util};
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
 use alloy::providers::Provider;
@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_mempool::subpools::l1::L1Subpool;
 use zksync_os_provider::NodeProvider;
 use zksync_os_types::L1PriorityEnvelope;
 
@@ -16,12 +15,12 @@ use zksync_os_types::L1PriorityEnvelope;
 ///
 /// This component reads `NewPriorityRequest` events from the L1 mailbox, waits until the same
 /// priority request is visible from the settlement layer, and then inserts the corresponding
-/// `L1PriorityEnvelope` into `L1Subpool`.
+/// `L1PriorityEnvelope` into its sink.
 pub struct L1TxWatcher {
     next_l1_priority_id: u64,
     zk_chain_sl: ZkChain<NodeProvider>,
     cached_total_priority_ops_resp: Option<u64>,
-    l1_subpool: L1Subpool,
+    sink: Box<dyn EventSink<Arc<L1PriorityEnvelope>>>,
 }
 
 impl L1TxWatcher {
@@ -29,7 +28,7 @@ impl L1TxWatcher {
         config: L1WatcherConfig,
         zk_chain_l1: ZkChain<NodeProvider>,
         zk_chain_sl: ZkChain<NodeProvider>,
-        l1_subpool: L1Subpool,
+        sink: impl EventSink<Arc<L1PriorityEnvelope>>,
     ) -> anyhow::Result<StartResolver<u64, Self>> {
         tracing::info!(
             config.max_blocks_to_process,
@@ -51,7 +50,7 @@ impl L1TxWatcher {
                 next_l1_priority_id,
                 zk_chain_sl,
                 cached_total_priority_ops_resp: None,
-                l1_subpool,
+                sink: Box::new(sink),
             };
             Ok((next_l1_block, processor))
         };
@@ -125,7 +124,7 @@ impl ProcessL1Event for L1TxWatcher {
                 hash = ?tx.hash(),
                 "sending new priority transaction for processing",
             );
-            self.l1_subpool.insert(Arc::new(tx)).await;
+            self.sink.push(Arc::new(tx)).await;
         }
         Ok(())
     }

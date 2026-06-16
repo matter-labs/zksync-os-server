@@ -19,21 +19,32 @@ pub struct UpgradeSubpool {
 struct Inner {
     /// Tracks currently active protocol version. Needed because of patch upgrades that do not come
     /// with an upgrade transaction.
-    current_protocol_version: ProtocolSemanticVersion,
+    current_protocol_version: Option<ProtocolSemanticVersion>,
     sender: Option<mpsc::Sender<UpgradeInfo>>,
     pending_upgrades: VecDeque<UpgradeInfo>,
 }
 
-impl UpgradeSubpool {
-    pub fn new(current_protocol_version: ProtocolSemanticVersion) -> Self {
+impl Default for UpgradeSubpool {
+    fn default() -> Self {
         Self {
             notify: Arc::new(Notify::new()),
             inner: Arc::new(RwLock::new(Inner {
-                current_protocol_version,
+                current_protocol_version: None,
                 sender: None,
                 pending_upgrades: VecDeque::new(),
             })),
         }
+    }
+}
+
+impl UpgradeSubpool {
+    pub(crate) async fn init(&self, current_protocol_version: ProtocolSemanticVersion) {
+        let mut inner = self.inner.write().await;
+        assert!(
+            inner.current_protocol_version.is_none(),
+            "tried to re-initialize UpgradeSubpool"
+        );
+        inner.current_protocol_version = Some(current_protocol_version);
     }
 
     pub async fn upgrade_info_stream(&self) -> UpgradeInfoStream {
@@ -81,7 +92,13 @@ impl UpgradeSubpool {
         txs: Vec<&L1UpgradeEnvelope>,
     ) {
         // We track current protocol version that we end up with after applying upgrade transaction.
-        let mut current_protocol_version = self.inner.read().await.current_protocol_version.clone();
+        let mut current_protocol_version = self
+            .inner
+            .read()
+            .await
+            .current_protocol_version
+            .clone()
+            .expect("uninitialized subpool");
 
         if txs.is_empty() && protocol_version == &current_protocol_version {
             return;
@@ -135,7 +152,7 @@ impl UpgradeSubpool {
             }
         }
         // Write protocol version we ended up with.
-        self.inner.write().await.current_protocol_version = current_protocol_version;
+        self.inner.write().await.current_protocol_version = Some(current_protocol_version);
     }
 }
 
@@ -253,7 +270,10 @@ mod tests {
     #[tokio::test]
     async fn historical_upgrade_replay_does_not_wait_for_watcher() {
         let unreliable_version = version(30, 1);
-        let subpool = UpgradeSubpool::new(ProtocolSemanticVersion::legacy_genesis_version());
+        let subpool = UpgradeSubpool::default();
+        subpool
+            .init(ProtocolSemanticVersion::legacy_genesis_version())
+            .await;
         let tx = upgrade_tx(1);
 
         tokio::time::timeout(
@@ -265,13 +285,16 @@ mod tests {
 
         assert_eq!(
             subpool.inner.read().await.current_protocol_version,
-            unreliable_version
+            Some(unreliable_version)
         );
     }
 
     #[tokio::test]
     async fn historical_replay_drains_pending_old_upgrades() {
-        let subpool = UpgradeSubpool::new(ProtocolSemanticVersion::legacy_genesis_version());
+        let subpool = UpgradeSubpool::default();
+        subpool
+            .init(ProtocolSemanticVersion::legacy_genesis_version())
+            .await;
         let old_tx = upgrade_tx(1);
         let new_tx = upgrade_tx(2);
         let new_version = version(31, 0);
@@ -298,8 +321,10 @@ mod tests {
 
     #[tokio::test]
     async fn supported_upgrade_waits_for_watcher_and_validates_tx() {
-        let subpool =
-            UpgradeSubpool::new(ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS);
+        let subpool = UpgradeSubpool::default();
+        subpool
+            .init(ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS)
+            .await;
         let tx = upgrade_tx(1);
         let target_version = version(31, 0);
 
@@ -325,14 +350,16 @@ mod tests {
 
         assert_eq!(
             subpool.inner.read().await.current_protocol_version,
-            target_version
+            Some(target_version)
         );
     }
 
     #[tokio::test]
     async fn supported_patch_upgrade_consumes_watcher_metadata() {
-        let subpool =
-            UpgradeSubpool::new(ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS);
+        let subpool = UpgradeSubpool::default();
+        subpool
+            .init(ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS)
+            .await;
         let target_version = version(30, 3);
         subpool
             .insert(upgrade_info(target_version.clone(), None))
@@ -347,7 +374,7 @@ mod tests {
 
         assert_eq!(
             subpool.inner.read().await.current_protocol_version,
-            target_version
+            Some(target_version)
         );
     }
 }

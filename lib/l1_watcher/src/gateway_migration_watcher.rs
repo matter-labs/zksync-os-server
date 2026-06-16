@@ -1,11 +1,10 @@
 use crate::watcher::{L1WatcherError, StartResolver};
-use crate::{L1WatcherConfig, ProcessRawEvents, util};
+use crate::{EventSink, L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, ChainId, U256};
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
 use zksync_os_contract_interface::{Bridgehub, ServerNotifier::MigrateToGateway, ZkChain};
-use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_provider::NodeProvider;
 use zksync_os_types::SystemTxEnvelope;
 
@@ -22,7 +21,7 @@ pub struct GatewayMigrationWatcher {
     gw_chain_id: ChainId,
     /// New settlement layer chain ID when a `MigrateFromGateway` event fires.
     l1_chain_id: ChainId,
-    sl_chain_id_subpool: SlChainIdSubpool,
+    sink: Box<dyn EventSink<SystemTxEnvelope>>,
     /// The next migration number to be processed.  This is incremented by 1 after every
     /// non-duplicate migration event.
     next_migration_number: u64,
@@ -37,7 +36,7 @@ impl GatewayMigrationWatcher {
         l1_chain_id: ChainId,
         gw_chain_id: ChainId,
         config: L1WatcherConfig,
-        sl_chain_id_subpool: SlChainIdSubpool,
+        sink: impl EventSink<SystemTxEnvelope>,
     ) -> anyhow::Result<StartResolver<u64, Self>> {
         let server_notifier_contract = zk_chain.get_server_notifier_address().await?;
         let provider = zk_chain.provider().clone();
@@ -68,7 +67,7 @@ impl GatewayMigrationWatcher {
                 l2_chain_id,
                 l1_chain_id,
                 gw_chain_id,
-                sl_chain_id_subpool,
+                sink: Box::new(sink),
                 // Due to legacy reasons we saved first migration number as 0 when it should
                 // have been 1.
                 next_migration_number: next_migration_number.max(1),
@@ -153,7 +152,7 @@ impl ProcessRawEvents for GatewayMigrationWatcher {
         self.next_migration_number += 1;
 
         let envelope = SystemTxEnvelope::set_sl_chain_id(new_sl_chain_id, migration_number);
-        self.sl_chain_id_subpool.insert(envelope).await;
+        self.sink.push(envelope).await;
         Ok(())
     }
 }
