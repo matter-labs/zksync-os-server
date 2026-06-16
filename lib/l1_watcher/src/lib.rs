@@ -27,6 +27,9 @@ pub use sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};
 mod traits;
 pub(crate) use traits::{ProcessL1Event, ProcessRawEvents};
 
+mod sink;
+pub use sink::EventSink;
+
 mod committed_batch_provider;
 pub use committed_batch_provider::CommittedBatchProvider;
 
