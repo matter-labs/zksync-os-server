@@ -41,6 +41,9 @@ pub enum L1SenderState {
     SendingToL1,
     /// Transaction submitted; waiting for L1 block inclusion.
     WaitingL1Inclusion,
+    /// The batch cannot be executed yet because the ValidatorTimelock execution delay
+    /// has not elapsed; waiting for the window to open before sending.
+    WaitingExecutionDelay,
 }
 
 impl StateLabel for L1SenderState {
@@ -49,6 +52,7 @@ impl StateLabel for L1SenderState {
             Self::Idle => GenericComponentState::Idle,
             Self::SendingToL1 => GenericComponentState::Active,
             Self::WaitingL1Inclusion => GenericComponentState::Active,
+            Self::WaitingExecutionDelay => GenericComponentState::Active,
         }
     }
     fn specific(&self) -> &'static str {
@@ -56,6 +60,7 @@ impl StateLabel for L1SenderState {
             Self::Idle => "idle",
             Self::SendingToL1 => "sending_to_l1",
             Self::WaitingL1Inclusion => "waiting_l1_inclusion",
+            Self::WaitingExecutionDelay => "waiting_execution_delay",
         }
     }
 }
@@ -72,6 +77,38 @@ const OPERATOR_METRICS_POLL_INTERVAL: Duration = Duration::from_secs(60);
 const L1_GAS_LIMIT_FALLBACK: u64 = 15_000_000;
 /// Per-call cap for `eth_simulateV1`. The simulation reports the actual `gas_used`.
 const L1_SIM_GAS_LIMIT: u64 = 30_000_000;
+
+/// Selector of `TimeNotReached(uint256 executableFrom, uint256 currentTimestamp)`, reverted by
+/// the ValidatorTimelock's `executeBatches*` when a batch's execution delay has not yet elapsed.
+const TIME_NOT_REACHED_SELECTOR: [u8; 4] = [0x08, 0x75, 0x39, 0x82];
+/// Slack added on top of the timelock window before retrying, to absorb L1 block-time
+/// granularity so the retry doesn't land in the same block and revert again.
+const EXECUTION_DELAY_BUFFER_SECS: u64 = 15;
+/// Upper bound on a single sleep while waiting for the execution-delay window. Bounds graceful
+/// shutdown latency and forces a periodic re-simulation, which is the source of truth for
+/// readiness (resilient to L1 clock skew / reorgs).
+const EXECUTION_DELAY_RECHECK_CAP: Duration = Duration::from_secs(60);
+
+/// Outcome of simulating a batch of L1 commands via `eth_simulateV1`.
+enum GasEstimation {
+    /// All calls simulate successfully; per-tx gas limits in command order.
+    Ready(Vec<u64>),
+    /// At least one execute call reverted with `TimeNotReached` because the ValidatorTimelock
+    /// execution delay has not elapsed. Carries the latest `executableFrom` UNIX timestamp
+    /// (seconds) across the reverting calls — the earliest time a retry can succeed.
+    NotExecutableUntil(u64),
+}
+
+/// Decodes the `executableFrom` timestamp from a `TimeNotReached(uint256,uint256)` revert
+/// payload. Returns `None` if `data` does not carry that custom error.
+fn decode_time_not_reached(data: &Bytes) -> Option<u64> {
+    let bytes = data.as_ref();
+    if bytes.len() < 4 + 32 || bytes[..4] != TIME_NOT_REACHED_SELECTOR {
+        return None;
+    }
+    // First `uint256` argument: the timestamp at which execution becomes allowed.
+    Some(U256::from_be_slice(&bytes[4..4 + 32]).saturating_to::<u64>())
+}
 
 #[derive(Debug, Clone, Copy)]
 struct FeeParams {
@@ -239,15 +276,45 @@ where
             let sim_fee_params = self
                 .resolve_fee_params(fee_config, force_transaction_resubmission)
                 .await?;
-            let gas_limits = self
-                .estimate_gas_limits(&commands, operator_address, sim_fee_params)
-                .await?;
-            tracing::info!(
-                command_name,
-                range,
-                ?gas_limits,
-                "estimated gas limits via eth_simulateV1",
-            );
+            // Estimate gas via `eth_simulateV1`. If the batch is still within the ValidatorTimelock
+            // execution-delay window the simulation reverts with `TimeNotReached`; rather than
+            // sending a transaction that is guaranteed to revert (and taking down this critical
+            // task), wait for the window to open and re-simulate. Only the execute command can hit
+            // this; commit/prove always resolve to `Ready` on the first pass.
+            let gas_limits = loop {
+                match self
+                    .estimate_gas_limits(&commands, operator_address, sim_fee_params)
+                    .await?
+                {
+                    GasEstimation::Ready(gas_limits) => {
+                        tracing::info!(
+                            command_name,
+                            range,
+                            ?gas_limits,
+                            "estimated gas limits via eth_simulateV1",
+                        );
+                        break gas_limits;
+                    }
+                    GasEstimation::NotExecutableUntil(executable_from) => {
+                        let sleep_for = Duration::from_secs(
+                            self.seconds_until_executable(executable_from).await
+                                + EXECUTION_DELAY_BUFFER_SECS,
+                        )
+                        .min(EXECUTION_DELAY_RECHECK_CAP);
+                        tracing::info!(
+                            command_name,
+                            range,
+                            executable_from,
+                            sleep_secs = sleep_for.as_secs(),
+                            "batch is within the ValidatorTimelock execution-delay window; \
+                             waiting before sending to L1",
+                        );
+                        state_reporter.enter_state(L1SenderState::WaitingExecutionDelay);
+                        tokio::time::sleep(sleep_for).await;
+                    }
+                }
+            };
+            state_reporter.enter_state(L1SenderState::SendingToL1);
 
             // It's important to preserve the order of commands -
             // so that we send them downstream also in order.
@@ -289,10 +356,10 @@ where
                         }
                         tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
 
-                        // Fusaka is active on all real chains, so send the EIP-7594 blob format by
-                        // default. Anvil does not support EIP-7594 yet, so fall back to EIP-4844
-                        // there (see https://github.com/foundry-rs/foundry/issues/12222).
-                        if self.provider.capabilities().supports_eip7594 {
+                        let pending_block = self.provider.get_block(BlockId::pending()).await?.expect("no pending block");
+                        // todo: make conversion unconditional (and remove respective config) once anvil
+                        //       supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
+                        if self.config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
                             tx_request.set_blob_sidecar(BlobTransactionSidecarVariant::Eip7594(
                                 blob_sidecar.try_into_7594(EnvKzgSettings::Default.get())?,
                             ));
@@ -675,13 +742,16 @@ where
     /// `2 * gas_used` per call. Each command goes into its own simulated block so
     /// cumulative block-gas-limit constraints can't reject the batch, while writes from
     /// earlier blocks remain visible to later ones (spec-mandated overlay propagation).
-    /// Falls back to [`L1_GAS_LIMIT_FALLBACK`] per tx on any simulate failure.
+    /// Falls back to [`L1_GAS_LIMIT_FALLBACK`] per tx on any simulate failure, except a
+    /// `TimeNotReached` revert (ValidatorTimelock execution delay not yet elapsed), which is
+    /// surfaced as [`GasEstimation::NotExecutableUntil`] so the caller can wait rather than send
+    /// a doomed transaction.
     async fn estimate_gas_limits(
         &self,
         commands: &[Input],
         operator_address: Address,
         fee_params: FeeParams,
-    ) -> anyhow::Result<Vec<u64>> {
+    ) -> anyhow::Result<GasEstimation> {
         // Sequential nonces from the operator's pending count — anvil's EIP-4844 parsing
         // requires `nonce` and `gas_limit` even with `validation=false`.
         let starting_nonce = self
@@ -702,9 +772,16 @@ where
             )
             .build();
 
-        // Mirror the submission path: EIP-7594 by default, EIP-4844 only on Anvil. Only consumed
-        // by `build_l1_simulation_request` when a command actually carries a blob sidecar.
-        let use_eip7594_sidecar = self.provider.capabilities().supports_eip7594;
+        let use_eip7594_sidecar = if commands.iter().any(|cmd| cmd.blob_sidecar().is_some()) {
+            let pending_block = self
+                .provider
+                .get_block(BlockId::pending())
+                .await?
+                .expect("no pending block");
+            self.config.fusaka_upgrade_timestamp <= pending_block.header.timestamp
+        } else {
+            false
+        };
 
         let block_state_calls = commands
             .iter()
@@ -740,28 +817,49 @@ where
                     expected = commands.len(),
                     "eth_simulateV1 returned mismatched block count, falling back to {L1_GAS_LIMIT_FALLBACK} per tx",
                 );
-                return Ok(vec![L1_GAS_LIMIT_FALLBACK; commands.len()]);
+                return Ok(GasEstimation::Ready(vec![
+                    L1_GAS_LIMIT_FALLBACK;
+                    commands.len()
+                ]));
             }
             Err(err) => {
                 tracing::warn!(
                     %err,
                     "eth_simulateV1 unavailable or errored, falling back to {L1_GAS_LIMIT_FALLBACK} per tx",
                 );
-                return Ok(vec![L1_GAS_LIMIT_FALLBACK; commands.len()]);
+                return Ok(GasEstimation::Ready(vec![
+                    L1_GAS_LIMIT_FALLBACK;
+                    commands.len()
+                ]));
             }
         };
 
+        // If any call reverted because its execution-delay window hasn't opened, surface the
+        // latest `executableFrom` so the caller waits instead of sending a doomed transaction.
+        let mut not_executable_until: Option<u64> = None;
         let gas_limits = blocks
             .iter()
             .enumerate()
             .map(|(i, block)| match block.calls.first() {
                 Some(call) if call.status => call.gas_used.saturating_mul(2),
                 Some(call) => {
-                    tracing::warn!(
-                        tx_index = i,
-                        return_data = ?call.return_data,
-                        "eth_simulateV1 call reverted, falling back to {L1_GAS_LIMIT_FALLBACK}",
-                    );
+                    if let Some(executable_from) = decode_time_not_reached(&call.return_data) {
+                        tracing::info!(
+                            tx_index = i,
+                            executable_from,
+                            "eth_simulateV1 call reverted with TimeNotReached - batch is within \
+                             the ValidatorTimelock execution-delay window",
+                        );
+                        not_executable_until = Some(
+                            not_executable_until.map_or(executable_from, |t| t.max(executable_from)),
+                        );
+                    } else {
+                        tracing::warn!(
+                            tx_index = i,
+                            return_data = ?call.return_data,
+                            "eth_simulateV1 call reverted, falling back to {L1_GAS_LIMIT_FALLBACK}",
+                        );
+                    }
                     L1_GAS_LIMIT_FALLBACK
                 }
                 None => {
@@ -773,7 +871,21 @@ where
                 }
             })
             .collect();
-        Ok(gas_limits)
+
+        if let Some(executable_from) = not_executable_until {
+            return Ok(GasEstimation::NotExecutableUntil(executable_from));
+        }
+        Ok(GasEstimation::Ready(gas_limits))
+    }
+
+    /// Seconds to wait until `executable_from`, measured against the L1 pending-block timestamp
+    /// (the same clock the timelock compares against). Returns [`EXECUTION_DELAY_RECHECK_CAP`] if
+    /// the L1 clock can't be read, so the caller backs off and re-simulates rather than busy-looping.
+    async fn seconds_until_executable(&self, executable_from: u64) -> u64 {
+        match self.provider.get_block(BlockId::pending()).await {
+            Ok(Some(block)) => executable_from.saturating_sub(block.header.timestamp),
+            _ => EXECUTION_DELAY_RECHECK_CAP.as_secs(),
+        }
     }
 
     async fn report_custom_priority_fee_metrics(&self) -> anyhow::Result<()> {
