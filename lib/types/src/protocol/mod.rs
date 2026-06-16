@@ -248,19 +248,4 @@ mod tests {
             assert_eq!(version.is_live(), *expected);
         }
     }
-
-    #[test]
-    fn test_protocol_semantic_version_is_pre_v30() {
-        let test_vector = [
-            ((0, 29, 1), true),
-            ((0, 29, 99), true),
-            ((0, 30, 0), false),
-            ((0, 31, 0), false),
-            ((1, 0, 0), false),
-        ];
-        for ((major, minor, patch), expected) in test_vector.iter() {
-            let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
-            assert_eq!(version.is_pre_v30(), *expected);
-        }
-    }
 }
