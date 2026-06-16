@@ -3,8 +3,6 @@ use std::{collections::BTreeMap, mem, ops::RangeInclusive, sync::Arc};
 use tokio::sync::watch;
 use zksync_os_batch_types::BlockCommitmentData;
 
-pub const DEFAULT_MAX_CACHED_TREE_BLOCK_BYTES: usize = 512 * 1024 * 1024;
-
 #[derive(Debug)]
 struct CachedBlockCommitmentData {
     block: Arc<BlockCommitmentData>,
@@ -34,17 +32,7 @@ pub struct TreeBlockCache {
     max_cached_bytes: usize,
 }
 
-impl Default for TreeBlockCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl TreeBlockCache {
-    pub fn new() -> Self {
-        Self::with_max_cached_bytes(DEFAULT_MAX_CACHED_TREE_BLOCK_BYTES)
-    }
-
     pub fn with_max_cached_bytes(max_cached_bytes: usize) -> Self {
         Self {
             data: BTreeMap::new(),

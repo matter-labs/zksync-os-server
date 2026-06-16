@@ -516,7 +516,7 @@ pub struct GeneralConfig {
     /// verifies concurrently (and thus on parallel commitment rebuilds, each offloaded to a
     /// blocking thread). The cache byte cap must comfortably cover the combined retained data
     /// for this many in-flight batches, otherwise intake stalls waiting for eviction.
-    #[config(default_t = 16)]
+    #[config(default_t = 4)]
     pub consistency_checker_verification_concurrency: usize,
 
     /// **IMPORTANT: It must be set for an external node. However, setting this DOES NOT make the node into an external node.
