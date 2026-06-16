@@ -373,7 +373,14 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 execute_sl_block_number,
             },
         );
-        self.flush_verified_batches();
+
+        // flushing verified batches
+        while let Some(next_batch) = self.next_batch_to_persist() {
+            let Some(verified) = self.verified_executions.remove(&next_batch) else {
+                break;
+            };
+            self.persist_batch(verified.committed_batch, verified.execute_sl_block_number);
+        }
         Ok(())
     }
 
@@ -387,15 +394,6 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             .chain(self.verified_executions.keys())
             .min()
             .copied()
-    }
-
-    fn flush_verified_batches(&mut self) {
-        while let Some(next_batch) = self.next_batch_to_persist() {
-            let Some(verified) = self.verified_executions.remove(&next_batch) else {
-                break;
-            };
-            self.persist_batch(verified.committed_batch, verified.execute_sl_block_number);
-        }
     }
 
     /// Pulls one verified batch from the consistency checker without blocking. Returns `Ok(None)`
