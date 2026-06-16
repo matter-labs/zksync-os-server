@@ -77,13 +77,12 @@ impl<ReadState: ReadStateHistory> PipelineComponent for LocalBatchDataCacher<Rea
         tracing::info!("starting local batch data cacher");
         let mut cache_rx = self.cache.subscribe();
         loop {
+            state_reporter.enter_state(GenericComponentState::Idle);
             // Bound memory by waiting for verified batches to be evicted.
             while !cache_rx.borrow_and_update().has_capacity() {
-                state_reporter.enter_state(GenericComponentState::Idle);
                 cache_rx.changed().await?;
             }
 
-            state_reporter.enter_state(GenericComponentState::Idle);
             let Some(tree_block) = input.recv().await else {
                 return Ok(());
             };

@@ -450,27 +450,27 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         }
     }
 
+    /// Pulls one verified batch from the consistency checker without blocking. Returns `Ok(None)`
+    /// when nothing is ready (or the checker isn't configured), and errors only if the checker
+    /// stopped while executed batches still await verification.
+    fn try_recv_verified(&mut self) -> Result<Option<DiscoveredCommittedBatch>, L1WatcherError> {
+        let Some(verified_batches_rx) = self.verified_batches_rx.as_mut() else {
+            return Ok(None);
+        };
+        match verified_batches_rx.try_recv() {
+            Ok(verified) => Ok(Some(verified)),
+            Err(mpsc::error::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::error::TryRecvError::Disconnected) if self.pending_executions.is_empty() => {
+                Ok(None)
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => Err(L1WatcherError::Other(anyhow!(
+                "L1 consistency checker stopped before verifying all executed batches"
+            ))),
+        }
+    }
+
     fn drain_verified_batches(&mut self) -> Result<(), L1WatcherError> {
-        loop {
-            let Some(verified) = ({
-                let Some(verified_batches_rx) = self.verified_batches_rx.as_mut() else {
-                    return Ok(());
-                };
-                match verified_batches_rx.try_recv() {
-                    Ok(verified) => Some(verified),
-                    Err(mpsc::error::TryRecvError::Empty) => None,
-                    Err(mpsc::error::TryRecvError::Disconnected) => {
-                        if self.pending_executions.is_empty() {
-                            return Ok(());
-                        }
-                        return Err(L1WatcherError::Other(anyhow!(
-                            "L1 consistency checker stopped before verifying all executed batches"
-                        )));
-                    }
-                }
-            }) else {
-                break;
-            };
+        while let Some(verified) = self.try_recv_verified()? {
             self.handle_verified_batch(verified)?;
         }
         Ok(())

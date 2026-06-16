@@ -129,10 +129,8 @@ impl TreeBlockCacheReceiverExt for watch::Receiver<TreeBlockCache> {
     ) -> anyhow::Result<Vec<Arc<BlockCommitmentData>>> {
         let mut cache_rx = self.clone();
         loop {
-            {
-                if let Some(blocks) = cache_rx.borrow_and_update().get_range(&range)? {
-                    return Ok(blocks);
-                }
+            if let Some(blocks) = cache_rx.borrow_and_update().get_range(&range)? {
+                return Ok(blocks);
             }
             cache_rx.changed().await?;
         }
