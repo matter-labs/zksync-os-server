@@ -8,17 +8,17 @@ use tokio::task::JoinSet;
 use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
 use zksync_os_types::PubdataMode;
 
-pub struct L1CommittedBatch {
+pub struct L1ExecutedBatch {
     pub batch_number: u64,
     pub state_commitment: B256,
     pub commitment: B256,
     pub range: RangeInclusive<u64>,
 }
 
-/// Checks L1-committed batches against locally replayed blocks.
+/// Checks L1-executed batch commitments against locally replayed blocks.
 ///
-/// Verification is concurrent; reconstructed committed-batch data is sent back to the persist
-/// watcher once a worker verifies it against local blocks.
+/// Verification is concurrent; reconstructed batch data is sent back to the persist watcher once a
+/// worker verifies it against local blocks.
 pub struct L1ConsistencyChecker {
     chain_id: u64,
     sl_chain_id: u64,
@@ -26,7 +26,7 @@ pub struct L1ConsistencyChecker {
     /// Shared with the cacher and batch verification responder.
     cache: watch::Sender<TreeBlockCache>,
     cache_rx: watch::Receiver<TreeBlockCache>,
-    l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
+    l1_events_rx: mpsc::Receiver<L1ExecutedBatch>,
     verified_batches_tx: mpsc::UnboundedSender<DiscoveredCommittedBatch>,
     verification_concurrency: usize,
 }
@@ -37,7 +37,7 @@ impl L1ConsistencyChecker {
         sl_chain_id: u64,
         last_persisted_block_on_start: u64,
         cache: watch::Sender<TreeBlockCache>,
-        l1_events_rx: mpsc::Receiver<L1CommittedBatch>,
+        l1_events_rx: mpsc::Receiver<L1ExecutedBatch>,
         verified_batches_tx: mpsc::UnboundedSender<DiscoveredCommittedBatch>,
         verification_concurrency: usize,
     ) -> Self {
@@ -54,26 +54,26 @@ impl L1ConsistencyChecker {
         }
     }
 
-    /// Verifies one committed batch once its local blocks are cached.
-    async fn verify_commit(
+    /// Verifies one executed batch once its local blocks are cached.
+    async fn verify_execute(
         cache_rx: watch::Receiver<TreeBlockCache>,
         chain_id: u64,
         sl_chain_id: u64,
         last_persisted_block_on_start: u64,
-        commit: L1CommittedBatch,
+        execute: L1ExecutedBatch,
     ) -> anyhow::Result<DiscoveredCommittedBatch> {
-        let range = commit.range.clone();
+        let range = execute.range.clone();
 
         anyhow::ensure!(
-            commit.range.end() > &last_persisted_block_on_start,
-            "L1 committed batch #{} was already persisted on startup",
-            commit.batch_number,
+            execute.range.end() > &last_persisted_block_on_start,
+            "L1 executed batch #{} was already persisted on startup",
+            execute.batch_number,
         );
 
         let blocks = cache_rx
             .wait_for_range(range.clone())
             .await
-            .context("while waiting for a committed batch's blocks to be cached")?;
+            .context("while waiting for an executed batch's blocks to be cached")?;
 
         let verified = tokio::task::spawn_blocking(move || {
             for pubdata_mode in [
@@ -84,13 +84,13 @@ impl L1ConsistencyChecker {
                 let (local_batch_info, _) = ExtendedCommitBatchInfo::build(
                     &blocks,
                     chain_id,
-                    commit.batch_number,
+                    execute.batch_number,
                     pubdata_mode,
                     sl_chain_id,
                 );
                 let local_stored = local_batch_info.into_stored();
-                if local_stored.state_commitment == commit.state_commitment
-                    && local_stored.commitment == commit.commitment
+                if local_stored.state_commitment == execute.state_commitment
+                    && local_stored.commitment == execute.commitment
                 {
                     return Ok(DiscoveredCommittedBatch {
                         batch_info: local_stored,
@@ -100,18 +100,18 @@ impl L1ConsistencyChecker {
             }
 
             anyhow::bail!(
-                "L1 committed batch #{} is inconsistent with locally replayed blocks, state commitment: {:?}, commitment: {:?}",
-                commit.batch_number,
-                commit.state_commitment,
-                commit.commitment
+                "L1 executed batch #{} is inconsistent with locally replayed blocks, state commitment: {:?}, commitment: {:?}",
+                execute.batch_number,
+                execute.state_commitment,
+                execute.commitment
             );
         })
         .await
-        .context("while rebuilding a committed batch's commitment")??;
+        .context("while rebuilding an executed batch's commitment")??;
 
         tracing::info!(
-            "verified L1 committed batch #{} against locally replayed blocks {:?}",
-            commit.batch_number,
+            "verified L1 executed batch #{} against locally replayed blocks {:?}",
+            execute.batch_number,
             verified.block_range,
         );
 
@@ -126,14 +126,14 @@ impl L1ConsistencyChecker {
 
         loop {
             tokio::select! {
-                maybe_commit = self.l1_events_rx.recv() => {
-                    let Some(commit) = maybe_commit else {
+                maybe_execute = self.l1_events_rx.recv() => {
+                    let Some(execute) = maybe_execute else {
                         break;
                     };
                     tracing::debug!(
-                        "received L1 committed batch {} for consistency checking in range {:?}",
-                        commit.batch_number,
-                        commit.range,
+                        "received L1 executed batch {} for consistency checking in range {:?}",
+                        execute.batch_number,
+                        execute.range,
                     );
                     // Bound in-flight commitment rebuilds.
                     let permit = semaphore
@@ -147,12 +147,12 @@ impl L1ConsistencyChecker {
                     let last_persisted_block_on_start = self.last_persisted_block_on_start;
                     tasks.spawn(async move {
                         let _permit = permit; // held until the verification finishes
-                        Self::verify_commit(
+                        Self::verify_execute(
                             cache_rx,
                             chain_id,
                             sl_chain_id,
                             last_persisted_block_on_start,
-                            commit,
+                            execute,
                         )
                         .await
                     });

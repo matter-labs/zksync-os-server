@@ -69,7 +69,7 @@ use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
 use zksync_os_l1_consistency_checker::{
-    L1CommittedBatch, L1ConsistencyChecker, LocalBatchDataCacher, TreeBlockCache,
+    L1ConsistencyChecker, L1ExecutedBatch, LocalBatchDataCacher, TreeBlockCache,
 };
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
@@ -907,7 +907,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .expect("consistency checker cache byte limit does not fit usize"),
     ));
     let (l1_consistency_event_tx, l1_consistency_event_rx) =
-        tokio::sync::mpsc::channel::<L1CommittedBatch>(4096);
+        tokio::sync::mpsc::channel::<L1ExecutedBatch>(4096);
     let (verified_l1_batches_tx, verified_l1_batches_rx) =
         tokio::sync::mpsc::unbounded_channel::<DiscoveredCommittedBatch>();
     let l1_consistency_event_tx = (!node_role.is_main()).then_some(l1_consistency_event_tx);
@@ -1448,7 +1448,7 @@ async fn run_en_pipeline(
     last_persisted_block_on_start: u64,
     local_batch_data_cache: watch::Sender<TreeBlockCache>,
     verified_l1_batches_tx: tokio::sync::mpsc::UnboundedSender<DiscoveredCommittedBatch>,
-    l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1CommittedBatch>,
+    l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1ExecutedBatch>,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
 ) -> watch::Receiver<TransactionAcceptanceState> {
