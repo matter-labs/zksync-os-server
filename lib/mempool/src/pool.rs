@@ -6,46 +6,191 @@ use crate::subpools::l2::{L2Subpool, L2TransactionsStreamMarker};
 use crate::subpools::sl_chain_id::SlChainIdSubpool;
 use crate::subpools::upgrade::{UpgradeSubpool, UpgradeTransactionsStream};
 use alloy::consensus::{Header, Sealed};
-use alloy::primitives::{ChainId, TxHash};
+use alloy::primitives::{Address, ChainId, TxHash};
+use anyhow::Context;
 use futures::stream::{BoxStream, PollNext};
 use futures::{Stream, StreamExt};
 use reth_ethereum_primitives::{Block, BlockBody};
 use reth_execution_types::ChangedAccount;
 use reth_primitives_traits::SealedBlock;
+use reth_tasks::Runtime;
 use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
 use tokio::time::Instant;
+use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::AccountDiff;
+use zksync_os_l1_watcher::{
+    GatewayMigrationWatcher, InteropWatcher, L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig,
+    SegmentResolver, StartResolver,
+};
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{L1TxSerialId, SystemTxType, UpgradeMetadata, ZkEnvelope, ZkTransaction};
+use zksync_os_types::{
+    L1TxSerialId, ProtocolSemanticVersion, SystemTxType, UpgradeInfo, UpgradeMetadata, ZkEnvelope,
+    ZkTransaction,
+};
 
 /// General pool that provides unified access to all transaction sources in the system.
 ///
 /// Consists of multiple smaller subpools, see [`crate::subpools`] for more information.
 pub struct Pool<T> {
+    runtime: Runtime,
+    genesis: Genesis,
     upgrade_subpool: UpgradeSubpool,
     sl_chain_id_subpool: SlChainIdSubpool,
     interop_fee_subpool: InteropFeeSubpool,
     interop_roots_subpool: InteropRootsSubpool,
     l1_subpool: L1Subpool,
     l2_subpool: T,
+    watchers: Watchers,
+}
+
+struct Watchers {
+    upgrade_watcher: Option<StartResolver<ProtocolSemanticVersion, L1UpgradeTxWatcher>>,
+    l1_tx_watcher: Option<StartResolver<u64, L1TxWatcher>>,
+    interop_watcher: Option<SegmentResolver<u64, InteropWatcher>>,
+    gateway_migration_watcher: Option<StartResolver<u64, GatewayMigrationWatcher>>,
+}
+
+pub struct Config {
+    pub chain_id: ChainId,
+    pub gateway_chain_id: ChainId,
+    pub interop_roots_per_tx: usize,
+    pub bytecode_supplier_address: Address,
+    pub l1_watcher_config: L1WatcherConfig,
 }
 
 impl<T: L2Subpool> Pool<T> {
-    pub fn new(
-        upgrade_subpool: UpgradeSubpool,
-        sl_chain_id_subpool: SlChainIdSubpool,
-        interop_fee_subpool: InteropFeeSubpool,
-        interop_roots_subpool: InteropRootsSubpool,
-        l1_subpool: L1Subpool,
+    pub async fn new(
+        runtime: Runtime,
+        genesis: Genesis,
+        l1_state: &L1State,
+        config: Config,
         l2_subpool: T,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        let upgrade_subpool = UpgradeSubpool::default();
+        let sl_chain_id_subpool = SlChainIdSubpool::default();
+        let interop_fee_subpool = InteropFeeSubpool::default();
+        let interop_roots_subpool = InteropRootsSubpool::new(config.interop_roots_per_tx);
+        let l1_subpool = L1Subpool::new(10);
+
+        let upgrade_watcher = L1UpgradeTxWatcher::create_watcher(
+            config.l1_watcher_config.clone(),
+            config.chain_id,
+            l1_state.bridgehub_l1.clone(),
+            l1_state.diamond_proxy_l1.clone(),
+            l1_state.diamond_proxy_sl.clone(),
+            config.bytecode_supplier_address,
+            upgrade_subpool.clone(),
+        )
+        .await
+        .expect("failed to start L1 upgrade transaction watcher");
+
+        let interop_watcher = InteropWatcher::create_watcher(
+            l1_state.settlement_layer_intervals.clone(),
+            config.l1_watcher_config.clone(),
+            config.chain_id,
+            interop_roots_subpool.clone(),
+        )
+        .context("failed to create interop roots watcher")?;
+
+        let l1_tx_watcher = L1TxWatcher::create_watcher(
+            config.l1_watcher_config.clone(),
+            l1_state.diamond_proxy_l1.clone(),
+            l1_state.diamond_proxy_sl.clone(),
+            l1_subpool.clone(),
+        )
+        .await
+        .context("failed to create L1 transaction watcher")?;
+
+        let gateway_migration_watcher = GatewayMigrationWatcher::create_watcher(
+            l1_state.diamond_proxy_l1.clone(),
+            l1_state.bridgehub_l1.clone(),
+            config.chain_id,
+            l1_state.l1_chain_id,
+            config.gateway_chain_id,
+            config.l1_watcher_config.clone(),
+            sl_chain_id_subpool.clone(),
+        )
+        .await
+        .context("failed to create gateway migration watcher")?;
+
+        let watchers = Watchers {
+            upgrade_watcher: Some(upgrade_watcher),
+            l1_tx_watcher: Some(l1_tx_watcher),
+            interop_watcher,
+            gateway_migration_watcher: Some(gateway_migration_watcher),
+        };
+
+        Ok(Self {
+            runtime,
+            genesis,
             upgrade_subpool,
             sl_chain_id_subpool,
             interop_fee_subpool,
             interop_roots_subpool,
             l1_subpool,
             l2_subpool,
+            watchers,
+        })
+    }
+
+    pub fn interop_fee_subpool(&self) -> &InteropFeeSubpool {
+        &self.interop_fee_subpool
+    }
+
+    /// Initializes mempool with the starting block, expects to be called exactly once during the
+    /// node's lifetime.
+    pub async fn init(&mut self, replay: &ReplayRecord) {
+        let current_protocol_version = &replay.protocol_version;
+        self.upgrade_subpool
+            .init(current_protocol_version.clone())
+            .await;
+
+        // If we start from genesis, we should start by sending upgrade tx for genesis. Same thing
+        // for block #1 as it contains this upgrade tx required during replay.
+        if replay.block_context.block_number <= 1 {
+            let genesis_upgrade = self.genesis.genesis_upgrade_tx().await;
+            let upgrade_tx = UpgradeInfo {
+                tx: Some(genesis_upgrade.tx.clone()),
+                metadata: UpgradeMetadata {
+                    protocol_version: genesis_upgrade.protocol_version.clone(),
+                    timestamp: 0, // No restrictions on timestamp.
+                    force_preimages: genesis_upgrade.force_deploy_preimages.clone(),
+                },
+            };
+            self.upgrade_subpool.insert(upgrade_tx).await;
+        }
+
+        self.interop_fee_subpool
+            .init(replay.starting_cursors.interop_fee_number)
+            .await;
+
+        if let Some(upgrade_watcher) = self.watchers.upgrade_watcher.take() {
+            self.runtime.spawn_critical_task(
+                "L1 upgrade transaction watcher",
+                upgrade_watcher.run(current_protocol_version.clone()),
+            );
+        }
+        if let Some(l1_tx_watcher) = self.watchers.l1_tx_watcher.take() {
+            self.runtime.spawn_critical_task(
+                "L1 transaction watcher",
+                l1_tx_watcher.run(replay.starting_cursors.l1_priority_id),
+            );
+        }
+        if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
+            if let Some(gateway_migration_watcher) = self.watchers.gateway_migration_watcher.take()
+            {
+                self.runtime.spawn_critical_task(
+                    "gateway migration watcher",
+                    gateway_migration_watcher.run(replay.starting_cursors.migration_number),
+                );
+            }
+            if let Some(interop_watcher) = self.watchers.interop_watcher.take() {
+                self.runtime.spawn_critical_task(
+                    "interop roots watcher",
+                    interop_watcher.run(replay.starting_cursors.interop_root_id),
+                );
+            }
         }
     }
 

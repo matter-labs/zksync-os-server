@@ -69,6 +69,105 @@ pub(crate) fn init_host_env_in_boa_context(
     install_host_bindings(ctx, host_env)?;
     install_db_wrapper(ctx)?;
     install_step_helpers(ctx)?;
+    install_invocation_helpers(ctx)?;
+
+    Ok(())
+}
+
+/// Installs the geth-shaped `log`/`frame` wrapper builders and per-hook invoker functions once,
+/// so the hot path only converts step data to a `JsValue` and calls a pre-compiled function
+/// instead of parsing fresh JS source on every step (which also grows Boa's string interner
+/// without bound).
+fn install_invocation_helpers(ctx: &mut BoaContext) -> anyhow::Result<()> {
+    let helpers = r#"
+        function __zkjs_build_step_log(raw) {
+            let op = {
+                toString() { return raw.op.name; },
+                toNumber() { return raw.op.code; },
+                isPush() { return raw.op.isPush; },
+            };
+            let memory = {
+                __buffer: hexToBytes(raw.memory),
+                slice(start, stop) {
+                    const from = start >>> 0;
+                    const to = stop === undefined ? this.__buffer.length : stop >>> 0;
+                    return this.__buffer.slice(from, to);
+                },
+                getUint(offset) {
+                    const from = offset >>> 0;
+                    const end = from + 32;
+                    const out = new Uint8Array(32);
+                    const available = this.__buffer.slice(from, end);
+                    out.set(available, 0);
+                    return out;
+                },
+                length() { return this.__buffer.length; },
+            };
+            let contract = {
+                __input: hexToBytes(raw.contract.input),
+                getCaller() { return raw.contract.caller; },
+                getAddress() { return raw.contract.address; },
+                getValue() { return raw.contract.value; },
+                getInput() { return this.__input.slice(); },
+            };
+            let stack = {
+                __entries: raw.stack,
+                length() { return this.__entries.length; },
+                peek(n) { return this.__entries[n]; },
+            };
+            return {
+                op,
+                memory,
+                contract,
+                stack,
+                getPC() { return raw.pc; },
+                getGas() { return raw.gas; },
+                getCost() { return raw.cost; },
+                getDepth() { return raw.depth; },
+                getRefund() { return raw.refund; },
+                getError() { return raw.error; },
+            };
+        }
+
+        function __zkjs_build_error_log(raw) {
+            return {
+                getError() { return raw.error; },
+                getDepth() { return raw.depth; },
+            };
+        }
+
+        function __zkjs_build_enter_frame(raw) {
+            return {
+                getType() { return raw.type; },
+                getFrom() { return raw.from; },
+                getTo() { return raw.to; },
+                getInput() { return hexToBytes(raw.input); },
+                getGas() { return raw.gas; },
+                getValue() { return raw.value; },
+            };
+        }
+
+        function __zkjs_build_exit_frame(raw) {
+            return {
+                getGasUsed() { return raw.gasUsed; },
+                getOutput() { return raw.output ? hexToBytes(raw.output) : null; },
+                getError() { return raw.error; },
+            };
+        }
+
+        function __zkjs_invoke_setup(cfg) { return tracer.setup(cfg); }
+        function __zkjs_invoke_step(raw) { return tracer.step(__zkjs_build_step_log(raw), db); }
+        function __zkjs_invoke_step_err(raw) { return tracer.step(__zkjs_build_error_log(raw), db); }
+        function __zkjs_invoke_fault(raw) { return tracer.fault(__zkjs_build_step_log(raw), db); }
+        function __zkjs_invoke_fault_err(raw) { return tracer.fault(__zkjs_build_error_log(raw), db); }
+        function __zkjs_invoke_enter(raw) { return tracer.enter(__zkjs_build_enter_frame(raw)); }
+        function __zkjs_invoke_exit(raw) { return tracer.exit(__zkjs_build_exit_frame(raw)); }
+        function __zkjs_invoke_write(modification) { return tracer.write(modification); }
+        function __zkjs_invoke_result(ctx) { return JSON.stringify(tracer.result(ctx, db)); }
+    "#;
+
+    ctx.eval(Source::from_bytes(helpers.as_bytes()))
+        .map_err(|e| anyhow::anyhow!(format!("install invocation helpers failed: {e:?}")))?;
 
     Ok(())
 }

@@ -91,8 +91,16 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                 }
             }
             GethDebugTracerType::JsTracer(js) => {
-                match crate::js_tracer::tracer::trace_block(txs, block_context, prev_state_view, js)
-                {
+                let limits = crate::js_tracer::tracer::JsTracerLimits::from_config(
+                    &self.eth_call_handler.config,
+                );
+                match crate::js_tracer::tracer::trace_block(
+                    txs,
+                    block_context,
+                    prev_state_view,
+                    js,
+                    limits,
+                ) {
                     Ok(outputs) => Ok(outputs
                         .into_iter()
                         .zip(&block.body.transactions)

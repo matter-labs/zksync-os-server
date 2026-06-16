@@ -18,14 +18,17 @@ pub use upgrade_tx_watcher::L1UpgradeTxWatcher;
 mod interop_watcher;
 pub use interop_watcher::InteropWatcher;
 
-pub mod util;
 mod watcher;
+pub use watcher::{L1Watcher, StartResolver};
 
 mod sl_aware_watcher;
-pub use sl_aware_watcher::{SegmentSpec, SlAwareL1Watcher};
+pub use sl_aware_watcher::{SegmentResolver, SegmentSpec, SlAwareL1Watcher};
 
 mod traits;
 pub(crate) use traits::{ProcessL1Event, ProcessRawEvents};
+
+mod sink;
+pub use sink::EventSink;
 
 mod committed_batch_provider;
 pub use committed_batch_provider::CommittedBatchProvider;
@@ -41,3 +44,5 @@ pub use migration_finalized_watcher::MigrationFinalizedWatcher;
 
 mod settlement_layer_watcher;
 pub use settlement_layer_watcher::SettlementLayerWatcher;
+
+pub mod util;

@@ -29,6 +29,13 @@ pub struct RpcConfig {
     /// Gas limit of transactions executed via eth_call
     pub eth_call_gas: usize,
 
+    /// Maximum execution time of a single JS tracer run
+    pub js_tracer_timeout: Duration,
+
+    /// Maximum memory growth (in bytes) allowed during a single JS tracer run, measured via
+    /// jemalloc per-thread allocation counters; `0` disables the check
+    pub js_tracer_max_memory_bytes: usize,
+
     /// Maximum block gas limit accepted for an `eth_simulateV1` block override. Applies only
     /// when the caller explicitly overrides `blockOverrides.gasLimit`; unset overrides fall
     /// back to the executing block's own gas limit.

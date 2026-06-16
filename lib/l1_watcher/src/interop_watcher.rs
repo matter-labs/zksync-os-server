@@ -10,20 +10,19 @@ use zksync_os_contract_interface::l1_discovery::L2_BRIDGEHUB_ADDRESS;
 use zksync_os_contract_interface::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
-use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
 use zksync_os_provider::NodeProvider;
 use zksync_os_types::IndexedInteropRoot;
 
 use crate::sl_aware_watcher::{SegmentResolver, SegmentSpec};
 use crate::util::{find_l1_block_by_interop_root_id, find_l1_execute_block_by_batch_number};
 use crate::watcher::L1WatcherError;
-use crate::{L1WatcherConfig, ProcessRawEvents};
+use crate::{EventSink, L1WatcherConfig, ProcessRawEvents};
 /// Watches interop root updates emitted by Gateway settlement layers and feeds them into the
 /// interop subpool.
 ///
 /// This component reads `NewInteropRoot` events from the Gateway bridgehub's message-root
 /// contract, de-duplicates multiple logs for the same `logId`, and inserts the latest
-/// `IndexedInteropRoot` into `InteropRootsSubpool`.
+/// `IndexedInteropRoot` into its sink.
 ///
 /// To support a chain that has migrated GW → L1 (or GW → L1 → GW → …), the watcher walks every
 /// Gateway interval — historical and active — via [`SlAwareL1Watcher`](crate::SlAwareL1Watcher).
@@ -31,7 +30,7 @@ use crate::{L1WatcherConfig, ProcessRawEvents};
 /// root was emitted.
 pub struct InteropWatcher {
     starting_interop_root_id: u64,
-    interop_roots_subpool: InteropRootsSubpool,
+    sink: Box<dyn EventSink<IndexedInteropRoot>>,
 }
 
 impl InteropWatcher {
@@ -41,7 +40,7 @@ impl InteropWatcher {
         intervals: SettlementLayerIntervals,
         config: L1WatcherConfig,
         l2_chain_id: u64,
-        interop_roots_subpool: InteropRootsSubpool,
+        sink: impl EventSink<IndexedInteropRoot>,
     ) -> anyhow::Result<Option<SegmentResolver<u64, Self>>> {
         // Whether there is anything to watch depends only on the (static) interval layout, so we
         // can decide Some/None up front without resolving any block windows.
@@ -135,7 +134,7 @@ impl InteropWatcher {
 
             let processor = Self {
                 starting_interop_root_id,
-                interop_roots_subpool,
+                sink: Box::new(sink),
             };
             Ok((segments, processor))
         };
@@ -198,8 +197,8 @@ impl ProcessRawEvents for InteropWatcher {
             sides: event.sides.clone(),
         };
 
-        self.interop_roots_subpool
-            .add_root(IndexedInteropRoot {
+        self.sink
+            .push(IndexedInteropRoot {
                 log_id,
                 root: interop_root,
             })

@@ -16,25 +16,38 @@ pub struct InteropFeeSubpool {
 struct Inner {
     sender: Option<mpsc::Sender<U256>>,
     pending_fee: Option<U256>,
-    next_interop_fee_number: u64,
+    next_interop_fee_number: Option<u64>,
 }
 
-impl InteropFeeSubpool {
-    pub fn new(next_interop_fee_number: u64) -> Self {
+impl Default for InteropFeeSubpool {
+    fn default() -> Self {
         Self {
             notify: Arc::new(Notify::new()),
             inner: Arc::new(RwLock::new(Inner {
                 sender: None,
                 pending_fee: None,
-                next_interop_fee_number,
+                next_interop_fee_number: None,
             })),
         }
+    }
+}
+
+impl InteropFeeSubpool {
+    pub(crate) async fn init(&self, next_interop_fee_number: u64) {
+        let mut inner = self.inner.write().await;
+        assert!(
+            inner.next_interop_fee_number.is_none(),
+            "tried to re-initialize InteropFeeSubpool"
+        );
+        inner.next_interop_fee_number = Some(next_interop_fee_number);
     }
 
     pub async fn best_transactions_stream(&self) -> InteropFeeTransactionsStream {
         let (sender, receiver) = mpsc::channel(1);
         let mut inner = self.inner.write().await;
-        let next_interop_fee_number = inner.next_interop_fee_number;
+        let next_interop_fee_number = inner
+            .next_interop_fee_number
+            .expect("InteropFeeSubpool is not initialized");
         inner.sender = Some(sender);
         let state = if let Some(pending_fee) = inner.pending_fee {
             StreamState::Pending(SystemTxEnvelope::set_interop_fee(
@@ -64,12 +77,14 @@ impl InteropFeeSubpool {
             {
                 let mut inner = self.inner.write().await;
                 if let Some(pending_fee) = inner.pending_fee {
-                    let expected_number = inner.next_interop_fee_number;
+                    let expected_number = inner
+                        .next_interop_fee_number
+                        .expect("InteropFeeSubpool is not initialized");
                     let expected_tx =
                         SystemTxEnvelope::set_interop_fee(pending_fee, expected_number);
                     assert_eq!(tx, &expected_tx);
                     inner.pending_fee.take();
-                    inner.next_interop_fee_number += 1;
+                    inner.next_interop_fee_number = Some(expected_number + 1);
                     return expected_number;
                 }
             }
@@ -92,9 +107,12 @@ impl InteropFeeSubpool {
             let last_interop_fee_number = last_interop_fee_number.last();
             if let Some(last_interop_fee_number) = last_interop_fee_number {
                 let mut inner = self.inner.write().await;
-                inner.next_interop_fee_number = inner
-                    .next_interop_fee_number
-                    .max(last_interop_fee_number + 1);
+                inner.next_interop_fee_number = Some(
+                    inner
+                        .next_interop_fee_number
+                        .expect("InteropFeeSubpool is not initialized")
+                        .max(last_interop_fee_number + 1),
+                );
             }
             return last_interop_fee_number;
         }

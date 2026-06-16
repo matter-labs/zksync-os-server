@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.20.7](https://github.com/matter-labs/zksync-os-server/compare/v0.20.6...v0.20.7) (2026-06-16)
+
+
+### Features
+
+* **backpressure:** introduce PipelineAdmissionGate to pause block ingestion under backpressure ([#1363](https://github.com/matter-labs/zksync-os-server/issues/1363)) ([561c39e](https://github.com/matter-labs/zksync-os-server/commit/561c39e11909344c880da09d4da9442e1fc4d52a))
+* **l1-sender:** drop `fusaka_upgrade_timestamp` config option ([#1386](https://github.com/matter-labs/zksync-os-server/issues/1386)) ([239f76e](https://github.com/matter-labs/zksync-os-server/commit/239f76e0afd4b63679262c9e946509d4dc8f66ca))
+* **l1-sender:** Make confirmation requirement configurable ([#1374](https://github.com/matter-labs/zksync-os-server/issues/1374)) ([e4442bc](https://github.com/matter-labs/zksync-os-server/commit/e4442bc27d58a2bd21ffad57d3e1a6ac388772c3))
+* **provider:** add fallback when `finalized` is not supported ([#1370](https://github.com/matter-labs/zksync-os-server/issues/1370)) ([b579e08](https://github.com/matter-labs/zksync-os-server/commit/b579e08dc106c0eee921abcb385bfe0cdfaa2242))
+
+
+### Bug Fixes
+
+* **ci:** set finalized block polling interval to 100ms in local_dev.yaml ([#1354](https://github.com/matter-labs/zksync-os-server/issues/1354)) ([93d8d94](https://github.com/matter-labs/zksync-os-server/commit/93d8d94404a98c62683d24272292926b4660f945))
+* ignore tx limit for v31 upgrade block ([#1389](https://github.com/matter-labs/zksync-os-server/issues/1389)) ([67d4195](https://github.com/matter-labs/zksync-os-server/commit/67d4195684de4d2de0d6ede34812f41efd0373ec))
+* JS tracer performance ([#1381](https://github.com/matter-labs/zksync-os-server/issues/1381)) ([e18afb5](https://github.com/matter-labs/zksync-os-server/commit/e18afb51162abbce2e17669739ea5a6ac39c737a))
+* tracing multi-root calls ([#1318](https://github.com/matter-labs/zksync-os-server/issues/1318)) ([04d144c](https://github.com/matter-labs/zksync-os-server/commit/04d144c598fed6ee00e6636cca531a5088427acc))
+
+
+### Performance Improvements
+
+* fetch committed batch data elements in parallel ([#1361](https://github.com/matter-labs/zksync-os-server/issues/1361)) ([c613906](https://github.com/matter-labs/zksync-os-server/commit/c61390653d3b6ebe9ad4841d5ea72313121a207e))
+
 ## [0.20.6](https://github.com/matter-labs/zksync-os-server/compare/v0.20.5...v0.20.6) (2026-06-03)
 
 

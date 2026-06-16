@@ -18,6 +18,7 @@ default = ["jemalloc"]
 jemalloc = [
     "dep:tikv-jemallocator",
     "zksync_os_observability/jemalloc",
+    "zksync_os_rpc/jemalloc",
     "tikv-jemallocator/stats",
 ]
 
