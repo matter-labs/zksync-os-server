@@ -270,7 +270,7 @@ mod tests {
     #[tokio::test]
     async fn historical_upgrade_replay_does_not_wait_for_watcher() {
         let unreliable_version = version(30, 1);
-        let subpool = UpgradeSubpool::new();
+        let subpool = UpgradeSubpool::default();
         subpool
             .init(ProtocolSemanticVersion::legacy_genesis_version())
             .await;
@@ -291,7 +291,7 @@ mod tests {
 
     #[tokio::test]
     async fn historical_replay_drains_pending_old_upgrades() {
-        let subpool = UpgradeSubpool::new();
+        let subpool = UpgradeSubpool::default();
         subpool
             .init(ProtocolSemanticVersion::legacy_genesis_version())
             .await;
@@ -321,7 +321,7 @@ mod tests {
 
     #[tokio::test]
     async fn supported_upgrade_waits_for_watcher_and_validates_tx() {
-        let subpool = UpgradeSubpool::new();
+        let subpool = UpgradeSubpool::default();
         subpool
             .init(ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS)
             .await;
@@ -356,7 +356,7 @@ mod tests {
 
     #[tokio::test]
     async fn supported_patch_upgrade_consumes_watcher_metadata() {
-        let subpool = UpgradeSubpool::new();
+        let subpool = UpgradeSubpool::default();
         subpool
             .init(ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS)
             .await;
