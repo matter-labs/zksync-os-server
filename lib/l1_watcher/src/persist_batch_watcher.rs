@@ -249,23 +249,6 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         Ok(())
     }
 
-    fn process_commit_range(
-        &mut self,
-        report: ReportCommittedBatchRangeZKsyncOS,
-        log: Log,
-    ) -> Result<(), L1WatcherError> {
-        let batch_number = report.batchNumber;
-        let range_report = L1BatchRangeReport {
-            block_range: report.firstBlockNumber..=report.lastBlockNumber,
-            chain_address: log.address(),
-            commit_tx_hash: log.transaction_hash.expect("indexed log without tx hash"),
-            commit_l1_block_number: log.block_number.expect("indexed log without block number"),
-        };
-
-        self.range_reports.insert(batch_number, range_report);
-        Ok(())
-    }
-
     fn should_schedule_executed_batch(
         &mut self,
         batch_number: u64,
@@ -523,7 +506,14 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
         match event_signature {
             s if s == ReportCommittedBatchRangeZKsyncOS::SIGNATURE_HASH => {
                 let report = ReportCommittedBatchRangeZKsyncOS::decode_log(&log.inner)?.data;
-                self.process_commit_range(report, log)?;
+                let range_report = L1BatchRangeReport {
+                    block_range: report.firstBlockNumber..=report.lastBlockNumber,
+                    chain_address: log.address(),
+                    commit_tx_hash: log.transaction_hash.expect("indexed log without tx hash"),
+                    commit_l1_block_number: log.block_number.expect("indexed log without block number"),
+                };
+
+                self.range_reports.insert(report.batchNumber, range_report);
             }
             s if s == BlockExecution::SIGNATURE_HASH => {
                 let execute = BlockExecution::decode_log(&log.inner)?.data;
