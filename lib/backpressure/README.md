@@ -57,9 +57,6 @@ Some components are deliberately skipped when computing adjacent pairs:
 - **Pipeline sources** (`ConsensusNodeCommandSource`,
   `ExternalNodeCommandSource`) — no upstream to compare against.
 - **Pipeline sinks** (`BatchSink`, `NoopSink`) — no downstream.
-- **`BatchVerificationResponder`** — conditional stage (`pipe_if`) that may be
-  replaced by a `NoopSink` based on config, which shifts all window pairs; it
-  also only reports block numbers, making batch-diff comparisons undefined.
 
 ---
 
@@ -96,7 +93,7 @@ precedence over the global defaults.
 
 | Category | Default threshold | Signal |
 |---|---|---|
-| Block-pipeline stages (`BlockCanonizer`, `BlockApplier`, `TreeManager`, `ProverInputGenerator`, `RevmConsistencyChecker`) | 256 blocks | `block_diff_to_upstream` |
+| Block-pipeline stages (`BlockCanonizer`, `BlockApplier`, `TreeManager`, `ProverInputGenerator`, `RevmConsistencyChecker`, `L1ConsistencyChecker`) | 256 blocks | `block_diff_to_upstream` |
 | Batch-pipeline stages (`BatchVerification`, `FriJobManager`, `SnarkJobManager`, `GaplessCommitter`, `UpgradeGatekeeper`, `L1SenderCommit/Prove/Execute`, `GaplessL1ProofSender`, `PriorityTree`) | 128 batches | `batch_diff_to_upstream` |
 | `Batcher` | none — see note below | — |
 | Pipeline sources / sinks | none | — |

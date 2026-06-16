@@ -507,6 +507,18 @@ pub struct GeneralConfig {
     #[config(default_t = 512)]
     pub blocks_to_retain_in_memory: usize,
 
+    /// [external node] Max retained bytes for commitment data cached while waiting for L1 commit
+    /// events. This is a soft cap: one block may exceed it before intake waits for eviction.
+    #[config(default_t = 512 * 1024 * 1024)]
+    pub consistency_checker_max_cached_bytes: usize,
+
+    /// [external node] Upper bound on how many L1-committed batches the consistency checker
+    /// verifies concurrently (and thus on parallel commitment rebuilds, each offloaded to a
+    /// blocking thread). The cache byte cap must comfortably cover the combined retained data
+    /// for this many in-flight batches, otherwise intake stalls waiting for eviction.
+    #[config(default_t = 4)]
+    pub consistency_checker_verification_concurrency: usize,
+
     /// **IMPORTANT: It must be set for an external node. However, setting this DOES NOT make the node into an external node.
     /// [`GeneralConfig::node_role`] is the source of truth for node type. **
     #[config(default_t = None)]

@@ -74,6 +74,10 @@ impl ProtocolSemanticVersion {
         self.minor >= 31
     }
 
+    pub fn is_pre_v30(&self) -> bool {
+        self < &Self::new(0, 30, 0)
+    }
+
     /// This version was used for all the chains prior to the introduction of protocol upgrades
     /// support.
     pub const fn legacy_genesis_version() -> Self {

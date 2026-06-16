@@ -57,6 +57,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
+use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_batch_verification::{
     BatchVerificationConfig as BatchVerificationPolicyConfig, BatchVerificationPipelineStep,
     BatchVerificationResponder, effective_verification_policy,
@@ -67,6 +68,9 @@ use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
+use zksync_os_l1_consistency_checker::{
+    L1ConsistencyChecker, L1ExecutedBatch, LocalBatchDataCacher, TreeBlockCache,
+};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -74,8 +78,8 @@ use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::L1PersistBatchWatcher;
 use zksync_os_l1_watcher::{
-    CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1FinalizedExecuteWatcher,
-    MigrationFinalizedWatcher, SettlementLayerWatcher,
+    CommittedBatchProvider, ConsistencyCheckerChannels, L1CommitWatcher, L1ExecuteWatcher,
+    L1FinalizedExecuteWatcher, MigrationFinalizedWatcher, SettlementLayerWatcher,
 };
 use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
@@ -110,8 +114,8 @@ use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
-    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord,
-    WriteReplay, WriteRepository, WriteState,
+    FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
+    ReplayRecord, WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
     ExecutionVersion, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
@@ -388,11 +392,20 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_finalized_executed_block: last_l1_finalized_executed_block,
         last_finalized_executed_batch: l1_state.last_finalized_executed_batch,
     });
+    let persistent_batch_storage =
+        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
+
+    let latest_batch = persistent_batch_storage.latest_batch();
+    let last_persisted_block_on_start = persistent_batch_storage
+        .get_batch_by_number(latest_batch)
+        .expect("failed to read latest persisted batch")
+        .map(|batch| batch.last_block_number())
+        .unwrap_or(0);
 
     // `starting_block` - the first block to go through the pipeline. Invariant: a replay record for
     // this block must already exist. Note that this holds for `starting_block=0` as genesis is
     // always present in the system.
-    let starting_block = if node_startup_state.l1_state.last_committed_batch > 0 {
+    let mut starting_block = if node_startup_state.l1_state.last_committed_batch > 0 {
         // todo: ideally this should be searched through p2p networking instead of RPC
         //       but too many things depend on this being initialized here right now
         //       once refactored we can get rid of `main_node_rpc_url` config param
@@ -410,10 +423,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // No batches committed - starting from genesis.
         0
     };
+    if !node_role.is_main() {
+        starting_block = starting_block.min(last_persisted_block_on_start.saturating_add(1));
+        if starting_block > 0 && starting_block < state.block_range_available().start() + 1 {
+            panic!(
+                "Cannot start: last_persisted_block_on_start + 1 < state.block_range_available().start() + 1: {} < {}",
+                last_persisted_block_on_start.saturating_add(1),
+                state.block_range_available().start() + 1
+            );
+        }
+    }
 
     tracing::info!(
         config.general_config.min_blocks_to_replay,
         config.general_config.force_starting_block_number,
+        last_persisted_block_on_start,
         ?node_startup_state,
         starting_block,
         blocks_to_replay = node_startup_state.block_replay_storage_last_block + 1 - starting_block,
@@ -594,7 +618,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
     assert!(
-        first_replay_record.is_some() || starting_block == 1,
+        first_replay_record.is_some() || starting_block == 0,
         "Unless it's a new chain, replay record must exist"
     );
 
@@ -786,8 +810,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // ========== Start L1 Persist Batch Watcher ===========
 
-    let persistent_batch_storage =
-        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
     let rpc_storage = RpcStorage::new(
         repositories.clone(),
         block_replay_storage.clone(),
@@ -796,6 +818,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
         tree_for_rpc,
     );
+    let (local_batch_data_cache, _) = watch::channel(TreeBlockCache::with_max_cached_bytes(
+        config.general_config.consistency_checker_max_cached_bytes,
+    ));
+    let (l1_consistency_event_tx, l1_consistency_event_rx) =
+        tokio::sync::mpsc::channel::<L1ExecutedBatch>(4096);
+    let (verified_l1_batches_tx, verified_l1_batches_rx) =
+        tokio::sync::mpsc::unbounded_channel::<DiscoveredCommittedBatch>();
+    // External nodes verify L1 consistency; the main node persists directly and skips it.
+    let consistency_checker_channels = (!node_role.is_main()).then(|| ConsistencyCheckerChannels {
+        tx: l1_consistency_event_tx,
+        verified_rx: verified_l1_batches_rx,
+    });
     runtime.spawn_critical_task("l1 batch persist watcher", {
         let config = config.l1_watcher_config.clone();
         let settlement_layer_intervals = node_startup_state
@@ -808,6 +842,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 config.into(),
                 settlement_layer_intervals,
                 persistent_batch_storage,
+                consistency_checker_channels,
             )
             .run(())
             .await
@@ -959,6 +994,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             stop_receiver.clone(),
             tx_acceptance_state_sender,
             chain_id,
+            last_persisted_block_on_start,
+            local_batch_data_cache,
+            verified_l1_batches_tx,
+            l1_consistency_event_rx,
             verify_batch_rx,
             outgoing_verify_results.clone(),
         )
@@ -1325,6 +1364,10 @@ async fn run_en_pipeline(
     stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
+    last_persisted_block_on_start: u64,
+    local_batch_data_cache: watch::Sender<TreeBlockCache>,
+    verified_l1_batches_tx: tokio::sync::mpsc::UnboundedSender<DiscoveredCommittedBatch>,
+    l1_consistency_event_rx: tokio::sync::mpsc::Receiver<L1ExecutedBatch>,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
 ) -> watch::Receiver<TransactionAcceptanceState> {
@@ -1340,6 +1383,32 @@ async fn run_en_pipeline(
     let monitor =
         BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver.clone());
     let pipeline_gate = monitor.subscribe_gate();
+
+    if config.batch_verification_config.client_enabled {
+        let responder = BatchVerificationResponder::new(
+            chain_id,
+            node_state_on_startup.l1_state.diamond_proxy_address_sl(),
+            config.batch_verification_config.signing_key.clone(),
+            node_state_on_startup.l1_state.clone(),
+            local_batch_data_cache.subscribe(),
+            verify_batch_rx,
+            outgoing_verify_results,
+        );
+        runtime.spawn_critical_with_graceful_shutdown_signal(
+            "batch verification responder",
+            |shutdown| async move {
+                tokio::select! {
+                    result = responder.run() => {
+                        result.expect("batch verification responder failed");
+                    }
+                    _guard = shutdown => {}
+                }
+            },
+        );
+    } else {
+        drop(verify_batch_rx);
+        drop(outgoing_verify_results);
+    }
 
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
@@ -1376,20 +1445,29 @@ async fn run_en_pipeline(
                 }),
         )
         .pipe(TreeManager { tree: tree.clone() })
-        .pipe_if(
-            config.batch_verification_config.client_enabled,
-            BatchVerificationResponder::new(
-                chain_id,
-                node_state_on_startup.l1_state.diamond_proxy_address_sl(),
-                config.batch_verification_config.signing_key.clone(),
-                finality.clone(),
-                node_state_on_startup.l1_state.clone(),
-                state.clone(),
-                verify_batch_rx,
-                outgoing_verify_results,
-            ),
-            NoOpSink::new(),
-        );
+        // Keep block intake on the pipeline; verify L1 commits in the background.
+        .pipe(LocalBatchDataCacher::new(
+            last_persisted_block_on_start,
+            state.clone(),
+            local_batch_data_cache.clone(),
+        ));
+
+    runtime.spawn_critical_task("l1 consistency checker", {
+        let checker = L1ConsistencyChecker {
+            chain_id,
+            sl_chain_id: node_state_on_startup.l1_state.sl_chain_id,
+            last_persisted_block_on_start,
+            cache: local_batch_data_cache,
+            l1_events_rx: l1_consistency_event_rx,
+            verified_batches_tx: verified_l1_batches_tx,
+            verification_concurrency: config
+                .general_config
+                .consistency_checker_verification_concurrency,
+        };
+        async move {
+            checker.run().await.expect("L1 consistency checker failed");
+        }
+    });
 
     let components = pipeline.components();
     pipeline.spawn();

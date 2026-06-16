@@ -48,6 +48,7 @@ members = [
     "lib/backpressure",
     "lib/alloy_ext",
     "lib/provider",
+    "lib/l1_consistency_checker",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -331,6 +332,7 @@ zksync_os_operator_signer = { version = "=0.20.7", path = "lib/operator_signer" 
 zksync_os_integration_tests_macros = { version = "=0.20.7", path = "integration-tests-macros" }
 zksync_os_tx_validators = { version = "=0.20.7", path = "lib/tx_validators" }
 zksync_os_alloy_ext = { version = "=0.20.7", path = "lib/alloy_ext" }
+zksync_os_l1_consistency_checker = { version = "=0.20.7", path = "lib/l1_consistency_checker" }
 
 zksync_os_server = { version = "=0.20.7", path = "node/bin" }
 

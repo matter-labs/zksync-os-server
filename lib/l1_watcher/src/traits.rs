@@ -43,6 +43,11 @@ pub trait ProcessRawEvents: Send + Sync + 'static {
         provider: &NodeProvider,
         event: Log,
     ) -> Result<(), L1WatcherError>;
+
+    /// Invoked after all logs available in the current polling pass were processed.
+    async fn after_poll(&mut self, _provider: &NodeProvider) -> Result<(), L1WatcherError> {
+        Ok(())
+    }
 }
 
 /// Blanket implementation of `ProcessRawEvents` for any type implementing `ProcessL1Event`.

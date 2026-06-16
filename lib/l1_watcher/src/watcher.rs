@@ -238,6 +238,8 @@ impl<P: ProcessRawEvents> L1Watcher<P> {
             self.next_block = to_block + 1;
         }
 
+        self.processor.after_poll(&self.provider).await?;
+
         Ok(())
     }
 

@@ -1,0 +1,161 @@
+use crate::cache::{TreeBlockCache, TreeBlockCacheReceiverExt};
+use alloy::primitives::B256;
+use anyhow::Context;
+use std::ops::RangeInclusive;
+use std::sync::Arc;
+use tokio::sync::{Semaphore, mpsc, watch};
+use tokio::task::JoinSet;
+use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
+use zksync_os_types::PubdataMode;
+
+pub struct L1ExecutedBatch {
+    pub batch_number: u64,
+    pub state_commitment: B256,
+    pub commitment: B256,
+    pub range: RangeInclusive<u64>,
+}
+
+/// Checks L1-executed batch commitments against locally replayed blocks.
+///
+/// Verification is concurrent; reconstructed batch data is sent back to the persist watcher once a
+/// worker verifies it against local blocks.
+pub struct L1ConsistencyChecker {
+    pub chain_id: u64,
+    pub sl_chain_id: u64,
+    pub last_persisted_block_on_start: u64,
+    /// Shared with the cacher and batch verification responder.
+    pub cache: watch::Sender<TreeBlockCache>,
+    pub l1_events_rx: mpsc::Receiver<L1ExecutedBatch>,
+    pub verified_batches_tx: mpsc::UnboundedSender<DiscoveredCommittedBatch>,
+    pub verification_concurrency: usize,
+}
+
+impl L1ConsistencyChecker {
+    /// Verifies one executed batch once its local blocks are cached.
+    async fn verify_execute(
+        cache_rx: watch::Receiver<TreeBlockCache>,
+        chain_id: u64,
+        sl_chain_id: u64,
+        last_persisted_block_on_start: u64,
+        execute: L1ExecutedBatch,
+    ) -> anyhow::Result<DiscoveredCommittedBatch> {
+        let range = execute.range.clone();
+
+        anyhow::ensure!(
+            execute.range.end() > &last_persisted_block_on_start,
+            "L1 executed batch #{} was already persisted on startup",
+            execute.batch_number,
+        );
+
+        let blocks = cache_rx
+            .wait_for_range(range.clone())
+            .await
+            .context("while waiting for an executed batch's blocks to be cached")?;
+
+        let verified = tokio::task::spawn_blocking(move || {
+            for pubdata_mode in [
+                PubdataMode::Calldata,
+                PubdataMode::Validium,
+                PubdataMode::Blobs,
+            ] {
+                let (local_batch_info, _) = ExtendedCommitBatchInfo::build(
+                    &blocks,
+                    chain_id,
+                    execute.batch_number,
+                    pubdata_mode,
+                    sl_chain_id,
+                );
+                let local_stored = local_batch_info.into_stored();
+                if local_stored.state_commitment == execute.state_commitment
+                    && local_stored.commitment == execute.commitment
+                {
+                    return Ok(DiscoveredCommittedBatch {
+                        batch_info: local_stored,
+                        block_range: range.clone(),
+                    });
+                }
+            }
+
+            anyhow::bail!(
+                "L1 executed batch #{} is inconsistent with locally replayed blocks, state commitment: {:?}, commitment: {:?}",
+                execute.batch_number,
+                execute.state_commitment,
+                execute.commitment
+            );
+        })
+        .await
+        .context("while rebuilding an executed batch's commitment")??;
+
+        tracing::info!(
+            "verified L1 executed batch #{} against locally replayed blocks {:?}",
+            execute.batch_number,
+            verified.block_range,
+        );
+
+        Ok(verified)
+    }
+
+    pub async fn run(mut self) -> anyhow::Result<()> {
+        tracing::info!("starting L1 consistency checker");
+
+        let semaphore = Arc::new(Semaphore::new(self.verification_concurrency));
+        let mut tasks: JoinSet<anyhow::Result<DiscoveredCommittedBatch>> = JoinSet::new();
+
+        loop {
+            tokio::select! {
+                maybe_execute = self.l1_events_rx.recv() => {
+                    let Some(execute) = maybe_execute else {
+                        break;
+                    };
+                    tracing::debug!(
+                        "received L1 executed batch {} for consistency checking in range {:?}",
+                        execute.batch_number,
+                        execute.range,
+                    );
+                    // Bound in-flight commitment rebuilds.
+                    let permit = semaphore
+                        .clone()
+                        .acquire_owned()
+                        .await
+                        .expect("verification semaphore is never closed");
+                    let cache_rx = self.cache.subscribe();
+                    let chain_id = self.chain_id;
+                    let sl_chain_id = self.sl_chain_id;
+                    let last_persisted_block_on_start = self.last_persisted_block_on_start;
+                    tasks.spawn(async move {
+                        let _permit = permit; // held until the verification finishes
+                        Self::verify_execute(
+                            cache_rx,
+                            chain_id,
+                            sl_chain_id,
+                            last_persisted_block_on_start,
+                            execute,
+                        )
+                        .await
+                    });
+                }
+                Some(joined) = tasks.join_next() => {
+                    let verified = joined.context("verification task panicked")??;
+                    self.handle_verified(verified)?;
+                }
+            }
+        }
+
+        while let Some(joined) = tasks.join_next().await {
+            let verified = joined.context("verification task panicked")??;
+            self.handle_verified(verified)?;
+        }
+        Ok(())
+    }
+
+    /// Evicts verified blocks and publishes reconstructed batch data for persistence.
+    fn handle_verified(&self, verified: DiscoveredCommittedBatch) -> anyhow::Result<()> {
+        self.cache
+            .send_modify(|cache| cache.remove_range(verified.block_range.clone()));
+
+        self.verified_batches_tx
+            .send(verified)
+            .map_err(|_| anyhow::anyhow!("L1 persisted-batch watcher stopped"))?;
+        Ok(())
+    }
+}

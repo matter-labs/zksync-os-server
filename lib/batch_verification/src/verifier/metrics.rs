@@ -27,12 +27,6 @@ pub(crate) static BATCH_VERIFICATION_RESPONDER_METRICS: vise::Global<
 > = vise::Global::new();
 
 impl BatchVerificationResponderMetrics {
-    pub fn update_cache_range(&self, from: u64, to: u64) {
-        self.block_cache_from_number.set(from);
-        self.block_cache_to_number.set(to);
-        self.block_cache_size.set((to + 1 - from) as usize);
-    }
-
     pub fn record_request_success(&self, request_id: u64, batch_number: u64) {
         self.request_count.inc();
         self.request_success_count.inc();

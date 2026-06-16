@@ -1,8 +1,8 @@
 use alloy::primitives::Address;
-use zksync_os_batch_types::ExtendedCommitBatchInfo;
 use zksync_os_batch_types::batcher_model::{
     BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
 };
+use zksync_os_batch_types::{BlockCommitmentData, ExtendedCommitBatchInfo};
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_multichain_root};
@@ -29,24 +29,28 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
     let last_block_hash = blocks.last().unwrap().0.header.hash();
     let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
-    let (_, last_replay_record, _, _) = blocks.last().unwrap();
 
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
+    let commitment_blocks: Vec<BlockCommitmentData> = blocks
+        .iter()
+        .map(|(block_output, replay_record, tree, _)| {
+            BlockCommitmentData::new(
+                block_output,
+                &replay_record.transactions,
+                tree,
+                &replay_record.block_context.block_hashes.0,
+                multichain_root,
+                replay_record.protocol_version.clone(),
+            )
+        })
+        .collect();
     let (batch_info, blob_sidecar) = ExtendedCommitBatchInfo::build(
-        blocks
-            .iter()
-            .map(|(block_output, replay_record, tree, _)| {
-                (block_output, replay_record.transactions.as_slice(), tree)
-            })
-            .collect(),
+        &commitment_blocks,
         chain_id,
         batch_number,
         pubdata_mode,
         sl_chain_id,
-        multichain_root,
-        &protocol_version,
-        &last_replay_record.block_context.block_hashes.0,
     );
 
     let mut logs = Vec::new();
