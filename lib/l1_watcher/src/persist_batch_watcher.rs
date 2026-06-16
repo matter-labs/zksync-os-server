@@ -296,6 +296,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         range_report: &L1BatchRangeReport,
         execute_sl_block_number: BlockNumber,
     ) -> Result<(), L1WatcherError> {
+        // this path is available on EN - it makes EN sync much faster
         if let Some(consistency_checker) = &self.consistency_checker {
             let l1_execute = L1ExecutedBatch {
                 batch_number,
@@ -313,6 +314,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             self.pending_executions
                 .insert(batch_number, execute_sl_block_number);
             self.last_scheduled_batch = batch_number;
+
+            // Drain already verified batches
             self.drain_verified_batches()?;
             Ok(())
         } else {
@@ -334,15 +337,15 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         &mut self,
         verified: DiscoveredCommittedBatch,
     ) -> Result<(), L1WatcherError> {
-        let batch_number = verified.number();
-        let Some(execute_sl_block_number) = self.pending_executions.remove(&batch_number) else {
+        // cleanup the pending queue
+        let Some(execute_sl_block_number) = self.pending_executions.remove(&verified.number()) else {
             return Err(L1WatcherError::Other(anyhow!(
-                "L1 consistency checker verified unexpected batch #{batch_number}"
+                "L1 consistency checker verified unexpected batch #{}", verified.number()
             )));
         };
 
         self.verified_executions.insert(
-            batch_number,
+            verified.number(),
             VerifiedExecutedBatch {
                 committed_batch: verified,
                 execute_sl_block_number,
@@ -350,6 +353,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         );
 
         // flushing verified batches
+        // we are persisting batches strictly in order
         while let Some(next_batch) = self.next_batch_to_persist() {
             let Some(verified) = self.verified_executions.remove(&next_batch) else {
                 break;
@@ -364,6 +368,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             return Some(self.last_processed_batch + 1);
         }
 
+        // in case we haven't process any batch just yet - choose from minimal queued/verified one
         self.pending_executions
             .keys()
             .chain(self.verified_executions.keys())
@@ -371,6 +376,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             .copied()
     }
 
+    /// Non-blocking drain of already verified batches coming from consistency checker
     fn drain_verified_batches(&mut self) -> Result<(), L1WatcherError> {
         loop {
             // Re-borrow the receiver each iteration so the borrow ends before `handle_verified_batch`.
@@ -395,26 +401,6 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
             self.handle_verified_batch(verified)?;
         }
-    }
-
-    async fn finish_pending_verifications(&mut self) -> Result<(), L1WatcherError> {
-        while !self.pending_executions.is_empty() {
-            let verified =
-                {
-                    let Some(consistency_checker) = self.consistency_checker.as_mut() else {
-                        return Err(L1WatcherError::Other(anyhow!(
-                            "L1 consistency checker is not configured"
-                        )));
-                    };
-                    consistency_checker.verified_rx.recv().await.ok_or_else(|| {
-                    L1WatcherError::Other(anyhow::anyhow!(
-                        "L1 consistency checker stopped before verifying all executed batches"
-                    ))
-                })?
-                };
-            self.handle_verified_batch(verified)?;
-        }
-        Ok(())
     }
 
     fn persist_batch(&mut self, committed_batch: DiscoveredCommittedBatch, block_number: u64) {
@@ -522,6 +508,22 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
     }
 
     async fn after_poll(&mut self, _provider: &NodeProvider) -> Result<(), L1WatcherError> {
-        self.finish_pending_verifications().await
+        while !self.pending_executions.is_empty() {
+            let verified =
+                {
+                    let Some(consistency_checker) = self.consistency_checker.as_mut() else {
+                        return Err(L1WatcherError::Other(anyhow!(
+                            "L1 consistency checker is not configured"
+                        )));
+                    };
+                    consistency_checker.verified_rx.recv().await.ok_or_else(|| {
+                    L1WatcherError::Other(anyhow::anyhow!(
+                        "L1 consistency checker stopped before verifying all executed batches"
+                    ))
+                })?
+                };
+            self.handle_verified_batch(verified)?;
+        }
+        Ok(())
     }
 }
