@@ -401,7 +401,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     });
     let persistent_batch_storage =
         ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
-    let last_persisted_block_on_start = persistent_batch_storage.last_persisted_block_number();
+
+    let latest_batch = persistent_batch_storage.latest_batch();
+    let last_persisted_block_on_start = persistent_batch_storage
+        .get_batch_by_number(latest_batch)
+        .expect("failed to read latest persisted batch")
+        .map(|batch| batch.last_block_number())
+        .unwrap_or(0);
 
     // `starting_block` - the first block to go through the pipeline. Invariant: a replay record for
     // this block must already exist. Note that this holds for `starting_block=0` as genesis is

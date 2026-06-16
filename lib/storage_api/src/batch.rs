@@ -45,19 +45,6 @@ pub trait ReadBatch: Send + Sync + 'static {
     /// batches `[0; N-1]` MAY be missing if they are a legacy batch (i.e. produced before
     /// `ReportCommittedBatchRangeZKsyncOS` event was being emitted on commit to settlement layer).
     fn latest_batch(&self) -> u64;
-
-    /// Returns the last block number contained in the latest persisted batch, or `0` when only
-    /// genesis is persisted (or the latest batch is a legacy batch missing from storage).
-    ///
-    /// Handy on startup to learn up to which block local data is already known to be consistent
-    /// with the settlement layer.
-    fn last_persisted_block_number(&self) -> u64 {
-        let latest_batch = self.latest_batch();
-        self.get_batch_by_number(latest_batch)
-            .expect("failed to read latest persisted batch")
-            .map(|batch| batch.last_block_number())
-            .unwrap_or(0)
-    }
 }
 
 /// A write-capable counterpart of [`ReadBatch`] that allows to write new batches to the storage.

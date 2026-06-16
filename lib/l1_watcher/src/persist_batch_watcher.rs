@@ -379,34 +379,33 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             .copied()
     }
 
-    /// Pulls one verified batch from the consistency checker without blocking. Returns `Ok(None)`
-    /// when nothing is ready (or the checker isn't configured), and errors only if the checker
-    /// stopped while executed batches still await verification.
-    fn try_recv_verified(&mut self) -> Result<Option<DiscoveredCommittedBatch>, L1WatcherError> {
-        let Some(consistency_checker) = self.consistency_checker.as_mut() else {
-            return Ok(None);
-        };
-        match consistency_checker.verified_rx.try_recv() {
-            Ok(verified) => Ok(Some(verified)),
-            Err(mpsc::error::TryRecvError::Empty) => Ok(None),
-            Err(mpsc::error::TryRecvError::Disconnected) if self.pending_executions.is_empty() => {
-                Ok(None)
-            }
-            Err(mpsc::error::TryRecvError::Disconnected) => Err(L1WatcherError::Other(anyhow!(
-                "L1 consistency checker stopped before verifying all executed batches"
-            ))),
-        }
-    }
-
     fn drain_verified_batches(&mut self) -> Result<(), L1WatcherError> {
-        while let Some(verified) = self.try_recv_verified()? {
+        loop {
+            // Re-borrow the receiver each iteration so the borrow ends before `handle_verified_batch`.
+            let verified = match self
+                .consistency_checker
+                .as_mut()
+                .map(|checker| checker.verified_rx.try_recv())
+            {
+                None | Some(Err(mpsc::error::TryRecvError::Empty)) => return Ok(()),
+                Some(Ok(verified)) => verified,
+                Some(Err(mpsc::error::TryRecvError::Disconnected))
+                    if self.pending_executions.is_empty() =>
+                {
+                    return Ok(());
+                }
+                Some(Err(mpsc::error::TryRecvError::Disconnected)) => {
+                    return Err(L1WatcherError::Other(anyhow!(
+                        "L1 consistency checker stopped before verifying all executed batches"
+                    )));
+                }
+            };
+
             self.handle_verified_batch(verified)?;
         }
-        Ok(())
     }
 
     async fn finish_pending_verifications(&mut self) -> Result<(), L1WatcherError> {
-        self.drain_verified_batches()?;
         while !self.pending_executions.is_empty() {
             let verified =
                 {
@@ -510,7 +509,9 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
                     block_range: report.firstBlockNumber..=report.lastBlockNumber,
                     chain_address: log.address(),
                     commit_tx_hash: log.transaction_hash.expect("indexed log without tx hash"),
-                    commit_l1_block_number: log.block_number.expect("indexed log without block number"),
+                    commit_l1_block_number: log
+                        .block_number
+                        .expect("indexed log without block number"),
                 };
 
                 self.range_reports.insert(report.batchNumber, range_report);
