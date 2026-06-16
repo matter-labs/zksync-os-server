@@ -26,6 +26,20 @@ struct L1BatchRangeReport {
     commit_l1_block_number: BlockNumber,
 }
 
+#[derive(Clone, Debug)]
+struct PendingExecutedBatch {
+    execute_sl_block_number: BlockNumber,
+    state_commitment: B256,
+    commitment: B256,
+    block_range: RangeInclusive<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct VerifiedExecutedBatch {
+    committed_batch: DiscoveredCommittedBatch,
+    execute_sl_block_number: BlockNumber,
+}
+
 /// Watches finalized batch-range and execute events together and persists only irreversibly
 /// executed batches.
 ///
@@ -44,6 +58,9 @@ pub struct L1PersistBatchWatcher<BatchStorage> {
     consistency_checker_tx: Option<mpsc::Sender<L1ExecutedBatch>>,
     verified_batches_rx: Option<mpsc::UnboundedReceiver<DiscoveredCommittedBatch>>,
     range_reports: HashMap<u64, L1BatchRangeReport>,
+    pending_executions: HashMap<u64, PendingExecutedBatch>,
+    verified_executions: HashMap<u64, VerifiedExecutedBatch>,
+    last_scheduled_batch: u64,
     last_processed_batch: u64,
     last_persisted_batch_on_start: u64,
 }
@@ -179,6 +196,9 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 consistency_checker_tx,
                 verified_batches_rx,
                 range_reports: HashMap::new(),
+                pending_executions: HashMap::new(),
+                verified_executions: HashMap::new(),
+                last_scheduled_batch: last_persisted_batch,
                 last_processed_batch: last_persisted_batch,
                 last_persisted_batch_on_start: last_persisted_batch,
             };
@@ -272,19 +292,19 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         Ok(())
     }
 
-    fn should_process_executed_batch(
+    fn should_schedule_executed_batch(
         &mut self,
         batch_number: u64,
         state_commitment: B256,
         commitment: B256,
         range: &RangeInclusive<u64>,
     ) -> Result<bool, L1WatcherError> {
-        let latest_processed_batch = self.last_processed_batch;
+        let latest_scheduled_batch = self.last_scheduled_batch;
         let stored_batch = self
             .batch_storage
             .get_batch_by_number(batch_number)
             .map_err(L1WatcherError::Other)?;
-        if batch_number <= latest_processed_batch
+        if batch_number <= latest_scheduled_batch
             && let Some(stored_batch) = stored_batch
         {
             tracing::debug!("discovered already processed batch #{batch_number}, validating");
@@ -298,8 +318,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             return Ok(false);
         }
 
-        if batch_number > latest_processed_batch.saturating_add(1) {
-            if latest_processed_batch == 0 {
+        if batch_number > latest_scheduled_batch.saturating_add(1) {
+            if latest_scheduled_batch == 0 {
                 // We did not have `ReportCommittedBatchRangeZKsyncOS` event on some of the older
                 // testnet chains (e.g. `stage`, `testnet-alpha`). These batches are considered to
                 // be legacy and are not persisted in batch storage. Users will not be able to
@@ -314,11 +334,11 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 // This should only be possible if we skipped reverted batch previously and are now
                 // discovering more reverted batches.
                 tracing::warn!(
-                    "non-sequential executed batch #{batch_number} discovered after latest processed batch #{latest_processed_batch}; assuming revert and skipping"
+                    "non-sequential executed batch #{batch_number} discovered after latest scheduled batch #{latest_scheduled_batch}; assuming revert and skipping"
                 );
                 return Ok(false);
             }
-        } else if batch_number <= latest_processed_batch {
+        } else if batch_number <= latest_scheduled_batch {
             tracing::warn!(
                 "Found already executed batch #{batch_number}, but it is not present in batch storage; \
                 assuming previous operation was reverted and overwriting data"
@@ -329,14 +349,15 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         Ok(true)
     }
 
-    async fn verify_executed_batch(
+    async fn process_executed_batch(
         &mut self,
         provider: &NodeProvider,
         batch_number: u64,
         state_commitment: B256,
         commitment: B256,
         range_report: &L1BatchRangeReport,
-    ) -> Result<DiscoveredCommittedBatch, L1WatcherError> {
+        execute_sl_block_number: BlockNumber,
+    ) -> Result<(), L1WatcherError> {
         if let Some(tx) = &self.consistency_checker_tx {
             let l1_execute = L1ExecutedBatch {
                 batch_number,
@@ -350,15 +371,19 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                     "L1 consistency checker event channel closed"
                 ))
             })?;
-            let verified = self.wait_until_batch_verified(batch_number).await?;
-            Self::validate_stored_batch(
-                &verified,
+
+            self.pending_executions.insert(
                 batch_number,
-                state_commitment,
-                commitment,
-                &range_report.block_range,
-            )?;
-            Ok(verified)
+                PendingExecutedBatch {
+                    execute_sl_block_number,
+                    state_commitment,
+                    commitment,
+                    block_range: range_report.block_range.clone(),
+                },
+            );
+            self.last_scheduled_batch = batch_number;
+            self.drain_verified_batches()?;
+            Ok(())
         } else {
             let committed_batch = self.parse_committed_batch(provider, range_report).await?;
             Self::validate_stored_batch(
@@ -368,8 +393,117 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 commitment,
                 &range_report.block_range,
             )?;
-            Ok(committed_batch)
+            self.last_scheduled_batch = batch_number;
+            self.persist_batch(committed_batch, execute_sl_block_number);
+            Ok(())
         }
+    }
+
+    fn handle_verified_batch(
+        &mut self,
+        verified: DiscoveredCommittedBatch,
+    ) -> Result<(), L1WatcherError> {
+        let batch_number = verified.number();
+        let Some(pending) = self.pending_executions.remove(&batch_number) else {
+            return Err(L1WatcherError::Other(anyhow!(
+                "L1 consistency checker verified unexpected batch #{batch_number}"
+            )));
+        };
+
+        Self::validate_stored_batch(
+            &verified,
+            batch_number,
+            pending.state_commitment,
+            pending.commitment,
+            &pending.block_range,
+        )?;
+
+        self.verified_executions.insert(
+            batch_number,
+            VerifiedExecutedBatch {
+                committed_batch: verified,
+                execute_sl_block_number: pending.execute_sl_block_number,
+            },
+        );
+        self.flush_verified_batches();
+        Ok(())
+    }
+
+    fn next_batch_to_persist(&self) -> Option<u64> {
+        if self.last_processed_batch != 0 {
+            return Some(self.last_processed_batch + 1);
+        }
+
+        self.pending_executions
+            .keys()
+            .chain(self.verified_executions.keys())
+            .min()
+            .copied()
+    }
+
+    fn flush_verified_batches(&mut self) {
+        while let Some(next_batch) = self.next_batch_to_persist() {
+            let Some(verified) = self.verified_executions.remove(&next_batch) else {
+                break;
+            };
+            self.persist_batch(verified.committed_batch, verified.execute_sl_block_number);
+        }
+    }
+
+    fn drain_verified_batches(&mut self) -> Result<(), L1WatcherError> {
+        loop {
+            let Some(verified) = ({
+                let Some(verified_batches_rx) = self.verified_batches_rx.as_mut() else {
+                    return Ok(());
+                };
+                match verified_batches_rx.try_recv() {
+                    Ok(verified) => Some(verified),
+                    Err(mpsc::error::TryRecvError::Empty) => None,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        if self.pending_executions.is_empty() {
+                            return Ok(());
+                        }
+                        return Err(L1WatcherError::Other(anyhow!(
+                            "L1 consistency checker stopped before verifying all executed batches"
+                        )));
+                    }
+                }
+            }) else {
+                break;
+            };
+            self.handle_verified_batch(verified)?;
+        }
+        Ok(())
+    }
+
+    async fn finish_pending_verifications(&mut self) -> Result<(), L1WatcherError> {
+        self.drain_verified_batches()?;
+        while !self.pending_executions.is_empty() {
+            let verified = {
+                let Some(verified_batches_rx) = self.verified_batches_rx.as_mut() else {
+                    return Err(L1WatcherError::Other(anyhow!(
+                        "L1 consistency checker is not configured"
+                    )));
+                };
+                verified_batches_rx.recv().await.ok_or_else(|| {
+                    L1WatcherError::Other(anyhow::anyhow!(
+                        "L1 consistency checker stopped before verifying all executed batches"
+                    ))
+                })?
+            };
+            self.handle_verified_batch(verified)?;
+        }
+        Ok(())
+    }
+
+    fn persist_batch(&mut self, committed_batch: DiscoveredCommittedBatch, block_number: u64) {
+        let batch_number = committed_batch.number();
+        tracing::debug!("persisting executed batch #{}", batch_number);
+        self.batch_storage.write(PersistedBatch {
+            committed_batch,
+            execute_sl_block_number: Some(block_number),
+        });
+        self.last_processed_batch = batch_number;
     }
 
     async fn process_execution(
@@ -386,9 +520,9 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
 
         let state_commitment = execute.batchHash;
         let commitment = execute.commitment;
-        let committed_batch = match self.range_reports.remove(&batch_number) {
+        match self.range_reports.remove(&batch_number) {
             Some(range_report) => {
-                if !self.should_process_executed_batch(
+                if !self.should_schedule_executed_batch(
                     batch_number,
                     state_commitment,
                     commitment,
@@ -396,16 +530,17 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 )? {
                     return Ok(());
                 }
-                self.verify_executed_batch(
+                self.process_executed_batch(
                     provider,
                     batch_number,
                     state_commitment,
                     commitment,
                     &range_report,
+                    log.block_number.expect("Missing block number in log"),
                 )
-                .await?
+                .await?;
             }
-            None if self.last_processed_batch == self.last_persisted_batch_on_start => {
+            None if self.last_scheduled_batch == self.last_persisted_batch_on_start => {
                 // No `ReportCommittedBatchRangeZKsyncOS` event was processed yet, it is very likely
                 // that the batch is legacy, i.e. block range was not reported for it. Skip this batch.
                 tracing::info!("assuming batch #{batch_number} is legacy and skipping it");
@@ -416,39 +551,8 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                     "discovered executed batch #{batch_number} before its block range was reported"
                 )));
             }
-        };
-
-        tracing::debug!("persisting executed batch #{}", batch_number);
-        self.batch_storage.write(PersistedBatch {
-            committed_batch,
-            execute_sl_block_number: Some(log.block_number.expect("Missing block number in log")),
-        });
-        self.last_processed_batch = batch_number;
-        Ok(())
-    }
-
-    async fn wait_until_batch_verified(
-        &mut self,
-        batch_number: u64,
-    ) -> Result<DiscoveredCommittedBatch, L1WatcherError> {
-        let Some(verified_batches_rx) = self.verified_batches_rx.as_mut() else {
-            return Err(L1WatcherError::Other(anyhow!(
-                "L1 consistency checker is not configured"
-            )));
-        };
-        let verified = verified_batches_rx.recv().await.ok_or_else(|| {
-            L1WatcherError::Other(anyhow::anyhow!(
-                "L1 consistency checker stopped before verifying batch #{batch_number}"
-            ))
-        })?;
-        let verified_batch_number = verified.number();
-        if verified_batch_number == batch_number {
-            Ok(verified)
-        } else {
-            return Err(L1WatcherError::Other(anyhow!(
-                "L1 consistency checker verified unexpected batch #{verified_batch_number} while waiting for batch #{batch_number}"
-            )));
         }
+        Ok(())
     }
 }
 
@@ -490,5 +594,9 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
             }
         }
         Ok(())
+    }
+
+    async fn after_poll(&mut self, _provider: &NodeProvider) -> Result<(), L1WatcherError> {
+        self.finish_pending_verifications().await
     }
 }
