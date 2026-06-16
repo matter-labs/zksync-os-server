@@ -265,20 +265,12 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         }
 
         if batch_number > latest_scheduled_batch.saturating_add(1) {
-            if latest_scheduled_batch == 0 {
-                // We did not have `ReportCommittedBatchRangeZKsyncOS` event on some of the older
-                // testnet chains (e.g. `stage`, `testnet-alpha`). These batches are considered to
-                // be legacy and are not persisted in batch storage. Users will not be able to
-                // generate L2->L1 log proofs for those batches through RPC.
-                tracing::warn!(
-                    "first discovered batch #{batch_number} is not batch #1; assuming batches #1-#{} are legacy and skipping them",
-                    batch_number - 1
-                );
-                self.range_reports
-                    .retain(|tracked_batch_number, _| *tracked_batch_number >= batch_number);
-            } else {
-                // This should only be possible if we skipped reverted batch previously and are now
-                // discovering more reverted batches.
+            // A gap above what we've scheduled means a revert — skip it. The one legitimate gap is
+            // the very first scheduled batch: on older chains (e.g. `stage`, `testnet-alpha`) the
+            // earliest batches are legacy (no `ReportCommittedBatchRangeZKsyncOS` event, skipped as
+            // they execute), so the first batch that reports a range may not be #1. Those legacy
+            // batches stay unpersisted, so their L2->L1 log proofs are unavailable through RPC.
+            if latest_scheduled_batch != 0 {
                 tracing::warn!(
                     "non-sequential executed batch #{batch_number} discovered after latest scheduled batch #{latest_scheduled_batch}; assuming revert and skipping"
                 );
