@@ -262,12 +262,10 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
         };
 
         if let Some(existing) = self.range_reports.get(&batch_number) {
-            if existing.block_range != range_report.block_range {
-                return Err(L1WatcherError::Other(anyhow!(
-                    "Conflicting ReportCommittedBatchRangeZKsyncOS events for batch #{batch_number}"
-                )));
+            // that should happen only if the block revert was done
+            if existing.block_range == range_report.block_range {
+                return Ok(());
             }
-            return Ok(());
         }
 
         self.range_reports.insert(batch_number, range_report);
