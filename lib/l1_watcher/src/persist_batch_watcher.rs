@@ -2,7 +2,6 @@ use crate::sl_aware_watcher::SegmentResolver;
 use crate::traits::ProcessRawEvents;
 use crate::watcher::L1WatcherError;
 use crate::{L1WatcherConfig, SegmentSpec, util};
-use alloy::eips::BlockId;
 use alloy::primitives::{Address, B256, BlockNumber, TxHash};
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
@@ -128,18 +127,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                         "first SL interval ({interval}) must start at or before first non-persisted batch ({})",
                         last_persisted_batch + 1
                     );
-                    // Skip the deployment-to-first-commit gap when batch 1 exists.
-                    if last_persisted_batch == 0
-                        && zk_chain
-                            .get_total_batches_committed(BlockId::latest())
-                            .await
-                            .context("while attempting to read total committed batches")?
-                            >= 1
-                    {
-                        1
-                    } else {
-                        last_persisted_batch
-                    }
+                    last_persisted_batch
                 } else {
                     // First batch in the interval might not have been committed yet. We
                     // resolve the canonical start of the segment from the previous batch's
