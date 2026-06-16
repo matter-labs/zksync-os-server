@@ -45,11 +45,9 @@ impl InteropFeeSubpool {
     pub async fn best_transactions_stream(&self) -> InteropFeeTransactionsStream {
         let (sender, receiver) = mpsc::channel(1);
         let mut inner = self.inner.write().await;
-        let Some(next_interop_fee_number) = inner.next_interop_fee_number else {
-            return InteropFeeTransactionsStream {
-                state: StreamState::Empty,
-            };
-        };
+        let next_interop_fee_number = inner
+            .next_interop_fee_number
+            .expect("InteropFeeSubpool is not initialized");
         inner.sender = Some(sender);
         let state = if let Some(pending_fee) = inner.pending_fee {
             StreamState::Pending(SystemTxEnvelope::set_interop_fee(
@@ -57,7 +55,7 @@ impl InteropFeeSubpool {
                 next_interop_fee_number,
             ))
         } else {
-            StreamState::Waiting(ReceiverStream::new(receiver), next_interop_fee_number)
+            StreamState::Empty(ReceiverStream::new(receiver), next_interop_fee_number)
         };
         InteropFeeTransactionsStream { state }
     }
@@ -78,9 +76,10 @@ impl InteropFeeSubpool {
             let notified = self.notify.notified();
             {
                 let mut inner = self.inner.write().await;
-                if let Some(pending_fee) = inner.pending_fee
-                    && let Some(expected_number) = inner.next_interop_fee_number
-                {
+                if let Some(pending_fee) = inner.pending_fee {
+                    let expected_number = inner
+                        .next_interop_fee_number
+                        .expect("InteropFeeSubpool is not initialized");
                     let expected_tx =
                         SystemTxEnvelope::set_interop_fee(pending_fee, expected_number);
                     assert_eq!(tx, &expected_tx);
@@ -108,9 +107,12 @@ impl InteropFeeSubpool {
             let last_interop_fee_number = last_interop_fee_number.last();
             if let Some(last_interop_fee_number) = last_interop_fee_number {
                 let mut inner = self.inner.write().await;
-                inner.next_interop_fee_number = inner
-                    .next_interop_fee_number
-                    .map(|n| n.max(last_interop_fee_number + 1));
+                inner.next_interop_fee_number = Some(
+                    inner
+                        .next_interop_fee_number
+                        .expect("InteropFeeSubpool is not initialized")
+                        .max(last_interop_fee_number + 1),
+                );
             }
             return last_interop_fee_number;
         }
@@ -128,8 +130,7 @@ pub struct InteropFeeTransactionsStream {
 }
 
 enum StreamState {
-    Empty,
-    Waiting(ReceiverStream<U256>, u64),
+    Empty(ReceiverStream<U256>, u64),
     Pending(SystemTxEnvelope),
     Closed,
 }
@@ -140,8 +141,7 @@ impl Stream for InteropFeeTransactionsStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
         match &mut this.state {
-            StreamState::Empty => Poll::Pending,
-            StreamState::Waiting(receiver, next_interop_fee_number) => {
+            StreamState::Empty(receiver, next_interop_fee_number) => {
                 let Some(interop_fee) = ready!(receiver.poll_next_unpin(cx)) else {
                     tracing::debug!("interop fee updater stream is closed");
                     this.state = StreamState::Closed;
