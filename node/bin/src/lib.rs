@@ -1453,17 +1453,17 @@ async fn run_en_pipeline(
         ));
 
     runtime.spawn_critical_task("l1 consistency checker", {
-        let checker = L1ConsistencyChecker::new(
+        let checker = L1ConsistencyChecker {
             chain_id,
-            node_state_on_startup.l1_state.sl_chain_id,
+            sl_chain_id: node_state_on_startup.l1_state.sl_chain_id,
             last_persisted_block_on_start,
-            local_batch_data_cache,
-            l1_consistency_event_rx,
-            verified_l1_batches_tx,
-            config
+            cache: local_batch_data_cache,
+            l1_events_rx: l1_consistency_event_rx,
+            verified_batches_tx: verified_l1_batches_tx,
+            verification_concurrency: config
                 .general_config
                 .consistency_checker_verification_concurrency,
-        );
+        };
         async move {
             checker.run().await.expect("L1 consistency checker failed");
         }

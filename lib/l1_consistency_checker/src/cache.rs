@@ -101,11 +101,10 @@ impl TreeBlockCache {
 
         let mut blocks = Vec::with_capacity(range.clone().count());
         for block_number in range.clone() {
-            let Some(block) = self.data.get(&block_number) else {
-                anyhow::bail!(
-                    "requested local batch data block {block_number} was already evicted"
-                );
-            };
+            let block = self
+                .data
+                .get(&block_number)
+                .expect("Cache should not be evicted while can still be used");
             blocks.push(Arc::clone(&block.block));
         }
         Ok(Some(blocks))

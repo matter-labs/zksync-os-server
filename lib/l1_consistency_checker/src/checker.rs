@@ -20,40 +20,17 @@ pub struct L1ExecutedBatch {
 /// Verification is concurrent; reconstructed batch data is sent back to the persist watcher once a
 /// worker verifies it against local blocks.
 pub struct L1ConsistencyChecker {
-    chain_id: u64,
-    sl_chain_id: u64,
-    last_persisted_block_on_start: u64,
+    pub chain_id: u64,
+    pub sl_chain_id: u64,
+    pub last_persisted_block_on_start: u64,
     /// Shared with the cacher and batch verification responder.
-    cache: watch::Sender<TreeBlockCache>,
-    cache_rx: watch::Receiver<TreeBlockCache>,
-    l1_events_rx: mpsc::Receiver<L1ExecutedBatch>,
-    verified_batches_tx: mpsc::UnboundedSender<DiscoveredCommittedBatch>,
-    verification_concurrency: usize,
+    pub cache: watch::Sender<TreeBlockCache>,
+    pub l1_events_rx: mpsc::Receiver<L1ExecutedBatch>,
+    pub verified_batches_tx: mpsc::UnboundedSender<DiscoveredCommittedBatch>,
+    pub verification_concurrency: usize,
 }
 
 impl L1ConsistencyChecker {
-    pub fn new(
-        chain_id: u64,
-        sl_chain_id: u64,
-        last_persisted_block_on_start: u64,
-        cache: watch::Sender<TreeBlockCache>,
-        l1_events_rx: mpsc::Receiver<L1ExecutedBatch>,
-        verified_batches_tx: mpsc::UnboundedSender<DiscoveredCommittedBatch>,
-        verification_concurrency: usize,
-    ) -> Self {
-        let cache_rx = cache.subscribe();
-        Self {
-            chain_id,
-            sl_chain_id,
-            last_persisted_block_on_start,
-            cache,
-            cache_rx,
-            l1_events_rx,
-            verified_batches_tx,
-            verification_concurrency,
-        }
-    }
-
     /// Verifies one executed batch once its local blocks are cached.
     async fn verify_execute(
         cache_rx: watch::Receiver<TreeBlockCache>,
@@ -141,7 +118,7 @@ impl L1ConsistencyChecker {
                         .acquire_owned()
                         .await
                         .expect("verification semaphore is never closed");
-                    let cache_rx = self.cache_rx.clone();
+                    let cache_rx = self.cache.subscribe();
                     let chain_id = self.chain_id;
                     let sl_chain_id = self.sl_chain_id;
                     let last_persisted_block_on_start = self.last_persisted_block_on_start;
