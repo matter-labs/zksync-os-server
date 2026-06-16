@@ -146,8 +146,9 @@ impl<T: L2Subpool> Pool<T> {
             .init(current_protocol_version.clone())
             .await;
 
-        // If we start from genesis, we should start by sending upgrade tx for genesis.
-        if replay.block_context.block_number == 0 {
+        // If we start from genesis, we should start by sending upgrade tx for genesis. Same thing
+        // for block #1 as it contains this upgrade tx required during replay.
+        if replay.block_context.block_number <= 1 {
             let genesis_upgrade = self.genesis.genesis_upgrade_tx().await;
             let upgrade_tx = UpgradeInfo {
                 tx: Some(genesis_upgrade.tx.clone()),
