@@ -64,18 +64,19 @@ async fn derive_last_l1_batch_to_keep(
         top.last_block_number(),
     );
 
-    // Find the highest committed-only batch whose first block is at or before `from_block`: that
-    // batch contains `from_block` and is the first to revert, so `last_to_keep` is one below it.
+    // Fast path for the common revert case: `from_block` lies in the last committed batch
+    // (reverting from a recent block).
+    if top.first_block_number() <= from_block {
+        return Ok(last_committed_batch - 1);
+    }
+
+    // Binary-search the remaining committed-only batches.
     let mut low_batch = last_executed_batch + 1;
-    let mut high_batch = last_committed_batch;
+    let mut high_batch = last_committed_batch - 1;
     let mut first_batch_to_revert: Option<u64> = None;
     while low_batch <= high_batch {
         let mid_batch = low_batch + (high_batch - low_batch) / 2;
-        let mid_first_block = if mid_batch == last_committed_batch {
-            top.first_block_number()
-        } else {
-            fetch_committed(mid_batch).await?.first_block_number()
-        };
+        let mid_first_block = fetch_committed(mid_batch).await?.first_block_number();
         if mid_first_block <= from_block {
             first_batch_to_revert = Some(mid_batch);
             low_batch = mid_batch + 1;
