@@ -7,7 +7,7 @@ pub use config::TxValidatorConfig;
 pub mod subpools;
 
 mod pool;
-pub use pool::{MarkingTxStream, Pool};
+pub use pool::{Config, MarkingTxStream, Pool};
 
 mod metrics;
 

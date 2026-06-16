@@ -240,6 +240,11 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         &mut self,
         record: Box<ReplayRecord>,
     ) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
+        if self.last_block.is_none() {
+            // As this is the first block we are replaying, we need to initialize the mempool.
+            self.pool.init(&record).await;
+        }
+
         if record.block_context.block_number == 0 {
             self.last_block = Some(LastBlock {
                 record: *record,
@@ -311,8 +316,15 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         &mut self,
         rebuild: Box<RebuildCommand>,
     ) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
+        if self.last_block.is_none() {
+            // As this is the first block we are rebuilding, we need to initialize the mempool.
+            self.pool.init(&rebuild.replay_record).await;
+        }
+
         let (previous_block_timestamp, next_cursors, block_hashes) =
             if let Some(last_block) = self.last_block.as_ref() {
+                // We can't just use `rebuild`'s fields as the last block might have changed if we
+                // are rebuilding a range of blocks
                 (
                     last_block.record.block_context.timestamp,
                     last_block.next_cursors.clone(),

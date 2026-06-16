@@ -72,19 +72,13 @@ use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
+use zksync_os_l1_watcher::L1PersistBatchWatcher;
 use zksync_os_l1_watcher::{
-    CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
-    L1FinalizedExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, MigrationFinalizedWatcher,
-    SettlementLayerWatcher,
+    CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1FinalizedExecuteWatcher,
+    MigrationFinalizedWatcher, SettlementLayerWatcher,
 };
-use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::Pool;
-use zksync_os_mempool::subpools::interop_fee::InteropFeeSubpool;
-use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
-use zksync_os_mempool::subpools::l1::L1Subpool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
-use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
-use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_network::RecordOverride;
@@ -120,8 +114,7 @@ use zksync_os_storage_api::{
     WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
-    BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, PubdataMode,
-    TransactionAcceptanceState, UpgradeInfo, UpgradeMetadata,
+    ExecutionVersion, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -605,12 +598,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "Unless it's a new chain, replay record must exist"
     );
 
-    let next_cursors = first_replay_record
-        .as_ref()
-        .map_or(BlockStartCursors::default(), |record| {
-            record.starting_cursors.clone()
-        });
-
     let current_protocol_version = if let Some(record) = &first_replay_record {
         &record.protocol_version
     } else {
@@ -648,26 +635,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
-    let sl_chain_id_subpool = SlChainIdSubpool::default();
-    let interop_fee_subpool = InteropFeeSubpool::new(next_cursors.interop_fee_number);
-    let interop_roots_subpool =
-        InteropRootsSubpool::new(config.sequencer_config.interop_roots_per_tx);
-
-    // If we start from genesis, we should start by sending upgrade tx for genesis.
-    if starting_block == 0 {
-        let genesis_upgrade = genesis.genesis_upgrade_tx().await;
-        let upgrade_tx = UpgradeInfo {
-            tx: Some(genesis_upgrade.tx.clone()),
-            metadata: UpgradeMetadata {
-                protocol_version: genesis_upgrade.protocol_version.clone(),
-                timestamp: 0, // No restrictions on timestamp.
-                force_preimages: genesis_upgrade.force_deploy_preimages.clone(),
-            },
-        };
-        upgrade_subpool.insert(upgrade_tx).await;
-    }
-
     // Last-finalized migration counter, the sole input to `MigrationGate`'s pause decision.
     // Always created so the gate has a stable receiver regardless of protocol version; on
     // pre-v31 chains it stays at 0 (no migrations exist) and the gate is transparent.
@@ -680,22 +647,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         watch::channel::<Option<u64>>(None);
 
     if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
-        runtime.spawn_critical_task(
-            "gateway migration watcher",
-            GatewayMigrationWatcher::create_watcher(
-                node_startup_state.l1_state.diamond_proxy_l1.clone(),
-                node_startup_state.l1_state.bridgehub_l1.clone(),
-                chain_id,
-                node_startup_state.l1_state.l1_chain_id,
-                config.general_config.gateway_chain_id,
-                config.l1_watcher_config.clone().into(),
-                sl_chain_id_subpool.clone(),
-            )
-            .await
-            .expect("failed to start gateway migration watcher")
-            .run(next_cursors.migration_number),
-        );
-
         // Initializes `last_finalized_migration` from the SL's `migrationNumber(chainId)` and,
         // if the current SL interval migration has not yet finalized, spawns a watcher to track
         // future `MigrationFinalized` events. When the migration is already finalized at startup
@@ -727,38 +678,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             )
             .run(),
         );
-
-        if let Some(interop_watcher) = InteropWatcher::create_watcher(
-            node_startup_state
-                .l1_state
-                .settlement_layer_intervals
-                .clone(),
-            config.l1_watcher_config.clone().into(),
-            chain_id,
-            interop_roots_subpool.clone(),
-        )
-        .expect("failed to start L1 interop roots watcher")
-        {
-            runtime.spawn_critical_task(
-                "interop roots watcher",
-                interop_watcher.run(next_cursors.interop_root_id),
-            );
-        }
     }
-
-    let l1_subpool = L1Subpool::new(10);
-    runtime.spawn_critical_task(
-        "L1 transaction watcher",
-        L1TxWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            l1_subpool.clone(),
-        )
-        .await
-        .expect("failed to start L1 transaction watcher")
-        .run(next_cursors.l1_priority_id),
-    );
 
     // Transaction acceptance state - tracks whether we're accepting new transactions
     // Main nodes: accepts, but may switch to reject when `sequencer_max_blocks_to_produce` blocks are produced
@@ -830,13 +750,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     let pool = Pool::new(
-        upgrade_subpool.clone(),
-        sl_chain_id_subpool,
-        interop_fee_subpool.clone(),
-        interop_roots_subpool,
-        l1_subpool,
+        runtime.clone(),
+        genesis.clone(),
+        &node_startup_state.l1_state,
+        zksync_os_mempool::Config {
+            chain_id,
+            gateway_chain_id: config.general_config.gateway_chain_id,
+            interop_roots_per_tx: config.sequencer_config.interop_roots_per_tx,
+            bytecode_supplier_address,
+            l1_watcher_config: config.l1_watcher_config.clone().into(),
+        },
         l2_subpool.clone(),
-    );
+    )
+    .await
+    .expect("failed to create mempool");
+    let interop_fee_subpool = pool.interop_fee_subpool().clone();
     let block_context_provider = BlockContextProvider::new(
         fee_provider,
         pool,
@@ -854,24 +782,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         },
         &node_startup_state.l1_state.settlement_layer_intervals,
         last_constructed_block_ctx_sender,
-    );
-
-    // ========== Start L1 Upgrade Watcher ===========
-
-    runtime.spawn_critical_task(
-        "l1 upgrade transaction watcher",
-        L1UpgradeTxWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            chain_id,
-            node_startup_state.l1_state.bridgehub_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_l1.clone(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            bytecode_supplier_address,
-            upgrade_subpool,
-        )
-        .await
-        .expect("failed to start L1 upgrade transaction watcher")
-        .run(current_protocol_version.clone()),
     );
 
     // ========== Start L1 Persist Batch Watcher ===========
@@ -961,6 +871,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             // RPC surface, so the admit boundary doesn't apply.
             None,
         );
+        // todo: make this a subcomponent of mempool
         let interop_fee_updater = InteropFeeUpdater::new(
             eth_call_handler,
             sl_provider.clone().erased(),

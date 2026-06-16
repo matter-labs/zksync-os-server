@@ -16,25 +16,40 @@ pub struct InteropFeeSubpool {
 struct Inner {
     sender: Option<mpsc::Sender<U256>>,
     pending_fee: Option<U256>,
-    next_interop_fee_number: u64,
+    next_interop_fee_number: Option<u64>,
 }
 
-impl InteropFeeSubpool {
-    pub fn new(next_interop_fee_number: u64) -> Self {
+impl Default for InteropFeeSubpool {
+    fn default() -> Self {
         Self {
             notify: Arc::new(Notify::new()),
             inner: Arc::new(RwLock::new(Inner {
                 sender: None,
                 pending_fee: None,
-                next_interop_fee_number,
+                next_interop_fee_number: None,
             })),
         }
+    }
+}
+
+impl InteropFeeSubpool {
+    pub(crate) async fn init(&self, next_interop_fee_number: u64) {
+        let mut inner = self.inner.write().await;
+        assert!(
+            inner.next_interop_fee_number.is_none(),
+            "tried to re-initialize InteropFeeSubpool"
+        );
+        inner.next_interop_fee_number = Some(next_interop_fee_number);
     }
 
     pub async fn best_transactions_stream(&self) -> InteropFeeTransactionsStream {
         let (sender, receiver) = mpsc::channel(1);
         let mut inner = self.inner.write().await;
-        let next_interop_fee_number = inner.next_interop_fee_number;
+        let Some(next_interop_fee_number) = inner.next_interop_fee_number else {
+            return InteropFeeTransactionsStream {
+                state: StreamState::Empty,
+            };
+        };
         inner.sender = Some(sender);
         let state = if let Some(pending_fee) = inner.pending_fee {
             StreamState::Pending(SystemTxEnvelope::set_interop_fee(
@@ -42,7 +57,7 @@ impl InteropFeeSubpool {
                 next_interop_fee_number,
             ))
         } else {
-            StreamState::Empty(ReceiverStream::new(receiver), next_interop_fee_number)
+            StreamState::Waiting(ReceiverStream::new(receiver), next_interop_fee_number)
         };
         InteropFeeTransactionsStream { state }
     }
@@ -63,13 +78,14 @@ impl InteropFeeSubpool {
             let notified = self.notify.notified();
             {
                 let mut inner = self.inner.write().await;
-                if let Some(pending_fee) = inner.pending_fee {
-                    let expected_number = inner.next_interop_fee_number;
+                if let Some(pending_fee) = inner.pending_fee
+                    && let Some(expected_number) = inner.next_interop_fee_number
+                {
                     let expected_tx =
                         SystemTxEnvelope::set_interop_fee(pending_fee, expected_number);
                     assert_eq!(tx, &expected_tx);
                     inner.pending_fee.take();
-                    inner.next_interop_fee_number += 1;
+                    inner.next_interop_fee_number = Some(expected_number + 1);
                     return expected_number;
                 }
             }
@@ -94,7 +110,7 @@ impl InteropFeeSubpool {
                 let mut inner = self.inner.write().await;
                 inner.next_interop_fee_number = inner
                     .next_interop_fee_number
-                    .max(last_interop_fee_number + 1);
+                    .map(|n| n.max(last_interop_fee_number + 1));
             }
             return last_interop_fee_number;
         }
@@ -112,7 +128,8 @@ pub struct InteropFeeTransactionsStream {
 }
 
 enum StreamState {
-    Empty(ReceiverStream<U256>, u64),
+    Empty,
+    Waiting(ReceiverStream<U256>, u64),
     Pending(SystemTxEnvelope),
     Closed,
 }
@@ -123,7 +140,8 @@ impl Stream for InteropFeeTransactionsStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
         match &mut this.state {
-            StreamState::Empty(receiver, next_interop_fee_number) => {
+            StreamState::Empty => Poll::Pending,
+            StreamState::Waiting(receiver, next_interop_fee_number) => {
                 let Some(interop_fee) = ready!(receiver.poll_next_unpin(cx)) else {
                     tracing::debug!("interop fee updater stream is closed");
                     this.state = StreamState::Closed;
