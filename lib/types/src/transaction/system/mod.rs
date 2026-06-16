@@ -139,6 +139,15 @@ impl SystemTxEnvelope {
         })
     }
 
+    /// Returns the transaction salt.
+    ///
+    /// For `ImportInteropRoots` envelopes this is the largest log_id consumed
+    /// by the envelope (used by the subpool to identify which pending roots
+    /// the envelope drew from).
+    pub fn salt(&self) -> u64 {
+        self.inner.salt
+    }
+
     pub fn interop_roots(&self) -> Option<Vec<InteropRoot>> {
         let input = self.decoded_input();
         if let SystemTxInput::ImportInteropRoots(roots) = input {

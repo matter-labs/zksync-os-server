@@ -651,8 +651,29 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
     let interop_fee_subpool = InteropFeeSubpool::new(next_cursors.interop_fee_number);
-    let interop_roots_subpool =
-        InteropRootsSubpool::new(config.sequencer_config.interop_roots_per_tx);
+    assert!(
+        config.sequencer_config.interop_roots_per_tx > 0,
+        "`sequencer.interop_roots_per_tx` must be greater than zero"
+    );
+    assert!(
+        config.batcher_config.interop_roots_per_batch_limit > 0,
+        "`batcher.interop_roots_per_batch_limit` must be greater than zero"
+    );
+    let interop_roots_per_batch_limit =
+        usize::try_from(config.batcher_config.interop_roots_per_batch_limit).unwrap_or(usize::MAX);
+    let effective_interop_roots_per_tx = config
+        .sequencer_config
+        .interop_roots_per_tx
+        .min(interop_roots_per_batch_limit);
+    if effective_interop_roots_per_tx < config.sequencer_config.interop_roots_per_tx {
+        tracing::warn!(
+            configured_interop_roots_per_tx = config.sequencer_config.interop_roots_per_tx,
+            interop_roots_per_batch_limit = config.batcher_config.interop_roots_per_batch_limit,
+            effective_interop_roots_per_tx,
+            "clamping interop root import transaction size to the destination batch limit"
+        );
+    }
+    let interop_roots_subpool = InteropRootsSubpool::new(effective_interop_roots_per_tx);
 
     // If we start from genesis, we should start by sending upgrade tx for genesis.
     if starting_block == 0 {

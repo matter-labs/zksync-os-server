@@ -26,6 +26,142 @@ use zksync_os_types::{SystemTxType, ZkTransaction, ZkTxType, ZksyncOsEncode};
 // a side effect of this is that it's harder to pass config values (normally we'd just pass the whole config object)
 // please be mindful when adding new parameters here
 
+#[derive(Debug)]
+struct PubdataBreakdown {
+    header_bytes: usize,
+    storage_bytes: usize,
+    storage_diffs: u32,
+    account_diff_bytes: usize,
+    account_diffs: u32,
+    value_diff_bytes: usize,
+    value_diffs: u32,
+    logs_bytes: usize,
+    logs_count: u32,
+    message_payload_bytes: usize,
+    messages_count: u32,
+}
+
+fn encoded_value_diff_len(pubdata: &[u8], offset: &mut usize) -> Option<usize> {
+    let metadata = *pubdata.get(*offset)?;
+    let compression_type = metadata & 0b111;
+    let len = match compression_type {
+        0 => 1 + 32,
+        1..=3 => 1 + ((metadata >> 3) as usize),
+        _ => return None,
+    };
+    *offset = offset.checked_add(len)?;
+    if *offset <= pubdata.len() {
+        Some(len)
+    } else {
+        None
+    }
+}
+
+fn encoded_account_diff_len(pubdata: &[u8], offset: &mut usize) -> Option<usize> {
+    let start = *offset;
+    let metadata = *pubdata.get(*offset)?;
+    if metadata & 0b111 != 4 {
+        return None;
+    }
+    *offset += 1;
+    match metadata >> 3 {
+        0 => {
+            *offset += 8;
+            encoded_value_diff_len(pubdata, offset)?;
+            encoded_value_diff_len(pubdata, offset)?;
+            let code_len_bytes = pubdata.get(*offset..offset.checked_add(4)?)?;
+            let code_len = u32::from_be_bytes(code_len_bytes.try_into().ok()?) as usize;
+            *offset += 4 + code_len + 4;
+        }
+        1 => {
+            encoded_value_diff_len(pubdata, offset)?;
+        }
+        2 => {
+            encoded_value_diff_len(pubdata, offset)?;
+        }
+        3 => {
+            encoded_value_diff_len(pubdata, offset)?;
+            encoded_value_diff_len(pubdata, offset)?;
+        }
+        4 => {
+            *offset += 8;
+            encoded_value_diff_len(pubdata, offset)?;
+            encoded_value_diff_len(pubdata, offset)?;
+            *offset += 32 + 4;
+        }
+        _ => return None,
+    }
+    if *offset <= pubdata.len() {
+        Some(*offset - start)
+    } else {
+        None
+    }
+}
+
+fn parse_pubdata_breakdown(pubdata: &[u8]) -> Option<PubdataBreakdown> {
+    const HEADER_BYTES: usize = 1 + 32 + 8;
+    const L2_TO_L1_LOG_BYTES: usize = 88;
+
+    let mut offset = HEADER_BYTES;
+    let storage_count_bytes = pubdata.get(offset..offset.checked_add(4)?)?;
+    let storage_diffs = u32::from_be_bytes(storage_count_bytes.try_into().ok()?);
+    offset += 4;
+
+    let storage_start = offset - 4;
+    let mut account_diff_bytes = 0usize;
+    let mut account_diffs = 0u32;
+    let mut value_diff_bytes = 0usize;
+    let mut value_diffs = 0u32;
+    for _ in 0..storage_diffs {
+        offset += 32;
+        let metadata = *pubdata.get(offset)?;
+        if metadata & 0b111 == 4 {
+            account_diff_bytes += 32 + encoded_account_diff_len(pubdata, &mut offset)?;
+            account_diffs += 1;
+        } else {
+            value_diff_bytes += 32 + encoded_value_diff_len(pubdata, &mut offset)?;
+            value_diffs += 1;
+        }
+    }
+    let storage_bytes = offset - storage_start;
+
+    let logs_start = offset;
+    let logs_count_bytes = pubdata.get(offset..offset.checked_add(4)?)?;
+    let logs_count = u32::from_be_bytes(logs_count_bytes.try_into().ok()?);
+    offset += 4;
+    offset += (logs_count as usize).checked_mul(L2_TO_L1_LOG_BYTES)?;
+
+    let messages_count_bytes = pubdata.get(offset..offset.checked_add(4)?)?;
+    let messages_count = u32::from_be_bytes(messages_count_bytes.try_into().ok()?);
+    offset += 4;
+    let mut message_payload_bytes = 0usize;
+    for _ in 0..messages_count {
+        let len_bytes = pubdata.get(offset..offset.checked_add(4)?)?;
+        let len = u32::from_be_bytes(len_bytes.try_into().ok()?) as usize;
+        offset += 4;
+        pubdata.get(offset..offset.checked_add(len)?)?;
+        offset += len;
+        message_payload_bytes += len;
+    }
+    if offset != pubdata.len() {
+        return None;
+    }
+
+    Some(PubdataBreakdown {
+        header_bytes: HEADER_BYTES,
+        storage_bytes,
+        storage_diffs,
+        account_diff_bytes,
+        account_diffs,
+        value_diff_bytes,
+        value_diffs,
+        logs_bytes: offset - logs_start,
+        logs_count,
+        message_payload_bytes,
+        messages_count,
+    })
+}
+
 pub async fn execute_block_in_vm<V: ViewState>(
     mut command: PreparedBlockCommand<'_>,
     state_view: V,
@@ -160,6 +296,18 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         EXECUTION_METRICS.transaction_pubdata_used.observe(res.pubdata_used);
                         let status_str = if res.status  {"success"} else {"failure"};
                         EXECUTION_METRICS.transaction_status[&status_str].inc();
+                        tracing::info!(
+                            block_number = command.block_context.block_number,
+                            tx_hash = ?tx.hash(),
+                            tx_type = ?tx.tx_type(),
+                            system_tx_type = ?tx.as_system_tx_type(),
+                            status = status_str,
+                            gas_used = res.gas_used,
+                            native_used = res.native_used,
+                            computational_native_used = res.computational_native_used,
+                            pubdata_used = res.pubdata_used,
+                            "Executed transaction pubdata measurement"
+                        );
                         tracing::debug!(
                             block_number=command.block_context.block_number,
                             output=?res,
@@ -399,6 +547,30 @@ pub async fn execute_block_in_vm<V: ViewState>(
         .observe(output.computational_native_used);
 
     let block_hash_output = hash_block_output(output);
+    if let Some(pubdata_breakdown) = parse_pubdata_breakdown(&output.pubdata) {
+        tracing::info!(
+            block_number = output.header.number,
+            header_bytes = pubdata_breakdown.header_bytes,
+            storage_bytes = pubdata_breakdown.storage_bytes,
+            storage_diffs = pubdata_breakdown.storage_diffs,
+            account_diff_bytes = pubdata_breakdown.account_diff_bytes,
+            account_diffs = pubdata_breakdown.account_diffs,
+            value_diff_bytes = pubdata_breakdown.value_diff_bytes,
+            value_diffs = pubdata_breakdown.value_diffs,
+            logs_bytes = pubdata_breakdown.logs_bytes,
+            logs_count = pubdata_breakdown.logs_count,
+            message_payload_bytes = pubdata_breakdown.message_payload_bytes,
+            messages_count = pubdata_breakdown.messages_count,
+            total_pubdata_bytes = output.pubdata.len(),
+            "Block pubdata component measurement"
+        );
+    } else {
+        tracing::warn!(
+            block_number = output.header.number,
+            total_pubdata_bytes = output.pubdata.len(),
+            "Failed to parse block pubdata component measurement"
+        );
+    }
 
     tracing::info!(
         block_number = output.header.number,

@@ -1072,6 +1072,10 @@ pub struct L1SenderConfig {
     #[config(default_t = 16)]
     pub command_limit: usize,
 
+    /// Gas limit used for each L1 settlement transaction.
+    #[config(default_t = 15_000_000)]
+    pub tx_gas_limit: u64,
+
     /// How often to poll L1 for new blocks.
     #[config(default_t = 1 * TimeUnit::Seconds)]
     pub poll_interval: Duration,
@@ -1183,6 +1187,10 @@ pub struct GatewaySenderConfig {
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
     pub command_limit: usize,
+
+    /// Gas limit used for each Gateway settlement transaction.
+    #[config(default_t = 15_000_000)]
+    pub tx_gas_limit: u64,
 
     /// How often to poll the Gateway for new blocks.
     #[config(default_t = 1 * TimeUnit::Seconds)]
@@ -1957,6 +1965,7 @@ impl L1SenderConfig {
             },
             force_transaction_resubmission: force_transaction_resubmission.enabled,
             command_limit: self.command_limit,
+            tx_gas_limit: self.tx_gas_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
@@ -2015,6 +2024,7 @@ impl GatewaySenderConfig {
             },
             force_transaction_resubmission: force_transaction_resubmission.enabled,
             command_limit: self.command_limit,
+            tx_gas_limit: self.tx_gas_limit,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
@@ -2407,6 +2417,7 @@ mod tests {
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
                 force_transaction_resubmission: ForceTransactionResubmissionConfig::default(),
                 command_limit: 16,
+                tx_gas_limit: 15_000_000,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
                 required_confirmations: DEFAULT_REQUIRED_CONFIRMATIONS_L1,
