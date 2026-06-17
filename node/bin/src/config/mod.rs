@@ -996,6 +996,10 @@ pub struct RpcConfig {
     /// Rate-limiting policy for incoming JSON-RPC requests.
     #[config(default, with = Serde![str])]
     pub rate_limit_policy: zksync_os_rpc::RateLimitPolicy,
+
+    /// List of RPC methods to reject with -32601. Default is empty.
+    #[config(default, with = Serde![*])]
+    pub method_filter: zksync_os_rpc::MethodFilter,
 }
 
 /// L1 sender configuration. The signing key fields are only required on the Main Node;
@@ -1811,6 +1815,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             gas_price_scale_factor: c.gas_price_scale_factor,
             estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
             rate_limit_policy: c.rate_limit_policy,
+            method_filter: c.method_filter,
         }
     }
 }

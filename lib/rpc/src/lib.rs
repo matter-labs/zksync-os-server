@@ -3,6 +3,7 @@ mod call_fees;
 mod config;
 
 pub use config::{RateLimitPolicy, RpcConfig};
+pub use method_filter::MethodFilter;
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -22,6 +23,8 @@ mod debug_impl;
 pub mod js_tracer;
 mod limits;
 mod log_proof_utils;
+mod method_filter;
+mod method_filter_middleware;
 mod monitoring_middleware;
 mod net_impl;
 mod rate_limit_middleware;
@@ -40,6 +43,7 @@ use crate::eth_filter::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
 use crate::limits::Limiter;
+use crate::method_filter_middleware::MethodFiltering;
 use crate::monitoring_middleware::Monitoring;
 use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
@@ -153,9 +157,11 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
 
     let max_response_size_bytes = config.max_response_size_bytes();
     let limiter = Limiter::new(config.rate_limit_policy.to_limits());
+    let method_filter = Arc::new(config.method_filter.clone());
     let rpc_middleware = RpcServiceBuilder::new()
         // Monitoring is outermost so rate-limited responses still appear in error metrics.
         .layer_fn(move |service| Monitoring::new(service, max_response_size_bytes))
+        .layer_fn(move |service| MethodFiltering::new(service, method_filter.clone()))
         .layer_fn(move |service| RateLimiting::new(service, limiter.clone()));
 
     let server_config = ServerConfigBuilder::default()

@@ -1,10 +1,11 @@
 use crate::limits::Limits;
+use crate::method_filter::MethodFilter;
 use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::Duration;
 
-/// How the JSON-RPC server gates incoming requests.
+/// How the JSON-RPC server throttles incoming requests.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum RateLimitPolicy {
     /// No rate limiting.
@@ -71,6 +72,9 @@ pub struct RpcConfig {
 
     /// Rate-limiting policy for incoming requests.
     pub rate_limit_policy: RateLimitPolicy,
+
+    /// Method-availability filter: which RPC methods the server will respond to.
+    pub method_filter: MethodFilter,
 }
 
 impl RpcConfig {
