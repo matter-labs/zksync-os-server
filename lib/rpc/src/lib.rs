@@ -21,6 +21,7 @@ pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
 pub mod js_tracer;
 mod log_proof_utils;
+mod method_filter_middleware;
 mod monitoring_middleware;
 mod net_impl;
 mod rate_limit_middleware;
@@ -39,6 +40,7 @@ use crate::debug_impl::DebugNamespace;
 use crate::eth_filter::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
+use crate::method_filter_middleware::MethodFiltering;
 use crate::monitoring_middleware::Monitoring;
 use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
@@ -153,9 +155,11 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     let max_response_size_bytes = config.max_response_size_bytes();
     // Build once so all connections share the same token-bucket state.
     let limiters = build_limiters(&config.rate_limits);
+    let method_filter = Arc::new(config.method_filter.clone());
     let rpc_middleware = RpcServiceBuilder::new()
         // Monitoring is outermost so rate-limited responses still appear in error metrics.
         .layer_fn(move |service| Monitoring::new(service, max_response_size_bytes))
+        .layer_fn(move |service| MethodFiltering::new(service, method_filter.clone()))
         .layer_fn(move |service| RateLimiting::new(service, limiters.clone()));
 
     let server_config = ServerConfigBuilder::default()

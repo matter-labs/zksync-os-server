@@ -1019,6 +1019,10 @@ pub struct RpcConfig {
         "each per-method limit must not exceed the global `*` limit"
     ))]
     pub rate_limits: HashMap<String, NonZeroU32>,
+
+    /// List of RPC methods to reject with -32601. Default is empty.
+    #[config(default, with = Delimited::new(","))]
+    pub method_filter: HashSet<String>,
 }
 
 /// L1 sender configuration. The signing key fields are only required on the Main Node;
@@ -1847,6 +1851,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             gas_price_scale_factor: c.gas_price_scale_factor,
             estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
             rate_limits: c.rate_limits.into_iter().map(Into::into).collect(),
+            method_filter: c.method_filter,
         }
     }
 }

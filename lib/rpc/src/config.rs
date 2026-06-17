@@ -77,6 +77,9 @@ pub struct RpcConfig {
     /// Per-method rate limits.  Use `"*"` as the method name for a global limit applied before
     /// per-method limits.  Empty means no rate limiting.
     pub rate_limits: Vec<RpcRateLimit>,
+
+    /// Methods rejected with -32601 before any rate-limit check.
+    pub method_filter: HashSet<String>,
 }
 
 impl RpcConfig {
