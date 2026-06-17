@@ -14,7 +14,7 @@ use crate::IZKChain::IZKChainInstance;
 use alloy::contract::SolCallBuilder;
 use alloy::eips::BlockId;
 use alloy::network::Ethereum;
-use alloy::primitives::{Address, B256, TxHash, U256};
+use alloy::primitives::{Address, B256, U256};
 use alloy::providers::Provider;
 use zksync_os_provider::NodeProvider;
 
@@ -286,8 +286,6 @@ alloy::sol! {
         function getAdmin() external view returns (address);
         function getChainTypeManager() external view returns (address);
         function getProtocolVersion() external view returns (uint256);
-        function getL2SystemContractsUpgradeTxHash() external view returns (bytes32);
-        function getL2SystemContractsUpgradeBatchNumber() external view returns (uint256);
         function baseTokenGasPriceMultiplierNominator() external view returns (uint128);
         function baseTokenGasPriceMultiplierDenominator() external view returns (uint128);
         function getBaseToken() external view returns (address);
@@ -882,27 +880,6 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .enrich("getProtocolVersion", Some(block_id))
-    }
-
-    /// Returns current upgrade transaction waiting to be executed. Zeroed out if not present.
-    pub async fn get_upgrade_tx_hash(&self, block_id: BlockId) -> Result<TxHash> {
-        self.instance
-            .getL2SystemContractsUpgradeTxHash()
-            .block(block_id)
-            .call()
-            .await
-            .enrich("getL2SystemContractsUpgradeTxHash", Some(block_id))
-    }
-
-    /// Returns batch number that contains current upgrade transaction. Returns `0` if not present.
-    pub async fn get_upgrade_batch_number(&self, block_id: BlockId) -> Result<u64> {
-        self.instance
-            .getL2SystemContractsUpgradeBatchNumber()
-            .block(block_id)
-            .call()
-            .await
-            .map(|n| n.saturating_to())
-            .enrich("getL2SystemContractsUpgradeBatchNumber", Some(block_id))
     }
 
     /// Returns base token address.

@@ -7,7 +7,7 @@ use block_cache::BlockCache;
 use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
-use zksync_os_batch_types::{BatchSignature, ExtendedCommitBatchInfo};
+use zksync_os_batch_types::{BatchSignature, PendingBatchInfo};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
@@ -110,7 +110,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
         let multichain_root = read_multichain_root(state_view);
         let (_, last_replay_record, _) = blocks.last().unwrap();
 
-        let (batch_info, _) = ExtendedCommitBatchInfo::build(
+        let (batch_info, _) = PendingBatchInfo::build(
             blocks
                 .iter()
                 .map(|(block_output, replay_record, tree)| {

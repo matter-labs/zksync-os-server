@@ -1,7 +1,7 @@
 use alloy::primitives::{Address, B256};
 /// This module is for sharing various testing utilities and helpers.
 use tokio::sync::watch;
-use zksync_os_batch_types::ExtendedCommitBatchInfo;
+use zksync_os_batch_types::PendingBatchInfo;
 use zksync_os_batch_types::batcher_model::{BatchEnvelope, BatchMetadata, MissingSignature};
 use zksync_os_contract_interface::models::{CommitBatchInfo, DACommitmentScheme, StoredBatchInfo};
 use zksync_os_storage_api::{FinalityStatus, ReadFinality};
@@ -72,7 +72,7 @@ pub fn dummy_batch_metadata(batch_number: u64, from: u64, to: u64) -> BatchMetad
             // unused
             last_block_timestamp: Some(0),
         },
-        batch_info: ExtendedCommitBatchInfo {
+        batch_info: PendingBatchInfo {
             commit_info: dummy_commit_batch_info(batch_number, from, to),
             protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
             upgrade_tx_hash: None,
