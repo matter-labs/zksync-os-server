@@ -1,22 +1,42 @@
+use crate::limits::Limits;
 use alloy::primitives::Address;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-/// A per-method rate limit entry.
-#[derive(Clone, Debug)]
-pub struct RpcRateLimit {
-    /// Exact RPC method name, e.g. `"eth_call"`.
-    pub method: String,
-    /// Maximum number of requests per second across all callers combined.
-    pub requests_per_second: NonZeroU32,
+/// Rate-limit configuration.
+#[derive(Clone, Debug, Default)]
+pub enum RateLimits {
+    /// No rate limiting.
+    #[default]
+    None,
+    /// One global cap, an `m_rps` bucket shared by `m_methods`, and per-method overrides
+    /// in `custom_methods`.
+    Tiered {
+        global_rps: NonZeroU32,
+        m_rps: NonZeroU32,
+        m_methods: HashSet<String>,
+        custom_methods: HashMap<String, NonZeroU32>,
+    },
 }
 
-impl From<(String, NonZeroU32)> for RpcRateLimit {
-    fn from((method, requests_per_second): (String, NonZeroU32)) -> Self {
-        Self {
-            method,
-            requests_per_second,
+impl RateLimits {
+    pub(crate) fn into_limits(self) -> Limits {
+        match self {
+            Self::None => Limits::default(),
+            Self::Tiered {
+                global_rps,
+                m_rps,
+                m_methods,
+                custom_methods,
+            } => Limits {
+                global_rps: Some(global_rps),
+                methods: m_methods
+                    .into_iter()
+                    .map(|name| (name, m_rps))
+                    .chain(custom_methods)
+                    .collect(),
+            },
         }
     }
 }
@@ -74,9 +94,8 @@ pub struct RpcConfig {
     /// because pubdata price increase in-between estimation and sequencing.
     pub estimate_gas_pubdata_price_factor: f64,
 
-    /// Per-method rate limits.  Use `"*"` as the method name for a global limit applied before
-    /// per-method limits.  Empty means no rate limiting.
-    pub rate_limits: Vec<RpcRateLimit>,
+    /// Rate limits for incoming requests.
+    pub rate_limits: RateLimits,
 }
 
 impl RpcConfig {
