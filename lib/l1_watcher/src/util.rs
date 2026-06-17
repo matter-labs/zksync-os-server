@@ -384,7 +384,7 @@ pub async fn fetch_stored_batch_data(
     }) else {
         return Ok(None);
     };
-    let batch_info = fetch_committed_batch_data(zk_chain, tx_hash, l1_block_number)
+    let batch_info = fetch_committed_batch_data(zk_chain, tx_hash, l1_block_number, batch_number)
         .await?
         .into_stored();
 
@@ -400,64 +400,90 @@ pub async fn fetch_committed_batch_data(
     zk_chain: &ZkChain<NodeProvider>,
     tx_hash: TxHash,
     l1_block_number: BlockNumber,
+    batch_number: u64,
 ) -> Result<CommittedBatchInfo, L1WatcherError> {
-    let tx = (|| async {
-        let tx = zk_chain
-            .provider()
-            .get_transaction_by_hash(tx_hash)
-            .await
-            .map_err(|e| L1WatcherError::Other(e.into()))?
-            .ok_or_else(|| {
-                L1WatcherError::Other(anyhow::anyhow!("commit tx {tx_hash} not found"))
-            })?;
-        tx.block_number.ok_or_else(|| {
-            L1WatcherError::Other(anyhow::anyhow!(
-                "commit tx {tx_hash} has no block number (still pending)"
-            ))
-        })?;
-        Ok::<_, L1WatcherError>(tx)
-    })
-    .retry(
+    // The commit transaction (which carries the `CommitBatchInfo` calldata) and the `BlockCommit`
+    // event (which carries the commitment) are independent given the batch number, so we fetch
+    // them concurrently. Both can transiently lag right after the commit is observed when hitting
+    // a load-balanced RPC, so each is retried.
+    let retry_policy = || {
         ConstantBuilder::default()
             .with_delay(Duration::from_millis(200))
-            .with_max_times(50),
-    )
-    .await?;
+            .with_max_times(50)
+    };
+
+    let tx_fut = async {
+        (|| async {
+            let tx = zk_chain
+                .provider()
+                .get_transaction_by_hash(tx_hash)
+                .await
+                .map_err(|e| L1WatcherError::Other(e.into()))?
+                .ok_or_else(|| {
+                    L1WatcherError::Other(anyhow::anyhow!("commit tx {tx_hash} not found"))
+                })?;
+            tx.block_number.ok_or_else(|| {
+                L1WatcherError::Other(anyhow::anyhow!(
+                    "commit tx {tx_hash} has no block number (still pending)"
+                ))
+            })?;
+            Ok::<_, L1WatcherError>(tx)
+        })
+        .retry(retry_policy())
+        .await
+    };
+
+    // The batch commitment is emitted in the `BlockCommit` event (indexed by batch number) of the
+    // commit transaction. Reading it from L1 directly is safe and accurate, unlike deriving it from
+    // the current protocol version / upgrade transaction hash, which reflect the latest chain state
+    // rather than the state at the moment this batch was committed. Filtering on the indexed
+    // `batchNumber` topic isolates this batch's event directly (a single commit tx covers a range
+    // of L2 blocks, and an L1 block may contain commits for several batches).
+    let log_fut = async {
+        (|| async {
+            zk_chain
+                .provider()
+                .get_logs(
+                    &Filter::new()
+                        .address(*zk_chain.address())
+                        .event_signature(IExecutor::BlockCommit::SIGNATURE_HASH)
+                        .topic1(U256::from(batch_number))
+                        .from_block(l1_block_number)
+                        .to_block(l1_block_number),
+                )
+                .await
+                .map_err(|e| L1WatcherError::Other(e.into()))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    L1WatcherError::Other(anyhow::anyhow!(
+                        "`BlockCommit` event for batch {batch_number} not found in L1 block {l1_block_number}"
+                    ))
+                })
+        })
+        .retry(retry_policy())
+        .await
+    };
+
+    let (tx, log) = tokio::try_join!(tx_fut, log_fut)?;
 
     let CommitCalldata {
         commit_batch_info, ..
     } = CommitCalldata::decode(tx.input()).map_err(L1WatcherError::Other)?;
+    if commit_batch_info.batch_number != batch_number {
+        return Err(L1WatcherError::Other(anyhow::anyhow!(
+            "commit tx {tx_hash} encodes batch {} but batch {batch_number} was expected",
+            commit_batch_info.batch_number
+        )));
+    }
 
-    // The batch commitment is emitted in the `BlockCommit` event (indexed by batch number) of
-    // the commit transaction. Reading it from L1 directly is safe and accurate, unlike deriving
-    // it from the current protocol version / upgrade transaction hash, which reflect the latest
-    // chain state rather than the state at the moment this batch was committed.
-    let logs = zk_chain
-        .provider()
-        .get_logs(
-            &Filter::new()
-                .address(*zk_chain.address())
-                .event_signature(IExecutor::BlockCommit::SIGNATURE_HASH)
-                .from_block(l1_block_number)
-                .to_block(l1_block_number),
-        )
-        .await
-        .map_err(|e| L1WatcherError::Other(e.into()))?;
-    // A single commit transaction may commit a range of batches, so there can be multiple
-    // `BlockCommit` logs in this L1 block - pick the one matching our batch number.
-    let commitment = logs
-        .into_iter()
-        .find_map(|log| {
-            let event = IExecutor::BlockCommit::decode_log(&log.inner).ok()?;
-            (event.batchNumber == U256::from(commit_batch_info.batch_number))
-                .then_some(event.commitment)
-        })
-        .ok_or_else(|| {
+    let commitment = IExecutor::BlockCommit::decode_log(&log.inner)
+        .map_err(|e| {
             L1WatcherError::Other(anyhow::anyhow!(
-                "`BlockCommit` event for batch {} not found in L1 block {l1_block_number}",
-                commit_batch_info.batch_number
+                "failed to decode `BlockCommit` event for batch {batch_number}: {e}"
             ))
-        })?;
+        })?
+        .commitment;
 
     Ok(CommittedBatchInfo {
         commit_info: commit_batch_info,
