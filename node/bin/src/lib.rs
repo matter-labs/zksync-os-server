@@ -56,7 +56,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
-use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
+use zksync_os_base_token_adjuster::{BaseTokenPriceHandle, BaseTokenPriceUpdater};
 use zksync_os_batch_verification::{
     BatchVerificationConfig as BatchVerificationPolicyConfig, BatchVerificationPipelineStep,
     BatchVerificationResponder, effective_verification_policy,
@@ -736,8 +736,28 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // ========== Start BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
 
-    let (token_price_sender, token_price_receiver) = watch::channel(None);
-    let interop_fee_token_price_receiver = token_price_receiver.clone();
+    // The base token price updater owns the price channel and hands back a cloneable handle.
+    // External nodes don't run the updater, so they get a `pending` handle whose value stays unset.
+    let base_token_price_handle = if node_role.is_main() {
+        let external_price_api_client_config = config
+            .external_price_api_client_config
+            .clone()
+            .expect("external_price_api_client config must be set for Main Node");
+        let (base_token_price_updater, base_token_price_handle) = BaseTokenPriceUpdater::new(
+            &l1_state,
+            base_token_price_updater_config(
+                &config.base_token_price_updater_config,
+                &config.l1_sender_config,
+            ),
+            external_price_api_client_config.into(),
+        )
+        .await
+        .expect("Failed to initialize BaseTokenPriceUpdater");
+        runtime.spawn_critical_task("base token price updater", base_token_price_updater.run());
+        base_token_price_handle
+    } else {
+        BaseTokenPriceHandle::pending()
+    };
 
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`
@@ -745,7 +765,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.fee_config.clone().into(),
         pubdata_price_receiver,
         blob_fill_ratio_receiver,
-        token_price_receiver,
+        base_token_price_handle.clone(),
         effective_pubdata_mode,
     );
 
@@ -826,38 +846,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state_clone.compact_periodically_optional(),
     );
 
-    if node_role.is_main() {
-        let external_price_api_client_config = config
-            .external_price_api_client_config
-            .clone()
-            .expect("external_price_api_client config must be set for Main Node");
-        let gateway_diamond_proxy = if l1_state.l1_chain_id != l1_state.sl_chain_id {
-            Some(
-                l1_state
-                    .bridgehub_l1
-                    .zk_chain_by_chain_id(l1_state.sl_chain_id)
-                    .await
-                    .expect("Failed to get gateway_diamond_proxy"),
-            )
-        } else {
-            None
-        };
-        let base_token_price_updater = BaseTokenPriceUpdater::new(
-            l1_state.diamond_proxy_l1.clone(),
-            gateway_diamond_proxy,
-            l1_provider.clone(),
-            base_token_price_updater_config(
-                &config.base_token_price_updater_config,
-                &config.l1_sender_config,
-            ),
-            external_price_api_client_config.into(),
-            token_price_sender,
-        )
-        .await
-        .expect("Failed to initialize BaseTokenPriceUpdater");
-        runtime.spawn_critical_task("base token price updater", base_token_price_updater.run());
-    }
-
     if node_role.is_main()
         && settles_on_gateway
         && current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
@@ -876,7 +864,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             eth_call_handler,
             sl_provider.clone().erased(),
             interop_fee_subpool,
-            interop_fee_token_price_receiver,
+            base_token_price_handle.clone(),
             InteropFeeUpdaterConfig {
                 polling_interval: config.interop_fee_updater_config.polling_interval,
                 update_deviation_percentage: config

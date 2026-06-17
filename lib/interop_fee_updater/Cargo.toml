@@ -16,6 +16,7 @@ num.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 tracing.workspace = true
 
+zksync_os_base_token_adjuster.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_mempool.workspace = true
 zksync_os_rpc.workspace = true
