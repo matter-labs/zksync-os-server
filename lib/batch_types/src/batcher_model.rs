@@ -1,4 +1,4 @@
-use crate::{BatchSignatureSet, ExtendedCommitBatchInfo};
+use crate::{BatchSignatureSet, PendingBatchInfo};
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{Address, B256, Bytes};
 use anyhow::Context as _;
@@ -12,8 +12,6 @@ use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_observability::LatencyDistributionTracker;
 use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_types::{ProvingVersion, PubdataMode};
-// todo: these models are used throughout the batcher subsystem - not only l1 sender
-//       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
 
 /// Information about a batch that is enough for all L1 operations.
 /// Used throughout the batcher subsystem
@@ -30,7 +28,7 @@ pub struct BatchMetadata {
     // This is not purely commitment information, but we keep old serialization name for
     // backwards-compatibility.
     #[serde(rename = "commit_batch_info")]
-    pub batch_info: ExtendedCommitBatchInfo,
+    pub batch_info: PendingBatchInfo,
     pub chain_address: Address,
     pub blob_sidecar: Option<BlobTransactionSidecar>,
     pub first_block_number: u64,

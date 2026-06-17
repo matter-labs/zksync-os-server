@@ -4,6 +4,7 @@ use alloy::primitives::U256;
 use num::rational::Ratio;
 use num::{BigUint, ToPrimitive};
 use tokio::sync::watch;
+use zksync_os_base_token_adjuster::BaseTokenPriceHandle;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{PubdataMode, TokenPricesForFees};
 
@@ -38,7 +39,7 @@ pub struct FeeProvider {
     previous_block_fee_params: Option<FeeParams>,
     pubdata_price_provider: watch::Receiver<Option<U256>>,
     blob_fill_ratio_provider: watch::Receiver<Option<Ratio<u64>>>,
-    token_price_provider: watch::Receiver<Option<TokenPricesForFees>>,
+    base_token_price: BaseTokenPriceHandle,
     pubdata_mode: Option<PubdataMode>,
 }
 
@@ -47,7 +48,7 @@ impl FeeProvider {
         fee_config: FeeConfig,
         pubdata_price_provider: watch::Receiver<Option<U256>>,
         blob_fill_ratio_provider: watch::Receiver<Option<Ratio<u64>>>,
-        token_price_provider: watch::Receiver<Option<TokenPricesForFees>>,
+        base_token_price: BaseTokenPriceHandle,
         pubdata_mode: Option<PubdataMode>,
     ) -> Self {
         Self {
@@ -55,18 +56,13 @@ impl FeeProvider {
             previous_block_fee_params: None,
             pubdata_price_provider,
             blob_fill_ratio_provider,
-            token_price_provider,
+            base_token_price,
             pubdata_mode,
         }
     }
 
     pub async fn produce_fee_params(&mut self) -> anyhow::Result<FeeParams> {
-        let token_prices = self
-            .token_price_provider
-            .wait_for(|prices| prices.is_some())
-            .await?
-            .clone()
-            .unwrap();
+        let token_prices = self.base_token_price.wait_for_prices().await?;
 
         let native_price = self.calculate_native_price(&token_prices);
         let eip1559_basefee = self.calculate_base_fee(&native_price);

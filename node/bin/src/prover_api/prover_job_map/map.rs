@@ -466,7 +466,7 @@ mod tests {
     use crate::prover_api::metrics::ProverStage;
     use alloy::primitives::{Address, B256};
     use std::time::Duration;
-    use zksync_os_batch_types::ExtendedCommitBatchInfo;
+    use zksync_os_batch_types::PendingBatchInfo;
     use zksync_os_batch_types::batcher_model::{BatchForSigning, BatchMetadata};
     use zksync_os_contract_interface::models::{
         CommitBatchInfo, DACommitmentScheme, StoredBatchInfo,
@@ -486,7 +486,7 @@ mod tests {
                 // unused
                 last_block_timestamp: Some(0),
             },
-            batch_info: ExtendedCommitBatchInfo {
+            batch_info: PendingBatchInfo {
                 commit_info: CommitBatchInfo {
                     batch_number,
                     new_state_commitment: B256::ZERO,

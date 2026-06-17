@@ -10,7 +10,6 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-zksync_os_alloy_ext.workspace = true
 zksync_os_provider.workspace = true
 vise.workspace = true
 

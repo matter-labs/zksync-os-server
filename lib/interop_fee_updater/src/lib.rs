@@ -7,7 +7,7 @@ use alloy::sol_types::SolCall;
 use anyhow::Context as _;
 use num::BigUint;
 use num::rational::Ratio;
-use tokio::sync::watch;
+use zksync_os_base_token_adjuster::BaseTokenPriceHandle;
 use zksync_os_contract_interface::{IGWAssetTracker, IInteropCenter::interopProtocolFeeCall};
 use zksync_os_mempool::subpools::interop_fee::InteropFeeSubpool;
 use zksync_os_rpc::{EthCallHandler, ReadRpcStorage};
@@ -25,7 +25,7 @@ pub struct InteropFeeUpdater<RpcStorage> {
     eth_call_handler: EthCallHandler<RpcStorage>,
     gateway_provider: DynProvider,
     interop_fee_subpool: InteropFeeSubpool,
-    token_price_receiver: watch::Receiver<Option<TokenPricesForFees>>,
+    base_token_price: BaseTokenPriceHandle,
     config: InteropFeeUpdaterConfig,
     last_enqueued_fee: Option<U256>,
 }
@@ -35,14 +35,14 @@ impl<RpcStorage: ReadRpcStorage> InteropFeeUpdater<RpcStorage> {
         eth_call_handler: EthCallHandler<RpcStorage>,
         gateway_provider: DynProvider,
         interop_fee_subpool: InteropFeeSubpool,
-        token_price_receiver: watch::Receiver<Option<TokenPricesForFees>>,
+        base_token_price: BaseTokenPriceHandle,
         config: InteropFeeUpdaterConfig,
     ) -> Self {
         Self {
             eth_call_handler,
             gateway_provider,
             interop_fee_subpool,
-            token_price_receiver,
+            base_token_price,
             config,
             last_enqueued_fee: None,
         }
@@ -60,7 +60,7 @@ impl<RpcStorage: ReadRpcStorage> InteropFeeUpdater<RpcStorage> {
     }
 
     async fn loop_iteration(&mut self) -> anyhow::Result<()> {
-        let Some(token_prices) = self.token_price_receiver.borrow().clone() else {
+        let Some(token_prices) = self.base_token_price.current() else {
             tracing::debug!("Token prices are not initialized yet, skipping interop fee update");
             return Ok(());
         };

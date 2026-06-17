@@ -1,5 +1,5 @@
 use alloy::primitives::Address;
-use zksync_os_batch_types::ExtendedCommitBatchInfo;
+use zksync_os_batch_types::PendingBatchInfo;
 use zksync_os_batch_types::batcher_model::{
     BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
 };
@@ -33,7 +33,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
 
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
-    let (batch_info, blob_sidecar) = ExtendedCommitBatchInfo::build(
+    let (batch_info, blob_sidecar) = PendingBatchInfo::build(
         blocks
             .iter()
             .map(|(block_output, replay_record, tree, _)| {

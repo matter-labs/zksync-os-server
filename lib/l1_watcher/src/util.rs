@@ -1,22 +1,19 @@
 use crate::watcher::L1WatcherError;
 use alloy::consensus::Transaction;
-use alloy::eips::BlockId;
 use alloy::primitives::{Address, BlockNumber, Log, TxHash, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
-use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
-use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
+use zksync_os_batch_types::{CommittedBatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IChainAssetHandler;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
 use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
 use zksync_os_provider::NodeProvider;
-use zksync_os_types::ProtocolSemanticVersion;
 
 /// Finds the first block where `IChainAssetHandler::migrationNumber(chain_id) >= migration_number`
 /// using binary search. Returns latest block if migration number is not reached yet.
@@ -368,7 +365,7 @@ pub async fn fetch_stored_batch_data(
     else {
         return Ok(None);
     };
-    let batch_info = fetch_committed_batch_data(zk_chain, tx_hash, l1_block_number)
+    let batch_info = fetch_committed_batch_data(zk_chain, tx_hash, l1_block_number, batch_number)
         .await?
         .into_stored();
 
@@ -414,9 +411,18 @@ pub async fn fetch_committed_batch_data(
     zk_chain: &ZkChain<NodeProvider>,
     tx_hash: TxHash,
     l1_block_number: BlockNumber,
-) -> Result<ExtendedCommitBatchInfo, L1WatcherError> {
-    // L1 block where this batch got committed.
-    let l1_block_id = BlockId::number(l1_block_number);
+    batch_number: u64,
+) -> Result<CommittedBatchInfo, L1WatcherError> {
+    // The commit transaction (which carries the `CommitBatchInfo` calldata) and the `BlockCommit`
+    // event (which carries the commitment) are independent given the batch number, so we fetch
+    // them concurrently. Both can transiently lag right after the commit is observed when hitting
+    // a load-balanced RPC, so each is retried.
+    let retry_policy = || {
+        ConstantBuilder::default()
+            .with_delay(Duration::from_millis(200))
+            .with_max_times(50)
+    };
+
     let tx_fut = async {
         (|| async {
             let tx = zk_chain
@@ -434,59 +440,64 @@ pub async fn fetch_committed_batch_data(
             })?;
             Ok::<_, L1WatcherError>(tx)
         })
-        .retry(
-            ConstantBuilder::default()
-                .with_delay(Duration::from_millis(200))
-                .with_max_times(50),
-        )
+        .retry(retry_policy())
         .await
     };
-    let upgrade_fut = async {
-        zk_chain
-            .get_upgrade_batch_number(l1_block_id)
-            .await
-            .map_err(|e| L1WatcherError::Other(e.into()))
+
+    // The batch commitment is emitted in the `BlockCommit` event (indexed by batch number) of the
+    // commit transaction. Reading it from L1 directly is safe and accurate, unlike deriving it from
+    // the current protocol version / upgrade transaction hash, which reflect the latest chain state
+    // rather than the state at the moment this batch was committed. Filtering on the indexed
+    // `batchNumber` topic isolates this batch's event directly (a single commit tx covers a range
+    // of L2 blocks, and an L1 block may contain commits for several batches).
+    let log_fut = async {
+        (|| async {
+            zk_chain
+                .provider()
+                .get_logs(
+                    &Filter::new()
+                        .address(*zk_chain.address())
+                        .event_signature(IExecutor::BlockCommit::SIGNATURE_HASH)
+                        .topic1(U256::from(batch_number))
+                        .from_block(l1_block_number)
+                        .to_block(l1_block_number),
+                )
+                .await
+                .map_err(|e| L1WatcherError::Other(e.into()))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    L1WatcherError::Other(anyhow::anyhow!(
+                        "`BlockCommit` event for batch {batch_number} not found in L1 block {l1_block_number}"
+                    ))
+                })
+        })
+        .retry(retry_policy())
+        .await
     };
-    // Fetch active protocol version at the moment the batch got committed. This should work
-    // for the vast majority of cases except when upgrade gets applied in the same L1 block
-    // but after batch was committed.
-    let packed_protocol_version_fut = async {
-        zk_chain
-            .get_raw_protocol_version(l1_block_id)
-            .await
-            .map_err(|e| L1WatcherError::Other(e.into()))
-    };
-    let (tx, upgrade_batch_number, packed_protocol_version) =
-        tokio::try_join!(tx_fut, upgrade_fut, packed_protocol_version_fut,)?;
+
+    let (tx, log) = tokio::try_join!(tx_fut, log_fut)?;
 
     let CommitCalldata {
         commit_batch_info, ..
     } = CommitCalldata::decode(tx.input()).map_err(L1WatcherError::Other)?;
+    if commit_batch_info.batch_number != batch_number {
+        return Err(L1WatcherError::Other(anyhow::anyhow!(
+            "commit tx {tx_hash} encodes batch {} but batch {batch_number} was expected",
+            commit_batch_info.batch_number
+        )));
+    }
 
-    // To recreate batch's commitment (and hence it's `StoredBatchInfo` form) we need to
-    // know any potential upgrade transaction hash that was applied in this batch.
-    //
-    // Unfortunately, this information is not passed in `CommitBatchInfo` so we must derive
-    // it through other means. Querying `getL2SystemContractsUpgradeTxHash()` and
-    // `getL2SystemContractsUpgradeBatchNumber()` should work for the vast majority of cases
-    // except when the batch got committed and executed in the same L1 block (which should
-    // never happen in current implementation as commit->prove->execute operations are submitted
-    // sequentially after at least 1 block confirmation).
-    let upgrade_tx_hash = if upgrade_batch_number == commit_batch_info.batch_number {
-        // If the latest upgrade transaction belongs to this batch then current upgrade tx
-        // hash must also be present on L1. Thus, we fetch it.
-        Some(zk_chain.get_upgrade_tx_hash(l1_block_id).await?)
-    } else {
-        // Either latest in-progress upgrade transaction belongs to a different batch or
-        // there is none. If none, `upgrade_batch_number` would be `0` and thus never equal
-        // to the currently inspected batch as genesis does not get committed via this flow.
-        None
-    };
-    Ok(ExtendedCommitBatchInfo {
+    let commitment = IExecutor::BlockCommit::decode_log(&log.inner)
+        .map_err(|e| {
+            L1WatcherError::Other(anyhow::anyhow!(
+                "failed to decode `BlockCommit` event for batch {batch_number}: {e}"
+            ))
+        })?
+        .commitment;
+
+    Ok(CommittedBatchInfo {
         commit_info: commit_batch_info,
-        upgrade_tx_hash,
-        protocol_version: ProtocolSemanticVersion::try_from(packed_protocol_version)
-            .context("invalid protocol version fetched from L1")
-            .map_err(L1WatcherError::Other)?,
+        commitment,
     })
 }
