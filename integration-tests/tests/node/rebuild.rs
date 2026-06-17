@@ -229,7 +229,7 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
     let mut restarted_config = tester.config().clone();
     restarted_config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
         bounds: RebuildBounds {
-            from_block: block_to_empty,
+            from_block_number: block_to_empty,
             from_block_hash: original_emptied_block_hash,
             blocks_to_empty: vec![block_to_empty],
             reset_timestamps: false,
@@ -304,13 +304,13 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
     Ok(())
 }
 
-/// Verifies that the node panics on startup when `rebuild.from_block` points to a block
-/// that is already committed on L1 (i.e. `from_block <= last_l1_committed_block`).
+/// Verifies that the node panics on startup when `rebuild.from_block_number` points to a block
+/// that is already committed on L1 (i.e. `from_block_number <= last_l1_committed_block`).
 ///
 /// Scenario:
 ///   1. Start a node with the batcher enabled and mine a few blocks until at least one batch
 ///      is committed to L1.
-///   2. Restart with `rebuild.from_block = 1`, which is guaranteed to be within the
+///   2. Restart with `rebuild.from_block_number = 1`, which is guaranteed to be within the
 ///      already-committed range.
 ///   3. Expect a fatal error containing "rebuild_from_block must be > last_l1_committed_block".
 #[test_multisetup([CURRENT_TO_L1])]
@@ -334,7 +334,7 @@ async fn rebuild_panics_if_from_block_is_already_committed(
     let mut restarted_config = tester.config().clone();
     restarted_config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
         bounds: RebuildBounds {
-            from_block: 1,
+            from_block_number: 1,
             from_block_hash: block1_hash,
             blocks_to_empty: vec![],
             reset_timestamps: false,
@@ -393,7 +393,7 @@ async fn block_rebuild_hash_guard_prevents_double_rebuild(
     // can distinguish the pre- and post-rebuild states on the second restart.
     restart_config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
         bounds: RebuildBounds {
-            from_block: 1,
+            from_block_number: 1,
             from_block_hash: original_block1_hash,
             blocks_to_empty: vec![],
             reset_timestamps: true,
@@ -425,14 +425,14 @@ async fn block_rebuild_hash_guard_prevents_double_rebuild(
 /// Verifies that after reverting committed L1 batches, the node can restart in rebuild mode and
 /// process new L2 transactions.
 ///
-/// Without the L1 revert, starting with `rebuild.from_block` within the committed range
+/// Without the L1 revert, starting with `rebuild.from_block_number` within the committed range
 /// would panic — see `rebuild_panics_if_from_block_is_already_committed` for that assertion.
 ///
 /// Scenario:
 ///   1. Start a node with the batcher and mine until a batch is committed on L1.
 ///   2. Stop the node.
 ///   3. Restart with `rebuild.mode = danger_block_rebuild_with_l1_revert` and
-///      `rebuild.from_block = 1`; the node reverts all committed batches on L1 and then
+///      `rebuild.from_block_number = 1`; the node reverts all committed batches on L1 and then
 ///      rebuilds blocks from block 1.
 ///   4. Confirm the node is alive by sending and confirming a new L2 transaction.
 ///   5. Verify the server commits a new batch on L1 with the same number as the reverted one.
@@ -467,7 +467,7 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
     let mut restart_config = stopped.config().clone();
     restart_config.sequencer_config.rebuild = Some(RebuildConfig::DangerBlockRebuildWithL1Revert {
         bounds: RebuildBounds {
-            from_block: 1,
+            from_block_number: 1,
             from_block_hash: block1_hash,
             blocks_to_empty: vec![],
             reset_timestamps: false,
@@ -534,7 +534,7 @@ async fn danger_block_rebuild_with_l1_revert_hash_guard_prevents_double_revert(
     // differs from the pre-rebuild value and the guard can distinguish the two states.
     restart_config.sequencer_config.rebuild = Some(RebuildConfig::DangerBlockRebuildWithL1Revert {
         bounds: RebuildBounds {
-            from_block: 1,
+            from_block_number: 1,
             from_block_hash: original_block1_hash,
             blocks_to_empty: vec![],
             reset_timestamps: true,
@@ -582,7 +582,7 @@ async fn danger_block_rebuild_with_l1_revert_hash_guard_prevents_double_revert(
 /// Scenario:
 ///   1. Start a node with the batcher and wait for a batch to be committed on L1.
 ///   2. Snapshot the local tip block hash.
-///   3. Restart with `rebuild.mode = l1_revert`, `from_batch = 1` (revert batch 1 and above).
+///   3. Restart with `rebuild.mode = l1_revert`, `from_batch_number = 1` (revert batch 1 and above).
 ///   4. Assert the tip block hash is unchanged (local blocks not rebuilt).
 ///   5. Assert the node is alive and accepting new L2 transactions.
 #[test_multisetup([CURRENT_TO_L1])]
@@ -617,7 +617,7 @@ async fn revert_l1_commits_without_rebuild_leaves_local_blocks_intact(
     let mut revert_config = stopped.config().clone();
     // Revert batch 1 and above, keeping no committed batches. L1Revert → no local block rebuild.
     revert_config.sequencer_config.rebuild = Some(RebuildConfig::L1Revert {
-        from_batch: NonZeroU64::new(1).unwrap(),
+        from_batch_number: NonZeroU64::new(1).unwrap(),
         from_batch_commit_tx_hash: batch1_commit_tx_hash,
         l1_reverter_sk: reverter_signer,
     });
@@ -641,14 +641,14 @@ async fn revert_l1_commits_without_rebuild_leaves_local_blocks_intact(
 /// startup skips the revert gracefully rather than panicking.
 ///
 /// Before this change the startup path had an `assert!` that fired when
-/// `last_committed_batch < from_batch`, causing a crash-loop on every pod restart
+/// `last_committed_batch < from_batch_number`, causing a crash-loop on every pod restart
 /// after a successful revert (if no new batches had been committed in the meantime).
 ///
 /// Scenario:
 ///   1. Commit a batch on L1.
-///   2. First restart: `rebuild.mode = l1_revert`, `from_batch = 1`, batcher disabled so nothing
+///   2. First restart: `rebuild.mode = l1_revert`, `from_batch_number = 1`, batcher disabled so nothing
 ///      re-commits; `last_committed_batch` drops to 0.
-///   3. Second restart: same config; `last_committed_batch (0) < from_batch (1)` → graceful skip.
+///   3. Second restart: same config; `last_committed_batch (0) < from_batch_number (1)` → graceful skip.
 ///   4. Assert the node starts cleanly and processes new L2 transactions.
 #[test_multisetup([CURRENT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
@@ -681,7 +681,7 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
     revert_config.batcher_config.enabled = false;
     // Revert batch 1 and above; L1Revert mode means no local block rebuild runs.
     revert_config.sequencer_config.rebuild = Some(RebuildConfig::L1Revert {
-        from_batch: NonZeroU64::new(1).unwrap(),
+        from_batch_number: NonZeroU64::new(1).unwrap(),
         from_batch_commit_tx_hash: batch1_commit_tx_hash,
         l1_reverter_sk: reverter_signer,
     });
@@ -695,7 +695,7 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
     })
     .await?;
 
-    // Second restart: last_committed_batch (0) < from_batch (1) → graceful skip, no panic.
+    // Second restart: last_committed_batch (0) < from_batch_number (1) → graceful skip, no panic.
     let stopped2 = first_reverted.stop().await?;
     let second = stopped2.start_with_config(revert_config).await?;
 
@@ -772,7 +772,7 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
     let mut restart_config = stopped.config().clone();
     restart_config.sequencer_config.rebuild = Some(RebuildConfig::DangerBlockRebuildWithL1Revert {
         bounds: RebuildBounds {
-            from_block,
+            from_block_number: from_block,
             from_block_hash,
             blocks_to_empty: vec![],
             reset_timestamps: false,
@@ -816,7 +816,7 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
 ///
 /// Scenario:
 ///   1. Start a node with the full pipeline and wait until at least one batch is executed on L1.
-///   2. Restart with `rebuild.mode = l1_revert`, `from_batch = 1` (<= last_executed_batch).
+///   2. Restart with `rebuild.mode = l1_revert`, `from_batch_number = 1` (<= last_executed_batch).
 ///   3. Expect a fatal startup error containing "at or before the last executed batch".
 #[test_multisetup([CURRENT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
@@ -840,9 +840,9 @@ async fn l1_revert_rejects_already_executed_batch(env: TestEnvironment) -> anyho
     let stopped = tester.stop().await?;
     let reverter_signer = make_reverter_config(&stopped)?;
     let mut revert_config = stopped.config().clone();
-    // from_batch = 1 is at or below last_executed_batch, so the revert must be rejected.
+    // from_batch_number = 1 is at or below last_executed_batch, so the revert must be rejected.
     revert_config.sequencer_config.rebuild = Some(RebuildConfig::L1Revert {
-        from_batch: NonZeroU64::new(1).unwrap(),
+        from_batch_number: NonZeroU64::new(1).unwrap(),
         from_batch_commit_tx_hash: batch1_commit_tx_hash,
         l1_reverter_sk: reverter_signer,
     });

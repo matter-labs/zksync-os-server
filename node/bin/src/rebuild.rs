@@ -217,7 +217,11 @@ async fn plan_startup_rebuild(
 ) -> anyhow::Result<RebuildAction> {
     match rebuild {
         RebuildConfig::BlockRebuild { bounds } => Ok(
-            if from_block_hash_matches(repositories, bounds.from_block, bounds.from_block_hash)? {
+            if from_block_hash_matches(
+                repositories,
+                bounds.from_block_number,
+                bounds.from_block_hash,
+            )? {
                 // No L1 revert for this mode.
                 RebuildAction::NoL1Revert
             } else {
@@ -229,20 +233,27 @@ async fn plan_startup_rebuild(
             bounds,
             l1_reverter_sk,
         } => {
-            if !from_block_hash_matches(repositories, bounds.from_block, bounds.from_block_hash)? {
+            if !from_block_hash_matches(
+                repositories,
+                bounds.from_block_number,
+                bounds.from_block_hash,
+            )? {
                 return Ok(RebuildAction::SkipAndClearConfig);
             }
 
             tracing::warn!(
-                from_block = bounds.from_block,
+                from_block_number = bounds.from_block_number,
                 last_committed_batch = l1_state.last_committed_batch,
-                "DangerBlockRebuildWithL1Revert: deriving batch to revert from from_block"
+                "DangerBlockRebuildWithL1Revert: deriving batch to revert from from_block_number"
             );
 
-            let last_l1_batch_to_keep =
-                derive_last_l1_batch_to_keep(bounds.from_block, l1_state, max_blocks_to_process)
-                    .await
-                    .context("failed to derive last_l1_batch_to_keep")?;
+            let last_l1_batch_to_keep = derive_last_l1_batch_to_keep(
+                bounds.from_block_number,
+                l1_state,
+                max_blocks_to_process,
+            )
+            .await
+            .context("failed to derive last_l1_batch_to_keep")?;
 
             Ok(RebuildAction::RevertL1 {
                 last_l1_batch_to_keep,
@@ -251,14 +262,14 @@ async fn plan_startup_rebuild(
         }
 
         RebuildConfig::L1Revert {
-            from_batch,
+            from_batch_number,
             from_batch_commit_tx_hash,
             l1_reverter_sk,
         } => {
-            let from_batch = from_batch.get();
-            if l1_state.last_committed_batch < from_batch {
+            let from_batch_number = from_batch_number.get();
+            if l1_state.last_committed_batch < from_batch_number {
                 tracing::info!(
-                    from_batch,
+                    from_batch_number,
                     last_committed_batch = l1_state.last_committed_batch,
                     "skipping L1Revert: already reverted or no batches to revert"
                 );
@@ -266,23 +277,23 @@ async fn plan_startup_rebuild(
             }
 
             anyhow::ensure!(
-                from_batch > l1_state.last_executed_batch,
-                "`l1_revert.from_batch` ({from_batch}) is at or before the last executed batch \
-                 ({}); executed batches are finalized on L1 and cannot be reverted",
+                from_batch_number > l1_state.last_executed_batch,
+                "`l1_revert.from_batch_number` ({from_batch_number}) is at or before the last \
+                 executed batch ({}); executed batches are finalized on L1 and cannot be reverted",
                 l1_state.last_executed_batch,
             );
 
             let on_chain_commit_tx_hash = fetch_batch_commit_tx_hash(
                 &l1_state.diamond_proxy_sl,
-                from_batch,
+                from_batch_number,
                 max_blocks_to_process,
             )
             .await
-            .context("failed to fetch on-chain commit tx hash for L1Revert from_batch")?;
+            .context("failed to fetch on-chain commit tx hash for L1Revert from_batch_number")?;
 
             if on_chain_commit_tx_hash != *from_batch_commit_tx_hash {
                 tracing::info!(
-                    from_batch,
+                    from_batch_number,
                     ?on_chain_commit_tx_hash,
                     ?from_batch_commit_tx_hash,
                     "skipping L1Revert: from_batch_commit_tx_hash mismatch (already reverted and \
@@ -292,14 +303,14 @@ async fn plan_startup_rebuild(
             }
 
             tracing::warn!(
-                from_batch,
-                last_l1_batch_to_keep = from_batch - 1,
+                from_batch_number,
+                last_l1_batch_to_keep = from_batch_number - 1,
                 last_committed_batch = l1_state.last_committed_batch,
                 "L1Revert: performing standalone L1 revert"
             );
 
             Ok(RebuildAction::RevertL1 {
-                last_l1_batch_to_keep: from_batch - 1,
+                last_l1_batch_to_keep: from_batch_number - 1,
                 l1_reverter_sk: l1_reverter_sk.clone(),
             })
         }

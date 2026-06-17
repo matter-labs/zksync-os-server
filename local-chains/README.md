@@ -72,25 +72,6 @@ Commonly modified values include:
 - `l1_sender.operator_prove_sk` — Private key for proving batches
 - `l1_sender.operator_execute_sk` — Private key for executing batches
 
-Block / batch revert options. All live under `sequencer.rebuild`; the required `mode` field selects one of three operations:
-
-**`mode: block_rebuild`** — replay local blocks from `from_block` without touching L1:
-- `from_block` — required; first block to rebuild from
-- `from_block_hash` — required; hash of `from_block` before the rebuild; the rebuild is skipped on pod restart when the hash no longer matches (block was already rebuilt)
-- `blocks_to_empty` — optional list of block numbers to remove all transactions from
-- `reset_timestamps` — optional; if `true`, rebuilt blocks get fresh timestamps
-
-**`mode: danger_block_rebuild_with_l1_revert`** — revert committed L1 batches (batch auto-derived from `from_block`), then rebuild local blocks:
-- `from_block` — required; first block to rebuild from; must fall within a committed-only (not yet executed) batch; may be the first block of that batch or any block inside it — the entire containing batch is reverted on L1 before the rebuild starts
-- `from_block_hash` — required; both the L1 revert and rebuild are skipped on restart when the hash no longer matches
-- `l1_reverter_sk` — required; signer (private key or GCP KMS) for `revertBatchesSharedBridge`
-- `blocks_to_empty`, `reset_timestamps` — optional, same as `mode: block_rebuild`
-
-**`mode: l1_revert`** — revert committed L1 batches only; local blocks are kept as-is:
-- `from_batch` — required; first batch to revert (>= 1); all committed batches from this number upward are reverted
-- `from_batch_commit_tx_hash` — required; hash of the L1 transaction that committed `from_batch`; acts as an idempotency guard — the revert is skipped unless the transaction currently committing `from_batch` on L1 matches this hash. The simplest way to get the hash is the sequencer's own logs (search for the next line): `commit batch <from_batch> ... succeeded on L1   (tx_hash=0x…)`
-- `l1_reverter_sk` — required; signer (private key or GCP KMS) for `revertBatchesSharedBridge`
-
 ### `genesis.json`
 
 ZKsync OS genesis configuration with the following fields:

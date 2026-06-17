@@ -368,7 +368,7 @@ fn load_internal_config(config: &mut Config) {
         } else {
             config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
                 bounds: RebuildBounds {
-                    from_block: failing_block,
+                    from_block_number: failing_block,
                     from_block_hash: internal_config.failing_block_hash.expect(
                         "internal_config.json has `failing_block` but no `failing_block_hash`; \
                          clear `failing_block` manually if the rebuild already ran",

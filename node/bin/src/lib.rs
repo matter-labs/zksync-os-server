@@ -372,7 +372,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // External node can be started at any point and doesn't have to be in sync with L1.
         // But the main node is expected to only produce blocks on top of committed L1 blocks,
         // as those can't be re-sequenced.
-        if let Some(from_block) = rebuild.rebuild_options().map(|o| o.from_block) {
+        if let Some(from_block) = rebuild.rebuild_options().map(|o| o.from_block_number) {
             assert!(
                 from_block > node_startup_state.last_l1_committed_block,
                 "rebuild_from_block must be > last_l1_committed_block, got {} <= {}",
@@ -1746,7 +1746,7 @@ fn determine_starting_block(
                 .rebuild
                 .as_ref()
                 .and_then(|r| r.rebuild_options())
-                .map_or(u64::MAX, |opts| opts.from_block),
+                .map_or(u64::MAX, |opts| opts.from_block_number),
         ]
         .into_iter()
         .min()

@@ -244,7 +244,7 @@ pub async fn fetch_batch(
         .with_context(|| format!("failed to find committed batch {batch_number} on L1"))
 }
 
-/// Resolves the hash of the L1 transaction that currently commits `batch_number`.
+/// Resolves the L1 transaction hash of the Commit transaction of batch `batch_number` (not to be confused with batch header hash itself)
 pub async fn fetch_batch_commit_tx_hash(
     diamond_proxy_sl: &ZkChain<NodeProvider>,
     batch_number: u64,
