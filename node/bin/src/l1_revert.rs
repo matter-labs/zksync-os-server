@@ -5,24 +5,15 @@ use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_l1_watcher::{fetch_batch, fetch_batch_commit_tx_hash};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_provider::{EthWalletProvider, NodeProvider};
-use zksync_os_storage_api::ReadRepository;
 
 use crate::config::{Config, RebuildConfig};
 
-/// What the startup rebuild/revert config asks us to do, decided by [`plan_startup_rebuild`]
-/// before any L1 transaction is sent.
-enum RebuildAction {
-    /// The `from_block_hash` guard says the operation already ran (or `from_block` is unknown
-    /// locally): drop the rebuild config so the local block rebuild is skipped too.
-    SkipAndClearConfig,
-    /// Nothing to do on L1: either a local-only `block_rebuild`, or a standalone `l1_revert`
-    /// whose skip conditions hold (already reverted / hash mismatch).
-    NoL1Revert,
-    /// Revert all committed batches above `last_l1_batch_to_keep` on the settlement layer.
-    RevertL1 {
-        last_l1_batch_to_keep: u64,
-        l1_reverter_sk: SignerConfig,
-    },
+/// An L1 revert to perform, decided by [`plan_l1_revert`] before any L1 transaction is sent.
+/// `plan_l1_revert` returns `None` when no L1 revert is needed.
+struct RevertPlan {
+    /// Revert all committed batches above this number on the settlement layer.
+    last_l1_batch_to_keep: u64,
+    l1_reverter_sk: SignerConfig,
 }
 
 /// Derives `last_l1_batch_to_keep` from `from_block` by scanning committed-only batches on L1.
@@ -98,7 +89,7 @@ async fn derive_last_l1_batch_to_keep(
 /// Calls `revertBatchesSharedBridge` on the validator timelock to roll back all committed batches
 /// above `last_l1_batch_to_keep`. Verifies the reverter has the required role before submitting.
 ///
-/// Reverting executed (finalized) batches is impossible: [`plan_startup_rebuild`] checks the
+/// Reverting executed (finalized) batches is impossible: [`plan_l1_revert`] checks the
 /// target against the on-chain `last_executed_batch`, and the Executor contract itself rejects
 /// reverts below `totalBatchesExecuted`.
 async fn perform_l1_revert(
@@ -170,77 +161,20 @@ async fn perform_l1_revert(
     Ok(())
 }
 
-/// Checks whether block `from_block` currently has the expected `from_block_hash`.
-///
-/// Returns `Ok(false)` (operation should be skipped) when the hashes differ — distinguishing the
-/// two reasons in the logs:
-/// - block missing locally: likely a misconfigured `from_block` (typo / beyond local tip);
-/// - hash changed: the rebuild/revert already ran on a previous startup (the expected case).
-fn from_block_hash_matches(
-    repositories: &dyn ReadRepository,
-    from_block: u64,
-    from_block_hash: alloy::primitives::BlockHash,
-) -> anyhow::Result<bool> {
-    let current_hash = repositories
-        .get_block_by_number(from_block)
-        .with_context(|| format!("failed to read block {from_block} from local repository"))?
-        .map(|b| b.hash());
-    Ok(match current_hash {
-        Some(hash) if hash == from_block_hash => true,
-        Some(hash) => {
-            tracing::info!(
-                from_block,
-                current_hash = ?hash,
-                ?from_block_hash,
-                "skipping startup rebuild/revert: from_block_hash changed (already ran)"
-            );
-            false
-        }
-        None => {
-            tracing::warn!(
-                from_block,
-                ?from_block_hash,
-                "skipping startup rebuild/revert: block `from_block` not found locally \
-                 (check `from_block` is correct — it may be a typo or beyond the local tip)"
-            );
-            false
-        }
-    })
-}
-
-/// Decides what to do for the given rebuild config without performing any L1 transaction.
-async fn plan_startup_rebuild(
+/// Decides the L1 revert to perform for the given rebuild config without sending any L1
+/// transaction. Returns `None` when no L1 revert is needed.
+async fn plan_l1_revert(
     rebuild: &RebuildConfig,
-    repositories: &dyn ReadRepository,
     l1_state: &L1State,
     max_blocks_to_process: u64,
-) -> anyhow::Result<RebuildAction> {
+) -> anyhow::Result<Option<RevertPlan>> {
     match rebuild {
-        RebuildConfig::BlockRebuild { bounds } => Ok(
-            if from_block_hash_matches(
-                repositories,
-                bounds.from_block_number,
-                bounds.from_block_hash,
-            )? {
-                // No L1 revert for this mode.
-                RebuildAction::NoL1Revert
-            } else {
-                RebuildAction::SkipAndClearConfig
-            },
-        ),
+        RebuildConfig::BlockRebuild { .. } => Ok(None),
 
         RebuildConfig::DangerBlockRebuildWithL1Revert {
             bounds,
             l1_reverter_sk,
         } => {
-            if !from_block_hash_matches(
-                repositories,
-                bounds.from_block_number,
-                bounds.from_block_hash,
-            )? {
-                return Ok(RebuildAction::SkipAndClearConfig);
-            }
-
             tracing::warn!(
                 from_block_number = bounds.from_block_number,
                 last_committed_batch = l1_state.last_committed_batch,
@@ -255,10 +189,10 @@ async fn plan_startup_rebuild(
             .await
             .context("failed to derive last_l1_batch_to_keep")?;
 
-            Ok(RebuildAction::RevertL1 {
+            Ok(Some(RevertPlan {
                 last_l1_batch_to_keep,
                 l1_reverter_sk: l1_reverter_sk.clone(),
-            })
+            }))
         }
 
         RebuildConfig::L1Revert {
@@ -273,7 +207,7 @@ async fn plan_startup_rebuild(
                     last_committed_batch = l1_state.last_committed_batch,
                     "skipping L1Revert: already reverted or no batches to revert"
                 );
-                return Ok(RebuildAction::NoL1Revert);
+                return Ok(None);
             }
 
             anyhow::ensure!(
@@ -299,7 +233,7 @@ async fn plan_startup_rebuild(
                     "skipping L1Revert: from_batch_commit_tx_hash mismatch (already reverted and \
                      re-committed, or wrong batch)"
                 );
-                return Ok(RebuildAction::NoL1Revert);
+                return Ok(None);
             }
 
             tracing::warn!(
@@ -309,43 +243,37 @@ async fn plan_startup_rebuild(
                 "L1Revert: performing standalone L1 revert"
             );
 
-            Ok(RebuildAction::RevertL1 {
+            Ok(Some(RevertPlan {
                 last_l1_batch_to_keep: from_batch_number - 1,
                 l1_reverter_sk: l1_reverter_sk.clone(),
-            })
+            }))
         }
     }
 }
 
-/// Handles the startup rebuild/revert config and performs L1 revert.
+/// Performs the configured startup L1 revert, if any.
 ///
-/// Returns `true` if an L1 revert was performed and the caller should refresh `L1State`.
-/// Returns `false` if no revert was needed (skipped or `BlockRebuild` which never touches L1).
-pub async fn handle_startup_rebuild(
-    config: &mut Config,
-    repositories: &dyn ReadRepository,
+/// Returns `true` if an L1 revert was performed.
+/// Returns `false` if no revert was needed (`BlockRebuild`, or an `L1Revert` whose skip
+/// conditions hold).
+pub async fn revert_l1_on_startup(
+    rebuild: &RebuildConfig,
+    config: &Config,
     l1_state: &L1State,
     sl_provider: &NodeProvider,
 ) -> anyhow::Result<bool> {
-    let Some(rebuild) = config.sequencer_config.rebuild.clone() else {
-        return Ok(false);
-    };
     let chain_id = config
         .genesis_config
         .chain_id
         .context("`genesis.chain_id` is required for startup rebuild")?;
     let max_blocks = config.l1_watcher_config.max_blocks_to_process;
 
-    match plan_startup_rebuild(&rebuild, repositories, l1_state, max_blocks).await? {
-        RebuildAction::SkipAndClearConfig => {
-            config.sequencer_config.rebuild = None;
-            Ok(false)
-        }
-        RebuildAction::NoL1Revert => Ok(false),
-        RebuildAction::RevertL1 {
+    match plan_l1_revert(rebuild, l1_state, max_blocks).await? {
+        None => Ok(false),
+        Some(RevertPlan {
             last_l1_batch_to_keep,
             l1_reverter_sk,
-        } => {
+        }) => {
             perform_l1_revert(
                 last_l1_batch_to_keep,
                 l1_state,

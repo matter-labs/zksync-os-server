@@ -889,6 +889,17 @@ pub enum RebuildConfig {
 }
 
 impl RebuildConfig {
+    /// Returns the block `bounds` for the modes that rebuild local blocks (carrying the
+    /// `from_block_hash` idempotency guard), `None` for `L1Revert` which has no local block bounds.
+    pub fn bounds(&self) -> Option<&RebuildBounds> {
+        match self {
+            Self::BlockRebuild { bounds } | Self::DangerBlockRebuildWithL1Revert { bounds, .. } => {
+                Some(bounds)
+            }
+            Self::L1Revert { .. } => None,
+        }
+    }
+
     /// Returns `RebuildOptions` if this config triggers a local block rebuild, `None` for
     /// `L1Revert` which only acts on L1 without replaying local blocks.
     pub fn rebuild_options(&self) -> Option<RebuildOptions> {

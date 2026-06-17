@@ -9,6 +9,7 @@ pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
 mod init_tx_forwarder;
+mod l1_revert;
 mod migration_gate;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
@@ -16,20 +17,22 @@ pub mod prover_api;
 mod prover_block;
 mod prover_input_generator;
 mod provider;
-mod rebuild;
 mod state_initializer;
 pub mod tree_manager;
 pub mod util;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
-use crate::command_source::{ConsensusNodeCommandSource, ExternalNodeCommandSource};
+use crate::command_source::{
+    ConsensusNodeCommandSource, ExternalNodeCommandSource, RebuildOptions,
+};
 use crate::config::{
-    Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
+    Config, ProverApiConfig, RebuildConfig, base_token_price_updater_config, gas_adjuster_config,
     report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
 use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
+use crate::l1_revert::revert_l1_on_startup;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -42,7 +45,6 @@ use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_api::snark_proving_pipeline_step::SnarkProvingPipelineStep;
 use crate::prover_input_generator::ProverInputGenerator;
 use crate::provider::{ProviderKind, build_node_provider};
-use crate::rebuild::handle_startup_rebuild;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
@@ -130,7 +132,7 @@ pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 #[allow(clippy::too_many_arguments)]
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
     runtime: &Runtime,
-    mut config: Config,
+    config: Config,
 ) {
     report_static_config_metrics(&config);
 
@@ -232,12 +234,37 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     )
     .await;
 
-    // Fetch the L1 state, performing any configured startup L1 revert first.
+    // Apply the `from_block_hash` idempotency guard once, up front, to derive the *effective*
+    // rebuild config used for the rest of startup. If the configured rebuild already ran on a
+    // prior startup (hash no longer matches), it is dropped here so BOTH the L1 revert (stage 1,
+    // below) and the local block rebuild (stage 2, downstream) are skipped.
+    let rebuild = if node_role.is_main() {
+        let configured = config.sequencer_config.rebuild.clone();
+        match configured.as_ref().and_then(|r| r.bounds()) {
+            Some(bounds)
+                if !from_block_hash_matches(
+                    &repositories,
+                    bounds.from_block_number,
+                    bounds.from_block_hash,
+                )
+                .expect("failed to evaluate startup rebuild from_block_hash guard") =>
+            {
+                None
+            }
+            _ => configured,
+        }
+    } else {
+        config.sequencer_config.rebuild.clone()
+    };
+    // What the local block-rebuild stage (stage 2) should replay, if anything.
+    let rebuild_options = rebuild.as_ref().and_then(|r| r.rebuild_options());
+
+    // Fetch the L1 state, performing the configured startup L1 revert first.
     tracing::info!("Reading L1 state");
     let l1_state = fetch_l1_state_with_startup_revert(
-        &mut config,
+        &config,
         node_role,
-        &repositories,
+        rebuild.as_ref(),
         &l1_provider,
         gateway_provider.as_ref(),
         bridgehub_address,
@@ -365,21 +392,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_l1_executed_block,
     };
 
-    if let Some(rebuild) = &config.sequencer_config.rebuild
+    if let Some(from_block) = rebuild_options.as_ref().map(|o| o.from_block_number)
         && node_role.is_main()
     {
         // The assertion is only relevant for the main node.
         // External node can be started at any point and doesn't have to be in sync with L1.
         // But the main node is expected to only produce blocks on top of committed L1 blocks,
         // as those can't be re-sequenced.
-        if let Some(from_block) = rebuild.rebuild_options().map(|o| o.from_block_number) {
-            assert!(
-                from_block > node_startup_state.last_l1_committed_block,
-                "rebuild_from_block must be > last_l1_committed_block, got {} <= {}",
-                from_block,
-                node_startup_state.last_l1_committed_block
-            );
-        }
+        assert!(
+            from_block > node_startup_state.last_l1_committed_block,
+            "rebuild_from_block must be > last_l1_committed_block, got {} <= {}",
+            from_block,
+            node_startup_state.last_l1_committed_block
+        );
     }
 
     let finality_storage = Finality::new(FinalityStatus {
@@ -407,7 +432,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 node_startup_state.repositories_persisted_block
             };
         // Some batches committed - starting from an already committed batch
-        determine_starting_block(&config, &node_startup_state, &state, last_matching_block)
+        determine_starting_block(
+            &config,
+            &node_startup_state,
+            &state,
+            last_matching_block,
+            rebuild_options.as_ref(),
+        )
     } else {
         // No batches committed - starting from genesis.
         0
@@ -924,6 +955,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             runtime,
             state.clone(),
             starting_block,
+            rebuild_options,
             repositories.clone(),
             block_context_provider,
             tree_db,
@@ -1031,12 +1063,50 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("All components scheduled for initialization in {startup_time:?}");
 }
 
+/// Checks whether block `rebuild.from_block` currently has the expected `rebuild.from_block_hash`.
+///
+/// Returns `Ok(false)` (operation should be skipped) when the hashes differ — distinguishing the
+/// two reasons in the logs:
+/// - block missing locally: likely a misconfigured `from_block` (typo / beyond local tip);
+/// - hash changed: the rebuild/revert already ran on a previous startup (the expected case).
+fn from_block_hash_matches(
+    repositories: &dyn ReadRepository,
+    from_block: u64,
+    from_block_hash: alloy::primitives::BlockHash,
+) -> anyhow::Result<bool> {
+    let current_hash = repositories
+        .get_block_by_number(from_block)
+        .with_context(|| format!("failed to read block {from_block} from local repository"))?
+        .map(|b| b.hash());
+    Ok(match current_hash {
+        Some(hash) if hash == from_block_hash => true,
+        Some(hash) => {
+            tracing::info!(
+                from_block,
+                current_hash = ?hash,
+                ?from_block_hash,
+                "skipping startup rebuild/revert: from_block_hash changed (already ran)"
+            );
+            false
+        }
+        None => {
+            tracing::warn!(
+                from_block,
+                ?from_block_hash,
+                "skipping startup rebuild/revert: block `from_block` not found locally \
+                 (check `from_block` is correct — it may be a typo or beyond the local tip)"
+            );
+            false
+        }
+    })
+}
+
 /// Fetches the L1 state, performing any configured startup L1 revert first, and returns the
 /// post-revert state.
 async fn fetch_l1_state_with_startup_revert(
-    config: &mut Config,
+    config: &Config,
     node_role: NodeRole,
-    repositories: &dyn ReadRepository,
+    rebuild: Option<&RebuildConfig>,
     l1_provider: &NodeProvider,
     gateway_provider: Option<&NodeProvider>,
     bridgehub_address: Address,
@@ -1058,7 +1128,9 @@ async fn fetch_l1_state_with_startup_revert(
     .await
     .context("failed to fetch L1 state")?;
 
-    if node_role.is_main() && config.sequencer_config.rebuild.is_some() {
+    if node_role.is_main()
+        && let Some(rebuild) = rebuild
+    {
         let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
             l1_provider.clone()
         } else {
@@ -1067,7 +1139,7 @@ async fn fetch_l1_state_with_startup_revert(
                 .context("chain settles on Gateway but no gateway RPC provider is configured")?
         };
 
-        let l1_revert_ran = handle_startup_rebuild(config, repositories, &l1_state, &sl_provider)
+        let l1_revert_ran = revert_l1_on_startup(rebuild, config, &l1_state, &sl_provider)
             .await
             .context("startup l1 revert failed")?;
 
@@ -1098,6 +1170,7 @@ async fn run_main_node_pipeline(
     runtime: &Runtime,
     state: impl ReadStateHistory + WriteState + Clone,
     starting_block: u64,
+    rebuild_options: Option<RebuildOptions>,
     repositories: impl WriteRepository + Clone,
     block_context_provider: BlockContextProvider<impl L2Subpool>,
     tree: MerkleTree<RocksDBWrapper>,
@@ -1140,11 +1213,7 @@ async fn run_main_node_pipeline(
         .pipe(ConsensusNodeCommandSource {
             block_replay_storage: block_replay_storage.clone(),
             starting_block,
-            rebuild_options: config
-                .sequencer_config
-                .rebuild
-                .as_ref()
-                .and_then(|r| r.rebuild_options()),
+            rebuild_options,
             replays_to_execute,
             pipeline_gate,
             leadership,
@@ -1700,6 +1769,7 @@ fn determine_starting_block(
     node_startup_state: &NodeStateOnStartup,
     state: &impl ReadStateHistory,
     last_matching_block: BlockNumber,
+    rebuild_options: Option<&RebuildOptions>,
 ) -> BlockNumber {
     assert!(
         node_startup_state.l1_state.last_committed_batch > 0,
@@ -1729,12 +1799,7 @@ fn determine_starting_block(
             *state.block_range_available().end(),
             // If block rebuild (aka block reversion) is configured, we should ensure we replay
             // all the blocks we are rebuilding
-            config
-                .sequencer_config
-                .rebuild
-                .as_ref()
-                .and_then(|r| r.rebuild_options())
-                .map_or(u64::MAX, |opts| opts.from_block_number),
+            rebuild_options.map_or(u64::MAX, |opts| opts.from_block_number),
         ]
         .into_iter()
         .min()
