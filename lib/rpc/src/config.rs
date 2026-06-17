@@ -1,25 +1,42 @@
 use crate::limits::Limits;
-use crate::method_filter::MethodFilter;
 use alloy::primitives::Address;
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU32;
 use std::time::Duration;
 
-/// How the JSON-RPC server throttles incoming requests.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub enum RateLimitPolicy {
+/// Rate-limit configuration.
+#[derive(Clone, Debug, Default)]
+pub enum RateLimits {
     /// No rate limiting.
     #[default]
-    Disabled,
-    /// Hardcoded per-node buckets. Scale capacity by adding nodes behind a load balancer.
-    Tiered,
+    None,
+    /// One global cap, an `m_rps` bucket shared by `m_methods`, and per-method overrides
+    /// in `custom_methods`.
+    Tiered {
+        global_rps: NonZeroU32,
+        m_rps: NonZeroU32,
+        m_methods: HashSet<String>,
+        custom_methods: HashMap<String, NonZeroU32>,
+    },
 }
 
-impl RateLimitPolicy {
-    pub(crate) fn to_limits(self) -> Limits {
+impl RateLimits {
+    pub(crate) fn into_limits(self) -> Limits {
         match self {
-            Self::Disabled => Limits::default(),
-            Self::Tiered => Limits::tiered(),
+            Self::None => Limits::default(),
+            Self::Tiered {
+                global_rps,
+                m_rps,
+                m_methods,
+                custom_methods,
+            } => Limits {
+                global_rps: Some(global_rps),
+                methods: m_methods
+                    .into_iter()
+                    .map(|name| (name, m_rps))
+                    .chain(custom_methods)
+                    .collect(),
+            },
         }
     }
 }
@@ -70,11 +87,11 @@ pub struct RpcConfig {
     /// because pubdata price increase in-between estimation and sequencing.
     pub estimate_gas_pubdata_price_factor: f64,
 
-    /// Rate-limiting policy for incoming requests.
-    pub rate_limit_policy: RateLimitPolicy,
+    /// Rate limits for incoming requests.
+    pub rate_limits: RateLimits,
 
-    /// Method-availability filter: which RPC methods the server will respond to.
-    pub method_filter: MethodFilter,
+    /// Methods rejected with -32601 before any rate-limit check.
+    pub method_filter: HashSet<String>,
 }
 
 impl RpcConfig {

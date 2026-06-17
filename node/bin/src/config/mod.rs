@@ -11,10 +11,13 @@ use smart_config::metadata::{SizeUnit, TimeUnit};
 use smart_config::value::SecretString;
 use smart_config::{
     ByteSize, ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig,
-    ErrorWithOrigin, EtherAmount, ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
+    ErrorWithOrigin, EtherAmount, ParseErrors, Serde,
+    de::{Delimited, Entries},
+    metadata::EtherUnit,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
+use std::num::NonZeroU32;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_config_validation_macros::ConfigValidate;
@@ -993,13 +996,51 @@ pub struct RpcConfig {
     #[config(default_t = 2.0)]
     pub estimate_gas_pubdata_price_factor: f64,
 
-    /// Rate-limiting policy for incoming JSON-RPC requests.
-    #[config(default, with = Serde![str])]
-    pub rate_limit_policy: zksync_os_rpc::RateLimitPolicy,
+    /// Rate limits for incoming JSON-RPC requests.
+    #[config(nest)]
+    pub rate_limits: RpcRateLimitsConfig,
 
     /// List of RPC methods to reject with -32601. Default is empty.
-    #[config(default, with = Serde![*])]
-    pub method_filter: zksync_os_rpc::MethodFilter,
+    #[config(default, with = Delimited::new(","))]
+    pub method_filter: HashSet<String>,
+}
+
+/// Rate-limit configuration for the JSON-RPC server.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(tag = "type", derive(Default))]
+pub enum RpcRateLimitsConfig {
+    /// No rate limiting.
+    #[config(default)]
+    None,
+    /// One global cap, an `m_rps` bucket shared by `m_methods`, and per-method overrides
+    /// in `custom_methods`.
+    Tiered {
+        global_rps: NonZeroU32,
+        m_rps: NonZeroU32,
+        #[config(default, with = Delimited::new(","))]
+        m_methods: HashSet<String>,
+        #[config(default, with = Entries::WELL_KNOWN.delimited(",", "="))]
+        custom_methods: HashMap<String, NonZeroU32>,
+    },
+}
+
+impl From<RpcRateLimitsConfig> for zksync_os_rpc::RateLimits {
+    fn from(c: RpcRateLimitsConfig) -> Self {
+        match c {
+            RpcRateLimitsConfig::None => Self::None,
+            RpcRateLimitsConfig::Tiered {
+                global_rps,
+                m_rps,
+                m_methods,
+                custom_methods,
+            } => Self::Tiered {
+                global_rps,
+                m_rps,
+                m_methods,
+                custom_methods,
+            },
+        }
+    }
 }
 
 /// L1 sender configuration. The signing key fields are only required on the Main Node;
@@ -1814,7 +1855,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
             gas_price_scale_factor: c.gas_price_scale_factor,
             estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
-            rate_limit_policy: c.rate_limit_policy,
+            rate_limits: c.rate_limits.into(),
             method_filter: c.method_filter,
         }
     }

@@ -1,9 +1,9 @@
-use crate::method_filter::MethodFilter;
 use jsonrpsee::MethodResponse;
 use jsonrpsee::core::middleware::{Batch, Notification};
 use jsonrpsee::server::middleware::rpc::{RpcService, RpcServiceT};
 use jsonrpsee::types::Request;
 use jsonrpsee::types::error::{ErrorObject, METHOD_NOT_FOUND_CODE};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 fn method_disabled_err() -> ErrorObject<'static> {
@@ -14,11 +14,11 @@ fn method_disabled_err() -> ErrorObject<'static> {
 #[derive(Clone)]
 pub(crate) struct MethodFiltering<S = RpcService> {
     inner: S,
-    filter: Arc<MethodFilter>,
+    filter: Arc<HashSet<String>>,
 }
 
 impl<S> MethodFiltering<S> {
-    pub(crate) fn new(inner: S, filter: Arc<MethodFilter>) -> Self {
+    pub(crate) fn new(inner: S, filter: Arc<HashSet<String>>) -> Self {
         Self { inner, filter }
     }
 }
@@ -41,7 +41,7 @@ where
         &self,
         request: Request<'a>,
     ) -> impl Future<Output = Self::MethodResponse> + Send + 'a {
-        let rejected = self.filter.rejects(request.method_name());
+        let rejected = self.filter.contains(request.method_name());
         let inner = self.inner.clone();
         async move {
             if rejected {

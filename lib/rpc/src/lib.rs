@@ -2,8 +2,7 @@ mod call_fees;
 
 mod config;
 
-pub use config::{RateLimitPolicy, RpcConfig};
-pub use method_filter::MethodFilter;
+pub use config::{RateLimits, RpcConfig};
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -23,7 +22,6 @@ mod debug_impl;
 pub mod js_tracer;
 mod limits;
 mod log_proof_utils;
-mod method_filter;
 mod method_filter_middleware;
 mod monitoring_middleware;
 mod net_impl;
@@ -156,7 +154,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     let middleware = tower::ServiceBuilder::new().layer(cors);
 
     let max_response_size_bytes = config.max_response_size_bytes();
-    let limiter = Limiter::new(config.rate_limit_policy.to_limits());
+    let limiter = Limiter::new(config.rate_limits.clone().into_limits());
     let method_filter = Arc::new(config.method_filter.clone());
     let rpc_middleware = RpcServiceBuilder::new()
         // Monitoring is outermost so rate-limited responses still appear in error metrics.
