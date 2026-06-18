@@ -9,7 +9,7 @@ use zksync_os_status_server::StatusResponse;
 const RESPAWN_GRACE: Duration = Duration::from_secs(10);
 
 use crate::{
-    AnvilL1, ChainLayout, Config, NodeRole, PROTOCOL_VERSION, Ports, StoppedTester, Tester,
+    AnvilL1, ChainLayout, Config, NodeRole, PROTOCOL_VERSION, StoppedTester, Tester, get_free_port,
     provider::ZksyncTestingProvider,
 };
 
@@ -546,18 +546,23 @@ impl MultiNodeTesterBuilder {
             "batcher_node_index must be in 0..{num_nodes}"
         );
 
-        let mut node_ports = Vec::with_capacity(membership_nodes);
+        // Pre-assign specific ports for p2p network and RPC, since consensus nodes need to know
+        // all peers' addresses before starting (for boot_nodes and tx_forwarding_rpc_urls).
+        // Using get_free_port() has a small TOCTOU window but avoids the fs2 file-lock approach.
+        let mut node_network_ports = Vec::with_capacity(membership_nodes);
+        let mut node_rpc_ports = Vec::with_capacity(membership_nodes);
         for _ in 0..membership_nodes {
-            node_ports.push(Ports::acquire_unused().await?);
+            node_network_ports.push(get_free_port().await?);
+            node_rpc_ports.push(get_free_port().await?);
         }
 
         let node_records = self
             .consensus_secret_keys
             .iter()
-            .zip(node_ports.iter())
-            .map(|(secret, port)| {
+            .zip(node_network_ports.iter())
+            .map(|(secret, &network_port)| {
                 zksync_os_network::NodeRecord::from_secret_key(
-                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port.network.port),
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), network_port),
                     secret,
                 )
             })
@@ -568,8 +573,8 @@ impl MultiNodeTesterBuilder {
             .collect::<Vec<_>>();
         let tx_forwarding_rpc_urls = node_records
             .iter()
-            .zip(node_ports.iter())
-            .map(|(record, ports)| format!("{}@127.0.0.1:{}", record.id, ports.l2_rpc.port))
+            .zip(node_rpc_ports.iter())
+            .map(|(record, &rpc_port)| format!("{}@127.0.0.1:{}", record.id, rpc_port))
             .collect::<Vec<_>>();
 
         let l1 = AnvilL1::start(ChainLayout::Default {
@@ -581,16 +586,15 @@ impl MultiNodeTesterBuilder {
             .consensus_secret_keys
             .into_iter()
             .take(num_nodes)
-            .zip(node_ports.into_iter())
+            .zip(node_network_ports.into_iter().zip(node_rpc_ports.into_iter()))
             .enumerate()
-            .map(|(i, (secret, ports))| {
+            .map(|(i, (secret, (network_port, rpc_port)))| {
                 let peers = peer_ids.clone();
                 let tx_forwarding_rpc_urls = tx_forwarding_rpc_urls.clone();
                 let boot_nodes: Vec<zksync_os_network::TrustedPeer> =
                     node_records.iter().copied().map(Into::into).collect();
                 let l1 = l1.clone();
                 async move {
-                    let network_port = ports.network.port;
                     // Production configs set this on every consensus node. The first node to
                     // initialize the cluster wins; the rest safely observe that it is initialized.
                     let bootstrap = true;
@@ -600,7 +604,7 @@ impl MultiNodeTesterBuilder {
                         &secret,
                     )
                     .id;
-                    tracing::info!("starting node... (node_index={i}, node_id={expected_node_id}, network_port={network_port}, bootstrap={bootstrap}, batcher_enabled={batcher_enabled})");
+                    tracing::info!("starting node... (node_index={i}, node_id={expected_node_id}, network_port={network_port}, rpc_port={rpc_port}, bootstrap={bootstrap}, batcher_enabled={batcher_enabled})");
 
                     let node = Tester::launch_node_with_ports(
                         l1,
@@ -614,6 +618,8 @@ impl MultiNodeTesterBuilder {
                             config.network_config.address = Ipv4Addr::LOCALHOST;
                             config.network_config.port = network_port;
                             config.network_config.boot_nodes = boot_nodes.clone();
+                            // Pin the RPC port so that tx_forwarding_rpc_urls URLs are reachable.
+                            config.rpc_config.address = format!("0.0.0.0:{rpc_port}");
                             config.consensus_config.enabled = true;
                             config.consensus_config.bootstrap = bootstrap;
                             config.consensus_config.peer_ids = peers.clone();
@@ -631,7 +637,6 @@ impl MultiNodeTesterBuilder {
                         ChainLayout::Default {
                             protocol_version: PROTOCOL_VERSION,
                         },
-                        ports,
                         false,
                     )
                     .await?;

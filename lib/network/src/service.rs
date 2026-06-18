@@ -176,7 +176,7 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
         raft_handler: Option<RaftProtocolHandler>,
-    ) -> Result<Self, NetworkError> {
+    ) -> Result<(Self, u16), NetworkError> {
         // Install ViseRecorder before creating the NetworkManager so that reth-network metrics
         // are captured. This must happen before `NetworkManager::builder()` because that is where
         // reth initializes its metric handles (via `Default::default()` on each metrics struct).
@@ -300,12 +300,16 @@ impl NetworkService {
         let (network_manager, _txpool, _request_handler) =
             NetworkManager::builder(net_cfg).await?.split();
 
-        Ok(Self {
-            network_manager,
-            protocol_rx,
-            peer_sessions: Arc::new(RwLock::new(PeerSessionStore::default())),
-            connection_registry,
-        })
+        let bound_port = network_manager.local_addr().port();
+        Ok((
+            Self {
+                network_manager,
+                protocol_rx,
+                peer_sessions: Arc::new(RwLock::new(PeerSessionStore::default())),
+                connection_registry,
+            },
+            bound_port,
+        ))
     }
 
     fn register_main_node_rlpx_sub_protocols(

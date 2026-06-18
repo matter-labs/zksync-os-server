@@ -76,6 +76,7 @@ use zksync_os_types::TransactionAcceptanceState;
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     config: RpcConfig,
+    listener: tokio::net::TcpListener,
     chain_id: u64,
     bridgehub_address: Address,
     bytecode_supplier_address: Address,
@@ -90,7 +91,6 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     runtime: &Runtime,
     wait_for_db: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    tracing::info!("Starting JSON-RPC server at {}", config.address);
     metrics::register_task_monitor();
 
     let mut rpc = RpcModule::new(());
@@ -170,9 +170,13 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         .set_http_middleware(middleware)
         .set_rpc_middleware(rpc_middleware);
 
+    tracing::info!("Starting JSON-RPC server at {}", config.address);
     let server = server_builder
-        .build(config.address)
-        .await
+        .build_from_tcp(
+            listener
+                .into_std()
+                .context("failed to convert RPC listener to std")?,
+        )
         .context("Failed building HTTP JSON-RPC server")?;
 
     runtime.spawn_critical_with_graceful_shutdown_signal("rpc server", |shutdown| async move {

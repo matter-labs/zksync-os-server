@@ -32,6 +32,28 @@ pub async fn run(
     bind_address: String,
     shutdown: GracefulShutdown,
 ) {
+    let bind_address: SocketAddr = bind_address.parse().expect("failed to parse bind address");
+    tracing::info!("starting proof data server on {bind_address}");
+    let listener = TcpListener::bind(bind_address)
+        .await
+        .expect("failed to bind prover server");
+    run_on_listener(
+        fri_job_manager,
+        snark_job_manager,
+        proof_storage,
+        listener,
+        shutdown,
+    )
+    .await;
+}
+
+pub(crate) async fn run_on_listener(
+    fri_job_manager: Arc<FriJobManager>,
+    snark_job_manager: Arc<SnarkJobManager>,
+    proof_storage: ProofStorage,
+    listener: TcpListener,
+    shutdown: GracefulShutdown,
+) {
     let app_state = AppState {
         fri_job_manager,
         snark_job_manager,
@@ -41,15 +63,13 @@ pub async fn run(
     let app = Router::new()
         .nest("/prover-jobs/v1", v1_routes())
         .with_state(app_state)
-        // Set the request body limit to 10MiB
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024));
 
-    let bind_address: SocketAddr = bind_address.parse().expect("failed to parse bind address");
-    tracing::info!("starting proof data server on {bind_address}");
+    let addr = listener
+        .local_addr()
+        .expect("failed to get prover server local addr");
+    tracing::info!("proof data server listening on {addr}");
 
-    let listener = TcpListener::bind(bind_address)
-        .await
-        .expect("failed to bind");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown.ignore_guard())
         .await
