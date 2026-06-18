@@ -48,11 +48,9 @@ pub struct EthCallHandler<RpcStorage> {
     policy_client: Option<PolicyClient>,
 }
 
-/// Lets `InteropFeeUpdater` (in `zksync_os_interop_fee_updater`) issue read-only local `eth_call`s
+/// Lets the interop fee updater (in `zksync_os_mempool`) issue read-only local `eth_call`s
 /// without depending on this crate.
-impl<RpcStorage: ReadRpcStorage> zksync_os_interop_fee_updater::LocalEthCall
-    for EthCallHandler<RpcStorage>
-{
+impl<RpcStorage: ReadRpcStorage> zksync_os_mempool::LocalEthCall for EthCallHandler<RpcStorage> {
     fn call(&self, request: TransactionRequest, block: Option<BlockId>) -> anyhow::Result<Bytes> {
         self.call_impl(request, block, None, None)
             .map_err(anyhow::Error::from)

@@ -66,7 +66,7 @@ use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
-use zksync_os_interop_fee_updater::{InteropFeeUpdaterConfig, LocalEthCall};
+use zksync_os_mempool::LocalEthCall;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -803,7 +803,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             interop_roots_per_tx: config.sequencer_config.interop_roots_per_tx,
             bytecode_supplier_address,
             l1_watcher_config: config.l1_watcher_config.clone().into(),
-            interop_fee_updater_config: config.interop_fee_updater_config.into(),
+            interop_fee_updater_config: config.interop_fee_updater_config.clone().into(),
         },
         local_eth_call,
         base_token_price_handle.clone(),

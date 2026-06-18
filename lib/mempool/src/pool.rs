@@ -20,8 +20,8 @@ use tokio::time::Instant;
 use zksync_os_base_token_adjuster::BaseTokenPriceHandle;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_genesis::Genesis;
+use crate::interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig, LocalEthCall};
 use zksync_os_interface::types::AccountDiff;
-use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig, LocalEthCall};
 use zksync_os_l1_watcher::{
     GatewayMigrationWatcher, InteropWatcher, L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig,
     SegmentResolver, StartResolver,
@@ -91,6 +91,7 @@ impl<T: L2Subpool> Pool<T> {
                 eth_call,
                 l1_state.diamond_proxy_sl.provider().clone().erased(),
                 base_token_price,
+                interop_fee_subpool.clone(),
                 config.interop_fee_updater_config.clone(),
             ))
         } else {
@@ -214,10 +215,8 @@ impl<T: L2Subpool> Pool<T> {
                 );
             }
             if let Some(interop_fee_updater) = self.subcomponents.interop_fee_updater.take() {
-                self.runtime.spawn_critical_task(
-                    "interop fee updater",
-                    interop_fee_updater.run(Box::new(self.interop_fee_subpool.clone())),
-                );
+                self.runtime
+                    .spawn_critical_task("interop fee updater", interop_fee_updater.run());
             }
         }
     }

@@ -15917,21 +15917,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zksync_os_interop_fee_updater"
-version = "0.20.7"
-dependencies = [
- "alloy",
- "anyhow",
- "async-trait",
- "num",
- "tokio",
- "tracing",
- "zksync_os_base_token_adjuster",
- "zksync_os_contract_interface",
- "zksync_os_types",
-]
-
-[[package]]
 name = "zksync_os_l1_sender"
 version = "0.20.7"
 dependencies = [
@@ -15990,6 +15975,7 @@ dependencies = [
  "auto_impl",
  "futures",
  "metrics",
+ "num",
  "pin-project",
  "reth-chainspec",
  "reth-ethereum-primitives",
@@ -16006,7 +15992,6 @@ dependencies = [
  "zksync_os_contract_interface",
  "zksync_os_genesis",
  "zksync_os_interface",
- "zksync_os_interop_fee_updater",
  "zksync_os_l1_watcher",
  "zksync_os_reth_compat",
  "zksync_os_storage_api",
@@ -16379,7 +16364,6 @@ dependencies = [
  "zksync_os_evm_errors",
  "zksync_os_genesis",
  "zksync_os_interface",
- "zksync_os_interop_fee_updater",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
  "zksync_os_merkle_tree_api",
@@ -16562,7 +16546,6 @@ dependencies = [
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_internal_config",
- "zksync_os_interop_fee_updater",
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",

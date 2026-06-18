@@ -5,12 +5,13 @@ use alloy::providers::DynProvider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::sol_types::SolCall;
 use anyhow::Context as _;
-use async_trait::async_trait;
 use num::BigUint;
 use num::rational::Ratio;
 use zksync_os_base_token_adjuster::BaseTokenPriceHandle;
 use zksync_os_contract_interface::{IGWAssetTracker, IInteropCenter::interopProtocolFeeCall};
 use zksync_os_types::{L2_INTEROP_CENTER_ADDRESS, TokenPricesForFees};
+
+use crate::subpools::interop_fee::InteropFeeSubpool;
 
 #[derive(Debug, Clone)]
 pub struct InteropFeeUpdaterConfig {
@@ -25,16 +26,11 @@ pub trait LocalEthCall: Send + Sync {
     fn call(&self, request: TransactionRequest, block: Option<BlockId>) -> anyhow::Result<Bytes>;
 }
 
-/// Sink for enqueueing interop-fee-update system transactions.
-#[async_trait]
-pub trait InteropFeeSink: Send + Sync {
-    async fn insert(&self, interop_fee: U256);
-}
-
 pub struct InteropFeeUpdater {
     eth_call: Box<dyn LocalEthCall>,
     gateway_provider: DynProvider,
     base_token_price: BaseTokenPriceHandle,
+    interop_fee_subpool: InteropFeeSubpool,
     config: InteropFeeUpdaterConfig,
     last_enqueued_fee: Option<U256>,
 }
@@ -44,35 +40,31 @@ impl InteropFeeUpdater {
         eth_call: Box<dyn LocalEthCall>,
         gateway_provider: DynProvider,
         base_token_price: BaseTokenPriceHandle,
+        interop_fee_subpool: InteropFeeSubpool,
         config: InteropFeeUpdaterConfig,
     ) -> Self {
         Self {
             eth_call,
             gateway_provider,
             base_token_price,
+            interop_fee_subpool,
             config,
             last_enqueued_fee: None,
         }
     }
 
-    /// The sink (the mempool's interop-fee subpool) is supplied at spawn time rather than stored on
-    /// the updater: `Pool` constructs the updater up front and hands it a clone of its
-    /// `interop_fee_subpool` only when it spawns the run loop.
-    pub async fn run(mut self, interop_fee_sink: Box<dyn InteropFeeSink>) {
+    pub async fn run(mut self) {
         let mut timer = tokio::time::interval(self.config.polling_interval);
 
         loop {
             timer.tick().await;
-            if let Err(err) = self.loop_iteration(interop_fee_sink.as_ref()).await {
+            if let Err(err) = self.loop_iteration().await {
                 tracing::warn!("Error in the `interop_fee_updater` loop iteration: {err:#}");
             }
         }
     }
 
-    async fn loop_iteration(
-        &mut self,
-        interop_fee_sink: &dyn InteropFeeSink,
-    ) -> anyhow::Result<()> {
+    async fn loop_iteration(&mut self) -> anyhow::Result<()> {
         let Some(token_prices) = self.base_token_price.current() else {
             tracing::debug!("Token prices are not initialized yet, skipping interop fee update");
             return Ok(());
@@ -118,7 +110,7 @@ impl InteropFeeUpdater {
             %gateway_settlement_fee,
             "enqueueing interop fee system transaction",
         );
-        interop_fee_sink.insert(target_interop_fee).await;
+        self.interop_fee_subpool.insert(target_interop_fee).await;
         self.last_enqueued_fee = Some(target_interop_fee);
 
         Ok(())
