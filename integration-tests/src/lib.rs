@@ -506,7 +506,7 @@ impl Tester {
     ///
     /// Returns a new `Tester` connected to the restarted node. The original `Tester` is consumed.
     ///
-    /// Restart keeps the same config by default, including the original ports.
+    /// Restart keeps the same config by default. Ports may differ on restart since port-0 binding lets the OS pick new ports.
     pub async fn stop(self) -> anyhow::Result<StoppedTester> {
         let Self {
             runtime,

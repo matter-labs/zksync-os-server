@@ -189,7 +189,25 @@ impl NetworkService {
                 tracing::info!(%ip, "resolved external IP (STUN)");
             }
         };
-        let rlpx_address = SocketAddr::V4(SocketAddrV4::new(config.address, config.port));
+        // When port=0, pre-bind a UDP socket first to claim an ephemeral port P, then
+        // configure the TCP listener to also bind to port P. TCP and UDP have independent
+        // port namespaces, so the same port number can be used for both protocols
+        // simultaneously. This keeps NodeRecord consistent: it holds a single port number
+        // that serves as both the RLPx (TCP) and discv5 (UDP) address.
+        let (rlpx_address, discv5_listen_config) = if config.port == 0 {
+            let udp = tokio::net::UdpSocket::bind(SocketAddrV4::new(config.address, 0)).await?;
+            let shared_port = udp.local_addr()?.port();
+            let addr = SocketAddr::V4(SocketAddrV4::new(config.address, shared_port));
+            let listen_config = discv5::ListenConfig::FromSockets {
+                ipv4: Some(Arc::new(udp)),
+                ipv6: None,
+            };
+            (addr, listen_config)
+        } else {
+            let addr = SocketAddr::V4(SocketAddrV4::new(config.address, config.port));
+            let listen_config = discv5::ListenConfig::from_ip(addr.ip(), config.port);
+            (addr, listen_config)
+        };
         let chain_spec = client.chain_spec();
         let genesis = Head {
             hash: chain_spec.genesis_hash(),
@@ -225,10 +243,7 @@ impl NetworkService {
             .discovery_v5(
                 reth_discv5::Config::builder(rlpx_address)
                     .discv5_config(
-                        discv5::ConfigBuilder::new(discv5::ListenConfig::from_ip(
-                            rlpx_address.ip(),
-                            config.port,
-                        ))
+                        discv5::ConfigBuilder::new(discv5_listen_config)
                         // Require only 2 peers to agree on our external IP to update our local ENR
                         .enr_peer_update_min(2)
                         // 2 peers from above must agree on external IP within 1h from each other.
