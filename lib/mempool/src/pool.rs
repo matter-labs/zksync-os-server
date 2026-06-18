@@ -1,3 +1,4 @@
+use crate::interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig, LocalEthCall};
 use crate::metrics::TRANSACTION_POOL_METRICS;
 use crate::subpools::interop_fee::InteropFeeSubpool;
 use crate::subpools::interop_roots::InteropRootsSubpool;
@@ -20,7 +21,6 @@ use tokio::time::Instant;
 use zksync_os_base_token_adjuster::BaseTokenPriceHandle;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_genesis::Genesis;
-use crate::interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig, LocalEthCall};
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_l1_watcher::{
     GatewayMigrationWatcher, InteropWatcher, L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig,
