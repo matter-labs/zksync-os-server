@@ -125,6 +125,7 @@ pub struct BoundPorts {
     pub status_port: Option<u16>,
     pub prover_api_port: Option<u16>,
     pub network_port: Option<u16>,
+    pub network_udp_port: Option<u16>,
 }
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -474,11 +475,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         ),
         None => (None, None, None),
     };
-    let network_port = if config.network_config.enabled {
+    let (network_port, network_udp_port) = if config.network_config.enabled {
         tracing::info!("initializing p2p networking");
         let batch_verification_policy_config: BatchVerificationPolicyConfig =
             config.batch_verification_config.clone().into();
-        let (network_service, bound_port) = if node_role.is_main() {
+        let (network_service, bound_tcp_port, bound_udp_port) = if node_role.is_main() {
             let (_, accepted_verifier_signers) =
                 effective_verification_policy(&batch_verification_policy_config, &l1_state);
             NetworkService::new(
@@ -535,12 +536,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .await
                 .expect("failed to run raft bootstrap process");
         }
-        Some(bound_port)
+        (Some(bound_tcp_port), Some(bound_udp_port))
     } else if node_role.is_main() {
         tracing::info!(
             "p2p networking is disabled; to enable set `network.enabled=true` and populate `network.secret_key`"
         );
-        None
+        (None, None)
     } else {
         panic!(
             "EN cannot run without p2p networking; to fix: \
@@ -1059,6 +1060,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         status_port,
         prover_api_port,
         network_port,
+        network_udp_port,
     }
 }
 

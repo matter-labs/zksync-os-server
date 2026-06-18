@@ -176,7 +176,7 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
         raft_handler: Option<RaftProtocolHandler>,
-    ) -> Result<(Self, u16), NetworkError> {
+    ) -> Result<(Self, u16, u16), NetworkError> {
         // Install ViseRecorder before creating the NetworkManager so that reth-network metrics
         // are captured. This must happen before `NetworkManager::builder()` because that is where
         // reth initializes its metric handles (via `Default::default()` on each metrics struct).
@@ -189,19 +189,18 @@ impl NetworkService {
                 tracing::info!(%ip, "resolved external IP (STUN)");
             }
         };
-        // When port=0, pre-bind a UDP socket first to claim an ephemeral port P, then
-        // configure the TCP listener to also bind to port P. TCP and UDP have independent
-        // port namespaces, so the same port number can be used for both protocols
-        // simultaneously. This keeps NodeRecord consistent: it holds a single port number
-        // that serves as both the RLPx (TCP) and discv5 (UDP) address.
+        // When port=0, pre-bind the UDP socket so discv5 reuses it via FromSockets.
+        // This lets build_local_enr read the actual bound port via socket.local_addr(),
+        // making the ENR's udp4 field correct.  The TCP (RLPx) listener is left at port 0
+        // so the OS assigns it an independent ephemeral port — no cross-namespace conflict.
         let (rlpx_address, discv5_listen_config) = if config.port == 0 {
             let udp = tokio::net::UdpSocket::bind(SocketAddrV4::new(config.address, 0)).await?;
-            let shared_port = udp.local_addr()?.port();
-            let addr = SocketAddr::V4(SocketAddrV4::new(config.address, shared_port));
             let listen_config = discv5::ListenConfig::FromSockets {
                 ipv4: Some(Arc::new(udp)),
                 ipv6: None,
             };
+            // Keep TCP at port 0 — binds to a different ephemeral port than UDP.
+            let addr = SocketAddr::V4(SocketAddrV4::new(config.address, 0));
             (addr, listen_config)
         } else {
             let addr = SocketAddr::V4(SocketAddrV4::new(config.address, config.port));
@@ -315,7 +314,12 @@ impl NetworkService {
         let (network_manager, _txpool, _request_handler) =
             NetworkManager::builder(net_cfg).await?.split();
 
-        let bound_port = network_manager.local_addr().port();
+        let bound_tcp_port = network_manager.local_addr().port();
+        let bound_udp_port = network_manager
+            .handle()
+            .discv5()
+            .map(|d5| d5.local_port())
+            .unwrap_or(bound_tcp_port);
         Ok((
             Self {
                 network_manager,
@@ -323,7 +327,8 @@ impl NetworkService {
                 peer_sessions: Arc::new(RwLock::new(PeerSessionStore::default())),
                 connection_registry,
             },
-            bound_port,
+            bound_tcp_port,
+            bound_udp_port,
         ))
     }
 

@@ -681,13 +681,16 @@ impl Tester {
             .secret_key
             .as_ref()
             .context("network secret key should be present in test config")?;
-        let node_record = NodeRecord::from_secret_key(
+        let mut node_record = NodeRecord::from_secret_key(
             SocketAddr::new(
                 IpAddr::V4(Ipv4Addr::LOCALHOST),
                 bound_ports.network_port.unwrap_or(0),
             ),
             network_secret_key,
         );
+        if let Some(udp_port) = bound_ports.network_udp_port {
+            node_record.udp_port = udp_port;
+        }
         #[cfg(feature = "prover-tests")]
         let prover_api_address = bound_ports
             .prover_api_port
