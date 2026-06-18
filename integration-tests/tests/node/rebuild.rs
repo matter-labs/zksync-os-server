@@ -312,7 +312,7 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
 ///      is committed to L1.
 ///   2. Restart with `rebuild.from_block_number = 1`, which is guaranteed to be within the
 ///      already-committed range.
-///   3. Expect a fatal error containing "rebuild_from_block must be > last_l1_committed_block".
+///   3. Expect a fatal error containing "rebuild_from_block_number must be > last_l1_committed_block".
 #[test_multisetup([CURRENT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
 async fn rebuild_panics_if_from_block_is_already_committed(
@@ -357,7 +357,7 @@ async fn rebuild_panics_if_from_block_is_already_committed(
         .or_else(|| payload.downcast_ref::<&str>().copied())
         .expect("panic payload should be a string");
     assert!(
-        panic_msg.contains("rebuild_from_block must be > last_l1_committed_block"),
+        panic_msg.contains("rebuild_from_block_number must be > last_l1_committed_block"),
         "unexpected panic message: {panic_msg}"
     );
 
@@ -459,7 +459,7 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
     );
 
     // last_executed_batch == 0 so we want to keep batch 0, reverting all committed batches
-    // (batch 1+). Batch 1 always starts at block 1, so from_block = 1.
+    // (batch 1+). Batch 1 always starts at block 1, so from_block_number = 1.
     let block1_hash = block_hash(&tester, 1).await?;
 
     let stopped = tester.stop().await?;
@@ -705,26 +705,26 @@ async fn revert_l1_commits_without_rebuild_is_idempotent_on_restart(
     Ok(())
 }
 
-/// Verifies `danger_block_rebuild_with_l1_revert` when `from_block` lies in a committed batch that
-/// is **not** the last committed batch.
+/// Verifies `danger_block_rebuild_with_l1_revert` when `from_block_number` lies in a committed batch
+/// that is **not** the last committed batch.
 ///
-/// The `from_block = 1` tests always resolve to batch 1 in a single scan step, so they never
+/// The `from_block_number = 1` tests always resolve to batch 1 in a single scan step, so they never
 /// exercise `derive_last_l1_batch_to_keep`'s scan loop (skipping higher committed batches and
-/// decrementing). This test commits at least three batches and points `from_block` into batch 2,
-/// forcing the scan to skip every batch above 2 before deciding to keep batch 1 and revert batch 2
-/// and above. When batch 2 happens to span multiple blocks, `from_block` is placed strictly inside
-/// it, additionally covering mid-batch acceptance.
+/// decrementing). This test commits at least three batches and points `from_block_number` into batch
+/// 2, forcing the scan to skip every batch above 2 before deciding to keep batch 1 and revert batch 2
+/// and above. When batch 2 happens to span multiple blocks, `from_block_number` is placed strictly
+/// inside it, additionally covering mid-batch acceptance.
 ///
 /// Scenario:
 ///   1. Start a node with the batcher and a short batch timeout so several batches commit.
 ///   2. Mine until `last_committed_batch >= 3` (still unexecuted) — guarantees batch 2 is a
 ///      non-last committed batch with batch 1 below it to keep and batches above it to skip.
-///   3. Point `from_block` into batch 2 (strictly inside it if it spans >1 block). Snapshot the
-///      on-chain hash of batch 1 (must survive) and a local block hash below `from_block`.
-///   4. Restart with `danger_block_rebuild_with_l1_revert` from that `from_block`.
-///   5. Assert: the node started (no panic — the startup `from_block > last_l1_committed_block`
+///   3. Point `from_block_number` into batch 2 (strictly inside it if it spans >1 block). Snapshot
+///      the on-chain hash of batch 1 (must survive) and a local block hash below `from_block_number`.
+///   4. Restart with `danger_block_rebuild_with_l1_revert` from that `from_block_number`.
+///   5. Assert: the node started (no panic — the startup `from_block_number > last_l1_committed_block`
 ///      assertion only holds if the revert kept exactly batch 1), batch 1's on-chain hash is
-///      unchanged, the local block below `from_block` is unchanged, the node accepts new L2
+///      unchanged, the local block below `from_block_number` is unchanged, the node accepts new L2
 ///      transactions, and it re-commits up to at least the reverted batch.
 #[test_multisetup([CURRENT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
@@ -747,11 +747,11 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
         "batch execution is disabled, so no batch should be executed"
     );
 
-    // Target batch 2: a non-last committed batch. Place `from_block` strictly inside it when it
-    // spans multiple blocks, otherwise at its single block — either way it resolves to batch 2.
+    // Target batch 2: a non-last committed batch. Place `from_block_number` strictly inside it when
+    // it spans multiple blocks, otherwise at its single block — either way it resolves to batch 2.
     let containing_batch = 2;
     let (_, first_block, last_block) = fetch_committed_batch(&tester, containing_batch).await?;
-    let from_block = if last_block > first_block {
+    let from_block_number = if last_block > first_block {
         first_block + 1
     } else {
         first_block
@@ -759,9 +759,9 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
     // Batch 1 is the deepest batch that must survive the revert.
     let survivor_batch = containing_batch - 1;
 
-    let from_block_hash = block_hash(&tester, from_block).await?;
-    // A local block strictly below `from_block` — must be untouched by the rebuild.
-    let below_block = from_block - 1;
+    let from_block_hash = block_hash(&tester, from_block_number).await?;
+    // A local block strictly below `from_block_number` — must be untouched by the rebuild.
+    let below_block = from_block_number - 1;
     let below_block_hash = block_hash(&tester, below_block).await?;
     // On-chain hash of the surviving batch — must be unchanged after the revert+rebuild, proving
     // the revert kept everything up to and including `survivor_batch`.
@@ -772,15 +772,15 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
     let mut restart_config = stopped.config().clone();
     restart_config.sequencer_config.rebuild = Some(RebuildConfig::DangerBlockRebuildWithL1Revert {
         bounds: RebuildBounds {
-            from_block_number: from_block,
+            from_block_number,
             from_block_hash,
             blocks_to_empty: vec![],
             reset_timestamps: false,
         },
         l1_reverter_sk: reverter_signer,
     });
-    // Startup panics if the derived revert boundary is wrong (`from_block` would not be strictly
-    // greater than `last_l1_committed_block`), so a successful start already proves the derivation.
+    // Startup panics if the derived revert boundary is wrong (`from_block_number` would not be
+    // strictly greater than `last_l1_committed_block`), so a successful start already proves the derivation.
     let restarted = stopped.start_with_config(restart_config).await?;
 
     // The surviving batch must be byte-for-byte identical: it was never reverted.
@@ -790,11 +790,11 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
         "batch {survivor_batch} below the containing batch must survive the mid-batch revert unchanged"
     );
 
-    // Local blocks below `from_block` must be untouched by the rebuild.
+    // Local blocks below `from_block_number` must be untouched by the rebuild.
     let below_block_hash_after = block_hash(&restarted, below_block).await?;
     assert_eq!(
         below_block_hash_after, below_block_hash,
-        "block {below_block} below from_block must not change during rebuild"
+        "block {below_block} below from_block_number must not change during rebuild"
     );
 
     // Node is alive and accepting new L2 transactions after the rebuild.

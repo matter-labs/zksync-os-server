@@ -16,15 +16,15 @@ struct RevertPlan {
     l1_reverter_sk: SignerConfig,
 }
 
-/// Derives `last_l1_batch_to_keep` from `from_block` by scanning committed-only batches on L1.
+/// Derives `last_l1_batch_to_keep` from `from_block_number` by scanning committed-only batches on L1.
 ///
 /// Returns an error if:
 /// - there are no committed batches on L1,
 /// - all committed batches are already executed (finalized),
-/// - `from_block` is beyond the last committed block (no batch to revert), or
-/// - `from_block` lies within an executed (finalized) batch.
+/// - `from_block_number` is beyond the last committed block (no batch to revert), or
+/// - `from_block_number` lies within an executed (finalized) batch.
 async fn derive_last_l1_batch_to_keep(
-    from_block: u64,
+    from_block_number: u64,
     l1_state: &L1State,
     max_blocks_to_process: u64,
 ) -> anyhow::Result<u64> {
@@ -45,19 +45,19 @@ async fn derive_last_l1_batch_to_keep(
             .with_context(|| format!("failed to fetch committed batch {batch} from L1"))
     };
 
-    // Precondition: from_block must not be past the tip of the last committed batch.
+    // Precondition: from_block_number must not be past the tip of the last committed batch.
     let top = fetch_committed(last_committed_batch).await?;
     anyhow::ensure!(
-        from_block <= top.last_block_number(),
-        "from_block ({from_block}) is beyond the last committed batch {last_committed_batch} \
+        from_block_number <= top.last_block_number(),
+        "from_block_number ({from_block_number}) is beyond the last committed batch {last_committed_batch} \
          (blocks {}..={}); nothing to revert",
         top.first_block_number(),
         top.last_block_number(),
     );
 
-    // Fast path for the common revert case: `from_block` lies in the last committed batch
+    // Fast path for the common revert case: `from_block_number` lies in the last committed batch
     // (reverting from a recent block).
-    if top.first_block_number() <= from_block {
+    if top.first_block_number() <= from_block_number {
         return Ok(last_committed_batch - 1);
     }
 
@@ -68,7 +68,7 @@ async fn derive_last_l1_batch_to_keep(
     while low_batch <= high_batch {
         let mid_batch = low_batch + (high_batch - low_batch) / 2;
         let mid_first_block = fetch_committed(mid_batch).await?.first_block_number();
-        if mid_first_block <= from_block {
+        if mid_first_block <= from_block_number {
             first_batch_to_revert = Some(mid_batch);
             low_batch = mid_batch + 1;
         } else {
@@ -79,7 +79,7 @@ async fn derive_last_l1_batch_to_keep(
     match first_batch_to_revert {
         Some(batch) => Ok(batch - 1),
         None => anyhow::bail!(
-            "from_block ({from_block}) is at or before the first committed-only batch ({}); it \
+            "from_block_number ({from_block_number}) is at or before the first committed-only batch ({}); it \
              lies within an executed (finalized) batch and cannot be reverted",
             last_executed_batch + 1,
         ),

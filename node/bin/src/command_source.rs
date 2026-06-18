@@ -68,13 +68,13 @@ impl<Replay: ReadReplay> PipelineComponent for ConsensusNodeCommandSource<Replay
         let replay_until = if let Some(rebuild_options) = &self.rebuild_options {
             assert!(
                 rebuild_options.from_block_number >= self.starting_block,
-                "rebuild_from_block must be >= starting_block, got {} < {}",
+                "rebuild_from_block_number must be >= starting_block, got {} < {}",
                 rebuild_options.from_block_number,
                 self.starting_block
             );
             assert!(
                 rebuild_options.from_block_number <= last_block_in_wal,
-                "rebuild_from_block must be <= last_block_in_wal, got {} > {}",
+                "rebuild_from_block_number must be <= last_block_in_wal, got {} > {}",
                 rebuild_options.from_block_number,
                 last_block_in_wal
             );

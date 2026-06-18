@@ -392,7 +392,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_l1_executed_block,
     };
 
-    if let Some(from_block) = rebuild_options.as_ref().map(|o| o.from_block_number)
+    if let Some(from_block_number) = rebuild_options.as_ref().map(|o| o.from_block_number)
         && node_role.is_main()
     {
         // The assertion is only relevant for the main node.
@@ -400,9 +400,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // But the main node is expected to only produce blocks on top of committed L1 blocks,
         // as those can't be re-sequenced.
         assert!(
-            from_block > node_startup_state.last_l1_committed_block,
-            "rebuild_from_block must be > last_l1_committed_block, got {} <= {}",
-            from_block,
+            from_block_number > node_startup_state.last_l1_committed_block,
+            "rebuild_from_block_number must be > last_l1_committed_block, got {} <= {}",
+            from_block_number,
             node_startup_state.last_l1_committed_block
         );
     }
@@ -1063,26 +1063,26 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("All components scheduled for initialization in {startup_time:?}");
 }
 
-/// Checks whether block `rebuild.from_block` currently has the expected `rebuild.from_block_hash`.
+/// Checks whether block `rebuild.from_block_number` currently has the expected `rebuild.from_block_hash`.
 ///
 /// Returns `Ok(false)` (operation should be skipped) when the hashes differ — distinguishing the
 /// two reasons in the logs:
-/// - block missing locally: likely a misconfigured `from_block` (typo / beyond local tip);
+/// - block missing locally: likely a misconfigured `from_block_number` (typo / beyond local tip);
 /// - hash changed: the rebuild/revert already ran on a previous startup (the expected case).
 fn from_block_hash_matches(
     repositories: &dyn ReadRepository,
-    from_block: u64,
+    from_block_number: u64,
     from_block_hash: alloy::primitives::BlockHash,
 ) -> anyhow::Result<bool> {
     let current_hash = repositories
-        .get_block_by_number(from_block)
-        .with_context(|| format!("failed to read block {from_block} from local repository"))?
+        .get_block_by_number(from_block_number)
+        .with_context(|| format!("failed to read block {from_block_number} from local repository"))?
         .map(|b| b.hash());
     Ok(match current_hash {
         Some(hash) if hash == from_block_hash => true,
         Some(hash) => {
             tracing::info!(
-                from_block,
+                from_block_number,
                 current_hash = ?hash,
                 ?from_block_hash,
                 "skipping startup rebuild/revert: from_block_hash changed (already ran)"
@@ -1091,10 +1091,10 @@ fn from_block_hash_matches(
         }
         None => {
             tracing::warn!(
-                from_block,
+                from_block_number,
                 ?from_block_hash,
-                "skipping startup rebuild/revert: block `from_block` not found locally \
-                 (check `from_block` is correct — it may be a typo or beyond the local tip)"
+                "skipping startup rebuild/revert: block `from_block_number` not found locally \
+                 (check `from_block_number` is correct — it may be a typo or beyond the local tip)"
             );
             false
         }
