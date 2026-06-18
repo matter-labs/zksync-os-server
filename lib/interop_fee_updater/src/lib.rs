@@ -5,12 +5,11 @@ use alloy::providers::DynProvider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::sol_types::SolCall;
 use anyhow::Context as _;
+use async_trait::async_trait;
 use num::BigUint;
 use num::rational::Ratio;
 use zksync_os_base_token_adjuster::BaseTokenPriceHandle;
 use zksync_os_contract_interface::{IGWAssetTracker, IInteropCenter::interopProtocolFeeCall};
-use zksync_os_mempool::subpools::interop_fee::InteropFeeSubpool;
-use zksync_os_rpc::{EthCallHandler, ReadRpcStorage};
 use zksync_os_types::{L2_INTEROP_CENTER_ADDRESS, TokenPricesForFees};
 
 #[derive(Debug, Clone)]
@@ -21,45 +20,59 @@ pub struct InteropFeeUpdaterConfig {
 
 const GW_ASSET_TRACKER_ADDRESS: Address = address!("0x0000000000000000000000000000000000010010");
 
-pub struct InteropFeeUpdater<RpcStorage> {
-    eth_call_handler: EthCallHandler<RpcStorage>,
+/// Read-only `eth_call` against the local chain's latest state.
+pub trait LocalEthCall: Send + Sync {
+    fn call(&self, request: TransactionRequest, block: Option<BlockId>) -> anyhow::Result<Bytes>;
+}
+
+/// Sink for enqueueing interop-fee-update system transactions.
+#[async_trait]
+pub trait InteropFeeSink: Send + Sync {
+    async fn insert(&self, interop_fee: U256);
+}
+
+pub struct InteropFeeUpdater {
+    eth_call: Box<dyn LocalEthCall>,
     gateway_provider: DynProvider,
-    interop_fee_subpool: InteropFeeSubpool,
     base_token_price: BaseTokenPriceHandle,
     config: InteropFeeUpdaterConfig,
     last_enqueued_fee: Option<U256>,
 }
 
-impl<RpcStorage: ReadRpcStorage> InteropFeeUpdater<RpcStorage> {
+impl InteropFeeUpdater {
     pub fn new(
-        eth_call_handler: EthCallHandler<RpcStorage>,
+        eth_call: Box<dyn LocalEthCall>,
         gateway_provider: DynProvider,
-        interop_fee_subpool: InteropFeeSubpool,
         base_token_price: BaseTokenPriceHandle,
         config: InteropFeeUpdaterConfig,
     ) -> Self {
         Self {
-            eth_call_handler,
+            eth_call,
             gateway_provider,
-            interop_fee_subpool,
             base_token_price,
             config,
             last_enqueued_fee: None,
         }
     }
 
-    pub async fn run(mut self) {
+    /// The sink (the mempool's interop-fee subpool) is supplied at spawn time rather than stored on
+    /// the updater: `Pool` constructs the updater up front and hands it a clone of its
+    /// `interop_fee_subpool` only when it spawns the run loop.
+    pub async fn run(mut self, interop_fee_sink: Box<dyn InteropFeeSink>) {
         let mut timer = tokio::time::interval(self.config.polling_interval);
 
         loop {
             timer.tick().await;
-            if let Err(err) = self.loop_iteration().await {
+            if let Err(err) = self.loop_iteration(interop_fee_sink.as_ref()).await {
                 tracing::warn!("Error in the `interop_fee_updater` loop iteration: {err:#}");
             }
         }
     }
 
-    async fn loop_iteration(&mut self) -> anyhow::Result<()> {
+    async fn loop_iteration(
+        &mut self,
+        interop_fee_sink: &dyn InteropFeeSink,
+    ) -> anyhow::Result<()> {
         let Some(token_prices) = self.base_token_price.current() else {
             tracing::debug!("Token prices are not initialized yet, skipping interop fee update");
             return Ok(());
@@ -105,7 +118,7 @@ impl<RpcStorage: ReadRpcStorage> InteropFeeUpdater<RpcStorage> {
             %gateway_settlement_fee,
             "enqueueing interop fee system transaction",
         );
-        self.interop_fee_subpool.insert(target_interop_fee).await;
+        interop_fee_sink.insert(target_interop_fee).await;
         self.last_enqueued_fee = Some(target_interop_fee);
 
         Ok(())
@@ -116,8 +129,8 @@ impl<RpcStorage: ReadRpcStorage> InteropFeeUpdater<RpcStorage> {
             .with_to(L2_INTEROP_CENTER_ADDRESS)
             .with_input(Bytes::from(interopProtocolFeeCall {}.abi_encode()));
         let output = self
-            .eth_call_handler
-            .call_impl(request, Some(BlockId::latest()), None, None)
+            .eth_call
+            .call(request, Some(BlockId::latest()))
             .context("failed to call `interopProtocolFee()` on local chain")?;
         let output: [u8; 32] = output
             .as_ref()

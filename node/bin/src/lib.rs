@@ -66,7 +66,7 @@ use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
-use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
+use zksync_os_interop_fee_updater::{InteropFeeUpdaterConfig, LocalEthCall};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -769,22 +769,49 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         effective_pubdata_mode,
     );
 
+    let persistent_batch_storage =
+        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
+    let rpc_storage = RpcStorage::new(
+        repositories.clone(),
+        block_replay_storage.clone(),
+        finality_storage.clone(),
+        persistent_batch_storage.clone(),
+        state.clone(),
+        tree_for_rpc,
+    );
+
+    // Mini-component capable of doing local `eth_call` without going through RPC. Needed for
+    // interop fee updater so it can query the current interop fee.
+    let local_eth_call = Box::new(EthCallHandler::new(
+        config.rpc_config.clone().into(),
+        rpc_storage.clone(),
+        chain_id,
+        last_constructed_block_ctx_receiver.clone(),
+        // Interop fee updater runs inside the node and is not a user-facing
+        // RPC surface, so the admit boundary doesn't apply.
+        None,
+    )) as Box<dyn LocalEthCall>;
+
     let pool = Pool::new(
         runtime.clone(),
         genesis.clone(),
         &node_startup_state.l1_state,
         zksync_os_mempool::Config {
+            node_role,
             chain_id,
             gateway_chain_id: config.general_config.gateway_chain_id,
             interop_roots_per_tx: config.sequencer_config.interop_roots_per_tx,
             bytecode_supplier_address,
             l1_watcher_config: config.l1_watcher_config.clone().into(),
+            interop_fee_updater_config: config.interop_fee_updater_config.into(),
         },
+        local_eth_call,
+        base_token_price_handle.clone(),
+        // todo: eventually this should be initialized inside `Pool::new`
         l2_subpool.clone(),
     )
     .await
     .expect("failed to create mempool");
-    let interop_fee_subpool = pool.interop_fee_subpool().clone();
     let block_context_provider = BlockContextProvider::new(
         fee_provider,
         pool,
@@ -806,16 +833,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // ========== Start L1 Persist Batch Watcher ===========
 
-    let persistent_batch_storage =
-        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
-    let rpc_storage = RpcStorage::new(
-        repositories.clone(),
-        block_replay_storage.clone(),
-        finality_storage.clone(),
-        persistent_batch_storage.clone(),
-        state.clone(),
-        tree_for_rpc,
-    );
     runtime.spawn_critical_task("l1 batch persist watcher", {
         let config = config.l1_watcher_config.clone();
         let settlement_layer_intervals = node_startup_state
@@ -845,45 +862,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "state compact loop",
         state_clone.compact_periodically_optional(),
     );
-
-    if node_role.is_main()
-        && settles_on_gateway
-        && current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
-    {
-        let eth_call_handler = EthCallHandler::new(
-            config.rpc_config.clone().into(),
-            rpc_storage.clone(),
-            chain_id,
-            last_constructed_block_ctx_receiver.clone(),
-            // Interop fee updater runs inside the node and is not a user-facing
-            // RPC surface, so the admit boundary doesn't apply.
-            None,
-        );
-        // todo: make this a subcomponent of mempool
-        let interop_fee_updater = InteropFeeUpdater::new(
-            eth_call_handler,
-            sl_provider.clone().erased(),
-            interop_fee_subpool,
-            base_token_price_handle.clone(),
-            InteropFeeUpdaterConfig {
-                polling_interval: config.interop_fee_updater_config.polling_interval,
-                update_deviation_percentage: config
-                    .interop_fee_updater_config
-                    .update_deviation_percentage,
-            },
-        );
-        runtime.spawn_critical_with_graceful_shutdown_signal(
-            "interop fee updater",
-            |shutdown| async move {
-                tokio::select! {
-                    _ = interop_fee_updater.run() => {}
-                    _guard = shutdown => {
-                        tracing::info!("interop fee updater graceful shutdown complete");
-                    }
-                }
-            },
-        );
-    }
 
     let replay_archive =
         init_replay_archive(config.replay_archive_config.clone().into(), runtime).await;

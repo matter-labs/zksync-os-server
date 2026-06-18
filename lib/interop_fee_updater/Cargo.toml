@@ -10,14 +10,13 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-alloy = { workspace = true, default-features = false, features = ["eips", "rpc-types", "network", "sol-types"] }
+alloy = { workspace = true, default-features = false, features = ["eips", "rpc-types", "network", "sol-types", "providers", "contract"] }
 anyhow.workspace = true
+async-trait.workspace = true
 num.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 tracing.workspace = true
 
 zksync_os_base_token_adjuster.workspace = true
 zksync_os_contract_interface.workspace = true
-zksync_os_mempool.workspace = true
-zksync_os_rpc.workspace = true
 zksync_os_types.workspace = true
