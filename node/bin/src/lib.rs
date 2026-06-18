@@ -81,6 +81,7 @@ use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
+use zksync_os_network::PreboundNetworkSockets;
 use zksync_os_network::RecordOverride;
 use zksync_os_network::VerifyBatch;
 use zksync_os_network::protocol::{
@@ -128,6 +129,12 @@ pub struct BoundPorts {
     pub network_udp_port: Option<u16>,
 }
 
+#[derive(Default)]
+pub struct PreboundPorts {
+    pub rpc_listener: Option<tokio::net::TcpListener>,
+    pub network_sockets: Option<PreboundNetworkSockets>,
+}
+
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const RAFT_DB_NAME: &str = "raft";
 const STATE_TREE_DB_NAME: &str = "tree";
@@ -140,6 +147,17 @@ pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
     runtime: &Runtime,
     config: Config,
+) -> BoundPorts {
+    run_with_prebound_ports::<State>(runtime, config, PreboundPorts::default()).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_with_prebound_ports<
+    State: ReadStateHistory + WriteState + StateInitializer + Clone,
+>(
+    runtime: &Runtime,
+    config: Config,
+    mut prebound_ports: PreboundPorts,
 ) -> BoundPorts {
     report_static_config_metrics(&config);
 
@@ -479,6 +497,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         tracing::info!("initializing p2p networking");
         let batch_verification_policy_config: BatchVerificationPolicyConfig =
             config.batch_verification_config.clone().into();
+        let prebound_network_sockets = prebound_ports.network_sockets.take();
         let (network_service, bound_tcp_port, bound_udp_port) = if node_role.is_main() {
             let (_, accepted_verifier_signers) =
                 effective_verification_policy(&batch_verification_policy_config, &l1_state);
@@ -492,6 +511,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 block_replay_storage.clone(),
                 zk_provider_factory,
                 raft_protocol_handler,
+                prebound_network_sockets,
             )
             .await
         } else {
@@ -525,6 +545,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 block_replay_storage.clone(),
                 zk_provider_factory,
                 raft_protocol_handler,
+                prebound_network_sockets,
             )
             .await
         }
@@ -1012,9 +1033,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .address
         .parse()
         .expect("malformed `rpc.address`");
-    let rpc_listener = tokio::net::TcpListener::bind(rpc_addr)
-        .await
-        .expect("failed to bind RPC server");
+    let rpc_listener = match prebound_ports.rpc_listener.take() {
+        Some(listener) => listener,
+        None => tokio::net::TcpListener::bind(rpc_addr)
+            .await
+            .expect("failed to bind RPC server"),
+    };
     let rpc_port = rpc_listener
         .local_addr()
         .expect("rpc server local_addr")

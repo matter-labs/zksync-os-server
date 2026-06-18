@@ -31,14 +31,14 @@ use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
-use zksync_os_network::NodeRecord;
+use zksync_os_network::{NodeRecord, PreboundNetworkSockets};
 use zksync_os_provider::NodeProvider;
-use zksync_os_server::BoundPorts;
 use zksync_os_server::config::{Config, ProviderConfig};
 pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::{
     NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
 };
+use zksync_os_server::{BoundPorts, PreboundPorts};
 use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
@@ -246,6 +246,7 @@ impl TestEnvironment {
             self.chain_layout,
             None,
             true,
+            None,
         )
         .await?;
         if let Some(gateway) = supporting_gateway {
@@ -326,14 +327,37 @@ pub struct SupportingNode {
     _tempdir: Arc<TempDir>,
 }
 
-/// Acquire an OS-assigned free port number by binding briefly to port 0.
-/// There is a small TOCTOU window between this call and the caller binding
-/// the port, acceptable in test environments.
-pub(crate) async fn get_free_port() -> anyhow::Result<u16> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .context("failed to bind to port 0 for free-port discovery")?;
-    Ok(listener.local_addr()?.port())
+pub(crate) struct PreboundNodePorts {
+    rpc_listener: tokio::net::TcpListener,
+    network_sockets: PreboundNetworkSockets,
+}
+
+impl PreboundNodePorts {
+    pub(crate) async fn bind() -> anyhow::Result<Self> {
+        Ok(Self {
+            rpc_listener: tokio::net::TcpListener::bind("0.0.0.0:0")
+                .await
+                .context("failed to prebind RPC listener")?,
+            network_sockets: PreboundNetworkSockets::bind(Ipv4Addr::LOCALHOST, 0)
+                .await
+                .context("failed to prebind p2p TCP/UDP sockets")?,
+        })
+    }
+
+    pub(crate) fn rpc_port(&self) -> anyhow::Result<u16> {
+        Ok(self.rpc_listener.local_addr()?.port())
+    }
+
+    pub(crate) fn network_port(&self) -> u16 {
+        self.network_sockets.port()
+    }
+
+    fn into_server_prebound_ports(self) -> PreboundPorts {
+        PreboundPorts {
+            rpc_listener: Some(self.rpc_listener),
+            network_sockets: Some(self.network_sockets),
+        }
+    }
 }
 
 impl Tester {
@@ -574,7 +598,7 @@ impl Tester {
     ) -> anyhow::Result<Self> {
         let tempdir = Arc::new(tempfile::tempdir()?);
         Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config);
-        Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true).await
+        Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, None).await
     }
 
     pub(crate) async fn launch_node_with_ports(
@@ -583,6 +607,7 @@ impl Tester {
         config_overrides: Option<impl FnOnce(&mut Config)>,
         chain_layout: ChainLayout<'static>,
         wait_for_initial_deposit: bool,
+        prebound_ports: Option<PreboundNodePorts>,
     ) -> anyhow::Result<Self> {
         let tempdir = Arc::new(tempfile::tempdir()?);
         let mut config = build_node_config(&l1, chain_layout, false).await?;
@@ -604,6 +629,7 @@ impl Tester {
             chain_layout,
             None,
             wait_for_initial_deposit,
+            prebound_ports,
         )
         .await
     }
@@ -628,6 +654,7 @@ impl Tester {
         chain_layout: ChainLayout<'static>,
         log_state: Option<NodeLogState>,
         wait_for_initial_deposit: bool,
+        prebound_ports: Option<PreboundNodePorts>,
     ) -> anyhow::Result<Self> {
         // In-process fake provers use job managers directly; keep the HTTP API only for tests
         // that can hand jobs to external prover workers.
@@ -663,9 +690,16 @@ impl Tester {
             role = %node_role,
         );
         tracing::info!(parent: &node_span, "Launching test node");
-        let bound_ports = zksync_os_server::run::<FullDiffsState>(&runtime, config.clone())
-            .instrument(node_span)
-            .await;
+        let server_prebound_ports = prebound_ports
+            .map(PreboundNodePorts::into_server_prebound_ports)
+            .unwrap_or_default();
+        let bound_ports = zksync_os_server::run_with_prebound_ports::<FullDiffsState>(
+            &runtime,
+            config.clone(),
+            server_prebound_ports,
+        )
+        .instrument(node_span)
+        .await;
         let task_manager_handle = runtime
             .take_task_manager_handle()
             .expect("Runtime must contain a TaskManager handle");
@@ -835,6 +869,7 @@ impl StoppedTester {
             chain_layout,
             Some(log_state.restarted()),
             false,
+            None,
         )
         .await?;
         tester.owned_supporting_nodes = owned_supporting_nodes;
@@ -889,7 +924,7 @@ impl Drop for SupportingNode {
     }
 }
 
-async fn wait_for_port_free(port: u16) -> anyhow::Result<()> {
+async fn wait_for_tcp_port_free(port: u16) -> anyhow::Result<()> {
     use std::net::{Ipv4Addr, SocketAddrV4, TcpListener as StdTcpListener};
     let deadline = tokio::time::Instant::now() + PORT_WAIT_TIMEOUT;
     loop {
@@ -905,24 +940,45 @@ async fn wait_for_port_free(port: u16) -> anyhow::Result<()> {
     }
 }
 
+async fn wait_for_udp_port_free(port: u16) -> anyhow::Result<()> {
+    use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
+    let deadline = tokio::time::Instant::now() + PORT_WAIT_TIMEOUT;
+    loop {
+        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+        if UdpSocket::bind(addr).is_ok() {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("UDP port {port} did not become free within {PORT_WAIT_TIMEOUT:?}");
+        }
+        tracing::debug!(port, "waiting for UDP port to become free");
+        tokio::time::sleep(PORT_WAIT_INTERVAL).await;
+    }
+}
+
 async fn wait_for_bound_ports_free(bound_ports: &BoundPorts) -> anyhow::Result<()> {
-    wait_for_port_free(bound_ports.rpc_port)
+    wait_for_tcp_port_free(bound_ports.rpc_port)
         .await
         .with_context(|| format!("waiting for RPC port {}", bound_ports.rpc_port))?;
     if let Some(port) = bound_ports.status_port {
-        wait_for_port_free(port)
+        wait_for_tcp_port_free(port)
             .await
             .with_context(|| format!("waiting for status port {port}"))?;
     }
     if let Some(port) = bound_ports.prover_api_port {
-        wait_for_port_free(port)
+        wait_for_tcp_port_free(port)
             .await
             .with_context(|| format!("waiting for prover API port {port}"))?;
     }
     if let Some(port) = bound_ports.network_port {
-        wait_for_port_free(port)
+        wait_for_tcp_port_free(port)
             .await
-            .with_context(|| format!("waiting for network port {port}"))?;
+            .with_context(|| format!("waiting for network TCP port {port}"))?;
+    }
+    if let Some(port) = bound_ports.network_udp_port {
+        wait_for_udp_port_free(port)
+            .await
+            .with_context(|| format!("waiting for network UDP port {port}"))?;
     }
     Ok(())
 }

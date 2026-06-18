@@ -15,7 +15,7 @@ use reth_chainspec::{ChainSpecProvider, EthChainSpec, Hardforks};
 use reth_discv5::discv5;
 use reth_eth_wire::HelloMessageWithProtocols;
 use reth_net_nat::NatResolver;
-use reth_network::error::NetworkError;
+use reth_network::error::{NetworkError, ServiceKind};
 use reth_network::types::peers::config::PeerBackoffDurations;
 use reth_network::{
     NetworkConfig as RethNetworkConfig, NetworkConfigBuilder, NetworkManager, PeersConfig,
@@ -27,7 +27,7 @@ use reth_tasks::Runtime;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -42,6 +42,68 @@ const BOOT_NODE_RESOLUTION_MAX_RETRIES: usize = 24;
 const BOOT_NODE_RESOLUTION_RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new()
     .with_delay(BOOT_NODE_RESOLUTION_RETRY_DELAY)
     .with_max_times(BOOT_NODE_RESOLUTION_MAX_RETRIES);
+const PREBOUND_SOCKET_BIND_ATTEMPTS: usize = 128;
+
+#[derive(Debug)]
+pub struct PreboundNetworkSockets {
+    tcp_listener: TcpListener,
+    udp_socket: tokio::net::UdpSocket,
+    port: u16,
+}
+
+impl PreboundNetworkSockets {
+    pub async fn bind(address: Ipv4Addr, port: u16) -> io::Result<Self> {
+        if port != 0 {
+            return Self::bind_once(address, port).await;
+        }
+
+        let mut last_err = None;
+        for _ in 0..PREBOUND_SOCKET_BIND_ATTEMPTS {
+            match Self::bind_once(address, 0).await {
+                Ok(sockets) => return Ok(sockets),
+                Err(err) => last_err = Some(err),
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::AddrNotAvailable,
+                "no TCP/UDP port pair bind attempted",
+            )
+        }))
+    }
+
+    async fn bind_once(address: Ipv4Addr, port: u16) -> io::Result<Self> {
+        let tcp_listener = TcpListener::bind(SocketAddrV4::new(address, port))?;
+        tcp_listener.set_nonblocking(true)?;
+        let port = tcp_listener.local_addr()?.port();
+        let udp_socket = tokio::net::UdpSocket::bind(SocketAddrV4::new(address, port)).await?;
+
+        Ok(Self {
+            tcp_listener,
+            udp_socket,
+            port,
+        })
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    pub fn tcp_local_addr(&self) -> SocketAddr {
+        self.tcp_listener
+            .local_addr()
+            .expect("prebound TCP listener local address")
+    }
+
+    pub fn udp_local_addr(&self) -> io::Result<SocketAddr> {
+        self.udp_socket.local_addr()
+    }
+
+    fn into_parts(self) -> (TcpListener, tokio::net::UdpSocket) {
+        (self.tcp_listener, self.udp_socket)
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to resolve any configured boot nodes before starting the p2p network")]
@@ -176,6 +238,7 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
         raft_handler: Option<RaftProtocolHandler>,
+        prebound_sockets: Option<PreboundNetworkSockets>,
     ) -> Result<(Self, u16, u16), NetworkError> {
         // Install ViseRecorder before creating the NetworkManager so that reth-network metrics
         // are captured. This must happen before `NetworkManager::builder()` because that is where
@@ -189,23 +252,18 @@ impl NetworkService {
                 tracing::info!(%ip, "resolved external IP (STUN)");
             }
         };
-        // When port=0, pre-bind the UDP socket so discv5 reuses it via FromSockets.
-        // This lets build_local_enr read the actual bound port via socket.local_addr(),
-        // making the ENR's udp4 field correct.  The TCP (RLPx) listener is left at port 0
-        // so the OS assigns it an independent ephemeral port — no cross-namespace conflict.
-        let (rlpx_address, discv5_listen_config) = if config.port == 0 {
-            let udp = tokio::net::UdpSocket::bind(SocketAddrV4::new(config.address, 0)).await?;
-            let listen_config = discv5::ListenConfig::FromSockets {
-                ipv4: Some(Arc::new(udp)),
-                ipv6: None,
-            };
-            // Keep TCP at port 0 — binds to a different ephemeral port than UDP.
-            let addr = SocketAddr::V4(SocketAddrV4::new(config.address, 0));
-            (addr, listen_config)
-        } else {
-            let addr = SocketAddr::V4(SocketAddrV4::new(config.address, config.port));
-            let listen_config = discv5::ListenConfig::from_ip(addr.ip(), config.port);
-            (addr, listen_config)
+        // Hold both namespaces across the config -> NetworkManager boundary. Without this, callers
+        // that need to know the p2p port before startup must bind/drop/rebind and reintroduce a
+        // TOCTOU race.
+        let sockets = match prebound_sockets {
+            Some(sockets) => sockets,
+            None => PreboundNetworkSockets::bind(config.address, config.port).await?,
+        };
+        let rlpx_address = sockets.tcp_local_addr();
+        let (tcp_listener, udp_socket) = sockets.into_parts();
+        let discv5_listen_config = discv5::ListenConfig::FromSockets {
+            ipv4: Some(Arc::new(udp_socket)),
+            ipv6: None,
         };
         let chain_spec = client.chain_spec();
         let genesis = Head {
@@ -243,14 +301,14 @@ impl NetworkService {
                 reth_discv5::Config::builder(rlpx_address)
                     .discv5_config(
                         discv5::ConfigBuilder::new(discv5_listen_config)
-                        // Require only 2 peers to agree on our external IP to update our local ENR
-                        .enr_peer_update_min(2)
-                        // 2 peers from above must agree on external IP within 1h from each other.
-                        // This can make the node less responsive to dynamic IP changes.
-                        .vote_duration(Duration::from_secs(3600))
-                        // Sets peer ban duration to 1 second, effectively disabling it
-                        .ban_duration(Some(Duration::from_secs(1)))
-                        .build(),
+                            // Require only 2 peers to agree on our external IP to update our local ENR
+                            .enr_peer_update_min(2)
+                            // 2 peers from above must agree on external IP within 1h from each other.
+                            // This can make the node less responsive to dynamic IP changes.
+                            .vote_duration(Duration::from_secs(3600))
+                            // Sets peer ban duration to 1 second, effectively disabling it
+                            .ban_duration(Some(Duration::from_secs(1)))
+                            .build(),
                     )
                     // Specify custom fork id configuration
                     .fork(b"zksync-os", fork_id),
@@ -274,8 +332,6 @@ impl NetworkService {
                     // chains.
                     .with_enforce_enr_fork_id(true),
             )
-            // Use the same port for RLPx (TCP) and for discv5 (UDP)
-            .listener_addr(rlpx_address)
             .discovery_addr(rlpx_address)
             // Disable transaction gossip as it is unsupported by ZKsync OS
             .disable_tx_gossip(true)
@@ -285,6 +341,9 @@ impl NetworkService {
             .network_id(Some(chain_spec.chain_id()))
             // Use genesis as chain head
             .set_head(genesis);
+        let cfg_builder = cfg_builder
+            .with_tcp_listener(tcp_listener)
+            .map_err(|err| NetworkError::from_io_error(err, ServiceKind::Listener(rlpx_address)))?;
         let connection_registry: ConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
         let mut cfg_builder = match protocol_config {
             ZksProtocolConfig::MainNode(protocol) => Self::register_main_node_rlpx_sub_protocols(
@@ -646,6 +705,23 @@ mod tests {
 
     fn node_record(enode: &str) -> NodeRecord {
         trusted_peer(enode).resolve_blocking().unwrap()
+    }
+
+    #[tokio::test]
+    async fn prebound_network_sockets_hold_same_tcp_udp_port() {
+        let sockets = super::PreboundNetworkSockets::bind(Ipv4Addr::LOCALHOST, 0)
+            .await
+            .expect("prebound sockets");
+
+        let port = sockets.port();
+        assert_ne!(port, 0);
+        assert_eq!(sockets.tcp_local_addr().port(), port);
+        assert_eq!(sockets.udp_local_addr().unwrap().port(), port);
+
+        std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+            .expect_err("TCP port should stay held");
+        std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, port))
+            .expect_err("UDP port should stay held");
     }
 
     async fn resolve_boot_nodes_with_retry_using<Resolve, ResolveFut, Sleep>(

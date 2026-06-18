@@ -9,8 +9,8 @@ use zksync_os_status_server::StatusResponse;
 const RESPAWN_GRACE: Duration = Duration::from_secs(10);
 
 use crate::{
-    AnvilL1, ChainLayout, Config, NodeRole, PROTOCOL_VERSION, StoppedTester, Tester, get_free_port,
-    provider::ZksyncTestingProvider,
+    AnvilL1, ChainLayout, Config, NodeRole, PROTOCOL_VERSION, PreboundNodePorts, StoppedTester,
+    Tester, provider::ZksyncTestingProvider,
 };
 
 const TEST_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
@@ -546,23 +546,20 @@ impl MultiNodeTesterBuilder {
             "batcher_node_index must be in 0..{num_nodes}"
         );
 
-        // Pre-assign specific ports for p2p network and RPC, since consensus nodes need to know
+        // Pre-bind specific ports for p2p network and RPC, since consensus nodes need to know
         // all peers' addresses before starting (for boot_nodes and tx_forwarding_rpc_urls).
-        // Using get_free_port() has a small TOCTOU window but avoids the fs2 file-lock approach.
-        let mut node_network_ports = Vec::with_capacity(membership_nodes);
-        let mut node_rpc_ports = Vec::with_capacity(membership_nodes);
+        let mut node_ports = Vec::with_capacity(membership_nodes);
         for _ in 0..membership_nodes {
-            node_network_ports.push(get_free_port().await?);
-            node_rpc_ports.push(get_free_port().await?);
+            node_ports.push(PreboundNodePorts::bind().await?);
         }
 
         let node_records = self
             .consensus_secret_keys
             .iter()
-            .zip(node_network_ports.iter())
-            .map(|(secret, &network_port)| {
+            .zip(node_ports.iter())
+            .map(|(secret, ports)| {
                 zksync_os_network::NodeRecord::from_secret_key(
-                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), network_port),
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ports.network_port()),
                     secret,
                 )
             })
@@ -573,9 +570,9 @@ impl MultiNodeTesterBuilder {
             .collect::<Vec<_>>();
         let tx_forwarding_rpc_urls = node_records
             .iter()
-            .zip(node_rpc_ports.iter())
-            .map(|(record, &rpc_port)| format!("{}@127.0.0.1:{}", record.id, rpc_port))
-            .collect::<Vec<_>>();
+            .zip(node_ports.iter())
+            .map(|(record, ports)| Ok(format!("{}@127.0.0.1:{}", record.id, ports.rpc_port()?)))
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         let l1 = AnvilL1::start(ChainLayout::Default {
             protocol_version: PROTOCOL_VERSION,
@@ -586,15 +583,17 @@ impl MultiNodeTesterBuilder {
             .consensus_secret_keys
             .into_iter()
             .take(num_nodes)
-            .zip(node_network_ports.into_iter().zip(node_rpc_ports.into_iter()))
+            .zip(node_ports.into_iter())
             .enumerate()
-            .map(|(i, (secret, (network_port, rpc_port)))| {
+            .map(|(i, (secret, ports))| {
                 let peers = peer_ids.clone();
                 let tx_forwarding_rpc_urls = tx_forwarding_rpc_urls.clone();
                 let boot_nodes: Vec<zksync_os_network::TrustedPeer> =
                     node_records.iter().copied().map(Into::into).collect();
                 let l1 = l1.clone();
                 async move {
+                    let network_port = ports.network_port();
+                    let rpc_port = ports.rpc_port()?;
                     // Production configs set this on every consensus node. The first node to
                     // initialize the cluster wins; the rest safely observe that it is initialized.
                     let bootstrap = true;
@@ -638,6 +637,7 @@ impl MultiNodeTesterBuilder {
                             protocol_version: PROTOCOL_VERSION,
                         },
                         false,
+                        Some(ports),
                     )
                     .await?;
                     tracing::info!("node started with tempfile: {} (node_index={i}, node_id={expected_node_id})", node.tempdir.path().display());

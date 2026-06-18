@@ -81,10 +81,17 @@ mod tests {
                     .unwrap();
             },
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let resp = reqwest::get(format!("http://localhost:{port}/status"))
-            .await
-            .unwrap();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let resp = loop {
+            match reqwest::get(format!("http://localhost:{port}/status")).await {
+                Ok(resp) => break resp,
+                Err(err) if tokio::time::Instant::now() < deadline => {
+                    tracing::debug!(%err, "status server not ready yet");
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(err) => panic!("status server did not become ready: {err}"),
+            }
+        };
         assert_eq!(resp.status(), 200);
     }
 }
