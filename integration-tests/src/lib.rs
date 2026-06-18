@@ -246,7 +246,7 @@ impl TestEnvironment {
             self.chain_layout,
             None,
             true,
-            None,
+            PreboundPorts::default(),
         )
         .await?;
         if let Some(gateway) = supporting_gateway {
@@ -358,6 +358,38 @@ impl PreboundNodePorts {
             network_sockets: Some(self.network_sockets),
         }
     }
+}
+
+async fn prebind_server_ports(
+    rpc_address: &str,
+    network_enabled: bool,
+    network_address: Ipv4Addr,
+    network_port: u16,
+) -> anyhow::Result<PreboundPorts> {
+    let rpc_addr: SocketAddr = rpc_address
+        .parse()
+        .with_context(|| format!("failed to parse RPC bind address {rpc_address:?}"))?;
+    let rpc_listener = tokio::net::TcpListener::bind(rpc_addr)
+        .await
+        .with_context(|| format!("failed to prebind RPC listener at {rpc_address}"))?;
+    let network_sockets = if network_enabled {
+        Some(
+            PreboundNetworkSockets::bind(network_address, network_port)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to prebind p2p TCP/UDP sockets at {network_address}:{network_port}"
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+
+    Ok(PreboundPorts {
+        rpc_listener: Some(rpc_listener),
+        network_sockets,
+    })
 }
 
 impl Tester {
@@ -598,7 +630,16 @@ impl Tester {
     ) -> anyhow::Result<Self> {
         let tempdir = Arc::new(tempfile::tempdir()?);
         Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config);
-        Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, None).await
+        Self::launch_node_inner(
+            l1,
+            config,
+            tempdir,
+            chain_layout,
+            None,
+            true,
+            PreboundPorts::default(),
+        )
+        .await
     }
 
     pub(crate) async fn launch_node_with_ports(
@@ -622,6 +663,9 @@ impl Tester {
         if let Some(config_overrides) = config_overrides {
             config_overrides(&mut config);
         }
+        let prebound_ports = prebound_ports
+            .map(PreboundNodePorts::into_server_prebound_ports)
+            .unwrap_or_default();
         Self::launch_node_inner(
             l1,
             config,
@@ -654,7 +698,7 @@ impl Tester {
         chain_layout: ChainLayout<'static>,
         log_state: Option<NodeLogState>,
         wait_for_initial_deposit: bool,
-        prebound_ports: Option<PreboundNodePorts>,
+        prebound_ports: PreboundPorts,
     ) -> anyhow::Result<Self> {
         // In-process fake provers use job managers directly; keep the HTTP API only for tests
         // that can hand jobs to external prover workers.
@@ -690,13 +734,10 @@ impl Tester {
             role = %node_role,
         );
         tracing::info!(parent: &node_span, "Launching test node");
-        let server_prebound_ports = prebound_ports
-            .map(PreboundNodePorts::into_server_prebound_ports)
-            .unwrap_or_default();
         let bound_ports = zksync_os_server::run_with_prebound_ports::<FullDiffsState>(
             &runtime,
             config.clone(),
-            server_prebound_ports,
+            prebound_ports,
         )
         .instrument(node_span)
         .await;
@@ -862,6 +903,13 @@ impl StoppedTester {
         } = self;
         // Wait for the ports from the previous run to be released before starting again.
         wait_for_bound_ports_free(&bound_ports).await?;
+        let prebound_ports = prebind_server_ports(
+            &config.rpc_config.address,
+            config.network_config.enabled,
+            config.network_config.address,
+            config.network_config.port,
+        )
+        .await?;
         let mut tester = Tester::launch_node_inner(
             l1,
             config,
@@ -869,7 +917,7 @@ impl StoppedTester {
             chain_layout,
             Some(log_state.restarted()),
             false,
-            None,
+            prebound_ports,
         )
         .await?;
         tester.owned_supporting_nodes = owned_supporting_nodes;
@@ -993,6 +1041,60 @@ async fn shutdown_runtime(runtime: Runtime) -> anyhow::Result<()> {
         panic!("node failed to shutdown in time");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{TcpListener as StdTcpListener, UdpSocket};
+
+    #[tokio::test]
+    async fn restart_prebind_ports_hold_configured_rpc_and_network_ports() {
+        let rpc_probe = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let rpc_port = rpc_probe.local_addr().unwrap().port();
+        drop(rpc_probe);
+
+        let network_probe = PreboundNetworkSockets::bind(Ipv4Addr::LOCALHOST, 0)
+            .await
+            .unwrap();
+        let network_port = network_probe.port();
+        drop(network_probe);
+
+        let ports = prebind_server_ports(
+            &format!("127.0.0.1:{rpc_port}"),
+            true,
+            Ipv4Addr::LOCALHOST,
+            network_port,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            ports
+                .rpc_listener
+                .as_ref()
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port(),
+            rpc_port
+        );
+        let network_sockets = ports.network_sockets.as_ref().unwrap();
+        assert_eq!(network_sockets.tcp_local_addr().port(), network_port);
+        assert_eq!(
+            network_sockets.udp_local_addr().unwrap().port(),
+            network_port
+        );
+
+        StdTcpListener::bind((Ipv4Addr::LOCALHOST, rpc_port))
+            .expect_err("RPC port should stay held");
+        StdTcpListener::bind((Ipv4Addr::LOCALHOST, network_port))
+            .expect_err("network TCP port should stay held");
+        UdpSocket::bind((Ipv4Addr::LOCALHOST, network_port))
+            .expect_err("network UDP port should stay held");
+    }
 }
 
 async fn ensure_test_wallet_funded(
