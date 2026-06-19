@@ -1,5 +1,5 @@
+use alloy::primitives::U256;
 use anyhow::Context as _;
-use ruint::aliases::U256;
 use zksync_os_contract_interface::IValidatorTimelock;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_l1_watcher::{fetch_batch, fetch_batch_commit_tx_hash};

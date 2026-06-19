@@ -23,7 +23,6 @@ jemalloc = [
 ]
 
 [dependencies]
-zksync_os_alloy_ext.workspace = true
 zksync_os_provider.workspace = true
 zksync_os_l1_sender.workspace = true
 zksync_os_l1_watcher.workspace = true
@@ -58,7 +57,6 @@ zksync_os_replay_archive.workspace = true
 zksync_os_state.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_merkle_tree.workspace = true
-zksync_os_interop_fee_updater.workspace = true
 zksync_os_raft.workspace = true
 zksync_os_tx_validators.workspace = true
 zksync_os_config_validation_macros.workspace = true
@@ -90,10 +88,8 @@ alloy = { workspace = true, default-features = false, features = [
 ] }
 blake2.workspace = true
 clap = { workspace = true, features = ["derive", "wrap_help"] }
-ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-stream.workspace = true
-tokio-util.workspace = true
 tower.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
@@ -103,7 +99,6 @@ base64.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml.workspace = true
-semver = { workspace = true, features = ["serde"] }
 bincode.workspace = true
 smart-config = { workspace = true, features = ["primitive-types", "alloy"] }
 smart-config-commands.workspace = true
@@ -114,10 +109,8 @@ jsonrpsee = { workspace = true, default-features = false, features = [
     "client",
 ] }
 rand.workspace = true
-reqwest = { workspace = true, features = ["stream"] }
 rustls = { workspace = true }
 num.workspace = true
-sentry.workspace = true
 tempfile.workspace = true
 flate2.workspace = true
 tar.workspace = true

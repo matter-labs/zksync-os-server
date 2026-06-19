@@ -36,7 +36,6 @@ members = [
     "lib/batch_types",
     "lib/batcher_metrics",
     "lib/internal_config",
-    "lib/interop_fee_updater",
     "lib/network",
     "lib/metadata",
     "lib/external_price_api",
@@ -320,7 +319,6 @@ zksync_os_batch_verification = { version = "=0.20.7", path = "lib/batch_verifica
 zksync_os_batch_types = { version = "=0.20.7", path = "lib/batch_types" }
 zksync_os_batcher_metrics = { version = "=0.20.7", path = "lib/batcher_metrics" }
 zksync_os_internal_config = { version = "=0.20.7", path = "lib/internal_config" }
-zksync_os_interop_fee_updater = { version = "=0.20.7", path = "lib/interop_fee_updater" }
 zksync_os_network = { version = "=0.20.7", path = "lib/network" }
 zksync_os_raft = { version = "=0.20.7", path = "lib/raft" }
 zksync_os_metadata = { version = "=0.20.7", path = "lib/metadata" }

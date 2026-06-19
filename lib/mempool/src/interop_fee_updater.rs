@@ -9,9 +9,9 @@ use num::BigUint;
 use num::rational::Ratio;
 use zksync_os_base_token_adjuster::BaseTokenPriceHandle;
 use zksync_os_contract_interface::{IGWAssetTracker, IInteropCenter::interopProtocolFeeCall};
-use zksync_os_mempool::subpools::interop_fee::InteropFeeSubpool;
-use zksync_os_rpc::{EthCallHandler, ReadRpcStorage};
 use zksync_os_types::{L2_INTEROP_CENTER_ADDRESS, TokenPricesForFees};
+
+use crate::subpools::interop_fee::InteropFeeSubpool;
 
 #[derive(Debug, Clone)]
 pub struct InteropFeeUpdaterConfig {
@@ -21,28 +21,33 @@ pub struct InteropFeeUpdaterConfig {
 
 const GW_ASSET_TRACKER_ADDRESS: Address = address!("0x0000000000000000000000000000000000010010");
 
-pub struct InteropFeeUpdater<RpcStorage> {
-    eth_call_handler: EthCallHandler<RpcStorage>,
+/// Read-only `eth_call` against the local chain's latest state.
+pub trait LocalEthCall: Send + Sync {
+    fn call(&self, request: TransactionRequest, block: Option<BlockId>) -> anyhow::Result<Bytes>;
+}
+
+pub struct InteropFeeUpdater {
+    eth_call: Box<dyn LocalEthCall>,
     gateway_provider: DynProvider,
-    interop_fee_subpool: InteropFeeSubpool,
     base_token_price: BaseTokenPriceHandle,
+    interop_fee_subpool: InteropFeeSubpool,
     config: InteropFeeUpdaterConfig,
     last_enqueued_fee: Option<U256>,
 }
 
-impl<RpcStorage: ReadRpcStorage> InteropFeeUpdater<RpcStorage> {
+impl InteropFeeUpdater {
     pub fn new(
-        eth_call_handler: EthCallHandler<RpcStorage>,
+        eth_call: Box<dyn LocalEthCall>,
         gateway_provider: DynProvider,
-        interop_fee_subpool: InteropFeeSubpool,
         base_token_price: BaseTokenPriceHandle,
+        interop_fee_subpool: InteropFeeSubpool,
         config: InteropFeeUpdaterConfig,
     ) -> Self {
         Self {
-            eth_call_handler,
+            eth_call,
             gateway_provider,
-            interop_fee_subpool,
             base_token_price,
+            interop_fee_subpool,
             config,
             last_enqueued_fee: None,
         }
@@ -116,8 +121,8 @@ impl<RpcStorage: ReadRpcStorage> InteropFeeUpdater<RpcStorage> {
             .with_to(L2_INTEROP_CENTER_ADDRESS)
             .with_input(Bytes::from(interopProtocolFeeCall {}.abi_encode()));
         let output = self
-            .eth_call_handler
-            .call_impl(request, Some(BlockId::latest()), None, None)
+            .eth_call
+            .call(request, Some(BlockId::latest()))
             .context("failed to call `interopProtocolFee()` on local chain")?;
         let output: [u8; 32] = output
             .as_ref()

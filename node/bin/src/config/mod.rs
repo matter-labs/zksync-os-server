@@ -2204,6 +2204,15 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
     }
 }
 
+impl From<InteropFeeUpdaterConfig> for zksync_os_mempool::InteropFeeUpdaterConfig {
+    fn from(c: InteropFeeUpdaterConfig) -> Self {
+        Self {
+            polling_interval: c.polling_interval,
+            update_deviation_percentage: c.update_deviation_percentage,
+        }
+    }
+}
+
 impl From<MempoolConfig> for zksync_os_mempool::PoolConfig {
     fn from(c: MempoolConfig) -> Self {
         Self {
