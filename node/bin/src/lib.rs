@@ -867,7 +867,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state,
             archiving_block_replay_storage,
             runtime,
-            starting_block,
             block_context_provider,
             state.clone(),
             tree_db,
@@ -987,8 +986,7 @@ async fn run_main_node_pipeline(
     let pipeline_gate = monitor.subscribe_gate();
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::unbounded_channel();
-    let (applied_block_number_sender, applied_block_number_receiver) =
-        watch::channel(starting_block.saturating_sub(1));
+    let (applied_block_number_sender, applied_block_number_receiver) = watch::channel(None);
 
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ConsensusNodeCommandSource {
@@ -1227,7 +1225,6 @@ async fn run_en_pipeline(
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     runtime: &Runtime,
-    starting_block: u64,
     block_context_provider: BlockContextProvider<impl L2Subpool>,
     state: impl ReadStateHistory + WriteState + Clone,
     tree: MerkleTree<RocksDBWrapper>,
@@ -1245,8 +1242,7 @@ async fn run_en_pipeline(
             .rocks_db_path
             .join(INTERNAL_CONFIG_FILE_NAME),
     );
-    let (applied_block_number_sender, applied_block_number_receiver) =
-        watch::channel(starting_block.saturating_sub(1));
+    let (applied_block_number_sender, applied_block_number_receiver) = watch::channel(None);
 
     let monitor =
         BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver.clone());
