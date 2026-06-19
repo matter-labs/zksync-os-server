@@ -44,11 +44,17 @@ const BOOT_NODE_RESOLUTION_RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new
     .with_max_times(BOOT_NODE_RESOLUTION_MAX_RETRIES);
 const PREBOUND_SOCKET_BIND_ATTEMPTS: usize = 128;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetworkPorts {
+    pub tcp: u16,
+    pub udp: u16,
+}
+
 #[derive(Debug)]
 pub struct PreboundNetworkSockets {
     tcp_listener: TcpListener,
     udp_socket: tokio::net::UdpSocket,
-    port: u16,
+    ports: NetworkPorts,
 }
 
 impl PreboundNetworkSockets {
@@ -82,16 +88,24 @@ impl PreboundNetworkSockets {
         let port = tokio_listener.local_addr()?.port();
         let tcp_listener = tokio_listener.into_std()?;
         let udp_socket = tokio::net::UdpSocket::bind(SocketAddrV4::new(address, port)).await?;
+        let udp_port = udp_socket.local_addr()?.port();
 
         Ok(Self {
             tcp_listener,
             udp_socket,
-            port,
+            ports: NetworkPorts {
+                tcp: port,
+                udp: udp_port,
+            },
         })
     }
 
     pub fn port(&self) -> u16 {
-        self.port
+        self.ports.tcp
+    }
+
+    pub fn ports(&self) -> NetworkPorts {
+        self.ports
     }
 
     pub fn tcp_local_addr(&self) -> SocketAddr {
@@ -241,8 +255,8 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
         raft_handler: Option<RaftProtocolHandler>,
-        prebound_sockets: Option<PreboundNetworkSockets>,
-    ) -> Result<(Self, u16, u16), NetworkError> {
+        prebound_sockets: PreboundNetworkSockets,
+    ) -> Result<(Self, NetworkPorts), NetworkError> {
         // Install ViseRecorder before creating the NetworkManager so that reth-network metrics
         // are captured. This must happen before `NetworkManager::builder()` because that is where
         // reth initializes its metric handles (via `Default::default()` on each metrics struct).
@@ -258,11 +272,8 @@ impl NetworkService {
         // Hold both namespaces across the config -> NetworkManager boundary. Without this, callers
         // that need to know the p2p port before startup must bind/drop/rebind and reintroduce a
         // TOCTOU race.
-        let sockets = match prebound_sockets {
-            Some(sockets) => sockets,
-            None => PreboundNetworkSockets::bind(config.address, config.port).await?,
-        };
-        let prebound_port = sockets.port();
+        let sockets = prebound_sockets;
+        let prebound_ports = sockets.ports();
         let rlpx_address = sockets.tcp_local_addr();
         let (tcp_listener, udp_socket) = sockets.into_parts();
         let discv5_listen_config = discv5::ListenConfig::FromSockets {
@@ -379,17 +390,16 @@ impl NetworkService {
 
         let bound_tcp_port = network_manager.local_addr().port();
         debug_assert_eq!(
-            bound_tcp_port, prebound_port,
+            bound_tcp_port, prebound_ports.tcp,
             "network manager TCP port does not match prebound port"
         );
         if let Some(discv5) = network_manager.handle().discv5() {
             debug_assert_eq!(
                 discv5.local_port(),
-                prebound_port,
+                prebound_ports.udp,
                 "discv5 UDP port does not match prebound port"
             );
         }
-        let bound_udp_port = prebound_port;
         Ok((
             Self {
                 network_manager,
@@ -397,8 +407,10 @@ impl NetworkService {
                 peer_sessions: Arc::new(RwLock::new(PeerSessionStore::default())),
                 connection_registry,
             },
-            bound_tcp_port,
-            bound_udp_port,
+            NetworkPorts {
+                tcp: bound_tcp_port,
+                udp: prebound_ports.udp,
+            },
         ))
     }
 

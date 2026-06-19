@@ -552,7 +552,15 @@ impl MultiNodeTesterBuilder {
         let mut node_ports: Vec<PreboundPorts> = Vec::with_capacity(membership_nodes);
         for _ in 0..membership_nodes {
             node_ports.push(
-                prebind_server_ports("0.0.0.0:0", true, Ipv4Addr::LOCALHOST, 0, None).await?,
+                prebind_server_ports(
+                    "0.0.0.0:0",
+                    true,
+                    Ipv4Addr::LOCALHOST,
+                    0,
+                    Some("0.0.0.0:0"),
+                    None,
+                )
+                .await?,
             );
         }
 
@@ -562,7 +570,10 @@ impl MultiNodeTesterBuilder {
             .zip(node_ports.iter())
             .map(|(secret, ports)| {
                 zksync_os_network::NodeRecord::from_secret_key(
-                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ports.network_port()),
+                    SocketAddr::new(
+                        IpAddr::V4(Ipv4Addr::LOCALHOST),
+                        ports.network_ports().expect("network sockets prebound").tcp,
+                    ),
                     secret,
                 )
             })
@@ -595,7 +606,10 @@ impl MultiNodeTesterBuilder {
                     node_records.iter().copied().map(Into::into).collect();
                 let l1 = l1.clone();
                 async move {
-                    let network_port = ports.network_port();
+                    let network_port = ports
+                        .network_ports()
+                        .expect("network sockets prebound")
+                        .tcp;
                     let rpc_port = ports.rpc_port()?;
                     // Production configs set this on every consensus node. The first node to
                     // initialize the cluster wins; the rest safely observe that it is initialized.

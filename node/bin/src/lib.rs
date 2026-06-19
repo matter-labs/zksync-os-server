@@ -81,7 +81,6 @@ use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
-use zksync_os_network::PreboundNetworkSockets;
 use zksync_os_network::RecordOverride;
 use zksync_os_network::VerifyBatch;
 use zksync_os_network::protocol::{
@@ -89,6 +88,7 @@ use zksync_os_network::protocol::{
     ZksProtocolConfig,
 };
 use zksync_os_network::service::{NetworkService, PeerVerifyBatch, PeerVerifyBatchResult};
+use zksync_os_network::{NetworkPorts, PreboundNetworkSockets};
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
@@ -118,79 +118,122 @@ use zksync_os_types::{
     ExecutionVersion, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
 };
 
-/// Actual TCP ports bound by each service after `run()` starts.
+/// Actual ports bound by each service after `run()` starts.
 /// Fields are `None` when the corresponding service is disabled in config.
 #[derive(Debug)]
 pub struct BoundPorts {
-    pub rpc_port: u16,
-    pub status_port: Option<u16>,
-    pub prover_api_port: Option<u16>,
-    pub network_port: Option<u16>,
-    pub network_udp_port: Option<u16>,
+    pub rpc: u16,
+    pub status: Option<u16>,
+    pub prover_api: Option<u16>,
+    pub network: Option<NetworkPorts>,
 }
 
 pub struct PreboundPorts {
-    pub rpc_listener: tokio::net::TcpListener,
-    pub status_listener: Option<tokio::net::TcpListener>,
-    pub network_sockets: Option<PreboundNetworkSockets>,
+    rpc_listener: tokio::net::TcpListener,
+    status_listener: Option<tokio::net::TcpListener>,
+    prover_api_listener: Option<tokio::net::TcpListener>,
+    network_sockets: Option<PreboundNetworkSockets>,
 }
 
 impl PreboundPorts {
-    pub async fn bind_from_config(config: &Config) -> Self {
-        let rpc_addr: std::net::SocketAddr = config
-            .rpc_config
-            .address
-            .parse()
-            .expect("malformed `rpc.address`");
-        let rpc_listener = tokio::net::TcpListener::bind(rpc_addr)
-            .await
-            .expect("failed to bind RPC server");
+    pub async fn bind_from_config(config: &Config) -> anyhow::Result<Self> {
+        let status_address = config
+            .status_server_config
+            .enabled
+            .then_some(config.status_server_config.address.as_str());
+        let prover_api_address = (config.general_config.node_role.is_main()
+            && config.batcher_config.enabled
+            && config.prover_api_config.enabled)
+            .then_some(config.prover_api_config.address.as_str());
+        let network = config
+            .network_config
+            .enabled
+            .then_some((config.network_config.address, config.network_config.port));
+        Self::bind(
+            &config.rpc_config.address,
+            status_address,
+            prover_api_address,
+            network,
+        )
+        .await
+    }
 
-        let status_listener = if config.status_server_config.enabled {
-            let addr: std::net::SocketAddr = config
-                .status_server_config
-                .address
-                .parse()
-                .expect("malformed `status_server.address`");
+    pub async fn bind(
+        rpc_address: &str,
+        status_address: Option<&str>,
+        prover_api_address: Option<&str>,
+        network: Option<(std::net::Ipv4Addr, u16)>,
+    ) -> anyhow::Result<Self> {
+        let rpc_listener = bind_tcp_listener(rpc_address, "RPC").await?;
+        let status_listener = if let Some(address) = status_address {
+            Some(bind_tcp_listener(address, "status").await?)
+        } else {
+            None
+        };
+        let prover_api_listener = if let Some(address) = prover_api_address {
+            Some(bind_tcp_listener(address, "prover API").await?)
+        } else {
+            None
+        };
+        let network_sockets = if let Some((address, port)) = network {
             Some(
-                tokio::net::TcpListener::bind(addr)
+                PreboundNetworkSockets::bind(address, port)
                     .await
-                    .expect("failed to bind status server"),
+                    .with_context(|| {
+                        format!("failed to prebind p2p TCP/UDP sockets at {address}:{port}")
+                    })?,
             )
         } else {
             None
         };
 
-        let network_sockets = if config.network_config.enabled {
-            Some(
-                PreboundNetworkSockets::bind(
-                    config.network_config.address,
-                    config.network_config.port,
-                )
-                .await
-                .expect("failed to bind network sockets"),
-            )
-        } else {
-            None
-        };
-
-        Self {
+        Ok(Self {
             rpc_listener,
             status_listener,
+            prover_api_listener,
             network_sockets,
-        }
+        })
     }
 
     pub fn rpc_port(&self) -> std::io::Result<u16> {
         self.rpc_listener.local_addr().map(|a| a.port())
     }
 
-    pub fn network_port(&self) -> u16 {
+    pub fn status_port(&self) -> Option<u16> {
+        self.status_listener.as_ref().map(|listener| {
+            listener
+                .local_addr()
+                .expect("status listener local_addr")
+                .port()
+        })
+    }
+
+    pub fn prover_api_port(&self) -> Option<u16> {
+        self.prover_api_listener.as_ref().map(|listener| {
+            listener
+                .local_addr()
+                .expect("prover API listener local_addr")
+                .port()
+        })
+    }
+
+    pub fn network_ports(&self) -> Option<NetworkPorts> {
         self.network_sockets
             .as_ref()
-            .expect("network sockets are not prebound")
-            .port()
+            .map(PreboundNetworkSockets::ports)
     }
+}
+
+async fn bind_tcp_listener(
+    address: &str,
+    service_name: &str,
+) -> anyhow::Result<tokio::net::TcpListener> {
+    let addr: SocketAddr = address
+        .parse()
+        .with_context(|| format!("malformed {service_name} bind address {address:?}"))?;
+    tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("failed to prebind {service_name} listener at {address}"))
 }
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -206,7 +249,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     runtime: &Runtime,
     config: Config,
 ) -> BoundPorts {
-    let prebound = PreboundPorts::bind_from_config(&config).await;
+    let prebound = PreboundPorts::bind_from_config(&config)
+        .await
+        .expect("failed to prebind server ports");
     run_with_prebound_ports::<State>(runtime, config, prebound).await
 }
 
@@ -221,6 +266,7 @@ pub async fn run_with_prebound_ports<
     let PreboundPorts {
         rpc_listener,
         status_listener: prebound_status_listener,
+        prover_api_listener: prebound_prover_api_listener,
         network_sockets: prebound_network_sockets,
     } = prebound_ports;
 
@@ -558,12 +604,13 @@ pub async fn run_with_prebound_ports<
         ),
         None => (None, None, None),
     };
-    let (network_port, network_udp_port) = if config.network_config.enabled {
+    let network = if config.network_config.enabled {
         tracing::info!("initializing p2p networking");
         let batch_verification_policy_config: BatchVerificationPolicyConfig =
             config.batch_verification_config.clone().into();
-        let prebound_network_sockets = prebound_network_sockets;
-        let (network_service, bound_tcp_port, bound_udp_port) = if node_role.is_main() {
+        let prebound_network_sockets = prebound_network_sockets
+            .expect("network is enabled but network sockets were not prebound");
+        let (network_service, bound_network_ports) = if node_role.is_main() {
             let (_, accepted_verifier_signers) =
                 effective_verification_policy(&batch_verification_policy_config, &l1_state);
             NetworkService::new(
@@ -622,12 +669,12 @@ pub async fn run_with_prebound_ports<
                 .await
                 .expect("failed to run raft bootstrap process");
         }
-        (Some(bound_tcp_port), Some(bound_udp_port))
+        Some(bound_network_ports)
     } else if node_role.is_main() {
         tracing::info!(
             "p2p networking is disabled; to enable set `network.enabled=true` and populate `network.secret_key`"
         );
-        (None, None)
+        None
     } else {
         panic!(
             "EN cannot run without p2p networking; to fix: \
@@ -1027,6 +1074,7 @@ pub async fn run_with_prebound_ports<
             settles_on_gateway,
             effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
             replay_archiver,
+            prebound_prover_api_listener,
         )
         .await
     } else {
@@ -1087,17 +1135,24 @@ pub async fn run_with_prebound_ports<
     };
 
     // =========== Start JSON RPC ========
-    debug_assert!({
-        let config_port = config
-            .rpc_config
-            .address
-            .parse::<SocketAddr>()
-            .ok()
-            .map(|a| a.port())
-            .unwrap_or(0);
-        let prebound_port = rpc_listener.local_addr().ok().map(|a| a.port()).unwrap_or(0);
-        config_port == 0 || prebound_port == 0 || config_port == prebound_port
-    }, "prebound RPC port does not match config port");
+    debug_assert!(
+        {
+            let config_port = config
+                .rpc_config
+                .address
+                .parse::<SocketAddr>()
+                .ok()
+                .map(|a| a.port())
+                .unwrap_or(0);
+            let prebound_port = rpc_listener
+                .local_addr()
+                .ok()
+                .map(|a| a.port())
+                .unwrap_or(0);
+            config_port == 0 || prebound_port == 0 || config_port == prebound_port
+        },
+        "prebound RPC port does not match config port"
+    );
     let rpc_port = rpc_listener
         .local_addr()
         .expect("rpc server local_addr")
@@ -1139,11 +1194,10 @@ pub async fn run_with_prebound_ports<
     tracing::info!("All components scheduled for initialization in {startup_time:?}");
 
     BoundPorts {
-        rpc_port,
-        status_port,
-        prover_api_port,
-        network_port,
-        network_udp_port,
+        rpc: rpc_port,
+        status: status_port,
+        prover_api: prover_api_port,
+        network,
     }
 }
 
@@ -1175,6 +1229,7 @@ async fn run_main_node_pipeline(
     settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
     replay_archiver: Option<impl ReplayArchiver>,
+    prebound_prover_api_listener: Option<tokio::net::TcpListener>,
 ) -> (watch::Receiver<TransactionAcceptanceState>, Option<u16>) {
     let priority_tree_db_path = config
         .general_config
@@ -1276,14 +1331,8 @@ async fn run_main_node_pipeline(
     );
 
     let prover_api_port = if config.prover_api_config.enabled {
-        let bind_addr: std::net::SocketAddr = config
-            .prover_api_config
-            .address
-            .parse()
-            .expect("failed to parse prover API bind address");
-        let prover_listener = tokio::net::TcpListener::bind(bind_addr)
-            .await
-            .expect("failed to bind prover API server");
+        let prover_listener = prebound_prover_api_listener
+            .expect("prover API is enabled but prover API listener was not prebound");
         let port = prover_listener
             .local_addr()
             .expect("prover server local_addr")
@@ -1946,9 +1995,11 @@ fn raft_storage_path_exists(path: &Path) -> anyhow::Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    use super::PreboundPorts;
     use super::check_batch_verification_mismatch;
     use crate::config::BatchVerificationConfig;
     use alloy::primitives::address;
+    use std::net::{Ipv4Addr, TcpListener as StdTcpListener, UdpSocket};
     use zksync_os_contract_interface::l1_discovery::{
         BatchVerificationSL, BatchVerificationSLConfig,
     };
@@ -2013,5 +2064,33 @@ mod tests {
         let warned = check_batch_verification_mismatch(&server_config, &l1_config);
 
         assert!(!warned);
+    }
+
+    #[tokio::test]
+    async fn prebound_ports_bind_holds_every_requested_endpoint() {
+        let ports = PreboundPorts::bind(
+            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
+            Some("127.0.0.1:0"),
+            Some((Ipv4Addr::LOCALHOST, 0)),
+        )
+        .await
+        .unwrap();
+
+        let rpc_port = ports.rpc_port().unwrap();
+        let status_port = ports.status_port().unwrap();
+        let prover_api_port = ports.prover_api_port().unwrap();
+        let network_ports = ports.network_ports().unwrap();
+
+        StdTcpListener::bind((Ipv4Addr::LOCALHOST, rpc_port))
+            .expect_err("RPC port should stay held");
+        StdTcpListener::bind((Ipv4Addr::LOCALHOST, status_port))
+            .expect_err("status port should stay held");
+        StdTcpListener::bind((Ipv4Addr::LOCALHOST, prover_api_port))
+            .expect_err("prover API port should stay held");
+        StdTcpListener::bind((Ipv4Addr::LOCALHOST, network_ports.tcp))
+            .expect_err("network TCP port should stay held");
+        UdpSocket::bind((Ipv4Addr::LOCALHOST, network_ports.udp))
+            .expect_err("network UDP port should stay held");
     }
 }

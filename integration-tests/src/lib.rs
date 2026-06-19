@@ -31,7 +31,7 @@ use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
-use zksync_os_network::{NodeRecord, PreboundNetworkSockets};
+use zksync_os_network::NodeRecord;
 use zksync_os_provider::NodeProvider;
 use zksync_os_server::config::{Config, ProviderConfig};
 pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
@@ -258,7 +258,7 @@ impl TestEnvironment {
             for node in &tester.owned_supporting_nodes {
                 sequencer_urls.push(
                     node.bound_ports
-                        .prover_api_port
+                        .prover_api
                         .map(|p| format!("http://localhost:{}", p))
                         .expect("supporting node must have prover API port bound for prover tests"),
                 );
@@ -333,44 +333,15 @@ pub(crate) async fn prebind_server_ports(
     network_address: Ipv4Addr,
     network_port: u16,
     status_address: Option<&str>,
+    prover_api_address: Option<&str>,
 ) -> anyhow::Result<PreboundPorts> {
-    let rpc_addr: SocketAddr = rpc_address
-        .parse()
-        .with_context(|| format!("failed to parse RPC bind address {rpc_address:?}"))?;
-    let rpc_listener = tokio::net::TcpListener::bind(rpc_addr)
-        .await
-        .with_context(|| format!("failed to prebind RPC listener at {rpc_address}"))?;
-    let network_sockets = if network_enabled {
-        Some(
-            PreboundNetworkSockets::bind(network_address, network_port)
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to prebind p2p TCP/UDP sockets at {network_address}:{network_port}"
-                    )
-                })?,
-        )
-    } else {
-        None
-    };
-    let status_listener = if let Some(addr) = status_address {
-        let status_addr: SocketAddr = addr
-            .parse()
-            .with_context(|| format!("failed to parse status bind address {addr:?}"))?;
-        Some(
-            tokio::net::TcpListener::bind(status_addr)
-                .await
-                .with_context(|| format!("failed to prebind status listener at {addr}"))?,
-        )
-    } else {
-        None
-    };
-
-    Ok(PreboundPorts {
-        rpc_listener,
-        status_listener,
-        network_sockets,
-    })
+    PreboundPorts::bind(
+        rpc_address,
+        status_address,
+        prover_api_address,
+        network_enabled.then_some((network_address, network_port)),
+    )
+    .await
 }
 
 impl Tester {
@@ -539,11 +510,12 @@ impl Tester {
         Self::launch_with_new_runtime(self.l1.clone(), self.chain_layout, config).await
     }
 
-    /// Gracefully shut down and restart the node, reusing the same database and L1.
+    /// Gracefully shut down the node while keeping its database and L1 alive for a later restart.
     ///
     /// Returns a new `Tester` connected to the restarted node. The original `Tester` is consumed.
     ///
-    /// Restart keeps the same config by default. Ports may differ on restart since port-0 binding lets the OS pick new ports.
+    /// A later restart keeps the P2P port stable by default; other port-0 services may get new
+    /// OS-assigned ports.
     pub async fn stop(self) -> anyhow::Result<StoppedTester> {
         let Self {
             runtime,
@@ -571,7 +543,7 @@ impl Tester {
         })
     }
 
-    /// Restart keeps the same config by default. The internal P2P network port may change.
+    /// Restart keeps the same config by default and preserves the P2P network port.
     pub async fn restart(self) -> anyhow::Result<Self> {
         self.stop().await?.start().await
     }
@@ -611,16 +583,7 @@ impl Tester {
     ) -> anyhow::Result<Self> {
         let tempdir = Arc::new(tempfile::tempdir()?);
         Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config);
-        Self::launch_node_inner(
-            l1,
-            config,
-            tempdir,
-            chain_layout,
-            None,
-            true,
-            None,
-        )
-        .await
+        Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, None).await
     }
 
     pub(crate) async fn launch_node_with_ports(
@@ -703,17 +666,7 @@ impl Tester {
 
         let prebound_ports = match prebound_ports {
             Some(ports) => ports,
-            None => prebind_server_ports(
-                &config.rpc_config.address,
-                config.network_config.enabled,
-                config.network_config.address,
-                config.network_config.port,
-                config
-                    .status_server_config
-                    .enabled
-                    .then(|| config.status_server_config.address.as_str()),
-            )
-            .await?,
+            None => PreboundPorts::bind_from_config(&config).await?,
         };
 
         let runtime = RuntimeBuilder::new(
@@ -738,10 +691,10 @@ impl Tester {
             .take_task_manager_handle()
             .expect("Runtime must contain a TaskManager handle");
 
-        let l2_rpc_ws_url = format!("ws://localhost:{}", bound_ports.rpc_port);
-        let l2_rpc_address = format!("http://localhost:{}", bound_ports.rpc_port);
+        let l2_rpc_ws_url = format!("ws://localhost:{}", bound_ports.rpc);
+        let l2_rpc_address = format!("http://localhost:{}", bound_ports.rpc);
         let status_server_url = bound_ports
-            .status_port
+            .status
             .map(|p| format!("http://localhost:{}", p))
             .unwrap_or_default();
         let network_secret_key = config
@@ -752,16 +705,16 @@ impl Tester {
         let mut node_record = NodeRecord::from_secret_key(
             SocketAddr::new(
                 IpAddr::V4(Ipv4Addr::LOCALHOST),
-                bound_ports.network_port.unwrap_or(0),
+                bound_ports.network.map(|p| p.tcp).unwrap_or(0),
             ),
             network_secret_key,
         );
-        if let Some(udp_port) = bound_ports.network_udp_port {
-            node_record.udp_port = udp_port;
+        if let Some(network_ports) = bound_ports.network {
+            node_record.udp_port = network_ports.udp;
         }
         #[cfg(feature = "prover-tests")]
         let prover_api_address = bound_ports
-            .prover_api_port
+            .prover_api
             .map(|p| format!("http://localhost:{}", p))
             .unwrap_or_default();
 
@@ -884,7 +837,7 @@ impl StoppedTester {
         self.start_with_config(config).await
     }
 
-    pub async fn start_with_config(self, config: Config) -> anyhow::Result<Tester> {
+    pub async fn start_with_config(self, mut config: Config) -> anyhow::Result<Tester> {
         let Self {
             l1,
             tempdir,
@@ -892,24 +845,19 @@ impl StoppedTester {
             log_state,
             owned_supporting_nodes,
             bound_ports,
+            config: stopped_config,
             ..
         } = self;
         // Wait for the ports from the previous run to be released before starting again.
         wait_for_bound_ports_free(&bound_ports).await?;
         // Preserve the old P2P port across restarts so peers still have a valid dial target.
-        let network_port = bound_ports.network_port.unwrap_or(config.network_config.port);
-        let status_address = config
-            .status_server_config
-            .enabled
-            .then(|| config.status_server_config.address.as_str());
-        let prebound_ports = prebind_server_ports(
-            &config.rpc_config.address,
-            config.network_config.enabled,
-            config.network_config.address,
-            network_port,
-            status_address,
-        )
-        .await?;
+        let network_port = restart_network_port(
+            stopped_config.network_config.port,
+            &bound_ports,
+            config.network_config.port,
+        );
+        config.network_config.port = network_port;
+        let prebound_ports = PreboundPorts::bind_from_config(&config).await?;
         let mut tester = Tester::launch_node_inner(
             l1,
             config,
@@ -972,6 +920,21 @@ impl Drop for SupportingNode {
     }
 }
 
+fn restart_network_port(
+    stopped_config_port: u16,
+    bound_ports: &BoundPorts,
+    requested_config_port: u16,
+) -> u16 {
+    match bound_ports.network {
+        Some(ports)
+            if requested_config_port == 0 || requested_config_port == stopped_config_port =>
+        {
+            ports.tcp
+        }
+        _ => requested_config_port,
+    }
+}
+
 async fn wait_for_tcp_port_free(port: u16) -> anyhow::Result<()> {
     use std::net::{Ipv4Addr, SocketAddrV4, TcpListener as StdTcpListener};
     let deadline = tokio::time::Instant::now() + PORT_WAIT_TIMEOUT;
@@ -1005,28 +968,26 @@ async fn wait_for_udp_port_free(port: u16) -> anyhow::Result<()> {
 }
 
 async fn wait_for_bound_ports_free(bound_ports: &BoundPorts) -> anyhow::Result<()> {
-    wait_for_tcp_port_free(bound_ports.rpc_port)
+    wait_for_tcp_port_free(bound_ports.rpc)
         .await
-        .with_context(|| format!("waiting for RPC port {}", bound_ports.rpc_port))?;
-    if let Some(port) = bound_ports.status_port {
+        .with_context(|| format!("waiting for RPC port {}", bound_ports.rpc))?;
+    if let Some(port) = bound_ports.status {
         wait_for_tcp_port_free(port)
             .await
             .with_context(|| format!("waiting for status port {port}"))?;
     }
-    if let Some(port) = bound_ports.prover_api_port {
+    if let Some(port) = bound_ports.prover_api {
         wait_for_tcp_port_free(port)
             .await
             .with_context(|| format!("waiting for prover API port {port}"))?;
     }
-    if let Some(port) = bound_ports.network_port {
-        wait_for_tcp_port_free(port)
+    if let Some(ports) = bound_ports.network {
+        wait_for_tcp_port_free(ports.tcp)
             .await
-            .with_context(|| format!("waiting for network TCP port {port}"))?;
-    }
-    if let Some(port) = bound_ports.network_udp_port {
-        wait_for_udp_port_free(port)
+            .with_context(|| format!("waiting for network TCP port {}", ports.tcp))?;
+        wait_for_udp_port_free(ports.udp)
             .await
-            .with_context(|| format!("waiting for network UDP port {port}"))?;
+            .with_context(|| format!("waiting for network UDP port {}", ports.udp))?;
     }
     Ok(())
 }
@@ -1047,6 +1008,7 @@ async fn shutdown_runtime(runtime: Runtime) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use std::net::{TcpListener as StdTcpListener, UdpSocket};
+    use zksync_os_network::{NetworkPorts, PreboundNetworkSockets};
 
     #[tokio::test]
     async fn restart_prebind_ports_includes_status_listener() {
@@ -1056,12 +1018,14 @@ mod tests {
             Ipv4Addr::LOCALHOST,
             0,
             Some("127.0.0.1:0"),
+            None,
         )
         .await
         .unwrap();
 
-        let status_listener = ports.status_listener.expect("status listener should be prebound");
-        let status_port = status_listener.local_addr().unwrap().port();
+        let status_port = ports
+            .status_port()
+            .expect("status listener should be prebound");
         assert_ne!(status_port, 0);
 
         StdTcpListener::bind((Ipv4Addr::LOCALHOST, status_port))
@@ -1088,17 +1052,15 @@ mod tests {
             Ipv4Addr::LOCALHOST,
             network_port,
             None,
+            None,
         )
         .await
         .unwrap();
 
-        assert_eq!(ports.rpc_listener.local_addr().unwrap().port(), rpc_port);
-        let network_sockets = ports.network_sockets.as_ref().unwrap();
-        assert_eq!(network_sockets.tcp_local_addr().port(), network_port);
-        assert_eq!(
-            network_sockets.udp_local_addr().unwrap().port(),
-            network_port
-        );
+        assert_eq!(ports.rpc_port().unwrap(), rpc_port);
+        let network_ports = ports.network_ports().unwrap();
+        assert_eq!(network_ports.tcp, network_port);
+        assert_eq!(network_ports.udp, network_port);
 
         StdTcpListener::bind((Ipv4Addr::LOCALHOST, rpc_port))
             .expect_err("RPC port should stay held");
@@ -1106,6 +1068,36 @@ mod tests {
             .expect_err("network TCP port should stay held");
         UdpSocket::bind((Ipv4Addr::LOCALHOST, network_port))
             .expect_err("network UDP port should stay held");
+    }
+
+    #[test]
+    fn restart_network_port_preserves_previous_bound_port_when_config_is_ephemeral() {
+        let bound_ports = BoundPorts {
+            rpc: 3050,
+            status: None,
+            prover_api: None,
+            network: Some(NetworkPorts {
+                tcp: 31_337,
+                udp: 31_337,
+            }),
+        };
+
+        assert_eq!(restart_network_port(0, &bound_ports, 0), 31_337);
+    }
+
+    #[test]
+    fn restart_network_port_respects_explicit_override() {
+        let bound_ports = BoundPorts {
+            rpc: 3050,
+            status: None,
+            prover_api: None,
+            network: Some(NetworkPorts {
+                tcp: 31_337,
+                udp: 31_337,
+            }),
+        };
+
+        assert_eq!(restart_network_port(0, &bound_ports, 31_338), 31_338);
     }
 }
 
