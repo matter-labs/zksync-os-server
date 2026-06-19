@@ -4,6 +4,7 @@ use crate::execution::execute_block_in_vm::execute_block_in_vm;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::save_dump;
 use crate::model::blocks::{BlockCommand, BlockCommandType, BlockPayload};
+use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -36,7 +37,7 @@ where
     /// before starting block `N + 1`. This works around an `OverlayBuffer` bug
     /// that reproduces during rebuilds when the runtime truncates base state.
     /// Once that bug is fixed, this wait can be removed.
-    pub applied_block_number_receiver: watch::Receiver<u64>,
+    pub applied_block_number_receiver: watch::Receiver<Option<BlockNumber>>,
 }
 
 #[async_trait]
@@ -79,7 +80,11 @@ where
             tracing::info!("Command {cmd} received by BlockExecutor");
             let cmd_type = cmd.command_type();
             state_reporter.enter_state(SequencerState::WaitingForApplier);
-            if let Some(last_block_number) = self.block_context_provider.last_block_number() {
+            // If we had a non-genesis block in the past, we need to wait for the block applier to
+            // catch up. Genesis is skipped because it never gets applied further down the pipeline.
+            if let Some(last_block_number) = self.block_context_provider.last_block_number()
+                && last_block_number > 0
+            {
                 wait_for_block_applier(&mut self.applied_block_number_receiver, last_block_number)
                     .await?;
             }
@@ -222,11 +227,11 @@ where
 }
 
 async fn wait_for_block_applier(
-    applied_block_number_receiver: &mut watch::Receiver<u64>,
-    required_block_number: u64,
+    applied_block_number_receiver: &mut watch::Receiver<Option<BlockNumber>>,
+    required_block_number: BlockNumber,
 ) -> anyhow::Result<()> {
     let applied_block_number = *applied_block_number_receiver.borrow_and_update();
-    if applied_block_number >= required_block_number {
+    if applied_block_number >= Some(required_block_number) {
         tracing::debug!(
             applied_block_number,
             required_block_number,
@@ -242,7 +247,7 @@ async fn wait_for_block_applier(
     );
 
     let reached_block_number = applied_block_number_receiver
-        .wait_for(|block_number| *block_number >= required_block_number)
+        .wait_for(|block_number| *block_number >= Some(required_block_number))
         .await
         .context("block applier progress watch closed while executor was waiting")?
         .to_owned();

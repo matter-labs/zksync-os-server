@@ -2,6 +2,7 @@ use crate::config::SequencerConfig;
 use crate::execution::metrics::BlockApplierState;
 use crate::model::blocks::{AppliedBlock, BlockCommandType, BlockPayload};
 use alloy::consensus::Sealed;
+use alloy::primitives::BlockNumber;
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
 use zksync_os_observability::ComponentStateReporter;
@@ -20,7 +21,7 @@ where
     pub replay: Replay,
     pub repositories: Repo,
     pub config: SequencerConfig,
-    pub applied_block_number_sender: watch::Sender<u64>,
+    pub applied_block_number_sender: watch::Sender<Option<BlockNumber>>,
 }
 
 #[async_trait]
@@ -97,7 +98,8 @@ where
                 )
                 .await?;
 
-            self.applied_block_number_sender.send_replace(block_number);
+            self.applied_block_number_sender
+                .send_replace(Some(block_number));
 
             output.send_and_record(
                 AppliedBlock {
