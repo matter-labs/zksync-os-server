@@ -9,7 +9,6 @@ pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
 mod init_tx_forwarder;
-mod migration_gate;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
 pub mod prover_api;
@@ -75,7 +74,6 @@ use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::L1PersistBatchWatcher;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1FinalizedExecuteWatcher,
-    MigrationFinalizedWatcher, SettlementLayerWatcher,
 };
 use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
@@ -635,51 +633,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    // Last-finalized migration counter, the sole input to `MigrationGate`'s pause decision.
-    // Always created so the gate has a stable receiver regardless of protocol version; on
-    // pre-v31 chains it stays at 0 (no migrations exist) and the gate is transparent.
-    let (last_finalized_migration_sender, last_finalized_migration_receiver) =
-        watch::channel::<u64>(0);
-
-    // Carries the trigger batch number from MigrationGate to SettlementLayerWatcher.
-    // None until MigrationGate detects the SetSLChainId batch; Some(N) after detection.
-    let (migration_triggered_sender, migration_triggered_receiver) =
-        watch::channel::<Option<u64>>(None);
-
-    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
-        // Initializes `last_finalized_migration` from the SL's `migrationNumber(chainId)` and,
-        // if the current SL interval migration has not yet finalized, spawns a watcher to track
-        // future `MigrationFinalized` events. When the migration is already finalized at startup
-        // the watcher is skipped — the seeded counter alone keeps the gate transparent.
-        let migration_finalized_watcher = MigrationFinalizedWatcher::create_watcher(
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            node_startup_state.l1_state.bridgehub_sl.clone(),
-            &node_startup_state.l1_state.settlement_layer_intervals,
-            chain_id,
-            node_startup_state.l1_state.l1_chain_id,
-            config.l1_watcher_config.clone().into(),
-            last_finalized_migration_sender,
-        )
-        .await
-        .expect("failed to start migration finalized watcher");
-        if let Some(watcher) = migration_finalized_watcher {
-            runtime.spawn_critical_task("migration finalized watcher", watcher.run(()));
-        }
-
-        // Crashes the node when getSettlementLayer() changes, forcing a restart against the
-        // new settlement layer.
-        runtime.spawn_critical_task(
-            "settlement layer watcher",
-            SettlementLayerWatcher::new(
-                node_startup_state.l1_state.diamond_proxy_l1.clone(),
-                node_startup_state.l1_state.settlement_layer_address,
-                config.l1_watcher_config.poll_interval,
-                migration_triggered_receiver,
-            )
-            .run(),
-        );
-    }
-
     // Transaction acceptance state - tracks whether we're accepting new transactions
     // Main nodes: accepts, but may switch to reject when `sequencer_max_blocks_to_produce` blocks are produced
     // External nodes: always accepts, but may be rejected on the main node side during forwarding
@@ -923,8 +876,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             commit_submitted_tx,
             verify_request_tx,
             verify_result_rx,
-            last_finalized_migration_receiver,
-            migration_triggered_sender,
             settles_on_gateway,
             effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
             replay_archiver,
@@ -1039,8 +990,6 @@ async fn run_main_node_pipeline(
     commit_submitted_tx: watch::Sender<u64>,
     verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
-    last_finalized_migration: watch::Receiver<u64>,
-    migration_triggered: watch::Sender<Option<u64>>,
     settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
     replay_archiver: Option<impl ReplayArchiver>,
@@ -1241,10 +1190,6 @@ async fn run_main_node_pipeline(
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy_sl.clone(),
         ))
-        .pipe(migration_gate::MigrationGate {
-            last_finalized_migration,
-            migration_triggered,
-        })
         .pipe_opt(replay_archiver.map(|replay_archiver| {
             ReplayArchiveGateComponent::new(replay_archiver, block_replay_storage.clone())
         }))
