@@ -9,9 +9,10 @@ use zksync_os_status_server::StatusResponse;
 const RESPAWN_GRACE: Duration = Duration::from_secs(10);
 
 use crate::{
-    AnvilL1, ChainLayout, Config, NodeRole, PROTOCOL_VERSION, PreboundNodePorts, StoppedTester,
-    Tester, provider::ZksyncTestingProvider,
+    AnvilL1, ChainLayout, Config, NodeRole, PROTOCOL_VERSION, StoppedTester, Tester,
+    prebind_server_ports, provider::ZksyncTestingProvider,
 };
+use zksync_os_server::PreboundPorts;
 
 const TEST_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 const TEST_ELECTION_TIMEOUT_MIN: Duration = Duration::from_secs(2);
@@ -548,9 +549,11 @@ impl MultiNodeTesterBuilder {
 
         // Pre-bind specific ports for p2p network and RPC, since consensus nodes need to know
         // all peers' addresses before starting (for boot_nodes and tx_forwarding_rpc_urls).
-        let mut node_ports = Vec::with_capacity(membership_nodes);
+        let mut node_ports: Vec<PreboundPorts> = Vec::with_capacity(membership_nodes);
         for _ in 0..membership_nodes {
-            node_ports.push(PreboundNodePorts::bind().await?);
+            node_ports.push(
+                prebind_server_ports("0.0.0.0:0", true, Ipv4Addr::LOCALHOST, 0, None).await?,
+            );
         }
 
         let node_records = self

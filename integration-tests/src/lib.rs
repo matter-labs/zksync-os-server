@@ -327,44 +327,12 @@ pub struct SupportingNode {
     _tempdir: Arc<TempDir>,
 }
 
-pub(crate) struct PreboundNodePorts {
-    rpc_listener: tokio::net::TcpListener,
-    network_sockets: PreboundNetworkSockets,
-}
-
-impl PreboundNodePorts {
-    pub(crate) async fn bind() -> anyhow::Result<Self> {
-        Ok(Self {
-            rpc_listener: tokio::net::TcpListener::bind("0.0.0.0:0")
-                .await
-                .context("failed to prebind RPC listener")?,
-            network_sockets: PreboundNetworkSockets::bind(Ipv4Addr::LOCALHOST, 0)
-                .await
-                .context("failed to prebind p2p TCP/UDP sockets")?,
-        })
-    }
-
-    pub(crate) fn rpc_port(&self) -> anyhow::Result<u16> {
-        Ok(self.rpc_listener.local_addr()?.port())
-    }
-
-    pub(crate) fn network_port(&self) -> u16 {
-        self.network_sockets.port()
-    }
-
-    fn into_server_prebound_ports(self) -> PreboundPorts {
-        PreboundPorts {
-            rpc_listener: Some(self.rpc_listener),
-            network_sockets: Some(self.network_sockets),
-        }
-    }
-}
-
-async fn prebind_server_ports(
+pub(crate) async fn prebind_server_ports(
     rpc_address: &str,
     network_enabled: bool,
     network_address: Ipv4Addr,
     network_port: u16,
+    status_address: Option<&str>,
 ) -> anyhow::Result<PreboundPorts> {
     let rpc_addr: SocketAddr = rpc_address
         .parse()
@@ -385,9 +353,22 @@ async fn prebind_server_ports(
     } else {
         None
     };
+    let status_listener = if let Some(addr) = status_address {
+        let status_addr: SocketAddr = addr
+            .parse()
+            .with_context(|| format!("failed to parse status bind address {addr:?}"))?;
+        Some(
+            tokio::net::TcpListener::bind(status_addr)
+                .await
+                .with_context(|| format!("failed to prebind status listener at {addr}"))?,
+        )
+    } else {
+        None
+    };
 
     Ok(PreboundPorts {
         rpc_listener: Some(rpc_listener),
+        status_listener,
         network_sockets,
     })
 }
@@ -648,7 +629,7 @@ impl Tester {
         config_overrides: Option<impl FnOnce(&mut Config)>,
         chain_layout: ChainLayout<'static>,
         wait_for_initial_deposit: bool,
-        prebound_ports: Option<PreboundNodePorts>,
+        prebound_ports: Option<PreboundPorts>,
     ) -> anyhow::Result<Self> {
         let tempdir = Arc::new(tempfile::tempdir()?);
         let mut config = build_node_config(&l1, chain_layout, false).await?;
@@ -663,9 +644,7 @@ impl Tester {
         if let Some(config_overrides) = config_overrides {
             config_overrides(&mut config);
         }
-        let prebound_ports = prebound_ports
-            .map(PreboundNodePorts::into_server_prebound_ports)
-            .unwrap_or_default();
+        let prebound_ports = prebound_ports.unwrap_or_default();
         Self::launch_node_inner(
             l1,
             config,
@@ -903,11 +882,18 @@ impl StoppedTester {
         } = self;
         // Wait for the ports from the previous run to be released before starting again.
         wait_for_bound_ports_free(&bound_ports).await?;
+        // Preserve the old P2P port across restarts so peers still have a valid dial target.
+        let network_port = bound_ports.network_port.unwrap_or(config.network_config.port);
+        let status_address = config
+            .status_server_config
+            .enabled
+            .then(|| config.status_server_config.address.as_str());
         let prebound_ports = prebind_server_ports(
             &config.rpc_config.address,
             config.network_config.enabled,
             config.network_config.address,
-            config.network_config.port,
+            network_port,
+            status_address,
         )
         .await?;
         let mut tester = Tester::launch_node_inner(
@@ -1049,6 +1035,26 @@ mod tests {
     use std::net::{TcpListener as StdTcpListener, UdpSocket};
 
     #[tokio::test]
+    async fn restart_prebind_ports_includes_status_listener() {
+        let ports = prebind_server_ports(
+            "0.0.0.0:0",
+            false,
+            Ipv4Addr::LOCALHOST,
+            0,
+            Some("127.0.0.1:0"),
+        )
+        .await
+        .unwrap();
+
+        let status_listener = ports.status_listener.expect("status listener should be prebound");
+        let status_port = status_listener.local_addr().unwrap().port();
+        assert_ne!(status_port, 0);
+
+        StdTcpListener::bind((Ipv4Addr::LOCALHOST, status_port))
+            .expect_err("status port should stay held by PreboundPorts");
+    }
+
+    #[tokio::test]
     async fn restart_prebind_ports_hold_configured_rpc_and_network_ports() {
         let rpc_probe = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
@@ -1067,6 +1073,7 @@ mod tests {
             true,
             Ipv4Addr::LOCALHOST,
             network_port,
+            None,
         )
         .await
         .unwrap();

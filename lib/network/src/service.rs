@@ -61,7 +61,10 @@ impl PreboundNetworkSockets {
         for _ in 0..PREBOUND_SOCKET_BIND_ATTEMPTS {
             match Self::bind_once(address, 0).await {
                 Ok(sockets) => return Ok(sockets),
-                Err(err) => last_err = Some(err),
+                Err(err) => {
+                    last_err = Some(err);
+                    tokio::task::yield_now().await;
+                }
             }
         }
 
@@ -74,9 +77,10 @@ impl PreboundNetworkSockets {
     }
 
     async fn bind_once(address: Ipv4Addr, port: u16) -> io::Result<Self> {
-        let tcp_listener = TcpListener::bind(SocketAddrV4::new(address, port))?;
-        tcp_listener.set_nonblocking(true)?;
-        let port = tcp_listener.local_addr()?.port();
+        let tokio_listener =
+            tokio::net::TcpListener::bind(SocketAddrV4::new(address, port)).await?;
+        let port = tokio_listener.local_addr()?.port();
+        let tcp_listener = tokio_listener.into_std()?;
         let udp_socket = tokio::net::UdpSocket::bind(SocketAddrV4::new(address, port)).await?;
 
         Ok(Self {
@@ -128,17 +132,16 @@ async fn resolve_boot_nodes_with_retry(
         resolved_boot_nodes: Vec::with_capacity(boot_nodes.len()),
         unresolved_boot_nodes: boot_nodes,
     }));
-    let resolve = Arc::new(|boot_node: TrustedPeer| async move { boot_node.resolve().await });
 
-    {
+    (|| {
         let state = Arc::clone(&state);
-        let resolve = Arc::clone(&resolve);
-        move || {
-            let state = Arc::clone(&state);
-            let resolve = Arc::clone(&resolve);
-            async move { resolve_boot_nodes_once(&state, resolve.as_ref()).await }
+        async move {
+            resolve_boot_nodes_once(&state, &|boot_node: TrustedPeer| async move {
+                boot_node.resolve().await
+            })
+            .await
         }
-    }
+    })
     .retry(BOOT_NODE_RESOLUTION_RETRY_BUILDER)
     .notify(|error, retry_in| {
         tracing::info!(
@@ -259,6 +262,7 @@ impl NetworkService {
             Some(sockets) => sockets,
             None => PreboundNetworkSockets::bind(config.address, config.port).await?,
         };
+        let prebound_port = sockets.port();
         let rlpx_address = sockets.tcp_local_addr();
         let (tcp_listener, udp_socket) = sockets.into_parts();
         let discv5_listen_config = discv5::ListenConfig::FromSockets {
@@ -374,11 +378,18 @@ impl NetworkService {
             NetworkManager::builder(net_cfg).await?.split();
 
         let bound_tcp_port = network_manager.local_addr().port();
-        let bound_udp_port = network_manager
-            .handle()
-            .discv5()
-            .map(|d5| d5.local_port())
-            .unwrap_or(bound_tcp_port);
+        debug_assert_eq!(
+            bound_tcp_port, prebound_port,
+            "network manager TCP port does not match prebound port"
+        );
+        if let Some(discv5) = network_manager.handle().discv5() {
+            debug_assert_eq!(
+                discv5.local_port(),
+                prebound_port,
+                "discv5 UDP port does not match prebound port"
+            );
+        }
+        let bound_udp_port = prebound_port;
         Ok((
             Self {
                 network_manager,

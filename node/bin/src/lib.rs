@@ -132,7 +132,25 @@ pub struct BoundPorts {
 #[derive(Default)]
 pub struct PreboundPorts {
     pub rpc_listener: Option<tokio::net::TcpListener>,
+    pub status_listener: Option<tokio::net::TcpListener>,
     pub network_sockets: Option<PreboundNetworkSockets>,
+}
+
+impl PreboundPorts {
+    pub fn rpc_port(&self) -> std::io::Result<u16> {
+        self.rpc_listener
+            .as_ref()
+            .expect("RPC listener is not prebound")
+            .local_addr()
+            .map(|a| a.port())
+    }
+
+    pub fn network_port(&self) -> u16 {
+        self.network_sockets
+            .as_ref()
+            .expect("network sockets are not prebound")
+            .port()
+    }
 }
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -1007,9 +1025,12 @@ pub async fn run_with_prebound_ports<
             .address
             .parse()
             .expect("malformed `status_server.address`");
-        let status_listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .expect("failed to bind status server");
+        let status_listener = match prebound_ports.status_listener.take() {
+            Some(listener) => listener,
+            None => tokio::net::TcpListener::bind(addr)
+                .await
+                .expect("failed to bind status server"),
+        };
         let port = status_listener
             .local_addr()
             .expect("status server local_addr")
