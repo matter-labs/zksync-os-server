@@ -129,20 +129,60 @@ pub struct BoundPorts {
     pub network_udp_port: Option<u16>,
 }
 
-#[derive(Default)]
 pub struct PreboundPorts {
-    pub rpc_listener: Option<tokio::net::TcpListener>,
+    pub rpc_listener: tokio::net::TcpListener,
     pub status_listener: Option<tokio::net::TcpListener>,
     pub network_sockets: Option<PreboundNetworkSockets>,
 }
 
 impl PreboundPorts {
+    pub async fn bind_from_config(config: &Config) -> Self {
+        let rpc_addr: std::net::SocketAddr = config
+            .rpc_config
+            .address
+            .parse()
+            .expect("malformed `rpc.address`");
+        let rpc_listener = tokio::net::TcpListener::bind(rpc_addr)
+            .await
+            .expect("failed to bind RPC server");
+
+        let status_listener = if config.status_server_config.enabled {
+            let addr: std::net::SocketAddr = config
+                .status_server_config
+                .address
+                .parse()
+                .expect("malformed `status_server.address`");
+            Some(
+                tokio::net::TcpListener::bind(addr)
+                    .await
+                    .expect("failed to bind status server"),
+            )
+        } else {
+            None
+        };
+
+        let network_sockets = if config.network_config.enabled {
+            Some(
+                PreboundNetworkSockets::bind(
+                    config.network_config.address,
+                    config.network_config.port,
+                )
+                .await
+                .expect("failed to bind network sockets"),
+            )
+        } else {
+            None
+        };
+
+        Self {
+            rpc_listener,
+            status_listener,
+            network_sockets,
+        }
+    }
+
     pub fn rpc_port(&self) -> std::io::Result<u16> {
-        self.rpc_listener
-            .as_ref()
-            .expect("RPC listener is not prebound")
-            .local_addr()
-            .map(|a| a.port())
+        self.rpc_listener.local_addr().map(|a| a.port())
     }
 
     pub fn network_port(&self) -> u16 {
@@ -166,7 +206,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     runtime: &Runtime,
     config: Config,
 ) -> BoundPorts {
-    run_with_prebound_ports::<State>(runtime, config, PreboundPorts::default()).await
+    let prebound = PreboundPorts::bind_from_config(&config).await;
+    run_with_prebound_ports::<State>(runtime, config, prebound).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -175,8 +216,14 @@ pub async fn run_with_prebound_ports<
 >(
     runtime: &Runtime,
     config: Config,
-    mut prebound_ports: PreboundPorts,
+    prebound_ports: PreboundPorts,
 ) -> BoundPorts {
+    let PreboundPorts {
+        rpc_listener,
+        status_listener: prebound_status_listener,
+        network_sockets: prebound_network_sockets,
+    } = prebound_ports;
+
     report_static_config_metrics(&config);
 
     let node_role = config.general_config.node_role;
@@ -515,7 +562,7 @@ pub async fn run_with_prebound_ports<
         tracing::info!("initializing p2p networking");
         let batch_verification_policy_config: BatchVerificationPolicyConfig =
             config.batch_verification_config.clone().into();
-        let prebound_network_sockets = prebound_ports.network_sockets.take();
+        let prebound_network_sockets = prebound_network_sockets;
         let (network_service, bound_tcp_port, bound_udp_port) = if node_role.is_main() {
             let (_, accepted_verifier_signers) =
                 effective_verification_policy(&batch_verification_policy_config, &l1_state);
@@ -1020,17 +1067,8 @@ pub async fn run_with_prebound_ports<
 
     // ======== Start Status Server ========
     let status_port = if config.status_server_config.enabled {
-        let addr: SocketAddr = config
-            .status_server_config
-            .address
-            .parse()
-            .expect("malformed `status_server.address`");
-        let status_listener = match prebound_ports.status_listener.take() {
-            Some(listener) => listener,
-            None => tokio::net::TcpListener::bind(addr)
-                .await
-                .expect("failed to bind status server"),
-        };
+        let status_listener = prebound_status_listener
+            .expect("status_server is enabled but status listener was not prebound");
         let port = status_listener
             .local_addr()
             .expect("status server local_addr")
@@ -1049,17 +1087,17 @@ pub async fn run_with_prebound_ports<
     };
 
     // =========== Start JSON RPC ========
-    let rpc_addr: SocketAddr = config
-        .rpc_config
-        .address
-        .parse()
-        .expect("malformed `rpc.address`");
-    let rpc_listener = match prebound_ports.rpc_listener.take() {
-        Some(listener) => listener,
-        None => tokio::net::TcpListener::bind(rpc_addr)
-            .await
-            .expect("failed to bind RPC server"),
-    };
+    debug_assert!({
+        let config_port = config
+            .rpc_config
+            .address
+            .parse::<SocketAddr>()
+            .ok()
+            .map(|a| a.port())
+            .unwrap_or(0);
+        let prebound_port = rpc_listener.local_addr().ok().map(|a| a.port()).unwrap_or(0);
+        config_port == 0 || prebound_port == 0 || config_port == prebound_port
+    }, "prebound RPC port does not match config port");
     let rpc_port = rpc_listener
         .local_addr()
         .expect("rpc server local_addr")

@@ -246,7 +246,7 @@ impl TestEnvironment {
             self.chain_layout,
             None,
             true,
-            PreboundPorts::default(),
+            None,
         )
         .await?;
         if let Some(gateway) = supporting_gateway {
@@ -367,7 +367,7 @@ pub(crate) async fn prebind_server_ports(
     };
 
     Ok(PreboundPorts {
-        rpc_listener: Some(rpc_listener),
+        rpc_listener,
         status_listener,
         network_sockets,
     })
@@ -618,7 +618,7 @@ impl Tester {
             chain_layout,
             None,
             true,
-            PreboundPorts::default(),
+            None,
         )
         .await
     }
@@ -644,7 +644,6 @@ impl Tester {
         if let Some(config_overrides) = config_overrides {
             config_overrides(&mut config);
         }
-        let prebound_ports = prebound_ports.unwrap_or_default();
         Self::launch_node_inner(
             l1,
             config,
@@ -677,7 +676,7 @@ impl Tester {
         chain_layout: ChainLayout<'static>,
         log_state: Option<NodeLogState>,
         wait_for_initial_deposit: bool,
-        prebound_ports: PreboundPorts,
+        prebound_ports: Option<PreboundPorts>,
     ) -> anyhow::Result<Self> {
         // In-process fake provers use job managers directly; keep the HTTP API only for tests
         // that can hand jobs to external prover workers.
@@ -701,6 +700,21 @@ impl Tester {
             .gateway_provider_config
             .as_ref()
             .map(|config| config.rpc_url.clone());
+
+        let prebound_ports = match prebound_ports {
+            Some(ports) => ports,
+            None => prebind_server_ports(
+                &config.rpc_config.address,
+                config.network_config.enabled,
+                config.network_config.address,
+                config.network_config.port,
+                config
+                    .status_server_config
+                    .enabled
+                    .then(|| config.status_server_config.address.as_str()),
+            )
+            .await?,
+        };
 
         let runtime = RuntimeBuilder::new(
             RuntimeConfig::default().with_tokio(TokioConfig::existing_handle(Handle::current())),
@@ -903,7 +917,7 @@ impl StoppedTester {
             chain_layout,
             Some(log_state.restarted()),
             false,
-            prebound_ports,
+            Some(prebound_ports),
         )
         .await?;
         tester.owned_supporting_nodes = owned_supporting_nodes;
@@ -1078,16 +1092,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(
-            ports
-                .rpc_listener
-                .as_ref()
-                .unwrap()
-                .local_addr()
-                .unwrap()
-                .port(),
-            rpc_port
-        );
+        assert_eq!(ports.rpc_listener.local_addr().unwrap().port(), rpc_port);
         let network_sockets = ports.network_sockets.as_ref().unwrap();
         assert_eq!(network_sockets.tcp_local_addr().port(), network_port);
         assert_eq!(
