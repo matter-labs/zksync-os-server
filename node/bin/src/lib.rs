@@ -9,6 +9,7 @@ pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
 mod init_tx_forwarder;
+mod main_node_client;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
 pub mod prover_api;
@@ -28,6 +29,7 @@ use crate::config::{
 };
 use crate::en_remote_config::load_remote_config;
 use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
+use crate::main_node_client::MainNodeClient;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -46,7 +48,6 @@ use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::BlockNumber;
 use alloy::providers::Provider;
 use anyhow::Context;
-use jsonrpsee::http_client::HttpClient;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
 use reth_tasks::Runtime;
 use std::net::SocketAddr;
@@ -100,7 +101,6 @@ use zksync_os_replay_archive::{
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{EthCallHandler, RpcStorage};
-use zksync_os_rpc_api::eth::EthApiClient;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::{BlockApplier, BlockCanonizer, BlockExecutor, FeeProvider};
 use zksync_os_status_server::run_status_server;
@@ -143,6 +143,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
     tracing::info!(version = NODE_VERSION, role, "Initializing Node");
 
+    // One client for all main-node RPC; `None` on a main node (nothing to talk to).
+    let main_node_client = config
+        .general_config
+        .main_node_rpc_url
+        .as_ref()
+        .map(|url| MainNodeClient::new(url).expect("failed to build main node RPC client"));
+
     let (bridgehub_address, bytecode_supplier_address, chain_id, genesis_input_source) =
         if node_role.is_main() {
             let genesis_input_source: Arc<dyn GenesisInputSource> =
@@ -166,12 +173,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 genesis_input_source,
             )
         } else {
-            let main_node_rpc_url = config
-                .general_config
-                .main_node_rpc_url
-                .clone()
+            let client = main_node_client
+                .as_ref()
                 .expect("Missing `main_node_rpc_url` in external node config");
-            load_remote_config(&main_node_rpc_url, &config.genesis_config)
+            load_remote_config(client, &config.genesis_config)
                 .await
                 .expect("Cannot load remote config from Main Node")
         };
@@ -388,14 +393,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // todo: ideally this should be searched through p2p networking instead of RPC
         //       but too many things depend on this being initialized here right now
         //       once refactored we can get rid of `main_node_rpc_url` config param
-        let last_matching_block =
-            if let Some(main_node_rpc_url) = &config.general_config.main_node_rpc_url {
-                find_last_matching_main_node_block(&repositories, main_node_rpc_url)
-                    .await
-                    .expect("Failed to find last matching block with main node")
-            } else {
-                node_startup_state.repositories_persisted_block
-            };
+        let last_matching_block = if let Some(client) = &main_node_client {
+            find_last_matching_main_node_block(&repositories, client)
+                .await
+                .expect("Failed to find last matching block with main node")
+        } else {
+            node_startup_state.repositories_persisted_block
+        };
         // Some batches committed - starting from an already committed batch
         determine_starting_block(&config, &node_startup_state, &state, last_matching_block)
     } else {
@@ -1611,11 +1615,11 @@ fn determine_starting_block(
 /// Finds the last block number where the local node's block hash matches the main node's block hash.
 async fn find_last_matching_main_node_block(
     repo: &RepositoryManager,
-    main_node_rpc_url: &str,
+    main_node_client: &MainNodeClient,
 ) -> anyhow::Result<u64> {
     async fn check(
         repo: &RepositoryManager,
-        main_node_client: &HttpClient,
+        main_node_client: &MainNodeClient,
         block_number: u64,
     ) -> anyhow::Result<bool> {
         let local_hash = repo
@@ -1638,14 +1642,12 @@ async fn find_last_matching_main_node_block(
         }
     }
 
-    let main_node_rpc_client =
-        jsonrpsee::http_client::HttpClientBuilder::new().build(main_node_rpc_url)?;
     let last_block = repo.get_latest_block();
     // Check last block first. Unless there was a reorg recently, this should return quickly.
-    if check(repo, &main_node_rpc_client, last_block).await? {
+    if check(repo, main_node_client, last_block).await? {
         return Ok(last_block);
     }
-    if !check(repo, &main_node_rpc_client, 0).await? {
+    if !check(repo, main_node_client, 0).await? {
         panic!("Genesis block mismatch between EN and main node");
     }
 
@@ -1655,7 +1657,7 @@ async fn find_last_matching_main_node_block(
     while left < right {
         #[allow(clippy::manual_div_ceil)]
         let mid = (left + right + 1) / 2;
-        if check(repo, &main_node_rpc_client, mid).await? {
+        if check(repo, main_node_client, mid).await? {
             left = mid;
         } else {
             right = mid - 1;
