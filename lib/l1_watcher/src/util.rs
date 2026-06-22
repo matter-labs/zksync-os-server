@@ -12,6 +12,7 @@ use zksync_os_batch_types::{CommittedBatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IChainAssetHandler;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
+use zksync_os_contract_interface::is_method_missing;
 use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
 use zksync_os_provider::NodeProvider;
 
@@ -59,11 +60,19 @@ pub async fn find_block_by_migration_number(
             if code.0.is_empty() {
                 return Ok(false);
             }
-            let res = instance
+            // At this block the address may have code but not yet be the ChainAssetHandler
+            // (e.g. a proxy upgraded to it only later), so `migrationNumber` reverts. Treat a
+            // revert as "not deployed yet" (false); real RPC errors still propagate.
+            let res = match instance
                 .migrationNumber(U256::from(chain_id))
                 .block(block.into())
                 .call()
-                .await?;
+                .await
+            {
+                Ok(res) => res,
+                Err(err) if is_method_missing(&err) => return Ok(false),
+                Err(err) => return Err(err.into()),
+            };
             Ok(res >= target)
         }
     })
