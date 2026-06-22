@@ -131,10 +131,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let node_role = config.general_config.node_role;
     let role: &'static str = node_role.as_str();
 
-    // Priority tree is required for main node
-    if node_role.is_main() && !config.general_config.run_priority_tree {
-        panic!("`general_run_priority_tree` must be true for Main Node");
-    }
     let process_started_at = Instant::now();
     GENERAL_METRICS.process_started_at[&(NODE_VERSION, role)].set(
         SystemTime::now()
