@@ -8,35 +8,20 @@ use revm::state::{AccountInfo, Bytecode};
 use ruint::aliases::B160;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
-use zksync_os_storage_api::{BlockHashes, ViewState};
+use zksync_os_storage_api::{BlockHashes, ViewState, eip7702_delegation_designator};
 
 fn fixed_bytes_to_bytes32(x: B256) -> Bytes32 {
     let x: [u8; 32] = x.into();
     x.into()
 }
 
-/// First three bytes of an EIP-7702 delegation designator: the `0xef01` magic followed by the
-/// version byte `0x00`.
-const EIP7702_DELEGATION_PREFIX: [u8; 3] = [0xef, 0x01, 0x00];
-/// Full length of an EIP-7702 delegation designator: 3-byte prefix + 20-byte address.
-const EIP7702_DELEGATION_DESIGNATOR_LEN: usize = 23;
-
-/// Build a revm [`Bytecode`] from a ZKsync OS preimage.
-///
-/// ZKsync OS stores an EIP-7702 delegation as the 23-byte designator `0xef0100 || address`
-/// padded with trailing zeroes; revm's 7702 parser requires *exactly* 23 bytes, so the padding
-/// is trimmed and the designator is parsed as a proper delegation (so revm follows it on call).
-/// Regular contract bytecode (code + padding + artifacts) is wrapped verbatim.
+/// Build a revm [`Bytecode`] from a ZKsync OS preimage. A 7702 delegation designator is trimmed
+/// to its 23 bytes (so revm follows the delegation); regular bytecode is wrapped verbatim.
 fn bytecode_from_preimage(full_bytecode: &[u8]) -> Bytecode {
-    if full_bytecode.len() >= EIP7702_DELEGATION_DESIGNATOR_LEN
-        && full_bytecode.starts_with(&EIP7702_DELEGATION_PREFIX)
-    {
-        Bytecode::new_raw_checked(Bytes::copy_from_slice(
-            &full_bytecode[..EIP7702_DELEGATION_DESIGNATOR_LEN],
-        ))
-        .expect("valid EIP-7702 delegation designator")
-    } else {
-        Bytecode::new_raw(Bytes::copy_from_slice(full_bytecode))
+    match eip7702_delegation_designator(full_bytecode) {
+        Some(designator) => Bytecode::new_raw_checked(Bytes::copy_from_slice(designator))
+            .expect("valid EIP-7702 delegation designator"),
+        None => Bytecode::new_raw(Bytes::copy_from_slice(full_bytecode)),
     }
 }
 

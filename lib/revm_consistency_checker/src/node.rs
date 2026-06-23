@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use revm::ExecuteCommitEvm;
 use revm::context::ContextTr;
 use revm::context_interface::block::BlobExcessGasAndPrice;
-use revm::context_interface::result::{EVMError, InvalidTransaction};
 use revm::database::{CacheDB, EmptyDB};
 use ruint::aliases::B160;
 use std::collections::HashSet;
@@ -17,7 +16,7 @@ use zk_ee::utils::Bytes32;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
-use zksync_os_revm::{DefaultZk, ZKsyncTxError, ZkBuilder, ZkContext, ZkSpecId};
+use zksync_os_revm::{DefaultZk, ZkBuilder, ZkContext, ZkSpecId};
 use zksync_os_sequencer::model::blocks::AppliedBlock;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, ViewState};
 use zksync_os_types::{BlockOutput, ExecutionVersion, SYSTEM_CONTEXT_ADDRESS};
@@ -241,39 +240,16 @@ where
                 match revm_txs {
                     Ok(txs) => {
                         // Commit after each tx
-                        let mut skip_block = false;
                         for tx in txs {
-                            if let Err(err) = evm.transact_commit(tx) {
-                                // Pre-Prague specs (AtlasV1/V2, i.e. execution versions <= V5)
-                                // can't validate EIP-7702 (set-code) transactions, which revm only
-                                // accepts under Prague. The V5 zksync-os binary applies 7702 but
-                                // otherwise keeps the AtlasV2 fee model, so no stock revm spec
-                                // re-executes such a block faithfully — skip it rather than tearing
-                                // down the pipeline. 7702 blocks are fully checked once they reach
-                                // V6 (AtlasV3 -> Prague). Genuine execution errors are still
-                                // propagated.
-                                if is_unsupported_tx_type(&err) {
-                                    PUSH_METRICS.revm_blocks_skipped.inc();
-                                    tracing::warn!(
-                                        block_number = replay_record.block_context.block_number,
-                                        "Skipping REVM consistency check for block, transaction type \
-                                         unsupported by the checker's revm spec: {err}"
-                                    );
-                                    skip_block = true;
-                                    break;
-                                }
-                                return Err(err.into());
-                            }
+                            evm.transact_commit(tx)?;
                         }
 
-                        if !skip_block {
-                            let compare_report = CompareReport::build(
-                                evm.0.db_mut(),
-                                &block_output.storage_writes,
-                                &block_output.account_diffs,
-                            )?;
-                            self.handle_report(block_output, &replay_record, &compare_report)?;
-                        }
+                        let compare_report = CompareReport::build(
+                            evm.0.db_mut(),
+                            &block_output.storage_writes,
+                            &block_output.account_diffs,
+                        )?;
+                        self.handle_report(block_output, &replay_record, &compare_report)?;
                     }
                     Err(err) => {
                         // Tx conversion failed (e.g. malformed envelope) — skip
@@ -296,18 +272,6 @@ where
             )?;
         }
     }
-}
-
-/// Whether a revm execution error is a transaction type the checker's revm spec cannot validate.
-///
-/// Pre-Prague specs (AtlasV1/V2) reject EIP-7702 (set-code) transactions up front with
-/// `Eip7702NotSupported`. Blocks containing such a tx are skipped rather than failing the
-/// pipeline; every other error is treated as a real divergence.
-fn is_unsupported_tx_type<DBError>(err: &EVMError<DBError, ZKsyncTxError>) -> bool {
-    matches!(
-        err,
-        EVMError::Transaction(ZKsyncTxError::Base(InvalidTransaction::Eip7702NotSupported))
-    )
 }
 
 /// Read the settlement layer chain id from `SYSTEM_CONTEXT_ADDRESS`, slot 0.

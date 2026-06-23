@@ -23,7 +23,9 @@ pub use repository::{
 };
 
 mod state;
-pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};
+pub use state::{
+    ReadStateHistory, StateError, StateResult, ViewState, WriteState, eip7702_delegation_designator,
+};
 
 pub mod state_override_view;
 pub use state_override_view::OverriddenStateView;
