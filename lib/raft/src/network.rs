@@ -110,12 +110,47 @@ pub struct RaftNetworkClient {
     timeout: Duration,
 }
 
+/// How long after a peer disconnects to keep waiting for it to reconnect before giving
+/// up and returning Unreachable immediately. During devp2p connection churn (a brief
+/// disruption to remaining nodes when one node joins or leaves), peers can disappear and
+/// reappear within this window. Without the wait, OpenRaft would back off for a full
+/// election timeout on the first miss, stalling replication unnecessarily.
+/// 500 ms covers the typical devp2p churn window. Peers absent for longer than this
+/// (e.g. a suspended node) are treated as permanently unreachable so their RPC attempts
+/// return Unreachable immediately instead of blocking for 500 ms each time.
+const PEER_CONNECT_WAIT: Duration = Duration::from_millis(500);
+const PEER_CONNECT_POLL: Duration = Duration::from_millis(50);
+
 impl RaftNetworkClient {
     async fn send_rpc<E: std::error::Error>(
         &self,
         request: RaftRequest,
         timeout_dur: Duration,
     ) -> Result<RaftResponse, RPCError<PeerId, RaftNode, E>> {
+        // If the peer isn't in the router, wait briefly before failing with Unreachable —
+        // but only if the peer recently disconnected (devp2p churn) or was never seen at all
+        // (fresh process start). For peers that have been gone longer than PEER_CONNECT_WAIT,
+        // return Unreachable immediately so OpenRaft's normal backoff governs retry frequency
+        // rather than blocking the replication task on a permanently-dead peer.
+        if !self.router.is_peer_connected(self.peer_id)
+            && !self
+                .router
+                .peer_disconnected_longer_than(self.peer_id, PEER_CONNECT_WAIT)
+        {
+            let connect_deadline = tokio::time::Instant::now() + PEER_CONNECT_WAIT;
+            loop {
+                tokio::time::sleep(PEER_CONNECT_POLL).await;
+                if self.router.is_peer_connected(self.peer_id) {
+                    break;
+                }
+                if tokio::time::Instant::now() >= connect_deadline {
+                    return Err(rpc_unreachable("peer not connected"));
+                }
+            }
+        } else if !self.router.is_peer_connected(self.peer_id) {
+            return Err(rpc_unreachable("peer not connected (long absent)"));
+        }
+
         let rx = self
             .router
             .send_request(self.peer_id, request)

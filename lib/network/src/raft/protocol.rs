@@ -52,6 +52,10 @@ pub struct RaftRouter {
     // unregister_peer. With a single slot, one connection would be silently orphaned and the peer
     // would appear disconnected even though the kept connection is alive.
     peers: Arc<DashMap<PeerId, Vec<PeerChannel>>>,
+    // Records the wall-clock time at which each peer's *last* connection was torn down.
+    // Used to distinguish transient devp2p churn (disconnected <500ms ago → worth waiting) from
+    // permanently-dead peers (disconnected long ago → return Unreachable immediately).
+    last_disconnected: Arc<DashMap<PeerId, Instant>>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +71,7 @@ impl Default for RaftRouter {
             next_connection_id: Arc::new(AtomicU64::new(1)),
             pending: Arc::new(DashMap::new()),
             peers: Arc::new(DashMap::new()),
+            last_disconnected: Arc::new(DashMap::new()),
         }
     }
 }
@@ -100,6 +105,7 @@ impl RaftRouter {
         }
         if channels.is_empty() {
             entry.remove();
+            self.last_disconnected.insert(*peer_id, Instant::now());
             tracing::info!(%peer_id, connection_id, "raft peer unregistered (no remaining connections)");
         } else {
             tracing::debug!(%peer_id, connection_id, remaining = channels.len(), "raft connection unregistered, peer still has other connections");
@@ -145,6 +151,21 @@ impl RaftRouter {
 
         tracing::debug!(%peer_id, request_id = id, "raft request failed: all connections dead");
         Err(RaftTransportError::SendFailed(peer_id))
+    }
+
+    pub fn is_peer_connected(&self, peer_id: PeerId) -> bool {
+        self.peers.contains_key(&peer_id)
+    }
+
+    /// Returns `true` if this peer disconnected more than `duration` ago.
+    /// Returns `false` if the peer is either currently connected, was never seen (fresh
+    /// process start), or disconnected within `duration` — all cases where it is worth
+    /// waiting briefly for a reconnect rather than returning Unreachable immediately.
+    pub fn peer_disconnected_longer_than(&self, peer_id: PeerId, duration: Duration) -> bool {
+        match self.last_disconnected.get(&peer_id) {
+            Some(t) => t.elapsed() > duration,
+            None => false,
+        }
     }
 
     pub fn connected_peers(&self) -> Vec<PeerId> {

@@ -6,7 +6,7 @@ use zksync_os_status_server::StatusResponse;
 
 /// Each respawn during a wait-helper poll buys this much extra time, since the freshly
 /// respawned node needs to finish booting and the cluster needs another election cycle.
-const RESPAWN_GRACE: Duration = Duration::from_secs(10);
+const RESPAWN_GRACE: Duration = Duration::from_secs(30);
 
 use crate::{
     AnvilL1, ChainLayout, Config, NodeRole, PROTOCOL_VERSION, Ports, StoppedTester, Tester,
@@ -14,8 +14,12 @@ use crate::{
 };
 
 const TEST_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
-const TEST_ELECTION_TIMEOUT_MIN: Duration = Duration::from_secs(2);
-const TEST_ELECTION_TIMEOUT_MAX: Duration = Duration::from_secs(4);
+// Election timeout must comfortably exceed devp2p reconnect time (up to ~2s under CI load)
+// plus one heartbeat interval (100ms). 5s gives ~2.9s margin even for slow CI reconnects,
+// preventing a rejoining node from triggering a disruptive election before receiving the
+// first heartbeat from the current leader.
+const TEST_ELECTION_TIMEOUT_MIN: Duration = Duration::from_secs(5);
+const TEST_ELECTION_TIMEOUT_MAX: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 enum NodeSlot {
@@ -454,12 +458,18 @@ impl MultiNodeTester {
         }
 
         let mut deadline = Instant::now() + timeout;
+        // Hard cap: never wait longer than timeout + 3 respawn graces total, regardless of
+        // how many nodes crash. Without this, rapid crash cycles under stress-test load can
+        // extend the deadline indefinitely.
+        let hard_deadline = Instant::now() + timeout + RESPAWN_GRACE * 3;
         let mut last_summary = String::new();
 
         while Instant::now() < deadline {
             let respawned = self.respawn_crashed_running_nodes().await?;
             if respawned > 0 {
-                deadline = deadline.max(Instant::now() + RESPAWN_GRACE);
+                deadline = deadline
+                    .max(Instant::now() + RESPAWN_GRACE)
+                    .min(hard_deadline);
             }
             let cluster_state =
                 ClusterState::collect_indices(&self.nodes, node_indices.iter().copied()).await;
