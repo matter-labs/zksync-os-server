@@ -84,6 +84,87 @@ impl ExecutedBatchStorage {
             .persist_batch_number
             .set(executed_batch.number());
     }
+
+    /// Removes persisted batch metadata for all batches whose L2 block range intersects
+    /// `from_block..`.
+    pub fn rollback_from_l2_block(&self, from_block: BlockNumber) -> anyhow::Result<()> {
+        let latest_batch = self.latest_batch();
+        if latest_batch == 0 {
+            return Ok(());
+        }
+
+        let first_batch_to_delete =
+            if let Some(batch) = self.get_batch_by_block_number(from_block)? {
+                Some(batch.number())
+            } else {
+                let start_key = from_block.to_be_bytes();
+                self.db
+                    .from_iterator_cf(
+                        ExecutedBatchColumnFamily::FirstBlockIndex,
+                        start_key.as_slice()..,
+                    )
+                    .next()
+                    .map(|(_, batch_number_bytes)| {
+                        let arr: [u8; 8] = batch_number_bytes
+                            .as_ref()
+                            .try_into()
+                            .context("invalid first block index")?;
+                        anyhow::Ok(u64::from_be_bytes(arr))
+                    })
+                    .transpose()?
+            };
+
+        let Some(first_batch_to_delete) = first_batch_to_delete else {
+            return Ok(());
+        };
+        if first_batch_to_delete > latest_batch {
+            return Ok(());
+        }
+
+        let mut batches_to_delete = vec![];
+        for batch_number in first_batch_to_delete..=latest_batch {
+            let batch = self.get_batch_by_number(batch_number)?;
+            batches_to_delete.push((batch_number, batch.map(|batch| batch.first_block_number())));
+        }
+
+        let mut latest_batch_to_keep = first_batch_to_delete.saturating_sub(1);
+        while latest_batch_to_keep > 0 && self.get_batch_by_number(latest_batch_to_keep)?.is_none()
+        {
+            latest_batch_to_keep -= 1;
+        }
+
+        tracing::warn!(
+            from_block,
+            first_batch_to_delete,
+            latest_batch,
+            latest_batch_to_keep,
+            "rolling back executed batch storage"
+        );
+        let mut batch = self.db.new_write_batch();
+        for (batch_number, first_block_number) in batches_to_delete {
+            batch.delete_cf(
+                ExecutedBatchColumnFamily::BatchInfo,
+                &batch_number.to_be_bytes(),
+            );
+            if let Some(first_block_number) = first_block_number {
+                batch.delete_cf(
+                    ExecutedBatchColumnFamily::FirstBlockIndex,
+                    &first_block_number.to_be_bytes(),
+                );
+            }
+        }
+        if latest_batch_to_keep == 0 {
+            batch.delete_cf(ExecutedBatchColumnFamily::Latest, Self::LATEST_KEY);
+        } else {
+            batch.put_cf(
+                ExecutedBatchColumnFamily::Latest,
+                Self::LATEST_KEY,
+                &latest_batch_to_keep.to_be_bytes(),
+            );
+        }
+        self.db.write(batch)?;
+        Ok(())
+    }
 }
 
 impl ReadBatch for ExecutedBatchStorage {

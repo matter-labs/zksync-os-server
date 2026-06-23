@@ -16,6 +16,7 @@ mod prover_block;
 mod prover_input_generator;
 mod provider;
 mod state_initializer;
+pub mod storage_recovery;
 pub mod tree_manager;
 pub mod util;
 

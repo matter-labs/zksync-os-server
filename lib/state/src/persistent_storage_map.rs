@@ -41,7 +41,7 @@ impl NamedColumnFamily for StorageMapCF {
 }
 
 impl StorageMapCF {
-    fn base_block_key() -> &'static [u8] {
+    pub(crate) fn base_block_key() -> &'static [u8] {
         b"base_block"
     }
 }

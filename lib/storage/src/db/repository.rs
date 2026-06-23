@@ -11,8 +11,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::watch;
 use zksync_os_genesis::Genesis;
-use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
+use zksync_os_rocksdb::{RocksDB, RocksDBOptions};
 use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
@@ -135,6 +135,26 @@ impl RepositoryDb {
         }
     }
 
+    pub fn new_without_genesis(db_path: &Path) -> anyhow::Result<Self> {
+        Self::new_without_genesis_with_options(db_path, RocksDBOptions::default())
+    }
+
+    pub fn new_without_genesis_with_options(
+        db_path: &Path,
+        options: RocksDBOptions,
+    ) -> anyhow::Result<Self> {
+        let db = RocksDB::<RepositoryCF>::with_options(db_path, options)?;
+        let latest_block_number = db
+            .get_cf(RepositoryCF::Meta, RepositoryCF::block_number_key())?
+            .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
+            .ok_or_else(|| anyhow::anyhow!("repository DB is missing latest block metadata"))?;
+
+        Ok(Self {
+            db,
+            latest_block_number: watch::channel(latest_block_number).0,
+        })
+    }
+
     /// Waits until the latest block number is at least `block_number`.
     /// Returns the latest block number once it is reached.
     pub async fn wait_for_block_number(&self, block_number: u64) -> u64 {
@@ -190,6 +210,10 @@ impl RepositoryDb {
     pub fn write_block(&self, block: &Sealed<Block<TxHash>>, txs: &[Arc<StoredTxData>]) {
         Self::write_block_inner(&self.db, block, txs);
         self.latest_block_number.send_replace(block.number);
+    }
+
+    pub fn latest_block_number(&self) -> u64 {
+        *self.latest_block_number.borrow()
     }
 
     fn add_tx_to_write_batch(

@@ -5,6 +5,7 @@ use alloy::primitives::{B256, BlockNumber};
 use std::path::PathBuf;
 use zksync_os_interface::traits::{PreimageSource, ReadStorage};
 use zksync_os_interface::types::StorageWrite;
+use zksync_os_rocksdb::RocksDBOptions;
 use zksync_os_storage_api::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};
 
 use preimages::FullDiffsPreimages;
@@ -57,6 +58,33 @@ impl FullDiffsState {
         }
 
         Ok(this)
+    }
+
+    /// Rolls back persisted full-diff state to the state after `last_block_to_keep`.
+    ///
+    /// This does not remove preimages, which are content-addressed and safe to leave in place.
+    pub fn rollback_db(base_path: PathBuf, last_block_to_keep: u64) -> anyhow::Result<()> {
+        Self::rollback_db_with_options(base_path, last_block_to_keep, RocksDBOptions::default())
+    }
+
+    pub fn rollback_db_with_options(
+        base_path: PathBuf,
+        last_block_to_keep: u64,
+        options: RocksDBOptions,
+    ) -> anyhow::Result<()> {
+        let storage_path = base_path.join(STATE_STORAGE_DB_NAME);
+        anyhow::ensure!(
+            storage_path.exists(),
+            "full-diffs state DB path does not exist: {}",
+            storage_path.display()
+        );
+        let storage = FullDiffsStorage::new_with_options(&storage_path, options)?;
+        let latest_block = storage.latest_block();
+        anyhow::ensure!(
+            latest_block >= last_block_to_keep,
+            "cannot roll back full-diffs state to block {last_block_to_keep}; latest state block is {latest_block}"
+        );
+        storage.rollback(last_block_to_keep)
     }
 }
 

@@ -15,7 +15,7 @@ use zksync_os_server::config::{
     StateBackendConfig, build_external_config, load_config_file_sources,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
-use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
+use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run, storage_recovery};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -169,6 +169,32 @@ pub async fn main() {
 
     let mut config = build_external_config(config_repo).await;
     tracing::info!(?config, "Loaded config");
+
+    if config.storage_recovery_config.rollback_l2_block.is_some() {
+        config.validate().await.expect("invalid config");
+
+        if opt.no_run {
+            tracing::info!("Node config was loaded successfully, exiting due to --no-run flag");
+            return;
+        }
+
+        match storage_recovery::apply(&config) {
+            Ok(storage_recovery::RecoveryOutcome::NotConfigured) => {}
+            Ok(outcome) => {
+                tracing::warn!(
+                    ?outcome,
+                    "storage recovery configured; exiting after one-shot recovery"
+                );
+                return;
+            }
+            Err(err) => {
+                tracing::error!(%err, "failed to apply storage recovery");
+                eprintln!("Error: {err:?}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     load_internal_config(&mut config);
     config.validate().await.expect("invalid config");
 
