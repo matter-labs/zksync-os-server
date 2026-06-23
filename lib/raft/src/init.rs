@@ -13,8 +13,9 @@ use openraft::{Config, Raft, SnapshotPolicy};
 use reth_network_peers::PeerId;
 use reth_tasks::Runtime;
 use std::collections::BTreeMap;
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
-use zksync_os_consensus_types::RaftNode;
+use zksync_os_consensus_types::{RaftNode, RaftTypeConfig};
 use zksync_os_network::raft::protocol::RaftProtocolHandler;
 use zksync_os_network::raft::protocol::RaftRouter;
 use zksync_os_sequencer::execution::NoopCanonization;
@@ -39,6 +40,12 @@ pub async fn init_consensus(
         election_timeout_max: config.election_timeout_max.as_millis() as u64,
         election_timeout_min: config.election_timeout_min.as_millis() as u64,
         heartbeat_interval: config.heartbeat_interval.as_millis() as u64,
+        // Suppress the periodic election timer on startup; the startup election gate
+        // re-enables it once we have proof we are not on a stale term. See
+        // `spawn_startup_election_gate`. `Raft::initialize` (bootstrap) and
+        // `Raft::trigger().elect()` are not gated by this flag, so first-cluster
+        // formation still works.
+        enable_elect: false,
         ..Default::default()
     };
 
@@ -95,6 +102,8 @@ pub async fn init_consensus(
          purged={purged:?}",
     );
 
+    spawn_startup_election_gate(runtime, raft.clone(), config.election_timeout_max);
+
     let (leader_tx, leader_rx) = watch::channel(ConsensusRole::Replica);
     let (status_tx, status_rx) = watch::channel::<Option<RaftConsensusStatus>>(None);
     spawn_leadership_monitor(
@@ -150,6 +159,57 @@ pub fn loopback_consensus() -> ConsensusRuntimeParts {
         leadership: LeadershipSignal::AlwaysLeader,
         raft: None,
     }
+}
+
+/// Suppresses the periodic election timer until either:
+///   * the node observes a current leader (proof its term is in sync with the cluster), or
+///   * `3 * election_timeout_max` (clamped to a 5s floor) elapses without contact.
+///
+/// On the success path, the node has been brought into the current term via inbound
+/// AppendEntries before it becomes eligible to start an election. This prevents a
+/// just-restarted node carrying a stale persisted vote from pairing with another
+/// stale-vote peer to form a transient phantom quorum on its old term — a scenario
+/// that ends in the node being deposed within milliseconds and leaves the produce
+/// pipeline parked (which is what `leadership_monitor.rs` then panics out of).
+///
+/// On the grace-expiry path, a fully restarted cluster still elects normally: every
+/// node hits the same timer and `enable_elect` flips back on without input from
+/// peers that are all in the same situation.
+fn spawn_startup_election_gate(
+    runtime: &Runtime,
+    raft: Raft<RaftTypeConfig>,
+    election_timeout_max: Duration,
+) {
+    let grace = (election_timeout_max * 3).max(Duration::from_secs(5));
+    let mut metrics_rx = raft.metrics();
+    runtime.spawn_critical_task("raft startup election gate", async move {
+        let deadline = tokio::time::Instant::now() + grace;
+        loop {
+            if metrics_rx.borrow().current_leader.is_some() {
+                tracing::info!("startup election gate: leader contact established");
+                break;
+            }
+            tokio::select! {
+                changed = metrics_rx.changed() => {
+                    if changed.is_err() {
+                        // Raft engine shut down before we observed a leader; nothing
+                        // to gate any more.
+                        tracing::info!(
+                            "startup election gate: raft metrics channel closed before contact"
+                        );
+                        return;
+                    }
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    tracing::info!(
+                        "startup election gate: grace ({grace:?}) expired without leader contact"
+                    );
+                    break;
+                }
+            }
+        }
+        raft.runtime_config().elect(true);
+    });
 }
 
 fn peer_list_to_nodes(peer_ids: &[PeerId]) -> BTreeMap<PeerId, RaftNode> {

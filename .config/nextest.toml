@@ -36,8 +36,10 @@ filter = 'test(~to_gateway)'
 threads-required = 2
 
 [[profile.default.overrides]]
-# Consensus tests spin up 3 L2 nodes + an L1 anvil and have tight 20s raft
-# timeouts; without throttling, parallel scheduling causes flaky failures.
+# Consensus tests spin up 3 L2 nodes + an L1 anvil. Reserve worker slots so
+# they don't starve unrelated CPU-heavy tests (network e2e, upgrade).
+# Transaction-storm tests are covered by the same filter since they also
+# match `~consensus`.
 filter = 'test(~consensus)'
 threads-required = 6
 
