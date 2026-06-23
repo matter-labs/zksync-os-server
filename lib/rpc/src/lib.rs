@@ -35,6 +35,7 @@ mod txpool_impl;
 mod types;
 mod unstable_impl;
 mod web3_impl;
+mod log_proof_utils;
 mod zks_impl;
 
 use crate::debug_impl::DebugNamespace;
@@ -52,6 +53,7 @@ use crate::unstable_impl::UnstableNamespace;
 use crate::web3_impl::Web3Namespace;
 use crate::zks_impl::ZksNamespace;
 use alloy::primitives::Address;
+use alloy::providers::DynProvider;
 use anyhow::Context;
 use hyper::Method;
 use jsonrpsee::RpcModule;
@@ -90,6 +92,9 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     tx_forwarder: Option<TxForwarder>,
     policy_client: Option<PolicyClient>,
+    /// L1 provider, used to build the L1 MessageRoot aggregation hop for
+    /// `zks_getL2ToL1LogProof` proofs of L1-settled chains.
+    l1_provider: DynProvider,
     runtime: &Runtime,
     wait_for_db: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
@@ -128,6 +133,8 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             bytecode_supplier_address,
             storage.clone(),
             genesis_input_source,
+            chain_id,
+            l1_provider,
         )
         .into_rpc(),
     )?;

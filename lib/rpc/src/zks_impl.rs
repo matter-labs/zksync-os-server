@@ -1,10 +1,13 @@
 use crate::ReadRpcStorage;
+use crate::log_proof_utils::{batch_tree_proof, chain_proof_vector, get_chain_log_proof};
 use crate::result::ToRpcResult;
-use alloy::primitives::{Address, B256, BlockNumber, TxHash, U64, keccak256};
+use alloy::primitives::{Address, B256, BlockNumber, TxHash, U64, U256, keccak256};
+use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Index;
 use anyhow::Context;
 use async_trait::async_trait;
 use blake2::{Blake2s256, Digest};
+use futures::{FutureExt, TryFutureExt};
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use std::sync::Arc;
@@ -19,6 +22,7 @@ use zksync_os_rpc_api::{
     },
     zks::ZksApiServer,
 };
+use zksync_os_contract_interface::IBridgehub;
 use zksync_os_storage_api::{RepositoryError, StateError, read_multichain_root};
 use zksync_os_types::L2_TO_L1_TREE_SIZE;
 
@@ -29,20 +33,29 @@ pub struct ZksNamespace<RpcStorage> {
     bytecode_supplier_address: Address,
     storage: RpcStorage,
     genesis_input_source: Arc<dyn GenesisInputSource>,
+    l2_chain_id: u64,
+    /// L1 provider, used to build the L1 MessageRoot aggregation hop for
+    /// proofs of L1-settled chains.
+    l1_provider: DynProvider,
 }
 
 impl<RpcStorage> ZksNamespace<RpcStorage> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         bridgehub_address: Address,
         bytecode_supplier_address: Address,
         storage: RpcStorage,
         genesis_input_source: Arc<dyn GenesisInputSource>,
+        l2_chain_id: u64,
+        l1_provider: DynProvider,
     ) -> Self {
         Self {
             bridgehub_address,
             bytecode_supplier_address,
             storage,
             genesis_input_source,
+            l2_chain_id,
+            l1_provider,
         }
     }
 }
@@ -52,9 +65,10 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         &self,
         tx_hash: TxHash,
         index: Index,
-        // Both proof targets produce the same shape when settling on L1: the local batch root
-        // is already the final node of the aggregated proof.
-        _proof_target: LogProofTarget,
+        // For the MessageRoot target the proof is extended with the L1 MessageRoot
+        // aggregation hop (non-final); other targets terminate at the local batch
+        // root as the final node.
+        proof_target: LogProofTarget,
     ) -> ZksResult<Option<L2ToL1LogProof>> {
         let Some(tx_meta) = self.storage.repository().get_transaction_meta(tx_hash)? else {
             return Ok(None);
@@ -120,10 +134,83 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             .chain(std::iter::once(multichain_root))
             .collect::<Vec<_>>();
 
-        // Settling on L1: the local batch root is the final node of the aggregated proof, so
-        // there is no batch-chain extension and no gateway block to reference.
         let (batch_proof_len, batch_chain_proof, is_final_node, gateway_block_number) =
-            (0u8, Vec::<B256>::new(), true, None);
+            match proof_target {
+                // The interop root for this chain's batch is the GLOBAL L1 MessageRoot at the L1
+                // block where the batch was executed (the interop tree is built on L1, keyed by
+                // (L1_CHAIN_ID, l1Block)). Build the aggregation hop against L1's MessageRoot, so
+                // the proof is non-final and carries the L1 block as its settlement-layer anchor.
+                // Without this the proof terminates at the source batch root, which no consuming
+                // chain holds (they import interopRoots[L1_CHAIN_ID][l1Block]), and the
+                // atomic-interop deadline has no settlement-layer block to compare against.
+                LogProofTarget::MessageRoot => {
+                    let execute_sl_block_number = batch
+                        .execute_sl_block_number
+                        .ok_or(ZksError::BatchNotAvailableYet)?;
+
+                    // The L1 MessageRoot lives at a deployed address (unlike the canonical L2
+                    // address used on a gateway); resolve it from the L1 bridgehub.
+                    let l1_message_root_address =
+                        IBridgehub::new(self.bridgehub_address, &self.l1_provider)
+                            .messageRoot()
+                            .call()
+                            .await
+                            .map_err(|e| {
+                                anyhow::Error::from(e).context("bridgehub.messageRoot()")
+                            })?;
+
+                    let chain_log_proof_future = get_chain_log_proof(
+                        self.l2_chain_id,
+                        execute_sl_block_number,
+                        &self.l1_provider,
+                        l1_message_root_address,
+                    )
+                    .map_err(|e| e.context("get_chain_log_proof (L1)"));
+
+                    let l1_chain_id_future = self
+                        .l1_provider
+                        .get_chain_id()
+                        .map_err(|e| anyhow::Error::from(e).context("get_chain_id (L1)"));
+
+                    let chain_proof_vector_future =
+                        futures::future::try_join(chain_log_proof_future, l1_chain_id_future)
+                            .map_ok(|(chain_log_proof, l1_chain_id)| {
+                                chain_proof_vector(
+                                    execute_sl_block_number,
+                                    chain_log_proof,
+                                    l1_chain_id,
+                                )
+                            });
+
+                    let batch_tree_proof_future = batch_tree_proof(
+                        execute_sl_block_number..=execute_sl_block_number,
+                        self.l2_chain_id,
+                        batch_number,
+                        &self.l1_provider,
+                        l1_message_root_address,
+                    )
+                    .map_err(|e| e.context("batch_tree_proof (L1)"));
+
+                    let (chain_proof_vector, (mut batch_chain_proof, batch_proof_len)) =
+                        futures::future::try_join(
+                            chain_proof_vector_future.boxed(),
+                            batch_tree_proof_future.boxed(),
+                        )
+                        .await?;
+
+                    batch_chain_proof.extend(chain_proof_vector);
+
+                    (
+                        batch_proof_len,
+                        batch_chain_proof,
+                        false,
+                        Some(execute_sl_block_number),
+                    )
+                }
+                // Other targets (e.g. L1 withdrawal-finalization proofs) terminate at L1 as a
+                // final node — there is no settlement layer above L1.
+                _ => (0u8, Vec::<B256>::new(), true, None),
+            };
 
         let proof = {
             let mut metadata = [0u8; 32];
