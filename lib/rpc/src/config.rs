@@ -78,7 +78,8 @@ pub struct RpcConfig {
     /// per-method limits.  Empty means no rate limiting.
     pub rate_limits: Vec<RpcRateLimit>,
 
-    /// Methods rejected with -32601 before any rate-limit check.
+    /// List of disabled methods.
+    /// Some stateful methods like `eth_newFilter` don't make sense when running in a cluster behind a load-balancer.
     pub method_filter: HashSet<String>,
 }
 
