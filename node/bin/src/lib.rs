@@ -235,7 +235,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // rebuild config used for the rest of startup. If the configured rebuild already ran on a
     // prior startup (hash no longer matches), it is dropped here so BOTH the L1 revert (stage 1,
     // below) and the local block rebuild (stage 2, downstream) are skipped.
-    let rebuild = if node_role.is_main() {
+    let rebuild_config = if node_role.is_main() {
         let configured = config.sequencer_config.rebuild.clone();
         match configured.as_ref().and_then(|r| r.bounds()) {
             Some(bounds)
@@ -254,14 +254,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.rebuild.clone()
     };
     // What the local block-rebuild stage (stage 2) should replay, if anything.
-    let rebuild_options = rebuild.as_ref().and_then(|r| r.rebuild_options());
+    let rebuild_options = rebuild_config.as_ref().and_then(|r| r.rebuild_options());
 
     // Fetch the L1 state, performing the configured startup L1 revert first.
     tracing::info!("Reading L1 state");
     let l1_state = fetch_l1_state_with_startup_revert(
         &config,
         node_role,
-        rebuild.as_ref(),
+        rebuild_config.as_ref(),
         &l1_provider,
         gateway_provider.as_ref(),
         bridgehub_address,

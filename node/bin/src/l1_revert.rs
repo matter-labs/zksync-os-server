@@ -93,15 +93,15 @@ async fn derive_last_l1_batch_to_keep(
 /// target against the on-chain `last_executed_batch`, and the Executor contract itself rejects
 /// reverts below `totalBatchesExecuted`.
 async fn perform_l1_revert(
-    last_l1_batch_to_keep: u64,
+    plan: &RevertPlan,
     l1_state: &L1State,
     chain_id: u64,
     sl_provider: &NodeProvider,
-    reverter_sk: &SignerConfig,
 ) -> anyhow::Result<()> {
     let mut sl_provider = sl_provider.clone();
 
-    let reverter_address = reverter_sk
+    let reverter_address = plan
+        .l1_reverter_sk
         .register_with_wallet(sl_provider.wallet_mut())
         .await
         .context("failed to initialize `sequencer.rebuild.l1_reverter_sk`")?;
@@ -118,7 +118,7 @@ async fn perform_l1_revert(
     );
 
     tracing::warn!(
-        last_l1_batch_to_keep,
+        last_l1_batch_to_keep = plan.last_l1_batch_to_keep,
         current_last_committed_batch = l1_state.last_committed_batch,
         current_last_executed_batch = l1_state.last_executed_batch,
         reverter = %reverter_address,
@@ -129,7 +129,7 @@ async fn perform_l1_revert(
     let revert_tx = validator_timelock
         .revertBatchesSharedBridge(
             *l1_state.diamond_proxy_sl.address(),
-            U256::from(last_l1_batch_to_keep),
+            U256::from(plan.last_l1_batch_to_keep),
         )
         .from(reverter_address)
         .send()
@@ -154,7 +154,7 @@ async fn perform_l1_revert(
     tracing::info!(
         tx_hash = ?receipt.transaction_hash,
         l1_block = ?receipt.block_number,
-        last_l1_batch_to_keep,
+        last_l1_batch_to_keep = plan.last_l1_batch_to_keep,
         "startup L1 revert completed"
     );
 
@@ -270,19 +270,10 @@ pub async fn revert_l1_on_startup(
 
     match plan_l1_revert(rebuild, l1_state, max_blocks).await? {
         None => Ok(false),
-        Some(RevertPlan {
-            last_l1_batch_to_keep,
-            l1_reverter_sk,
-        }) => {
-            perform_l1_revert(
-                last_l1_batch_to_keep,
-                l1_state,
-                chain_id,
-                sl_provider,
-                &l1_reverter_sk,
-            )
-            .await
-            .context("failed to perform startup L1 revert")?;
+        Some(plan) => {
+            perform_l1_revert(&plan, l1_state, chain_id, sl_provider)
+                .await
+                .context("failed to perform startup L1 revert")?;
             Ok(true)
         }
     }
