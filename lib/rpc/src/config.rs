@@ -10,8 +10,37 @@ pub enum RateLimits {
     /// No rate limiting.
     #[default]
     None,
-    /// One global cap, an `m_rps` bucket shared by `m_methods`, and per-method overrides
-    /// in `custom_methods`.
+    /// One global cap, plus per-method buckets: `m_rps` applied to each entry in
+    /// `m_methods`, and the explicit RPS in `custom_methods` for each entry there.
+    ///
+    /// Production example:
+    ///
+    /// ```yaml
+    /// rpc:
+    ///   rate_limits:
+    ///     type: Tiered
+    ///     global_rps: 1000
+    ///     m_rps: 200
+    ///     m_methods:
+    ///       - eth_call
+    ///       - eth_estimateGas
+    ///       - eth_getBlockReceipts
+    ///       - eth_fillTransaction
+    ///       - zks_getProof
+    ///       - ots_getBlockTransactions
+    ///       - txpool_inspect
+    ///     custom_methods:
+    ///       eth_getLogs: 200
+    ///       eth_simulateV1: 1
+    ///       debug_traceTransaction: 10
+    ///       debug_traceCall: 10
+    ///       debug_traceBlockByHash: 10
+    ///       debug_traceBlockByNumber: 10
+    ///       zks_getL2ToL1LogProof: 10
+    ///       ots_searchTransactionsBefore: 10
+    ///       ots_searchTransactionsAfter: 10
+    ///       txpool_content: 10
+    /// ```
     Tiered {
         global_rps: NonZeroU32,
         m_rps: NonZeroU32,

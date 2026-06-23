@@ -1020,8 +1020,8 @@ pub enum RpcRateLimitsConfig {
     /// No rate limiting.
     #[config(default)]
     None,
-    /// One global cap, an `m_rps` bucket shared by `m_methods`, and per-method overrides
-    /// in `custom_methods`.
+    /// One global cap, plus per-method buckets: `m_rps` applied to each entry in
+    /// `m_methods`, and the explicit RPS in `custom_methods` for each entry there.
     Tiered {
         global_rps: NonZeroU32,
         m_rps: NonZeroU32,
