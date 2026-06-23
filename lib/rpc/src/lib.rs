@@ -40,7 +40,7 @@ use crate::debug_impl::DebugNamespace;
 use crate::eth_filter::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
-use crate::limits::Limiter;
+use crate::limits::{Limiter, LoggingLimiter};
 use crate::monitoring_middleware::Monitoring;
 use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
@@ -153,7 +153,8 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     let middleware = tower::ServiceBuilder::new().layer(cors);
 
     let max_response_size_bytes = config.max_response_size_bytes();
-    let limiter = Limiter::new(config.rate_limits.clone().into_limits());
+    let limiter = LoggingLimiter::new(Limiter::new(config.rate_limits.clone().into_limits()));
+    let rate_limit_logging = LoggingLimiter::run(limiter.clone());
     let rpc_middleware = RpcServiceBuilder::new()
         // Monitoring is outermost so rate-limited responses still appear in error metrics.
         .layer_fn(move |service| Monitoring::new(service, max_response_size_bytes))
@@ -197,6 +198,9 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             // The stale-filter cleanup loop exited unexpectedly; this task also ends in that case.
             _ = eth_filter.watch_and_clear_stale_filters() => {
                 unreachable!("eth_filter.watch_and_clear_stale_filters() is an infinite loop")
+            }
+            _ = rate_limit_logging => {
+                unreachable!("LoggingLimiter::run is an infinite loop")
             }
             // Graceful shutdown was requested; stop accepting RPC traffic and wait for the server to exit.
             _guard = &mut shutdown => {

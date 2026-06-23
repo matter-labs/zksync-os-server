@@ -1,4 +1,4 @@
-use crate::limits::Limiter;
+use crate::limits::LoggingLimiter;
 use jsonrpsee::MethodResponse;
 use jsonrpsee::core::middleware::{Batch, Notification};
 use jsonrpsee::core::to_json_raw_value;
@@ -22,20 +22,15 @@ fn rate_limited_err(retry_after_ms: u64) -> ErrorObject<'static> {
     ErrorObject::owned(RATE_LIMIT_ERROR_CODE, "Too many requests", Some(data))
 }
 
-/// JSON-RPC middleware that enforces per-method request rate limits globally across all connections.
-///
-/// Build the rate limiter once with [`Limiter::new`] and share it across connections via `Arc`.
-/// Sit this layer inside `Monitoring` so rate-limited responses are counted in error metrics.
-/// `Monitoring` decomposes batch requests by calling `call()` per entry, so batch items are
-/// rate-limited automatically.
+/// JSON-RPC middleware that enforces per-method rate limits.
 #[derive(Clone)]
 pub(crate) struct RateLimiting<S = RpcService> {
     inner: S,
-    limiter: Arc<Limiter>,
+    limiter: Arc<LoggingLimiter>,
 }
 
 impl<S> RateLimiting<S> {
-    pub(crate) fn new(inner: S, limiter: Arc<Limiter>) -> Self {
+    pub(crate) fn new(inner: S, limiter: Arc<LoggingLimiter>) -> Self {
         Self { inner, limiter }
     }
 }
