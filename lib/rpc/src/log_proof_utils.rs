@@ -8,7 +8,12 @@ use std::ops;
 use zksync_os_contract_interface::IMessageRoot::AppendedChainBatchRoot;
 use zksync_os_contract_interface::{Bytes32PushTree, IMessageRoot};
 
-const L2_MESSAGE_ROOT_ADDRESS: Address = address!("0x0000000000000000000000000000000000010005");
+/// Canonical L2 address of the MessageRoot system contract. Used as the
+/// `message_root_address` for proofs that aggregate on a gateway (an L2). For
+/// L1-settled chains the MessageRoot lives at a deployed L1 address instead,
+/// which callers must pass explicitly.
+pub const L2_MESSAGE_ROOT_ADDRESS: Address =
+    address!("0x0000000000000000000000000000000000010005");
 
 fn calculate_batch_tree_proof(
     mut tree: Bytes32PushTree,
@@ -183,8 +188,9 @@ pub async fn get_chain_log_proof(
     l2_chain_id: u64,
     gw_block_number: u64,
     gw_provider: &DynProvider,
+    message_root_address: Address,
 ) -> anyhow::Result<ChainAggProof> {
-    let message_root = IMessageRoot::new(L2_MESSAGE_ROOT_ADDRESS, gw_provider.clone());
+    let message_root = IMessageRoot::new(message_root_address, gw_provider.clone());
     let merkle_path_builder = message_root
         .getMerklePathForChain(U256::from(l2_chain_id))
         .block(gw_block_number.into());
@@ -237,10 +243,11 @@ pub async fn batch_tree_proof(
     l2_chain_id: u64,
     batch_number: u64,
     gw_provider: &DynProvider,
+    message_root_address: Address,
 ) -> anyhow::Result<(Vec<B256>, u8)> {
     assert!(*gw_block_range.start() > 0);
 
-    let message_root = IMessageRoot::new(L2_MESSAGE_ROOT_ADDRESS, gw_provider.clone());
+    let message_root = IMessageRoot::new(message_root_address, gw_provider.clone());
     let tree_call_builder = message_root
         .getChainTree(U256::from(l2_chain_id))
         .block((gw_block_range.start() - 1).into());
@@ -254,7 +261,7 @@ pub async fn batch_tree_proof(
         .to_block(*gw_block_range.end())
         .event_signature(AppendedChainBatchRoot::SIGNATURE_HASH)
         .topic1(U256::from(l2_chain_id))
-        .address(L2_MESSAGE_ROOT_ADDRESS);
+        .address(message_root_address);
     let logs_future = gw_provider
         .get_logs(&filter)
         .map_err(|e| anyhow::Error::from(e).context("get_logs for AppendedChainBatchRoot"));
