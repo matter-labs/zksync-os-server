@@ -16555,6 +16555,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_snapshot_trimmer"
+version = "0.20.7"
+dependencies = [
+ "alloy-rlp",
+ "anyhow",
+ "clap",
+ "leb128",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber 0.3.22",
+ "zksync_os_merkle_tree",
+ "zksync_os_rocksdb",
+]
+
+[[package]]
 name = "zksync_os_state"
 version = "0.20.7"
 dependencies = [
