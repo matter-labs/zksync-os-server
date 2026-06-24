@@ -47,6 +47,12 @@ alloy::sol! {
         bytes initCalldata;
     }
 
+    struct Call {
+        address target;
+        uint256 value;
+        bytes data;
+    }
+
     #[sol(rpc)]
     contract ChainTypeManagerV30 {
         function owner() external view returns (address);
@@ -73,9 +79,16 @@ alloy::sol! {
             address _verifier
         ) external;
 
+        function setUpgradeDiamondCut(
+            DiamondCutData calldata _cutData,
+            uint256 _oldProtocolVersion
+        ) external;
+
         function getProtocolVersion(uint256 _chainId) external view returns (uint256);
 
         function L1_BYTECODES_SUPPLIER() external view returns (address);
+
+        function serverNotifierAddress() external view returns (address);
     }
 
     // Represents the diamond proxy of the ZK chain on L1
@@ -109,7 +122,18 @@ alloy::sol! {
     #[sol(rpc)]
     contract ChainAdmin {
         function owner() external view returns (address);
-        function setUpgradeTimestamp(uint256 _protocolVersion, uint256 _upgradeTimestamp) external;
+        function multicall(Call[] calldata _calls, bool _requireSuccess) external payable;
+    }
+
+    #[sol(rpc)]
+    contract ServerNotifier {
+        function setUpgradeTimestamp(uint256 _chainId, uint256 _upgradeTimestamp) external;
+    }
+
+    #[sol(rpc)]
+    contract ServerNotifierV30 {
+        // v30.2 variant: _protocolVersion is the old (current) version being upgraded from.
+        function setUpgradeTimestamp(uint256 _chainId, uint256 _protocolVersion, uint256 _upgradeTimestamp) external;
     }
 
     struct L2CanonicalTransaction {

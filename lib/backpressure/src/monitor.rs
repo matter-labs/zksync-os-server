@@ -1,4 +1,5 @@
 use crate::config::{BackpressureConfig, ComponentId, is_pipeline_stage};
+use crate::gate::{PipelineAdmissionGate, PipelineAdmissionReceiver};
 use crate::metrics::MONITOR_METRICS;
 use reth_tasks::Runtime;
 use std::collections::{HashMap, HashSet};
@@ -58,17 +59,24 @@ fn compute_adjacent_snapshots(
 pub struct BackpressureMonitor {
     config: BackpressureConfig,
     acceptance_tx: watch::Sender<TransactionAcceptanceState>,
+    pipeline_gate: PipelineAdmissionGate,
     stop_receiver: watch::Receiver<bool>,
 }
 
 impl BackpressureMonitor {
     pub fn new(config: BackpressureConfig, stop_receiver: watch::Receiver<bool>) -> Self {
         let (acceptance_tx, _) = watch::channel(TransactionAcceptanceState::Accepting);
+        let pipeline_gate = PipelineAdmissionGate::new();
         Self {
             config,
             acceptance_tx,
+            pipeline_gate,
             stop_receiver,
         }
+    }
+
+    pub fn subscribe_gate(&self) -> PipelineAdmissionReceiver {
+        self.pipeline_gate.subscribe()
     }
 
     pub fn spawn(
@@ -186,6 +194,8 @@ impl BackpressureMonitor {
     }
 
     fn update_acceptance_state(&self, new_state: TransactionAcceptanceState) {
+        self.pipeline_gate
+            .set(matches!(new_state, TransactionAcceptanceState::Accepting));
         self.acceptance_tx.send_if_modified(|current| {
             if *current == new_state {
                 return false;

@@ -1,5 +1,118 @@
 # Changelog
 
+## [0.20.7](https://github.com/matter-labs/zksync-os-server/compare/v0.20.6...v0.20.7) (2026-06-16)
+
+
+### Features
+
+* **backpressure:** introduce PipelineAdmissionGate to pause block ingestion under backpressure ([#1363](https://github.com/matter-labs/zksync-os-server/issues/1363)) ([561c39e](https://github.com/matter-labs/zksync-os-server/commit/561c39e11909344c880da09d4da9442e1fc4d52a))
+* **l1-sender:** drop `fusaka_upgrade_timestamp` config option ([#1386](https://github.com/matter-labs/zksync-os-server/issues/1386)) ([239f76e](https://github.com/matter-labs/zksync-os-server/commit/239f76e0afd4b63679262c9e946509d4dc8f66ca))
+* **l1-sender:** Make confirmation requirement configurable ([#1374](https://github.com/matter-labs/zksync-os-server/issues/1374)) ([e4442bc](https://github.com/matter-labs/zksync-os-server/commit/e4442bc27d58a2bd21ffad57d3e1a6ac388772c3))
+* **provider:** add fallback when `finalized` is not supported ([#1370](https://github.com/matter-labs/zksync-os-server/issues/1370)) ([b579e08](https://github.com/matter-labs/zksync-os-server/commit/b579e08dc106c0eee921abcb385bfe0cdfaa2242))
+
+
+### Bug Fixes
+
+* **ci:** set finalized block polling interval to 100ms in local_dev.yaml ([#1354](https://github.com/matter-labs/zksync-os-server/issues/1354)) ([93d8d94](https://github.com/matter-labs/zksync-os-server/commit/93d8d94404a98c62683d24272292926b4660f945))
+* ignore tx limit for v31 upgrade block ([#1389](https://github.com/matter-labs/zksync-os-server/issues/1389)) ([67d4195](https://github.com/matter-labs/zksync-os-server/commit/67d4195684de4d2de0d6ede34812f41efd0373ec))
+* JS tracer performance ([#1381](https://github.com/matter-labs/zksync-os-server/issues/1381)) ([e18afb5](https://github.com/matter-labs/zksync-os-server/commit/e18afb51162abbce2e17669739ea5a6ac39c737a))
+* tracing multi-root calls ([#1318](https://github.com/matter-labs/zksync-os-server/issues/1318)) ([04d144c](https://github.com/matter-labs/zksync-os-server/commit/04d144c598fed6ee00e6636cca531a5088427acc))
+
+
+### Performance Improvements
+
+* fetch committed batch data elements in parallel ([#1361](https://github.com/matter-labs/zksync-os-server/issues/1361)) ([c613906](https://github.com/matter-labs/zksync-os-server/commit/c61390653d3b6ebe9ad4841d5ea72313121a207e))
+
+## [0.20.6](https://github.com/matter-labs/zksync-os-server/compare/v0.20.5...v0.20.6) (2026-06-03)
+
+
+### Features
+
+* **l1:** use deployment block as lower bound for binsearch ([#1350](https://github.com/matter-labs/zksync-os-server/issues/1350)) ([3ec0af1](https://github.com/matter-labs/zksync-os-server/commit/3ec0af16c65184418866883fb4a846a6ec63f6cb))
+
+
+### Bug Fixes
+
+* **l1-sender:** Blob tx gas estimation ([#1351](https://github.com/matter-labs/zksync-os-server/issues/1351)) ([4119dc1](https://github.com/matter-labs/zksync-os-server/commit/4119dc13469bf76363bd8dc907364a12baf4b24a))
+
+## [0.20.5](https://github.com/matter-labs/zksync-os-server/compare/v0.20.4...v0.20.5) (2026-06-02)
+
+
+### Features
+
+* S3 replay archive implementation ([#1319](https://github.com/matter-labs/zksync-os-server/issues/1319)) ([4d522d4](https://github.com/matter-labs/zksync-os-server/commit/4d522d40080cc79857bfa7ef6ca0c93fbcdb8d64))
+* use simulateV1 for gas limits ([#1308](https://github.com/matter-labs/zksync-os-server/issues/1308)) ([f1aca77](https://github.com/matter-labs/zksync-os-server/commit/f1aca77356960105fa5766931ee616c741e072ea))
+* **watcher:** Separate value for finalized block polling ([#1342](https://github.com/matter-labs/zksync-os-server/issues/1342)) ([de4a84f](https://github.com/matter-labs/zksync-os-server/commit/de4a84f875218d082e9d0c98b4576b2af8d97277))
+
+
+### Bug Fixes
+
+* **alloy:** fallback to eth_getBlockByNumber with old behaviour ([#1338](https://github.com/matter-labs/zksync-os-server/issues/1338)) ([3653b37](https://github.com/matter-labs/zksync-os-server/commit/3653b37163ac0c33ea50fc5ffd86b8767d1525fe))
+
+## [0.20.4](https://github.com/matter-labs/zksync-os-server/compare/v0.20.3...v0.20.4) (2026-05-26)
+
+
+### Features
+
+* **multivm:** use v0.1.3 interface ([#1311](https://github.com/matter-labs/zksync-os-server/issues/1311)) ([e908627](https://github.com/matter-labs/zksync-os-server/commit/e9086271239b1f9f7e640847c57a8d1fb310292e))
+* **observability:** distinguish between default and non-default values in config metrics ([#1330](https://github.com/matter-labs/zksync-os-server/issues/1330)) ([bd44113](https://github.com/matter-labs/zksync-os-server/commit/bd44113c5d7f5dc187ac0d0f3e39dd0cbe1ffbec))
+* replay record archive ([#1279](https://github.com/matter-labs/zksync-os-server/issues/1279)) ([e412fe9](https://github.com/matter-labs/zksync-os-server/commit/e412fe94b0679d8f925a8a55f523e0d92d01ab6e))
+* **rpc:** add eth_fillTransaction ([#1288](https://github.com/matter-labs/zksync-os-server/issues/1288)) ([8507c44](https://github.com/matter-labs/zksync-os-server/commit/8507c4448a4b9f882d3a936eccc4b54591860fe3))
+* **rpc:** per-method and global JSON-RPC rate limiting ([#1297](https://github.com/matter-labs/zksync-os-server/issues/1297)) ([c9b6fd6](https://github.com/matter-labs/zksync-os-server/commit/c9b6fd6c83295fb60f6f1931c5803f0ddd451999))
+* **rpc:** surface VM rejections in eth_sendRawTransactionSync ([#1276](https://github.com/matter-labs/zksync-os-server/issues/1276)) ([bb2b452](https://github.com/matter-labs/zksync-os-server/commit/bb2b4525aa2a1eae64456eb5b7a0a3f4c1adf341))
+* **tree_manager:** combine tree writes with a single RocksDB flush ([#1304](https://github.com/matter-labs/zksync-os-server/issues/1304)) ([fd59f82](https://github.com/matter-labs/zksync-os-server/commit/fd59f8298eeb515a3562ba606c2cce9de628f0be))
+* **watcher:** shared l1/gw polling ([#1281](https://github.com/matter-labs/zksync-os-server/issues/1281)) ([9f580d1](https://github.com/matter-labs/zksync-os-server/commit/9f580d128cc13cd29893d66f42157a853b37911f))
+
+
+### Bug Fixes
+
+* **consensus:** forward follower transactions over RPC ([#1321](https://github.com/matter-labs/zksync-os-server/issues/1321)) ([6f8c110](https://github.com/matter-labs/zksync-os-server/commit/6f8c110e5781d27c0c8ea78bcf0ad922a572e9f5))
+* **integration-tests:** import NetworkTransactionBuilder ([#1305](https://github.com/matter-labs/zksync-os-server/issues/1305)) ([264d992](https://github.com/matter-labs/zksync-os-server/commit/264d9922452fd93ec5e7a1093ec6f928b67321ad))
+* **l1-watcher:** adapt upgrade watcher to ServerNotifier semantics ([#1289](https://github.com/matter-labs/zksync-os-server/issues/1289)) ([3e34339](https://github.com/matter-labs/zksync-os-server/commit/3e343399bafdb7cacfec17dcbca43d7ba883e579))
+* Revert change that returned back base fee estimation ([#1306](https://github.com/matter-labs/zksync-os-server/issues/1306)) ([e8030c8](https://github.com/matter-labs/zksync-os-server/commit/e8030c877080c0c3b7e3d54c493e9fd22b9da0d1))
+* **rpc:** return -32602 instead of -32603 for block-not-found errors ([#1310](https://github.com/matter-labs/zksync-os-server/issues/1310)) ([2f9f1f2](https://github.com/matter-labs/zksync-os-server/commit/2f9f1f2725a379e032dbfa6c4645d2aa7d3f1047))
+* **watcher:** skip old transactions in upgrade watcher ([#1325](https://github.com/matter-labs/zksync-os-server/issues/1325)) ([e9e977a](https://github.com/matter-labs/zksync-os-server/commit/e9e977a06816afe8d23a7669228efd034bb39e57))
+
+
+### Performance Improvements
+
+* **merkle-tree:** Optimize passing tree data through component pipeline ([#1241](https://github.com/matter-labs/zksync-os-server/issues/1241)) ([3dc0f18](https://github.com/matter-labs/zksync-os-server/commit/3dc0f18ea2c95da875e50bc25855e73e169d926a))
+
+## [0.20.3](https://github.com/matter-labs/zksync-os-server/compare/v0.20.2...v0.20.3) (2026-05-18)
+
+
+### Features
+
+* **consensus:** Final consensus integration and integration tests ([#1225](https://github.com/matter-labs/zksync-os-server/issues/1225)) ([9068d93](https://github.com/matter-labs/zksync-os-server/commit/9068d9393fc201fc86038d24ff589860855e2587))
+* **l1-sender:** Refresh balance & nonce more often, refactor for simpler method signatures ([#1260](https://github.com/matter-labs/zksync-os-server/issues/1260)) ([e8cdf32](https://github.com/matter-labs/zksync-os-server/commit/e8cdf3293cc26c8caffc1310e9fa08870d8fbd2e))
+* **l1-watcher:** traverse historical GW intervals ([#1285](https://github.com/matter-labs/zksync-os-server/issues/1285)) ([213b433](https://github.com/matter-labs/zksync-os-server/commit/213b433dcc45a108e6af04e73c4578b17066775d))
+* **observability:** jemalloc metrics ([#1284](https://github.com/matter-labs/zksync-os-server/issues/1284)) ([c557017](https://github.com/matter-labs/zksync-os-server/commit/c5570177e13aa34764a8283d05cc4fd498c10176))
+* **observability:** semi-automatic export of config values as metrics  ([#1265](https://github.com/matter-labs/zksync-os-server/issues/1265)) ([09996da](https://github.com/matter-labs/zksync-os-server/commit/09996da6febbf60e10662c78e6c177365d6b99da))
+* **prividium:** integrate PolicyClient over admit + judge ([#1220](https://github.com/matter-labs/zksync-os-server/issues/1220)) ([b00454e](https://github.com/matter-labs/zksync-os-server/commit/b00454e35f6edde8bbb2332c3a56fcfb3fed5311))
+* **revm-checker:** adopt new zksync-os-revm version ([#1267](https://github.com/matter-labs/zksync-os-server/issues/1267)) ([2ddd01a](https://github.com/matter-labs/zksync-os-server/commit/2ddd01a12ba627d07850962c683fc472d7df9d26))
+* **rpc:** Implement eth_simulateV1 ([#1240](https://github.com/matter-labs/zksync-os-server/issues/1240)) ([630e1ce](https://github.com/matter-labs/zksync-os-server/commit/630e1cee177f61035745eb1743b8fe9bc5891b87))
+* separate gateway sender config ([#1277](https://github.com/matter-labs/zksync-os-server/issues/1277)) ([b6c70a9](https://github.com/matter-labs/zksync-os-server/commit/b6c70a9b571664de7c759dc90df1793c024c9aca))
+* update v31 state ([#1293](https://github.com/matter-labs/zksync-os-server/issues/1293)) ([bfd382b](https://github.com/matter-labs/zksync-os-server/commit/bfd382bbdf6f3726cba671c1e65c3075d331e49f))
+
+
+### Bug Fixes
+
+* **migration:** idle when finalized migration channel is closed ([#1290](https://github.com/matter-labs/zksync-os-server/issues/1290)) ([dac983f](https://github.com/matter-labs/zksync-os-server/commit/dac983f444cbdca71dcc1b809b33f0f97e92017b))
+* **raft:** rate-limit ensure_linearizable to silence log spam ([#1283](https://github.com/matter-labs/zksync-os-server/issues/1283)) ([945c19c](https://github.com/matter-labs/zksync-os-server/commit/945c19c8a315189433b96d04e92fa91b51baee7a))
+
+## [0.20.2](https://github.com/matter-labs/zksync-os-server/compare/v0.20.1...v0.20.2) (2026-05-11)
+
+
+### Features
+
+* **mempool:** stream interop txs only during gateway SL ([#1263](https://github.com/matter-labs/zksync-os-server/issues/1263)) ([b2a8a4a](https://github.com/matter-labs/zksync-os-server/commit/b2a8a4abb9dbe158ce979905ac1b4d718e67a103))
+
+
+### Bug Fixes
+
+* **l1-watcher:** do not panic on non-existent migration ([#1274](https://github.com/matter-labs/zksync-os-server/issues/1274)) ([a3ba0fe](https://github.com/matter-labs/zksync-os-server/commit/a3ba0fe7b0d4f66b4f9f46c3cad9fb195d06207e))
+* **network:** pin reth with bounded RLPx buffer ([#1275](https://github.com/matter-labs/zksync-os-server/issues/1275)) ([d6194aa](https://github.com/matter-labs/zksync-os-server/commit/d6194aa9709dc326ad58055b77c12a7f33be6a1e))
+
 ## [0.20.1](https://github.com/matter-labs/zksync-os-server/compare/v0.20.0...v0.20.1) (2026-05-07)
 
 

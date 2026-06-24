@@ -1,16 +1,17 @@
+use crate::trace_filter::{is_asset_tracker_root_call, without_ignored_roots};
 use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, CallLogFrame};
 use alloy::sol_types::{ContractError, GenericRevertReason};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{
-    AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer,
-    NopTracer, NopValidator,
+    AnyTracer, AnyTxValidator, CallModifier, CallResult, EvmFrameInterface, EvmRequest,
+    EvmResources, EvmTracer, NopTracer, NopValidator,
 };
 use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
-use zksync_os_interface::types::{BlockContext, ExecutionResult, TxOutput};
+use zksync_os_interface::types::{ExecutionResult, TxOutput};
 use zksync_os_multivm::{run_block, simulate_tx};
-use zksync_os_storage_api::ViewState;
+use zksync_os_storage_api::{BlockContext, ViewState};
 use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
 /// EVM max stack size.
@@ -35,6 +36,25 @@ pub fn execute(
     block_context: BlockContext,
     state_view: impl ViewState,
 ) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
+    execute_with(
+        tx,
+        block_context,
+        state_view,
+        &mut NopTracer,
+        &mut NopValidator,
+    )
+}
+
+/// Same as [`execute`] but threads caller-supplied tracer + validator
+/// through the VM. The bootloader fires `validator.begin_tx` and
+/// `validator.finish_tx` around EVM execution.
+pub fn execute_with<T: AnyTracer, V: AnyTxValidator>(
+    tx: ZkTransaction,
+    block_context: BlockContext,
+    state_view: impl ViewState,
+    tracer: &mut T,
+    validator: &mut V,
+) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
     let encoded_tx = tx.encode();
 
     simulate_tx(
@@ -42,7 +62,8 @@ pub fn execute(
         block_context,
         state_view.clone(),
         state_view,
-        &mut NopTracer,
+        tracer,
+        validator,
     )
 }
 
@@ -67,6 +88,7 @@ pub fn call_trace_simulate(
         state_view.clone(),
         state_view,
         &mut tracer,
+        &mut NopValidator,
     )?;
 
     let frame = tracer
@@ -203,6 +225,35 @@ impl CallTracer {
             create_operation_requested: None,
         }
     }
+
+    fn failed_before_execution_frame(&self) -> Option<CallFrame> {
+        let tx = self.input_transactions.get(self.transactions.len())?;
+
+        Some(CallFrame {
+            from: tx.signer(),
+            gas: U256::from(tx.gas_limit()),
+            gas_used: U256::from(tx.gas_limit()),
+            to: tx.to(),
+            input: tx.input().clone(),
+            output: None,
+            error: Some("transaction failed before execution".to_string()),
+            revert_reason: None,
+            calls: vec![],
+            logs: vec![],
+            value: Some(tx.value()), // Can't have STATICCALL here
+            typ: if tx.to().is_some() {
+                "CALL".to_string()
+            } else {
+                "CREATE".to_string()
+            },
+        })
+    }
+
+    fn without_asset_tracker_root_frames(roots: Vec<CallFrame>) -> Vec<CallFrame> {
+        without_ignored_roots(roots, |root| {
+            is_asset_tracker_root_call(root.from, root.to, root.input.as_ref())
+        })
+    }
 }
 
 impl AnyTracer for CallTracer {
@@ -327,7 +378,7 @@ impl EvmTracer for CallTracer {
             }
 
             if is_top_level_frame {
-                self.current_tx_top_level_execution_succeeded = top_level_execution_succeeded;
+                self.current_tx_top_level_execution_succeeded &= top_level_execution_succeeded;
             }
             if let Some(parent_call) = self.unfinished_calls.last_mut() {
                 parent_call.calls.push(finished_call);
@@ -346,7 +397,8 @@ impl EvmTracer for CallTracer {
 
     fn begin_tx(&mut self, _calldata: &[u8]) {
         self.current_call_depth = 0;
-        self.current_tx_top_level_execution_succeeded = false;
+        self.current_tx_top_level_execution_succeeded = true;
+        self.finished_calls.clear();
 
         // Sanity check
         assert!(self.create_operation_requested.is_none());
@@ -359,34 +411,28 @@ impl EvmTracer for CallTracer {
         // Sanity check
         assert!(self.create_operation_requested.is_none());
 
-        if let Some(top_level_call) = self.finished_calls.pop() {
-            self.transactions.push(top_level_call);
-            self.top_level_execution_succeeded
-                .push(self.current_tx_top_level_execution_succeeded);
-        } else {
-            // We can have some edge cases when tx fails before any call frame is created
-            // In this case currently we populate minimal call frame info from the input tx data
-            let empty_tx = self.input_transactions.get(self.transactions.len());
-            if let Some(tx) = empty_tx {
-                self.transactions.push(CallFrame {
-                    from: tx.signer(),
-                    gas: U256::from(tx.gas_limit()),
-                    gas_used: U256::from(tx.gas_limit()),
-                    to: tx.to(),
-                    input: tx.input().clone(),
-                    output: None,
-                    error: Some("transaction failed before execution".to_string()),
-                    revert_reason: None,
-                    calls: vec![],
-                    logs: vec![],
-                    value: Some(tx.value()), // Can't have STATICCALL here
-                    typ: if tx.to().is_some() {
-                        "CALL".to_string()
-                    } else {
-                        "CREATE".to_string()
-                    },
-                });
-                self.top_level_execution_succeeded.push(false);
+        let roots =
+            Self::without_asset_tracker_root_frames(std::mem::take(&mut self.finished_calls));
+        // A transaction always produces exactly one genuine root frame; the bootloader's
+        // asset-tracker root (the only other depth-1 frame) is filtered out above.
+        assert!(
+            roots.len() <= 1,
+            "unexpected multi-root trace: {} roots remain after stripping asset-tracker roots",
+            roots.len()
+        );
+        match roots.into_iter().next() {
+            None => {
+                // We can have some edge cases when tx fails before any call frame is created.
+                // In this case currently we populate minimal call frame info from the input tx data.
+                if let Some(frame) = self.failed_before_execution_frame() {
+                    self.transactions.push(frame);
+                    self.top_level_execution_succeeded.push(false);
+                }
+            }
+            Some(root) => {
+                self.transactions.push(root);
+                self.top_level_execution_succeeded
+                    .push(self.current_tx_top_level_execution_succeeded);
             }
         }
     }
@@ -633,6 +679,9 @@ pub(crate) fn fmt_error_msg(error: &EvmError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trace_filter::{
+        ASSET_TRACKER_ADDRESS, ASSET_TRACKER_ROOT_SELECTOR, L2_BASE_TOKEN_ADDRESS,
+    };
     use alloy::sol_types::{Revert, SolError};
     use zksync_os_interface::tracing::EvmTracer;
     use zksync_os_interface::types::ExecutionOutput;
@@ -850,6 +899,28 @@ mod tests {
             tracer.create_operation_requested,
             Some(CreateType::Create2)
         ));
+    }
+
+    #[test]
+    fn finish_tx_ignores_asset_tracker_root_frames_when_actual_root_exists() {
+        let mut tracer = CallTracer::default();
+        let mut actual_root = make_empty_call_frame();
+        actual_root.to = Some(Address::from([0x11; 20]));
+        let mut asset_tracker_root = make_empty_call_frame();
+        asset_tracker_root.from = L2_BASE_TOKEN_ADDRESS;
+        asset_tracker_root.to = Some(ASSET_TRACKER_ADDRESS);
+        asset_tracker_root.input = Bytes::copy_from_slice(&ASSET_TRACKER_ROOT_SELECTOR);
+
+        tracer.begin_tx(&[]);
+        tracer.finished_calls.push(actual_root);
+        tracer.finished_calls.push(asset_tracker_root);
+        tracer.finish_tx();
+
+        assert_eq!(tracer.transactions.len(), 1);
+        assert_eq!(tracer.transactions[0].to, Some(Address::from([0x11; 20])));
+        assert!(tracer.transactions[0].calls.is_empty());
+        assert!(tracer.finished_calls.is_empty());
+        assert_eq!(tracer.top_level_execution_succeeded, vec![true]);
     }
 
     #[test]

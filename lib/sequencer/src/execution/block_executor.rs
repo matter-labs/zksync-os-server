@@ -1,10 +1,10 @@
 use crate::config::SequencerConfig;
-use crate::config::TxValidatorConfig;
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::execute_block_in_vm::execute_block_in_vm;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::save_dump;
 use crate::model::blocks::{BlockCommand, BlockCommandType, BlockPayload};
+use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -16,6 +16,7 @@ use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{OverlayBuffer, ReadStateHistory, WriteState};
 use zksync_os_tx_validators::deployment_filter;
+use zksync_os_tx_validators::policy_client::AccessType;
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
 /// Executes blocks, while only updating local in-memory state (mempool, block context).
@@ -36,7 +37,7 @@ where
     /// before starting block `N + 1`. This works around an `OverlayBuffer` bug
     /// that reproduces during rebuilds when the runtime truncates base state.
     /// Once that bug is fixed, this wait can be removed.
-    pub applied_block_number_receiver: watch::Receiver<u64>,
+    pub applied_block_number_receiver: watch::Receiver<Option<BlockNumber>>,
 }
 
 #[async_trait]
@@ -79,11 +80,14 @@ where
             tracing::info!("Command {cmd} received by BlockExecutor");
             let cmd_type = cmd.command_type();
             state_reporter.enter_state(SequencerState::WaitingForApplier);
-            wait_for_block_applier(
-                &mut self.applied_block_number_receiver,
-                self.block_context_provider.next_block_number() - 1,
-            )
-            .await?;
+            // If we had a non-genesis block in the past, we need to wait for the block applier to
+            // catch up. Genesis is skipped because it never gets applied further down the pipeline.
+            if let Some(last_block_number) = self.block_context_provider.last_block_number()
+                && last_block_number > 0
+            {
+                wait_for_block_applier(&mut self.applied_block_number_receiver, last_block_number)
+                    .await?;
+            }
 
             // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
             if matches!(cmd, BlockCommand::Produce(_))
@@ -100,7 +104,10 @@ where
             }
             state_reporter.enter_state(SequencerState::WaitingForTransaction);
 
-            let prepared_command = self.block_context_provider.prepare_command(cmd).await?;
+            let Some(prepared_command) = self.block_context_provider.prepare_command(cmd).await?
+            else {
+                continue;
+            };
 
             state_reporter.enter_state(SequencerState::InitializingVm);
 
@@ -123,8 +130,30 @@ where
                 .sync_with_base_and_build_view_for_block(&self.state, block_number)?;
 
             let is_produce = matches!(cmd_type, BlockCommandType::Produce);
-            let (tracer, validator) = make_tx_validator(is_produce, &self.config.tx_validator);
-            let (block_output, replay_record, purged_txs, strict_subpool_cleanup) = {
+            // Policy priority: when a `PolicyClient` is configured for a
+            // produce block, the policy service is the sole arbiter and the
+            // deployment filter is bypassed entirely (the policy service can
+            // express the same allow-list via its rules). Replay/rebuild
+            // traffic was already consulted against the policy service at
+            // original sequencing, so it always falls back to the deployment
+            // filter (with `Unrestricted` config to avoid re-filtering).
+            let policy_client = is_produce
+                .then_some(self.config.tx_validator.policy_client.as_ref())
+                .flatten();
+            let exec_result = if let Some(policy_client) = policy_client {
+                let policy_session = policy_client.session(AccessType::Write);
+                let policy_tracer = policy_session.paired_tracer();
+                execute_block_in_vm(
+                    prepared_command,
+                    exec_view,
+                    &state_reporter,
+                    policy_tracer,
+                    policy_session,
+                )
+                .await
+            } else {
+                let (tracer, validator) =
+                    make_deployment_filter(is_produce, &self.config.tx_validator.deployment_filter);
                 execute_block_in_vm(
                     prepared_command,
                     exec_view,
@@ -133,16 +162,17 @@ where
                     validator,
                 )
                 .await
-            }
-            .map_err(|dump| {
-                let error = anyhow::anyhow!("{}", dump.error);
-                tracing::info!("Saving dump..");
-                if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump) {
-                    tracing::error!(?err, "Failed to write block dump");
-                }
-                error
-            })
-            .context("execute_block_in_vm")?;
+            };
+            let (block_output, replay_record, purged_txs, strict_subpool_cleanup) = exec_result
+                .map_err(|dump| {
+                    let error = anyhow::anyhow!("{}", dump.error);
+                    tracing::info!("Saving dump..");
+                    if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump) {
+                        tracing::error!(?err, "Failed to write block dump");
+                    }
+                    error
+                })
+                .context("execute_block_in_vm")?;
 
             let time_since_last_block = last_processed_block_at
                 .map(|last_processed_block_at| last_processed_block_at.elapsed());
@@ -157,16 +187,20 @@ where
             state_reporter.enter_state(SequencerState::UpdatingMempool);
 
             self.block_context_provider
-                .on_canonical_state_change(&block_output, &replay_record, strict_subpool_cleanup)
+                .on_canonical_state_change(
+                    block_output.as_ref(),
+                    &replay_record,
+                    strict_subpool_cleanup,
+                )
                 .await;
-            let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
+            let purged_txs_hashes = purged_txs.iter().map(|(hash, _)| *hash).collect();
             self.block_context_provider
                 .purge_transactions(purged_txs_hashes);
 
             state_overlay_buffer.add_block(
                 block_number,
-                block_output.storage_writes.clone(),
-                block_output.published_preimages.clone(),
+                block_output.as_ref().storage_writes.clone(),
+                block_output.as_ref().published_preimages.clone(),
             )?;
 
             tracing::info!(
@@ -181,9 +215,10 @@ where
 
             output.send_and_record(
                 BlockPayload {
-                    output: block_output.clone(),
-                    record: replay_record.clone(),
+                    output: block_output,
+                    record: replay_record,
                     command_type: cmd_type,
+                    failed_transactions: purged_txs,
                 },
                 &state_reporter,
             )?;
@@ -192,11 +227,11 @@ where
 }
 
 async fn wait_for_block_applier(
-    applied_block_number_receiver: &mut watch::Receiver<u64>,
-    required_block_number: u64,
+    applied_block_number_receiver: &mut watch::Receiver<Option<BlockNumber>>,
+    required_block_number: BlockNumber,
 ) -> anyhow::Result<()> {
     let applied_block_number = *applied_block_number_receiver.borrow_and_update();
-    if applied_block_number >= required_block_number {
+    if applied_block_number >= Some(required_block_number) {
         tracing::debug!(
             applied_block_number,
             required_block_number,
@@ -212,7 +247,7 @@ async fn wait_for_block_applier(
     );
 
     let reached_block_number = applied_block_number_receiver
-        .wait_for(|block_number| *block_number >= required_block_number)
+        .wait_for(|block_number| *block_number >= Some(required_block_number))
         .await
         .context("block applier progress watch closed while executor was waiting")?
         .to_owned();
@@ -249,13 +284,6 @@ async fn check_block_production_limit(
         state_reporter.enter_state(SequencerState::ConfiguredBlockLimitReached);
         std::future::pending::<()>().await;
     }
-}
-
-fn make_tx_validator(
-    is_produce: bool,
-    config: &TxValidatorConfig,
-) -> (deployment_filter::Tracer, deployment_filter::Validator) {
-    make_deployment_filter(is_produce, &config.deployment_filter)
 }
 
 fn make_deployment_filter(

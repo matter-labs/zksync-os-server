@@ -10,13 +10,14 @@ use alloy::{
     sol_types::{SolCall, SolType, SolValue},
 };
 use anyhow::{Context, Result};
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::assert_traits::ProviderAssert;
-use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
 use zksync_os_integration_tests::{
-    GatewayTester, Tester, assert_traits::ReceiptAssert, contracts::TestERC20, provider::ZksyncApi,
+    GatewayTester, Tester, assert_traits::ReceiptAssert, contracts::TestERC20,
 };
+use zksync_os_provider::NodeProvider;
 use zksync_os_rpc_api::types::LogProofTarget;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, L2_INTEROP_CENTER_ADDRESS, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
@@ -215,7 +216,7 @@ fn build_second_bridge_calldata(
 async fn setup_l1_token_on_chain_a(
     chain_a: &Tester,
     l2_recipient: Address,
-) -> Result<(TestERC20::TestERC20Instance<EthDynProvider>, U256, [u8; 32])> {
+) -> Result<(TestERC20::TestERC20Instance<NodeProvider>, U256, [u8; 32])> {
     let deposit_amount = U256::from(1_000_000) * U256::from(10).pow(U256::from(18));
 
     // Deploy TestERC20 on L1 and mint to the L1 wallet.
@@ -281,7 +282,7 @@ async fn setup_l1_token_on_chain_a(
 /// chain in a multi-chain test setup.
 async fn deposit_erc20_to_chain(
     chain: &Tester,
-    l1_erc20: &TestERC20::TestERC20Instance<EthDynProvider>,
+    l1_erc20: &TestERC20::TestERC20Instance<NodeProvider>,
     to: Address,
     amount: U256,
 ) -> Result<TransactionReceipt> {

@@ -1,27 +1,27 @@
-use crate::dyn_wallet_provider::EthDynProvider;
-use crate::network::Zksync;
-use crate::provider::ZksyncApi;
 use alloy::eips::BlockNumberOrTag;
 use alloy::primitives::{U256, keccak256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use std::time::Duration;
+use zksync_os_alloy_ext::network::Zksync;
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_provider::NodeProvider;
 
 #[derive(Debug)]
 pub struct ProverTester {
-    l1_provider: EthDynProvider,
-    gateway_provider: Option<EthDynProvider>,
-    l2_provider: EthDynProvider,
+    l1_provider: NodeProvider,
+    gateway_provider: Option<NodeProvider>,
+    l2_provider: NodeProvider,
     l2_zk_provider: DynProvider<Zksync>,
 }
 
 impl ProverTester {
     /// Create a new client targeting the given base URL
     pub fn new(
-        l1_provider: EthDynProvider,
-        gateway_provider: Option<EthDynProvider>,
-        l2_provider: EthDynProvider,
+        l1_provider: NodeProvider,
+        gateway_provider: Option<NodeProvider>,
+        l2_provider: NodeProvider,
         l2_zk_provider: DynProvider<Zksync>,
     ) -> Self {
         Self {
@@ -30,6 +30,25 @@ impl ProverTester {
             l2_provider,
             l2_zk_provider,
         }
+    }
+
+    pub async fn last_proven_batch(&self) -> anyhow::Result<u64> {
+        let bridgehub_address = self.l2_zk_provider.get_bridgehub_contract().await?;
+        let chain_id = self.l2_provider.get_chain_id().await?;
+
+        // Get L1/SL state which contains diamond proxy address
+        let l1_state = L1State::fetch(
+            self.l1_provider.clone(),
+            self.gateway_provider.clone(),
+            bridgehub_address,
+            chain_id,
+        )
+        .await?;
+        let total_batches_proved = l1_state
+            .diamond_proxy_sl
+            .get_total_batches_proved(BlockNumberOrTag::Latest.into())
+            .await?;
+        Ok(total_batches_proved)
     }
 
     /// Checks batch status by verifying that the proof has been verified on L1.
@@ -41,8 +60,8 @@ impl ProverTester {
 
         // Get L1/SL state which contains diamond proxy address
         let l1_state = L1State::fetch(
-            self.l1_provider.clone().erased(),
-            self.gateway_provider.as_ref().map(|p| p.clone().erased()),
+            self.l1_provider.clone(),
+            self.gateway_provider.clone(),
             bridgehub_address,
             chain_id,
         )

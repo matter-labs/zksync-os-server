@@ -20,9 +20,10 @@ pub use transaction::{
     IndexedInteropRoot, InteropRootsLogIndex, L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1EnvelopeError,
     L1PriorityEnvelope, L1PriorityTx, L1PriorityTxType, L1Tx, L1TxSerialId, L1TxType,
     L1UpgradeEnvelope, L1UpgradeTx, L2_INTEROP_ROOT_STORAGE_ADDRESS, L2Envelope, L2Transaction,
-    REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, SYSTEM_TX_TYPE_ID, SystemTxEnvelope, SystemTxType,
-    TransactionData, UpgradeInfo, UpgradeMetadata, UpgradeTxType, ZkEnvelope, ZkTransaction,
-    ZkTxType, ZksyncOsEncode, utils::L2_INTEROP_CENTER_ADDRESS,
+    REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, SYSTEM_CONTEXT_ADDRESS, SYSTEM_TX_TYPE_ID,
+    SystemTxEnvelope, SystemTxType, TransactionData, UpgradeInfo, UpgradeMetadata, UpgradeTxType,
+    ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode,
+    utils::{BOOTLOADER_FORMAL_ADDRESS, L2_INTEROP_CENTER_ADDRESS},
 };
 
 pub use zksync_os_contract_interface::InteropRoot;
@@ -44,3 +45,6 @@ pub use block_start_cursors::BlockStartCursors;
 
 mod token_price;
 pub use token_price::{TokenApiRatio, TokenPricesForFees};
+
+mod block_output;
+pub use block_output::BlockOutput;

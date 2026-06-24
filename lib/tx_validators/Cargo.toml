@@ -10,9 +10,22 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 zksync_os_interface.workspace = true
 zksync_os_evm_errors.workspace = true
 tracing.workspace = true
 alloy = { workspace = true, default-features = false, features = [
     "consensus",
 ] }
+reqwest = { workspace = true, features = ["rustls-tls", "json"] }
+secrecy.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "time", "sync"] }
+url.workspace = true
+vise.workspace = true
+
+[dev-dependencies]
+httpmock.workspace = true
+tokio = { workspace = true, features = ["full"] }

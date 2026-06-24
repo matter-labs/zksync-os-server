@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_base_token_adjuster.workspace = true
 zksync_os_genesis.workspace = true
 zksync_os_mempool.workspace = true
 zksync_os_observability.workspace = true
@@ -18,8 +19,8 @@ zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_multivm.workspace = true
 zksync_os_tx_validators.workspace = true
-zksync_os_gas_adjuster.workspace = true
 zksync_os_metadata.workspace = true
+zksync_os_contract_interface.workspace = true
 
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true

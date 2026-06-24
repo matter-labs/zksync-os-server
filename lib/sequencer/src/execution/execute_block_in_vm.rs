@@ -1,7 +1,9 @@
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::{BlockDump, hash_block_output};
 use crate::execution::vm_wrapper::VmWrapper;
-use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
+use crate::model::blocks::{
+    BlockOutputWithReads, InvalidTxPolicy, PreparedBlockCommand, SealPolicy,
+};
 use crate::model::debug_formatting::BlockOutputDebug;
 use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
@@ -12,10 +14,11 @@ use vise::EncodeLabelValue;
 use zk_ee::memory::stack_trait::Stack;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
-use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_observability::ComponentStateReporter;
-use zksync_os_storage_api::{MeteredViewState, OverriddenStateView, ReplayRecord, ViewState};
+use zksync_os_storage_api::{
+    BlockContext, MeteredViewState, OverriddenStateView, ReplayRecord, ViewState,
+};
 use zksync_os_types::{SystemTxType, ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
@@ -31,7 +34,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     validator: impl AnyTxValidator + Send + 'static,
 ) -> Result<
     (
-        BlockOutput,
+        BlockOutputWithReads,
         ReplayRecord,
         Vec<(TxHash, InvalidTransaction)>,
         bool,
@@ -67,6 +70,17 @@ pub async fn execute_block_in_vm<V: ViewState>(
     let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx attempt
     let mut interop_roots_count = 0;
     let expect_sl_chain_id_tx_after_upgrade = command.expect_sl_chain_id_tx_after_upgrade;
+
+    if expect_sl_chain_id_tx_after_upgrade
+        && let SealPolicy::Decide(duration, tx_limit) = command.seal_policy
+        && tx_limit < 2
+    {
+        command.seal_policy = SealPolicy::Decide(duration, 2);
+        tracing::warn!(
+            "Upgrade v31 requires two txs (Upgrade and SetSLChainId) to be included in the first v31 block. \
+                `max_transactions_in_block` is ignored"
+        );
+    }
 
     /* ---------- main loop ------------------------------------------ */
     // seal_reason must only be used for observability - handling must remain generic
@@ -346,11 +360,13 @@ pub async fn execute_block_in_vm<V: ViewState>(
     }
 
     /* ---------- seal & return ------------------------------------- */
-    let mut output = runner.seal_block().await.map_err(|e| BlockDump {
+    let mut output_with_reads = runner.seal_block().await.map_err(|e| BlockDump {
         ctx,
         txs: all_processed_txs.clone(),
         error: e.context("seal_block()").to_string(),
     })?;
+    let unique_reads_count = output_with_reads.read_keys().len();
+    let output = output_with_reads.inner_mut();
 
     // Since we've overridden the state, we need to insert any forced preimages into the output as well.
     // Note: the fact that we're doing it here, would also affect the block output hash,
@@ -382,27 +398,26 @@ pub async fn execute_block_in_vm<V: ViewState>(
         .computational_native_used_per_block
         .observe(output.computational_native_used);
 
-    let block_hash_output = hash_block_output(&output);
+    let block_hash_output = hash_block_output(output);
 
     tracing::info!(
         block_number = output.header.number,
-        "Block {} ({}) sealed because of {seal_reason:?} in block executor with {} transactions ({} purged) and {} gas. \
-        Block hash output: {block_hash_output:?}, canonical hash: {:?}. \
-        storage_writes: {}, preimages: {}, pubdata bytes: {}. \
-        ",
-        output.header.number,
-        command.metrics_label,
-        executed_txs.len(),
-        purged_txs.len(),
-        cumulative_gas_used,
-        output.header.hash(),
-        output.storage_writes.len(),
-        output.published_preimages.len(),
-        output.pubdata.len(),
+        "Block {block_number} ({label}) sealed because of {seal_reason:?} in block executor \
+        with {tx_count} transactions ({purged_tx_count} purged) and {cumulative_gas_used} gas. \
+        Block hash output: {block_hash_output:?}, canonical hash: {canonical_hash:?}. \
+        storage writes: {write_count}, unique reads: {unique_reads_count}, preimages: {preimages_count}, pubdata bytes: {pubdata_len}.",
+        block_number = output.header.number,
+        label = command.metrics_label,
+        tx_count = executed_txs.len(),
+        purged_tx_count = purged_txs.len(),
+        canonical_hash = output.header.hash(),
+        write_count = output.storage_writes.len(),
+        preimages_count = output.published_preimages.len(),
+        pubdata_len = output.pubdata.len(),
     );
 
     tracing::debug!(
-        output = ?BlockOutputDebug(&output),
+        output = ?BlockOutputDebug(output),
         block_number = output.header.number,
         "Full block {} output",
         output.header.number,
@@ -425,7 +440,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     }
 
     Ok((
-        output,
+        output_with_reads,
         ReplayRecord::new(
             ctx,
             executed_txs,
@@ -532,7 +547,12 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::BlobListTooLong
         | InvalidTransaction::EmptyBlobList
         | InvalidTransaction::FilteredByValidator
-        | InvalidTransaction::CallerGasLimitTooHigh => TxRejectionMethod::Purge,
+        | InvalidTransaction::CallerGasLimitTooHigh
+        | InvalidTransaction::FriProofTxNotSupported
+        | InvalidTransaction::FriProofSidecarMissing
+        | InvalidTransaction::FriProofVerificationFailed
+        | InvalidTransaction::FriProofStatementHashMismatch
+        | InvalidTransaction::TooManyFriStatements => TxRejectionMethod::Purge,
 
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }

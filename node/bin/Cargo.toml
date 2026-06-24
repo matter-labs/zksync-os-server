@@ -15,9 +15,15 @@ path = "src/main.rs"
 
 [features]
 default = ["jemalloc"]
-jemalloc = ["dep:tikv-jemallocator"]
+jemalloc = [
+    "dep:tikv-jemallocator",
+    "zksync_os_observability/jemalloc",
+    "zksync_os_rpc/jemalloc",
+    "tikv-jemallocator/stats",
+]
 
 [dependencies]
+zksync_os_provider.workspace = true
 zksync_os_l1_sender.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_mempool.workspace = true
@@ -47,22 +53,23 @@ zksync_os_base_token_adjuster.workspace = true
 zksync_os_external_price_api.workspace = true
 zksync_os_operator_signer.workspace = true
 zksync_os_reth_compat.workspace = true
+zksync_os_replay_archive.workspace = true
 zksync_os_state.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_merkle_tree.workspace = true
-zksync_os_interop_fee_updater.workspace = true
 zksync_os_raft.workspace = true
 zksync_os_tx_validators.workspace = true
 zksync_os_config_validation_macros.workspace = true
 zksync_os_backpressure.workspace = true
 
+zk_ee_prev.workspace = true
+zk_os_basic_system_prev.workspace = true
+zk_os_forward_system_prev.workspace = true
+
 zk_ee.workspace = true
+zk_os_basic_system.workspace = true
 zk_os_forward_system.workspace = true
 
-zk_ee_dev.workspace = true
-zk_os_forward_system_dev.workspace = true
-
-zk_os_basic_system.workspace = true
 zksync_os_interface.workspace = true
 execution_utils.workspace = true
 full_statement_verifier.workspace = true
@@ -81,10 +88,8 @@ alloy = { workspace = true, default-features = false, features = [
 ] }
 blake2.workspace = true
 clap = { workspace = true, features = ["derive", "wrap_help"] }
-ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-stream.workspace = true
-tokio-util.workspace = true
 tower.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
@@ -94,7 +99,6 @@ base64.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml.workspace = true
-semver = { workspace = true, features = ["serde"] }
 bincode.workspace = true
 smart-config = { workspace = true, features = ["primitive-types", "alloy"] }
 smart-config-commands.workspace = true
@@ -105,13 +109,12 @@ jsonrpsee = { workspace = true, default-features = false, features = [
     "client",
 ] }
 rand.workspace = true
-reqwest = { workspace = true, features = ["stream"] }
 rustls = { workspace = true }
 num.workspace = true
-sentry.workspace = true
 tempfile.workspace = true
 flate2.workspace = true
 tar.workspace = true
+url.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = { workspace = true, optional = true }

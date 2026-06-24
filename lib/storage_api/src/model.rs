@@ -1,11 +1,12 @@
-use alloy::primitives::{Address, B256};
+use alloy::primitives::{Address, B256, U256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
 use zksync_os_batch_types::BlockMerkleTreeData;
-use zksync_os_interface::types::{BlockContext, BlockOutput};
+use zksync_os_interface::traits::AnyBlockContext;
 use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_types::{
-    BlockStartCursors, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction,
+    BlockOutput, BlockStartCursors, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope,
+    ZkTransaction,
 };
 
 #[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
@@ -138,5 +139,133 @@ impl HasBlockRangeEnd for ReplayRecord {
     }
     fn block_timestamp(&self) -> Option<u64> {
         Some(self.block_context.timestamp)
+    }
+}
+
+/// Be careful when changing this struct as making non-backwards-compatible changes will make old
+/// storage non-loadable.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct BlockContext {
+    // Chain id is temporarily also added here (so that it can be easily passed from the oracle)
+    // long term, we have to decide whether we want to keep it here, or add a separate oracle
+    // type that would return some 'chain' specific metadata (as this class is supposed to hold block metadata only).
+    pub chain_id: u64,
+    pub block_number: u64,
+    pub block_hashes: BlockHashes,
+    pub timestamp: u64,
+    pub eip1559_basefee: U256,
+    pub pubdata_price: U256,
+    pub native_price: U256,
+    pub coinbase: Address,
+    pub gas_limit: u64,
+    pub pubdata_limit: u64,
+    /// Source of randomness, currently holds the value of prevRandao.
+    pub mix_hash: U256,
+    /// Version of the ZKsync OS and its config to be used for this block.
+    pub execution_version: u32,
+    pub blob_fee: U256,
+}
+
+/// Array of previous block hashes.
+/// Hash for block number N will be at index [256 - (current_block_number - N)]
+/// (most recent will be at the end) if N is one of the most recent
+/// 256 blocks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlockHashes(pub [U256; 256]);
+
+impl BlockHashes {
+    pub fn push(self, block_hash: B256) -> Self {
+        Self(
+            self.0
+                .into_iter()
+                .skip(1)
+                .chain([U256::from_be_bytes(block_hash.0)])
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap(),
+        )
+    }
+}
+
+impl Default for BlockHashes {
+    fn default() -> Self {
+        Self([U256::ZERO; 256])
+    }
+}
+
+impl serde::Serialize for BlockHashes {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.to_vec().serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BlockHashes {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let vec: Vec<U256> = Vec::deserialize(deserializer)?;
+        let array: [U256; 256] = vec
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("Expected array of length 256"))?;
+        Ok(Self(array))
+    }
+}
+
+impl AnyBlockContext for BlockContext {
+    fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    fn block_number(&self) -> u64 {
+        self.block_number
+    }
+
+    fn block_hashes(&self) -> &[U256; 256] {
+        &self.block_hashes.0
+    }
+
+    fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+
+    fn eip1559_basefee(&self) -> U256 {
+        self.eip1559_basefee
+    }
+
+    fn pubdata_price(&self) -> U256 {
+        self.pubdata_price
+    }
+
+    fn native_price(&self) -> U256 {
+        self.native_price
+    }
+
+    fn coinbase(&self) -> Address {
+        self.coinbase
+    }
+
+    fn gas_limit(&self) -> u64 {
+        self.gas_limit
+    }
+
+    fn pubdata_limit(&self) -> u64 {
+        self.pubdata_limit
+    }
+
+    fn mix_hash(&self) -> U256 {
+        self.mix_hash
+    }
+
+    fn blob_fee(&self) -> U256 {
+        self.blob_fee
+    }
+
+    fn is_gateway(&self) -> bool {
+        // todo: source from a new optional field?
+        false
     }
 }

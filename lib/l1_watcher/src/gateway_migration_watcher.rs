@@ -1,16 +1,12 @@
-use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, ProcessRawEvents, util};
+use crate::watcher::{L1WatcherError, StartResolver};
+use crate::{EventSink, L1WatcherConfig, ProcessRawEvents, util};
 use alloy::primitives::{B256, ChainId, U256};
-use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
 use zksync_os_contract_interface::{Bridgehub, ServerNotifier::MigrateToGateway, ZkChain};
-use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::SystemTxEnvelope;
-
-/// Limit the number of L1 blocks to scan when looking for the migration number block.
-const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
 
 /// Watches for both `MigrateToGateway` and `MigrateFromGateway` events on L1 in a single
 /// polling loop, and submits a `SetSLChainId` system transaction for each.
@@ -25,7 +21,7 @@ pub struct GatewayMigrationWatcher {
     gw_chain_id: ChainId,
     /// New settlement layer chain ID when a `MigrateFromGateway` event fires.
     l1_chain_id: ChainId,
-    sl_chain_id_subpool: SlChainIdSubpool,
+    sink: Box<dyn EventSink<SystemTxEnvelope>>,
     /// The next migration number to be processed.  This is incremented by 1 after every
     /// non-duplicate migration event.
     next_migration_number: u64,
@@ -34,63 +30,58 @@ pub struct GatewayMigrationWatcher {
 impl GatewayMigrationWatcher {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
-        zk_chain: ZkChain<DynProvider>,
-        bridgehub: Bridgehub<DynProvider>,
+        zk_chain: ZkChain<NodeProvider>,
+        bridgehub: Bridgehub<NodeProvider>,
         l2_chain_id: ChainId,
         l1_chain_id: ChainId,
         gw_chain_id: ChainId,
-        next_migration_number: u64,
         config: L1WatcherConfig,
-        sl_chain_id_subpool: SlChainIdSubpool,
-    ) -> anyhow::Result<L1Watcher> {
+        sink: impl EventSink<SystemTxEnvelope>,
+    ) -> anyhow::Result<StartResolver<u64, Self>> {
         let server_notifier_contract = zk_chain.get_server_notifier_address().await?;
-        let chain_asset_handler_address = bridgehub.chain_asset_handler_address().await?;
-
-        let current_l1_block = zk_chain.provider().get_block_number().await?;
-        let next_l1_block = util::find_block_by_migration_number(
-            zk_chain.clone(),
-            chain_asset_handler_address,
-            l2_chain_id,
-            next_migration_number,
-        )
-        .await
-        .or_else(|err| {
-            if current_l1_block > INITIAL_LOOKBEHIND_BLOCKS {
-                anyhow::bail!(
-                    "Binary search failed with {err}. Cannot default starting block to zero \
-                     for a long chain. Current L1 block number: {current_l1_block}. \
-                     Limit: {INITIAL_LOOKBEHIND_BLOCKS}."
-                );
-            } else {
-                Ok(0)
-            }
-        })?;
+        let provider = zk_chain.provider().clone();
 
         tracing::info!(
             contract = %server_notifier_contract,
-            starting_l1_block = next_l1_block,
             l1_chain_id,
             gw_chain_id,
-            "gateway migration watcher starting from migration #{next_migration_number}"
+            "initializing gateway migration watcher"
         );
 
-        let this = Self {
-            l2_chain_id,
-            l1_chain_id,
-            gw_chain_id,
-            sl_chain_id_subpool,
-            // Due to legacy reasons we saved first migration number as 0 when it should have been 1.
-            next_migration_number: next_migration_number.max(1),
+        let resolve_start = move |next_migration_number: u64| async move {
+            let chain_asset_handler_address = bridgehub.chain_asset_handler_address().await?;
+            let next_l1_block = util::find_block_by_migration_number(
+                zk_chain.clone(),
+                chain_asset_handler_address,
+                l2_chain_id,
+                next_migration_number,
+            )
+            .await?;
+
+            tracing::info!(
+                starting_l1_block = next_l1_block,
+                "gateway migration watcher starting from migration #{next_migration_number}"
+            );
+
+            let processor = Self {
+                l2_chain_id,
+                l1_chain_id,
+                gw_chain_id,
+                sink: Box::new(sink),
+                // Due to legacy reasons we saved first migration number as 0 when it should
+                // have been 1.
+                next_migration_number: next_migration_number.max(1),
+            };
+            Ok((next_l1_block, processor))
         };
 
-        L1Watcher::new(
+        StartResolver::new(
             config,
-            zk_chain.provider().clone(),
+            provider,
             server_notifier_contract.into(),
-            next_l1_block,
             None,
             l1_chain_id,
-            Box::new(this),
+            resolve_start,
         )
         .await
     }
@@ -119,7 +110,7 @@ impl ProcessRawEvents for GatewayMigrationWatcher {
 
     async fn process_raw_event(
         &mut self,
-        _provider: &DynProvider,
+        _provider: &NodeProvider,
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let Some(&topic0) = log.topic0() else {
@@ -161,7 +152,7 @@ impl ProcessRawEvents for GatewayMigrationWatcher {
         self.next_migration_number += 1;
 
         let envelope = SystemTxEnvelope::set_sl_chain_id(new_sl_chain_id, migration_number);
-        self.sl_chain_id_subpool.insert(envelope).await;
+        self.sink.push(envelope).await;
         Ok(())
     }
 }

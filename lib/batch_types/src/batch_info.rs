@@ -6,20 +6,21 @@ use serde::{Deserialize, Serialize};
 use std::ops;
 use std::ops::{Deref, DerefMut};
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
-use zksync_os_interface::types::{BlockContext, BlockOutput};
+use zksync_os_merkle_tree_api::TreeBatchOutput;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_types::{
-    L2_TO_L1_TREE_SIZE, L2ToL1Log, ProtocolSemanticVersion, PubdataMode, ZkEnvelope, ZkTransaction,
+    BlockOutput, L2_TO_L1_TREE_SIZE, L2ToL1Log, ProtocolSemanticVersion, PubdataMode, ZkEnvelope,
+    ZkTransaction,
 };
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 
-/// Commitment information about a batch.
+/// Information about a batch produced by the batcher and driven through the pipeline before it is
+/// committed on-chain.
 /// Contains enough data to restore `StoredBatchInfo` that got applied on-chain.
-/// Contains enough data to construct public input hash.
-/// todo: these fields should be a part of `CommitBatchInfo` but needs to be changed on L1 contracts' side first
+/// Contains enough data to construct public input hash (the batch commitment).
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct ExtendedCommitBatchInfo {
+pub struct PendingBatchInfo {
     #[serde(flatten)]
     pub commit_info: CommitBatchInfo,
     /// L1 protocol upgrade transaction that was finalized in this batch. Missing for the vast
@@ -28,21 +29,17 @@ pub struct ExtendedCommitBatchInfo {
     pub protocol_version: ProtocolSemanticVersion,
 }
 
-impl ExtendedCommitBatchInfo {
+impl PendingBatchInfo {
     #[allow(clippy::too_many_arguments)]
     pub fn build(
-        blocks: Vec<(
-            &BlockOutput,
-            &BlockContext,
-            &[ZkTransaction],
-            &zksync_os_merkle_tree::TreeBatchOutput,
-        )>,
+        blocks: Vec<(&BlockOutput, &[ZkTransaction], &TreeBatchOutput)>,
         chain_id: u64,
         batch_number: u64,
         pubdata_mode: PubdataMode,
         sl_chain_id: u64,
         multichain_root: B256,
         protocol_version: &ProtocolSemanticVersion,
+        last_256_block_hashes: &[U256; 256],
     ) -> (Self, Option<BlobTransactionSidecar>) {
         let mut priority_operations_hash = keccak256([]);
         let mut number_of_layer1_txs = 0;
@@ -50,14 +47,14 @@ impl ExtendedCommitBatchInfo {
         let mut total_pubdata = vec![];
         let mut encoded_l2_l1_logs = vec![];
 
-        let (first_block_output, _, _, _) = *blocks.first().unwrap();
-        let (last_block_output, last_block_context, _, last_block_tree) = *blocks.last().unwrap();
+        let (first_block_output, _, _) = *blocks.first().unwrap();
+        let (last_block_output, _, last_block_tree) = *blocks.last().unwrap();
 
         let mut upgrade_tx_hash = None;
 
         let mut dependency_roots_rolling_hash = B256::ZERO;
 
-        for (block_output, _, transactions, _) in blocks {
+        for (block_output, transactions, _) in blocks {
             total_pubdata.extend(block_output.pubdata.clone());
 
             for tx in transactions {
@@ -118,7 +115,7 @@ impl ExtendedCommitBatchInfo {
 
         let last_256_block_hashes_blake = {
             let mut blocks_hasher = Blake2s256::new();
-            for block_hash in &last_block_context.block_hashes.0[1..] {
+            for block_hash in &last_256_block_hashes[1..] {
                 blocks_hasher.update(block_hash.to_be_bytes::<32>());
             }
             blocks_hasher.update(last_block_output.header.hash());
@@ -127,11 +124,7 @@ impl ExtendedCommitBatchInfo {
         };
 
         /* ---------- operator DA input ---------- */
-        let da_fields = calculate_da_fields(
-            &total_pubdata,
-            pubdata_mode,
-            last_block_context.execution_version,
-        );
+        let da_fields = calculate_da_fields(&total_pubdata, pubdata_mode);
 
         /* ---------- new state commitment ---------- */
         // FIXME: extract to a type common batch types?
@@ -186,8 +179,8 @@ impl ExtendedCommitBatchInfo {
         )
     }
 
-    /// Calculate keccak256 hash of BatchOutput part of public input
-    pub fn public_input_hash(&self) -> B256 {
+    /// Calculate keccak256 hash of BatchOutput part of public input (the batch commitment).
+    fn public_input_hash(&self) -> B256 {
         let commit_info = &self.commit_info;
         let upgrade_tx_hash = self.upgrade_tx_hash.unwrap_or(B256::ZERO);
         match self.protocol_version.minor {
@@ -229,8 +222,46 @@ impl ExtendedCommitBatchInfo {
         }
     }
 
-    pub fn into_stored(self) -> StoredBatchInfo {
+    /// Computes the batch commitment and turns this into its committed form.
+    pub fn into_committed(self) -> CommittedBatchInfo {
         let commitment = self.public_input_hash();
+        CommittedBatchInfo {
+            commit_info: self.commit_info,
+            commitment,
+        }
+    }
+
+    pub fn into_stored(self) -> StoredBatchInfo {
+        self.into_committed().into_stored()
+    }
+}
+
+impl Deref for PendingBatchInfo {
+    type Target = CommitBatchInfo;
+
+    fn deref(&self) -> &Self::Target {
+        &self.commit_info
+    }
+}
+
+impl DerefMut for PendingBatchInfo {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.commit_info
+    }
+}
+
+/// Information about a batch that has already been committed on-chain, as discovered from L1.
+/// Carries the batch `commitment` directly (e.g. read from the `BlockCommit` event) instead of
+/// the data required to recompute it.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct CommittedBatchInfo {
+    #[serde(flatten)]
+    pub commit_info: CommitBatchInfo,
+    pub commitment: B256,
+}
+
+impl CommittedBatchInfo {
+    pub fn into_stored(self) -> StoredBatchInfo {
         let commit_info = self.commit_info;
         StoredBatchInfo {
             batch_number: commit_info.batch_number,
@@ -239,24 +270,10 @@ impl ExtendedCommitBatchInfo {
             priority_operations_hash: commit_info.priority_operations_hash,
             dependency_roots_rolling_hash: commit_info.dependency_roots_rolling_hash,
             l2_to_l1_logs_root_hash: commit_info.l2_to_l1_logs_root_hash,
-            commitment,
+            commitment: self.commitment,
             // unused
             last_block_timestamp: Some(0),
         }
-    }
-}
-
-impl Deref for ExtendedCommitBatchInfo {
-    type Target = CommitBatchInfo;
-
-    fn deref(&self) -> &Self::Target {
-        &self.commit_info
-    }
-}
-
-impl DerefMut for ExtendedCommitBatchInfo {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.commit_info
     }
 }
 
@@ -266,63 +283,57 @@ struct DAFields {
     pub blob_sidecar: Option<BlobTransactionSidecar>,
 }
 
-fn calculate_da_fields(
-    pubdata: &[u8],
-    pubdata_mode: PubdataMode,
-    batch_execution_version: u32,
-) -> DAFields {
-    let (da_commitment, operator_da_input, blob_sidecar) =
-        match (pubdata_mode, batch_execution_version) {
-            (PubdataMode::Calldata | PubdataMode::RelayedL2Calldata, _)
-            | (PubdataMode::Validium, 4) => {
-                let mut operator_da_input = Vec::with_capacity(32 * 3 + 1 + pubdata.len() + 1 + 32);
+fn calculate_da_fields(pubdata: &[u8], pubdata_mode: PubdataMode) -> DAFields {
+    let (da_commitment, operator_da_input, blob_sidecar) = match pubdata_mode {
+        PubdataMode::Calldata | PubdataMode::RelayedL2Calldata => {
+            let mut operator_da_input = Vec::with_capacity(32 * 3 + 1 + pubdata.len() + 1 + 32);
 
-                // reference for this header is taken from zk_ee: https://github.com/matter-labs/zk_ee/blob/ad-aggregation-program/aggregator/src/aggregation/da_commitment.rs#L27
-                // consider reusing that code instead:
-                //
-                // hasher.update([0u8; 32]); // we don't have to validate state diffs hash
-                // hasher.update(Keccak256::digest(&pubdata)); // full pubdata keccak
-                // hasher.update([1u8]); // with calldata we should provide 1 blob
-                // hasher.update([0u8; 32]); // its hash will be ignored on the settlement layer
-                // Ok(hasher.finalize().into())
+            // reference for this header is taken from zk_ee: https://github.com/matter-labs/zk_ee/blob/ad-aggregation-program/aggregator/src/aggregation/da_commitment.rs#L27
+            // consider reusing that code instead:
+            //
+            // hasher.update([0u8; 32]); // we don't have to validate state diffs hash
+            // hasher.update(Keccak256::digest(&pubdata)); // full pubdata keccak
+            // hasher.update([1u8]); // with calldata we should provide 1 blob
+            // hasher.update([0u8; 32]); // its hash will be ignored on the settlement layer
+            // Ok(hasher.finalize().into())
 
-                operator_da_input.extend(B256::ZERO.as_slice());
-                operator_da_input.extend(keccak256(pubdata));
-                operator_da_input.push(1);
-                operator_da_input.extend(B256::ZERO.as_slice());
+            operator_da_input.extend(B256::ZERO.as_slice());
+            operator_da_input.extend(keccak256(pubdata));
+            operator_da_input.push(1);
+            operator_da_input.extend(B256::ZERO.as_slice());
 
-                //     bytes32 daCommitment; - we compute hash of the first part of the operator_da_input (see above)
-                let da_commitment = keccak256(&operator_da_input);
+            //     bytes32 daCommitment; - we compute hash of the first part of the operator_da_input (see above)
+            let da_commitment = keccak256(&operator_da_input);
 
-                operator_da_input.extend([PUBDATA_SOURCE_CALLDATA]);
-                operator_da_input.extend(pubdata);
-                // blob_commitment should be set to zero in ZK OS
-                operator_da_input.extend(B256::ZERO.as_slice());
+            operator_da_input.extend([PUBDATA_SOURCE_CALLDATA]);
+            operator_da_input.extend(pubdata);
+            // blob_commitment should be set to zero in ZK OS
+            operator_da_input.extend(B256::ZERO.as_slice());
 
-                if pubdata_mode == PubdataMode::Validium {
-                    operator_da_input = U256::ZERO.to_be_bytes_vec();
-                }
-
-                (da_commitment, operator_da_input, None)
+            if pubdata_mode == PubdataMode::Validium {
+                operator_da_input = U256::ZERO.to_be_bytes_vec();
             }
-            (PubdataMode::Validium, _) => (B256::ZERO, vec![0u8; 32], None),
-            (PubdataMode::Blobs, _) => {
-                // returns error in case of internal error during sidecar calculation
-                let blob_sidecar: BlobTransactionSidecar =
-                    SidecarBuilder::<SimpleCoder>::from_slice(pubdata)
-                        .build()
-                        .unwrap();
-                let versioned_hashes: Vec<u8> = blob_sidecar
-                    .versioned_hashes()
-                    .flat_map(|hash| hash.0.to_vec())
-                    .collect();
-                let da_commitment = keccak256(&versioned_hashes);
 
-                // we place zeroes into da input to publish blobs with commit transaction
-                let operator_da_input = vec![0u8; versioned_hashes.len()];
-                (da_commitment, operator_da_input, Some(blob_sidecar))
-            }
-        };
+            (da_commitment, operator_da_input, None)
+        }
+        PubdataMode::Validium => (B256::ZERO, vec![0u8; 32], None),
+        PubdataMode::Blobs => {
+            // returns error in case of internal error during sidecar calculation
+            let blob_sidecar: BlobTransactionSidecar =
+                SidecarBuilder::<SimpleCoder>::from_slice(pubdata)
+                    .build()
+                    .unwrap();
+            let versioned_hashes: Vec<u8> = blob_sidecar
+                .versioned_hashes()
+                .flat_map(|hash| hash.0.to_vec())
+                .collect();
+            let da_commitment = keccak256(&versioned_hashes);
+
+            // we place zeroes into da input to publish blobs with commit transaction
+            let operator_da_input = vec![0u8; versioned_hashes.len()];
+            (da_commitment, operator_da_input, Some(blob_sidecar))
+        }
+    };
     DAFields {
         da_commitment,
         operator_da_input,

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig};
+use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig, TokioConfig};
 use smart_config::{ConfigRepository, ConfigSources, Environment};
 use std::sync::mpsc;
 use std::{path::Path, path::PathBuf, str::FromStr, time::Duration};
@@ -11,8 +11,8 @@ use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
-    Config, ConfigArgs, ConfigValidate, PrometheusConfig, ProofStorageConfig, RebuildBlocksConfig,
-    StateBackendConfig, build_external_config, load_config_file_sources,
+    Config, ConfigArgs, ConfigValidate, PrometheusConfig, ProofStorageConfig, RebuildBounds,
+    RebuildConfig, StateBackendConfig, build_external_config, load_config_file_sources,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -27,7 +27,9 @@ const IMMEDIATE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// Push interval for push exporter (almost all metrics are pull)
 /// We don't have to report it frequently, because final push is guaranteed.
-const PROMETHEUS_PUSH_INTERVAL: Duration = Duration::from_secs(60);
+/// However, setting this to 60s or more,
+/// will cause a lot of reconnection log spam, due to our infra setup
+const PROMETHEUS_PUSH_INTERVAL: Duration = Duration::from_secs(30);
 /// Push exporter graceful shutdown timeout, the shutdown is nearly instant
 /// We need a graceful shutdown because push metrics can be used for alerts
 const PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -100,9 +102,11 @@ pub async fn main() {
         .install_default()
         .expect("failed to install rustls ring crypto provider");
 
-    let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
-        .build()
-        .expect("failed to build runtime");
+    let runtime = RuntimeBuilder::new(
+        RuntimeConfig::default().with_tokio(TokioConfig::existing_handle(Handle::current())),
+    )
+    .build()
+    .expect("failed to build runtime");
 
     let opt = Cli::parse();
 
@@ -313,7 +317,6 @@ fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
         path = %tempdir_path.display(),
         "Ephemeral mode enabled. Using temporary directory for RocksDB and proof storage"
     );
-
     // Update config to use temporary directory
     config.general_config.rocks_db_path = tempdir_path.join("node");
     config.prover_api_config.proof_storage = ProofStorageConfig {
@@ -356,17 +359,23 @@ fn load_internal_config(config: &mut Config) {
         .l2_signer_blacklist
         .extend(internal_config.l2_signer_blacklist);
     if let Some(failing_block) = internal_config.failing_block {
-        if config.sequencer_config.block_rebuild.is_some() {
+        if config.sequencer_config.rebuild.is_some() {
             panic!(
                 "External config specifies block rebuild: {:?} and internal config specifies failing block: {}. \
                  Please remove one of these settings to avoid conflicts.",
-                config.sequencer_config.block_rebuild, failing_block
+                config.sequencer_config.rebuild, failing_block
             );
         } else {
-            config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
-                from_block: failing_block,
-                blocks_to_empty: vec![failing_block],
-                reset_timestamps: false,
+            config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
+                bounds: RebuildBounds {
+                    from_block_number: failing_block,
+                    from_block_hash: internal_config.failing_block_hash.expect(
+                        "internal_config.json has `failing_block` but no `failing_block_hash`; \
+                         clear `failing_block` manually if the rebuild already ran",
+                    ),
+                    blocks_to_empty: vec![failing_block],
+                    reset_timestamps: false,
+                },
             });
         }
     }

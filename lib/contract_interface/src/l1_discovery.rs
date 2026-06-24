@@ -4,13 +4,15 @@ use crate::settlement_layer_intervals::SettlementLayerIntervals;
 use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256, address};
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::Provider;
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
 use std::fmt::Debug;
 use std::time::Duration;
+use zksync_os_provider::NodeProvider;
 
-const L2_BRIDGEHUB_ADDRESS: Address = address!("0x0000000000000000000000000000000000010002");
+/// Standard L2 bridgehub address — present at the same well-known address on every Gateway.
+pub const L2_BRIDGEHUB_ADDRESS: Address = address!("0x0000000000000000000000000000000000010002");
 
 #[derive(Clone, Debug)]
 pub struct BatchVerificationSLConfig {
@@ -26,10 +28,10 @@ pub enum BatchVerificationSL {
 
 #[derive(Clone, Debug)]
 pub struct L1State {
-    pub bridgehub_l1: Bridgehub<DynProvider>,
-    pub bridgehub_sl: Bridgehub<DynProvider>,
-    pub diamond_proxy_l1: ZkChain<DynProvider>,
-    pub diamond_proxy_sl: ZkChain<DynProvider>,
+    pub bridgehub_l1: Bridgehub<NodeProvider>,
+    pub bridgehub_sl: Bridgehub<NodeProvider>,
+    pub diamond_proxy_l1: ZkChain<NodeProvider>,
+    pub diamond_proxy_sl: ZkChain<NodeProvider>,
     pub validator_timelock_sl: Address,
     pub batch_verification: BatchVerificationSL,
     pub last_committed_batch: u64,
@@ -59,21 +61,54 @@ struct BatchFinality {
 }
 
 impl L1State {
+    /// Resolves the L1 diamond proxy for this chain via the L1 Bridgehub, without fetching any
+    /// batch-finality state.
+    ///
+    /// Startup uses this to initialize genesis and the repository manager *before* the startup L1
+    /// revert (the revert's `from_block_hash` guard reads the current local block hash via the
+    /// repository manager). The full [`L1State`] — including the batch-finality numbers
+    /// (`last_committed_batch`, ...) that a revert invalidates — is fetched only after the revert
+    /// decision point, so no stale batch-finality data can reach the components initialized here.
+    pub async fn resolve_diamond_proxy_l1(
+        l1_provider: NodeProvider,
+        bridgehub_address_l1: Address,
+        l2_chain_id: u64,
+    ) -> anyhow::Result<ZkChain<NodeProvider>> {
+        let (_, diamond_proxy_l1) =
+            Self::resolve_l1_bridgehub_and_proxy(l1_provider, bridgehub_address_l1, l2_chain_id)
+                .await?;
+        Ok(diamond_proxy_l1)
+    }
+
+    /// Builds the L1 Bridgehub handle and resolves the chain's L1 diamond proxy through it.
+    async fn resolve_l1_bridgehub_and_proxy(
+        l1_provider: NodeProvider,
+        bridgehub_address_l1: Address,
+        l2_chain_id: u64,
+    ) -> anyhow::Result<(Bridgehub<NodeProvider>, ZkChain<NodeProvider>)> {
+        let bridgehub_l1 = Bridgehub::new(bridgehub_address_l1, l1_provider, l2_chain_id);
+        let diamond_proxy_l1 = bridgehub_l1.zk_chain().await?;
+        Ok((bridgehub_l1, diamond_proxy_l1))
+    }
+
     /// Fetches L1 ecosystem contracts along with batch finality status as of latest block.
     ///
-    /// `gateway_provider` must be `Some` when the chain is settling on the Gateway and `None`
-    /// when settling on L1. An error is returned if the chain is found to be on the Gateway but
-    /// no provider was supplied.
+    /// `gateway_provider` must be `Some` when the chain is currently settling on the Gateway
+    /// (an error is returned if missing). It may also be passed when the chain is currently
+    /// settling on L1 but has historical Gateway intervals — in that case the Gateway diamond
+    /// proxy is resolved from it so historical batches committed on the Gateway can still be
+    /// looked up via [`SettlementLayerIntervals::resolve_proxy`].
     pub async fn fetch(
-        l1_provider: DynProvider,
-        gateway_provider: Option<DynProvider>,
+        l1_provider: NodeProvider,
+        gateway_provider: Option<NodeProvider>,
         bridgehub_address_l1: Address,
         l2_chain_id: u64,
     ) -> anyhow::Result<Self> {
         let l1_chain_id = l1_provider.get_chain_id().await?;
 
-        let bridgehub_l1 = Bridgehub::new(bridgehub_address_l1, l1_provider, l2_chain_id);
-        let diamond_proxy_l1 = bridgehub_l1.zk_chain().await?;
+        let (bridgehub_l1, diamond_proxy_l1) =
+            Self::resolve_l1_bridgehub_and_proxy(l1_provider, bridgehub_address_l1, l2_chain_id)
+                .await?;
 
         // Call ZKChainStorage::getSettlementLayer() on the L1 diamond proxy to determine whether
         // this chain is currently settling on L1 or on the Gateway.
@@ -87,7 +122,7 @@ impl L1State {
             (l1_chain_id, bridgehub_l1.clone())
         } else {
             // Settling on Gateway: require a dedicated Gateway RPC provider.
-            let gateway_provider = gateway_provider.with_context(|| {
+            let gateway_provider = gateway_provider.as_ref().with_context(|| {
                 format!(
                     "chain is settling on Gateway (settlement layer: {settlement_layer_address}) \
                      but no gateway RPC URL is configured"
@@ -98,7 +133,8 @@ impl L1State {
                 sl_chain_id != l1_chain_id,
                 "settling on Gateway but SL chain ID is identical to L1 chain ID"
             );
-            let bridgehub_sl = Bridgehub::new(L2_BRIDGEHUB_ADDRESS, gateway_provider, l2_chain_id);
+            let bridgehub_sl =
+                Bridgehub::new(L2_BRIDGEHUB_ADDRESS, gateway_provider.clone(), l2_chain_id);
             (sl_chain_id, bridgehub_sl)
         };
 
@@ -153,21 +189,17 @@ impl L1State {
         };
 
         let chain_asset_handler = bridgehub_l1.chain_asset_handler_address().await?;
-        let diamond_proxy_gw = if sl_chain_id == l1_chain_id {
-            None
-        } else {
-            Some((sl_chain_id, diamond_proxy_sl.clone()))
-        };
         let settlement_layer_intervals = SettlementLayerIntervals::discover(
             chain_asset_handler,
             diamond_proxy_l1.clone(),
-            diamond_proxy_gw,
+            gateway_provider,
             l2_chain_id,
         )
         .await?;
         tracing::info!(
-            "discovered {} settlement layer intervals",
-            settlement_layer_intervals.intervals().len()
+            "discovered {} settlement layer intervals: {:?}",
+            settlement_layer_intervals.intervals().len(),
+            settlement_layer_intervals.intervals(),
         );
 
         Ok(Self {
@@ -192,8 +224,8 @@ impl L1State {
     }
 
     async fn validate_chain_ids(
-        bridgehub_l1: &Bridgehub<DynProvider>,
-        bridgehub_sl: &Bridgehub<DynProvider>,
+        bridgehub_l1: &Bridgehub<NodeProvider>,
+        bridgehub_sl: &Bridgehub<NodeProvider>,
         l2_chain_id: u64,
     ) -> anyhow::Result<()> {
         let all_chain_ids_l1 = bridgehub_l1.get_all_zk_chain_chain_ids().await?;
@@ -223,8 +255,8 @@ impl L1State {
     /// NOTE: This should only be called on the main node as ENs will observe pending changes that
     /// are being submitted by the main node.
     pub async fn fetch_finalized(
-        l1_provider: DynProvider,
-        gateway_provider: Option<DynProvider>,
+        l1_provider: NodeProvider,
+        gateway_provider: Option<NodeProvider>,
         bridgehub_address: Address,
         chain_id: u64,
     ) -> anyhow::Result<Self> {
@@ -263,8 +295,29 @@ impl L1State {
         })
     }
 
+    /// Fetch L1 state, optionally waiting for all pending L1 transactions to finalize first.
+    pub async fn fetch_with_finality(
+        use_finalized: bool,
+        l1_provider: NodeProvider,
+        gateway_provider: Option<NodeProvider>,
+        bridgehub_address: Address,
+        chain_id: u64,
+    ) -> anyhow::Result<Self> {
+        if use_finalized {
+            Self::fetch_finalized(l1_provider, gateway_provider, bridgehub_address, chain_id).await
+        } else {
+            Self::fetch(l1_provider, gateway_provider, bridgehub_address, chain_id).await
+        }
+    }
+
     pub fn diamond_proxy_address_sl(&self) -> Address {
         *self.diamond_proxy_sl.address()
+    }
+
+    /// `true` when the chain is currently committing batches to a Gateway, derived from the
+    /// settlement layer interval discovered at startup.
+    pub fn settles_on_gateway(&self) -> bool {
+        self.settlement_layer_intervals.settles_on_gateway()
     }
 
     pub fn report_metrics(&self) {
@@ -285,7 +338,7 @@ impl L1State {
 }
 
 async fn fetch_finalized_executed_batch(
-    zk_chain_sl: &ZkChain<DynProvider>,
+    zk_chain_sl: &ZkChain<NodeProvider>,
 ) -> anyhow::Result<(u64, u64)> {
     let finalized_sl_block_number = zk_chain_sl
         .provider()
@@ -310,7 +363,7 @@ async fn fetch_finalized_executed_batch(
 
 /// Waits until the pending SL state matches the latest finalized SL block.
 async fn wait_to_finalize<T: Debug + PartialEq, Fut: Future<Output = crate::Result<T>>>(
-    provider: &DynProvider,
+    provider: &NodeProvider,
     f: impl Fn(BlockId) -> Fut,
 ) -> anyhow::Result<(u64, T)> {
     /// Ethereum blocks are mined every ~12 seconds on average, but we wait in 1-second intervals

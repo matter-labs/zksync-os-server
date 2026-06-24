@@ -4,8 +4,8 @@ use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::Stream;
 use reth_chainspec::ChainSpecProvider;
+use reth_ethereum_primitives::Block as EthBlock;
 use reth_evm_ethereum::EthEvmConfig;
-use reth_primitives::Block as EthBlock;
 use reth_primitives_traits::transaction::error::InvalidTransactionError;
 use reth_transaction_pool::blobstore::NoopBlobStore;
 use reth_transaction_pool::error::InvalidPoolTransactionError;
@@ -128,7 +128,7 @@ impl L2TransactionsStreamMarker {
         // Reth provides `TxTypeNotSupported` and we do the same just in case.
         inner.txs.mark_invalid(
             &tx,
-            &InvalidPoolTransactionError::Consensus(InvalidTransactionError::TxTypeNotSupported),
+            InvalidPoolTransactionError::Consensus(InvalidTransactionError::TxTypeNotSupported),
         );
     }
 }

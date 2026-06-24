@@ -25,7 +25,7 @@ where
     pub consensus: Consensus,
     /// Channel to send new canonized blocks to for the node to replay.
     /// They are sent to `NodeCommandSource` and then through the whole pipeline.
-    pub canonized_blocks_for_execution: mpsc::Sender<ReplayRecord>,
+    pub canonized_blocks_for_execution: mpsc::UnboundedSender<ReplayRecord>,
 }
 
 #[async_trait]
@@ -110,6 +110,7 @@ where
                         output: block_output,
                         record: produced_replay,
                         command_type: cmd_type,
+                        failed_transactions,
                     }) = produced_queue.pop_front()
                     {
                         tracing::info!(
@@ -133,6 +134,7 @@ where
                                     output: block_output,
                                     record: produced_replay,
                                     command_type: cmd_type,
+                                    failed_transactions,
                                 },
                                 &state_reporter,
                             )?;
@@ -144,7 +146,7 @@ where
                             record.block_output_hash,
                         );
 
-                        self.canonized_blocks_for_execution.send(record).await?;
+                        self.canonized_blocks_for_execution.send(record)?;
                     }
                 }
                 // Select arm that receives executed blocks from `BlockExecutor` (upstream).
@@ -154,6 +156,7 @@ where
                         output: block_output,
                         record: replay_record,
                         command_type: cmd_type,
+                        failed_transactions,
                     }) = maybe_executed
                     else {
                         tracing::info!("inbound channel closed");
@@ -179,6 +182,7 @@ where
                                     output: block_output,
                                     record: replay_record,
                                     command_type: cmd_type,
+                                    failed_transactions,
                                 },
                                 &state_reporter,
                             )?;
@@ -199,6 +203,7 @@ where
                                 output: block_output,
                                 record: replay_record,
                                 command_type: cmd_type,
+                                failed_transactions,
                             });
                         }
                     }

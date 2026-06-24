@@ -5,14 +5,10 @@ use alloy::primitives::{B256, BlockNumber};
 use anyhow::bail;
 use zksync_os_interface::types::StorageWrite;
 
-use crate::state_override_view::OverrideProvider;
+use crate::state_override_view::{OverrideProvider, OwnedOverrides};
 use crate::{OverriddenStateView, ReadStateHistory, ViewState};
 
-#[derive(Debug, Clone)]
-pub struct BlockOverlay {
-    pub storage_writes: HashMap<B256, B256>,
-    pub preimages: HashMap<B256, Vec<u8>>,
-}
+pub(crate) type BlockOverlay = OwnedOverrides;
 
 #[derive(Debug, Default, Clone)]
 pub struct OverlayBuffer {
@@ -111,13 +107,8 @@ impl OverlayBuffer {
             1,
             "Arc refcount > 1 during mutation - this would cause expensive clone!"
         );
-        Arc::make_mut(&mut self.overlays).insert(
-            block_number,
-            BlockOverlay {
-                storage_writes: storage_map,
-                preimages: preimage_map,
-            },
-        );
+        Arc::make_mut(&mut self.overlays)
+            .insert(block_number, BlockOverlay::new(storage_map, preimage_map));
         Ok(())
     }
 
@@ -143,12 +134,11 @@ impl OverlayBuffer {
     }
 }
 
-/// Implement OverrideProvider directly on Arc<BTreeMap<BlockNumber, BlockOverlay>>.
-/// Searches through overlays in reverse order (most recent first) with O(1) HashMap lookups per block
+/// Searches through overlays in reverse order (most recent first) with O(1) HashMap lookups per block.
 impl OverrideProvider for Arc<BTreeMap<BlockNumber, BlockOverlay>> {
     fn get_storage_override(&self, key: &B256) -> Option<B256> {
         for (_, overlay) in self.iter().rev() {
-            if let Some(&value) = overlay.storage_writes.get(key) {
+            if let Some(value) = overlay.get_storage_override(key) {
                 return Some(value);
             }
         }
@@ -157,8 +147,8 @@ impl OverrideProvider for Arc<BTreeMap<BlockNumber, BlockOverlay>> {
 
     fn get_preimage_override(&self, hash: &B256) -> Option<Vec<u8>> {
         for (_, overlay) in self.iter().rev() {
-            if let Some(bytes) = overlay.preimages.get(hash) {
-                return Some(bytes.clone());
+            if let Some(bytes) = overlay.get_preimage_override(hash) {
+                return Some(bytes);
             }
         }
         None

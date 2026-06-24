@@ -9,4 +9,4 @@ pub use block_merkle_tree_data::BlockMerkleTreeData;
 mod batch_info;
 pub mod batcher_model;
 
-pub use batch_info::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
+pub use batch_info::{CommittedBatchInfo, DiscoveredCommittedBatch, PendingBatchInfo};
