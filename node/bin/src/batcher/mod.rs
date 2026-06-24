@@ -193,10 +193,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             );
 
             if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone() {
-                self.sidecar_sender
-                    .send(sidecar)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
+                let _ = self.sidecar_sender.send(sidecar).await;
             }
             output.send_and_record(batch_envelope, &state_reporter)?;
         }

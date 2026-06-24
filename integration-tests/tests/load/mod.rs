@@ -1,5 +1,5 @@
 use alloy::network::{EthereumWallet, ReceiptResponse, TransactionBuilder, TxSigner};
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{Address, U128, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
@@ -11,7 +11,8 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use zksync_os_integration_tests::assert_traits::ReceiptsAssert;
-use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
+use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
+use zksync_os_server::config::FeeConfig;
 
 #[test_multisetup([CURRENT_TO_L1])]
 async fn transfers(tester: Tester) -> anyhow::Result<()> {
@@ -75,18 +76,28 @@ fn env_or<T: FromStr>(key: &str, default: T) -> T {
 /// releases its permit on confirmation, which both bounds memory and applies backpressure.
 ///
 /// Tunable via environment variables (defaults keep it CI-friendly):
-/// - `LOAD_TEST_DURATION_SECS` (default 5): length of the timed submission window.
-/// - `LOAD_TEST_WALLETS` (default 16): number of parallel sender wallets.
-/// - `LOAD_TEST_CONCURRENCY` (default 256): global cap on in-flight (sent-but-unconfirmed) txs.
+/// - `LOAD_TEST_DURATION_SECS` (default 60): length of the timed submission window.
+/// - `LOAD_TEST_WALLETS` (default 64): number of parallel sender wallets.
+/// - `LOAD_TEST_CONCURRENCY` (default 8192): global cap on in-flight (sent-but-unconfirmed) txs.
 ///
 /// This is a measurement, not a threshold gate: it logs the result and only fails if a transaction
 /// errors or reverts.
 #[test_multisetup([CURRENT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
-async fn effective_tps(tester: Tester) -> anyhow::Result<()> {
-    let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 5));
-    let num_wallets: usize = env_or("LOAD_TEST_WALLETS", 16);
-    let concurrency: usize = env_or("LOAD_TEST_CONCURRENCY", 256);
+async fn effective_tps(env: TestEnvironment) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    config.prover_input_generator_config.enable_input_generation = false;
+    config.fee_config = FeeConfig {
+        base_fee_override: Some(U128::from(0)),
+        pubdata_price_override: Some(U128::from(0)),
+        ..Default::default()
+    };
+    config.mempool_config.minimal_protocol_basefee = 0;
+    let tester = env.launch(config).await?;
+
+    let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
+    let num_wallets: usize = env_or("LOAD_TEST_WALLETS", 64);
+    let concurrency: usize = env_or("LOAD_TEST_CONCURRENCY", 8192);
     assert!(num_wallets > 0, "LOAD_TEST_WALLETS must be > 0");
     assert!(concurrency > 0, "LOAD_TEST_CONCURRENCY must be > 0");
 
@@ -155,11 +166,7 @@ async fn effective_tps(tester: Tester) -> anyhow::Result<()> {
             let mut receipts = JoinSet::new();
             while Instant::now() < deadline {
                 // Acquiring a permit blocks once `concurrency` txs are in flight — backpressure.
-                let permit = sem
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .expect("semaphore closed");
+                let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
                 let tx = build_transfer(recipient, gas_price);
                 let sent_at = Instant::now();
                 let pending = provider.send_transaction(tx).await?;
@@ -168,7 +175,10 @@ async fn effective_tps(tester: Tester) -> anyhow::Result<()> {
                 let confirmed = confirmed.clone();
                 let latency_micros = latency_micros.clone();
                 receipts.spawn(async move {
-                    let receipt = pending.with_timeout(Some(RECEIPT_TIMEOUT)).get_receipt().await?;
+                    let receipt = pending
+                        .with_timeout(Some(RECEIPT_TIMEOUT))
+                        .get_receipt()
+                        .await?;
                     // Release the in-flight slot only once the tx is confirmed.
                     drop(permit);
                     anyhow::ensure!(
