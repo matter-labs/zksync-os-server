@@ -20,6 +20,7 @@ mod simulate;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
 pub mod js_tracer;
+mod imt;
 mod log_proof_utils;
 mod monitoring_middleware;
 mod net_impl;
