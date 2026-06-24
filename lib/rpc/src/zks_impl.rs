@@ -1,4 +1,6 @@
-use crate::imt::{ImtLeaf as EngineImtLeaf, IndexedMerkleTree};
+use crate::imt::{
+    calculate_root, indexed_leaf_hash, ImtLeaf as EngineImtLeaf, IndexedMerkleTree,
+};
 use crate::log_proof_utils::{batch_tree_proof, chain_proof_vector, get_chain_log_proof};
 use crate::result::ToRpcResult;
 use crate::{EthCallHandler, ReadRpcStorage};
@@ -406,19 +408,8 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             .map_err(|err| ZksError::Batch(anyhow::anyhow!(err)))
     }
 
-    /// Reconstruct the IMT inclusion proof for the leaf holding `commit_value` against the
-    /// commitment tree as of `block_number`.
-    ///
-    /// Reads the index-ordered leaf set via `leafCount()` / `leafAt(i)` at the historical block,
-    /// rebuilds the tree with the off-chain engine (bit-for-bit identical to the on-chain
-    /// `IndexedMerkleTreeLib`), and returns the leaf, its index, and its 32-sibling Merkle path.
-    fn get_imt_inclusion_proof_impl(
-        &self,
-        commit_value: U256,
-        block_number: u64,
-    ) -> ZksResult<Option<ImtInclusionProof>> {
-        let block = BlockId::from(block_number);
-
+    /// Read the index-ordered commitment-tree leaf set as of `block` via `leafCount()` / `leafAt(i)`.
+    fn read_commitment_tree(&self, block: BlockId) -> ZksResult<IndexedMerkleTree> {
         let count_bytes = self.call_commitment_tree(
             IL2InteropCommitmentTree::leafCountCall {}.abi_encode().into(),
             block,
@@ -443,22 +434,59 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
                 next_value: leaf.nextValue,
             });
         }
+        Ok(IndexedMerkleTree::new(leaves))
+    }
 
-        let tree = IndexedMerkleTree::new(leaves);
+    /// Index of the low-nullifier leaf for `value` (the predecessor used when inserting `value`)
+    /// against the commitment tree as of `block_number`. `None` if no such leaf exists.
+    fn get_imt_low_nullifier_index_impl(
+        &self,
+        value: U256,
+        block_number: u64,
+    ) -> ZksResult<Option<u64>> {
+        let tree = self.read_commitment_tree(BlockId::from(block_number))?;
+        Ok(tree.find_low_nullifier_index(value))
+    }
+
+    /// Reconstruct the IMT inclusion proof for the leaf holding `commit_value` against the
+    /// commitment tree as of `block_number`.
+    ///
+    /// Reads the index-ordered leaf set via `leafCount()` / `leafAt(i)` at the historical block,
+    /// rebuilds the tree with the off-chain engine (bit-for-bit identical to the on-chain
+    /// `IndexedMerkleTreeLib`), and returns the leaf, its index, and its 32-sibling Merkle path.
+    fn get_imt_inclusion_proof_impl(
+        &self,
+        commit_value: U256,
+        block_number: u64,
+    ) -> ZksResult<Option<ImtInclusionProof>> {
+        let tree = self.read_commitment_tree(BlockId::from(block_number))?;
         let Some(leaf_index) = tree.find_value_index(commit_value) else {
             return Ok(None);
         };
         let leaf = tree.leaves()[leaf_index as usize];
+        let root = tree.root();
+        let path = tree.merkle_path(leaf_index);
+
+        // Self-verify the produced path against the root (same walk the on-chain `verifyInclusion`
+        // performs) so an engine bug surfaces here instead of as an on-chain `executeAtomicBundle`
+        // revert. A mismatch is an internal error, not a "leaf absent" (None) result.
+        let recomputed = calculate_root(&path, leaf_index, indexed_leaf_hash(&leaf));
+        if recomputed != root {
+            return Err(ZksError::Batch(anyhow::anyhow!(
+                "IMT inclusion proof failed self-verification for commit value {commit_value} at \
+                 leaf {leaf_index}: recomputed root {recomputed} != tree root {root}"
+            )));
+        }
 
         Ok(Some(ImtInclusionProof {
-            chain_imt_root: tree.root(),
+            chain_imt_root: root,
             leaf: ImtLeaf {
                 value: leaf.value,
                 next_index: leaf.next_index,
                 next_value: leaf.next_value,
             },
             imt_leaf_index: leaf_index,
-            imt_proof: tree.merkle_path(leaf_index),
+            imt_proof: path,
         }))
     }
 }
@@ -513,6 +541,15 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
         block_number: u64,
     ) -> RpcResult<Option<ImtInclusionProof>> {
         self.get_imt_inclusion_proof_impl(commit_value, block_number)
+            .to_rpc_result()
+    }
+
+    async fn get_imt_low_nullifier_index(
+        &self,
+        value: U256,
+        block_number: u64,
+    ) -> RpcResult<Option<u64>> {
+        self.get_imt_low_nullifier_index_impl(value, block_number)
             .to_rpc_result()
     }
 }

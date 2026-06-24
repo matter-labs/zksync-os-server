@@ -40,6 +40,18 @@ pub trait ZksApi {
         block_number: u64,
     ) -> RpcResult<Option<ImtInclusionProof>>;
 
+    /// Returns the index of the low-nullifier leaf for `value` (the predecessor used when inserting
+    /// `value`) in this chain's commitment tree as of `block_number`, or `None` if none exists.
+    ///
+    /// Used at atomic-send time to supply the IMT insert's low-nullifier index without an off-chain
+    /// tree reconstruction in the client.
+    #[method(name = "getImtLowNullifierIndex")]
+    async fn get_imt_low_nullifier_index(
+        &self,
+        value: U256,
+        block_number: u64,
+    ) -> RpcResult<Option<u64>>;
+
     #[method(name = "getGenesis")]
     async fn get_genesis(&self) -> RpcResult<GenesisInput>;
 
