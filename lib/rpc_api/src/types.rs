@@ -56,6 +56,38 @@ pub struct L2ToL1LogProof {
     pub gateway_block_number: Option<u64>,
 }
 
+/// One leaf of an Indexed Merkle Tree, in on-chain field order
+/// (`L2InteropCommitmentTree.leafAt` / `IndexedMerkleTreeLib`).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ImtLeaf {
+    /// The leaf's stored value (the atomic-interop commit value).
+    pub value: U256,
+    /// Index of the next leaf in the value-sorted linked list.
+    pub next_index: U256,
+    /// Value of the next leaf in the value-sorted linked list.
+    pub next_value: U256,
+}
+
+/// Membership proof of a commit leaf in a chain's atomic-interop commitment tree (IMT).
+///
+/// This is the IMT half of an `ImtInclusionProof` (`IAtomicInterop.sol`): it authenticates the
+/// leaf holding a given commit value against the chain's IMT root as of a specific L2 block. The
+/// caller pairs it with the message/interop-root proof from `zks_getL2ToL1LogProof` to form the
+/// full per-leg proof consumed by `InteropHandler.executeAtomicBundle`.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ImtInclusionProof {
+    /// The IMT root at the requested block (matches `L2InteropCommitmentTree.root()`).
+    pub chain_imt_root: B256,
+    /// The proven leaf.
+    pub leaf: ImtLeaf,
+    /// The leaf's index in the tree.
+    pub imt_leaf_index: u64,
+    /// Fixed-depth Merkle path (32 siblings, leaf level up) authenticating the leaf against the root.
+    pub imt_proof: Vec<B256>,
+}
+
 /// Selects the root that the returned merkle proof anchors to.
 ///
 /// If omitted from the RPC call, [`LogProofTarget::L1BatchRoot`] is used.
