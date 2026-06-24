@@ -86,6 +86,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
 
     /// `true` when the chain currently settles on a Gateway (i.e. its tracked SL chain id
     /// differs from L1's).
+    #[allow(dead_code)]
     fn settles_on_gateway(&self) -> bool {
         self.current_sl_chain_id != self.config.l1_chain_id
     }
@@ -123,12 +124,18 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         // Create stream:
         // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
         // - L1 transactions first, then L2 transactions.
+        // Include interop traffic (imported interop roots) on every settlement layer. Interop roots
+        // are now built on L1 too (era-contracts `MessageRootBase.addChainBatchRoot`), and the L1
+        // execute path verifies same-chain dependency roots via `MessageRoot.historicalRoot`
+        // (`Executor._verifyDependencyInteropRoots`) — so an L1-settled chain's own L1 interop roots
+        // commit/execute on L1 without hitting `CommitBasedInteropNotSupported` (that guard only fires
+        // for cross-chain dependency roots). NB: a chain that migrated GW→L1 with still-unserved
+        // gateway-sourced roots would need the subpool to filter by current SL chain id; for
+        // L1-native chains the subpool only holds L1 roots.
+        let include_interop_traffic = true;
         let best_txs = self
             .pool
-            .best_transactions_stream(
-                self.next_interop_tx_allowed_after,
-                self.settles_on_gateway(),
-            )
+            .best_transactions_stream(self.next_interop_tx_allowed_after, include_interop_traffic)
             .await
             .context("mempool is closed")?;
 
