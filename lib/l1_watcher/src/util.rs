@@ -10,7 +10,7 @@ use zksync_os_batch_types::{CommittedBatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
 use zksync_os_contract_interface::models::CommitBatchInfo;
-use zksync_os_contract_interface::{IExecutor, ZkChain};
+use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
 use zksync_os_provider::NodeProvider;
 
 /// Retry policy for data that can transiently lag right after a commit is observed on a
@@ -151,6 +151,35 @@ pub async fn find_l1_execute_block_by_batch_number(
         move |block| async move {
             let res = zk_chain.get_total_batches_executed(block.into()).await?;
             Ok(res >= batch_number)
+        },
+    )
+    .await
+}
+
+/// Finds the first L1 block where the MessageRoot's `interopRootLogId >= next_interop_root_id`.
+pub async fn find_l1_block_by_interop_root_id(
+    bridgehub: Bridgehub<NodeProvider>,
+    next_interop_root_id: u64,
+) -> anyhow::Result<BlockNumber> {
+    if next_interop_root_id == 0 {
+        return Ok(0);
+    }
+
+    let message_root_address = bridgehub.message_root_address().await?;
+    let message_root =
+        MessageRoot::new(message_root_address, bridgehub.provider().clone());
+
+    // The provider's cache resolves (and remembers) the MessageRoot deployment block, giving the
+    // search a tight lower bound without a per-iteration code-existence guard.
+    let deployment_block = message_root.deployment_block().await?;
+
+    let message_root = &message_root;
+    find_l1_block_by_predicate(
+        message_root.provider(),
+        deployment_block,
+        move |block| async move {
+            let res = message_root.interop_root_log_id(block.into()).await?;
+            Ok(res >= next_interop_root_id)
         },
     )
     .await

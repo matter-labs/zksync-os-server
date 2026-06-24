@@ -19,7 +19,7 @@ use tokio::time::Instant;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::AccountDiff;
-use zksync_os_l1_watcher::{L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig, StartResolver};
+use zksync_os_l1_watcher::{InteropWatcher, L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig, StartResolver};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
     L1TxSerialId, NodeRole, ProtocolSemanticVersion, SystemTxType, UpgradeInfo, UpgradeMetadata,
@@ -43,6 +43,7 @@ pub struct Pool<T> {
 struct Subcomponents {
     upgrade_watcher: Option<StartResolver<ProtocolSemanticVersion, L1UpgradeTxWatcher>>,
     l1_tx_watcher: Option<StartResolver<u64, L1TxWatcher>>,
+    interop_watcher: Option<StartResolver<u64, InteropWatcher>>,
 }
 
 pub struct Config {
@@ -78,6 +79,14 @@ impl<T: L2Subpool> Pool<T> {
         .await
         .context("failed to start L1 upgrade transaction watcher")?;
 
+        let interop_watcher = InteropWatcher::create_watcher(
+            config.l1_watcher_config.clone(),
+            l1_state.bridgehub_l1.clone(),
+            interop_roots_subpool.clone(),
+        )
+        .await
+        .context("failed to create interop roots watcher")?;
+
         let l1_tx_watcher = L1TxWatcher::create_watcher(
             config.l1_watcher_config.clone(),
             l1_state.diamond_proxy_l1.clone(),
@@ -89,6 +98,7 @@ impl<T: L2Subpool> Pool<T> {
         let subcomponents = Subcomponents {
             upgrade_watcher: Some(upgrade_watcher),
             l1_tx_watcher: Some(l1_tx_watcher),
+            interop_watcher: Some(interop_watcher),
         };
 
         Ok(Self {
@@ -140,6 +150,12 @@ impl<T: L2Subpool> Pool<T> {
             self.runtime.spawn_critical_task(
                 "L1 transaction watcher",
                 l1_tx_watcher.run(replay.starting_cursors.l1_priority_id),
+            );
+        }
+        if let Some(interop_watcher) = self.subcomponents.interop_watcher.take() {
+            self.runtime.spawn_critical_task(
+                "interop roots watcher",
+                interop_watcher.run(replay.starting_cursors.interop_root_id),
             );
         }
     }
