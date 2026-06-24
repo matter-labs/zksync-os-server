@@ -8,6 +8,7 @@ use crate::debug_impl::DebugError;
 use crate::eth_call_handler::EthCallError;
 use crate::eth_filter::EthFilterError;
 use crate::eth_impl::EthError;
+use crate::finality_impl::FinalityError;
 use crate::rpc_storage::RpcStorageError;
 use crate::tx_forwarder::TxForwardError;
 use crate::tx_handler::{EthSendRawTransactionError, EthSendRawTransactionSyncError};
@@ -44,6 +45,7 @@ macro_rules! impl_to_rpc_result {
 
 impl_to_rpc_result!(ZksError);
 impl_to_rpc_result!(UnstableError);
+impl_to_rpc_result!(FinalityError);
 
 impl<Ok> ToRpcResult<Ok, EthError> for Result<Ok, EthError> {
     fn to_rpc_result(self) -> RpcResult<Ok> {

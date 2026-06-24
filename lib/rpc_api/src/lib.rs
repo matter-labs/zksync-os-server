@@ -1,6 +1,7 @@
 pub mod debug;
 pub mod eth;
 pub mod filter;
+pub mod finality;
 pub mod net;
 pub mod ots;
 #[cfg(feature = "server")]
