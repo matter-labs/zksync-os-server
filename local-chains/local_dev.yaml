@@ -27,6 +27,9 @@ observability:
 sequencer:
   revm_consistency_checker_revert_on_divergence: true
 
+mempool:
+  max_account_slots: 4096
+
 external_price_api_client:
   source: Forced
   forced_prices:

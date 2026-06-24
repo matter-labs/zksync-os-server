@@ -18,5 +18,5 @@ mod metrics;
 pub use reth_transaction_pool::error::{InvalidPoolTransactionError, PoolError, PoolErrorKind};
 pub use reth_transaction_pool::{
     CanonicalStateUpdate, NewSubpoolTransactionStream, NewTransactionEvent, PoolConfig,
-    PoolUpdateKind, SubPoolLimit, ValidPoolTransaction,
+    PoolUpdateKind, SubPoolLimit, TXPOOL_MAX_ACCOUNT_SLOTS_PER_SENDER, ValidPoolTransaction,
 };

@@ -1380,6 +1380,12 @@ pub struct MempoolConfig {
     /// Defaults to `7` which is the lowest possible value of base fee under mainnet EIP-1559 params
     #[config(default_t = 7)]
     pub minimal_protocol_basefee: u64,
+
+    /// Maximum number of transactions a single sender may keep in the pool. This effectively bounds
+    /// how many nonces ahead of its on-chain nonce a sender can queue. Defaults to reth's
+    /// `TXPOOL_MAX_ACCOUNT_SLOTS_PER_SENDER` (16).
+    #[config(default_t = zksync_os_mempool::TXPOOL_MAX_ACCOUNT_SLOTS_PER_SENDER)]
+    pub max_account_slots: usize,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -2218,6 +2224,7 @@ impl From<MempoolConfig> for zksync_os_mempool::PoolConfig {
         Self {
             pending_limit: SubPoolLimit::new(c.max_pending_txs, c.max_pending_size),
             minimal_protocol_basefee: c.minimal_protocol_basefee,
+            max_account_slots: c.max_account_slots,
             ..Default::default()
         }
     }
