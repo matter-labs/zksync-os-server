@@ -21,6 +21,7 @@ mod simulate;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
 pub mod js_tracer;
+mod imt;
 mod limits;
 mod method_filter_middleware;
 mod monitoring_middleware;
@@ -92,8 +93,8 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     tx_forwarder: Option<TxForwarder>,
     policy_client: Option<PolicyClient>,
-    /// L1 provider, used to build the L1 MessageRoot aggregation hop for
-    /// `zks_getL2ToL1LogProof` proofs of L1-settled chains.
+    // L1 provider, used to build the L1 MessageRoot aggregation hop for
+    // `zks_getL2ToL1LogProof` proofs of L1-settled chains.
     l1_provider: DynProvider,
     runtime: &Runtime,
     wait_for_db: impl Future<Output = ()> + Send + 'static,
