@@ -131,6 +131,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             chain_id,
             gateway_provider,
             l1_provider,
+            eth_call_handler.clone(),
         )
         .into_rpc(),
     )?;

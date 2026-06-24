@@ -1,11 +1,15 @@
-use crate::ReadRpcStorage;
+use crate::imt::{ImtLeaf as EngineImtLeaf, IndexedMerkleTree};
 use crate::log_proof_utils::{
     batch_tree_proof, chain_proof_vector, get_chain_log_proof, L2_MESSAGE_ROOT_ADDRESS,
 };
 use crate::result::ToRpcResult;
+use crate::{EthCallHandler, ReadRpcStorage};
+use alloy::eips::BlockId;
 use alloy::primitives::{Address, B256, BlockNumber, TxHash, U64, U256, keccak256};
 use alloy::providers::{DynProvider, Provider};
-use alloy::rpc::types::Index;
+use alloy::rpc::types::{Index, TransactionRequest};
+use alloy::sol;
+use alloy::sol_types::SolCall;
 use anyhow::Context;
 use async_trait::async_trait;
 use blake2::{Blake2s256, Digest};
@@ -19,8 +23,8 @@ use zksync_os_merkle_tree_api::flat::StorageSlotProof;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_rpc_api::{
     types::{
-        AddressScopedKey, BatchStorageProof, BlockMetadata, L1VerificationData, L2ToL1LogProof,
-        LogProofTarget, StateCommitmentPreimage,
+        AddressScopedKey, BatchStorageProof, BlockMetadata, ImtInclusionProof, ImtLeaf,
+        L1VerificationData, L2ToL1LogProof, LogProofTarget, StateCommitmentPreimage,
     },
     zks::ZksApiServer,
 };
@@ -29,6 +33,24 @@ use zksync_os_storage_api::{PersistedBatch, RepositoryError, StateError, read_mu
 use zksync_os_types::L2_TO_L1_TREE_SIZE;
 
 const LOG_PROOF_SUPPORTED_METADATA_VERSION: u8 = 1;
+
+/// Canonical L2 address of the atomic-interop commitment tree (`L2InteropCommitmentTree`).
+const L2_INTEROP_COMMITMENT_TREE_ADDRESS: Address =
+    alloy::primitives::address!("0000000000000000000000000000000000010012");
+
+sol! {
+    /// Minimal view surface of `L2InteropCommitmentTree` needed to reconstruct the IMT.
+    #[sol(rpc)]
+    interface IL2InteropCommitmentTree {
+        struct IMTLeaf {
+            uint256 value;
+            uint256 nextIndex;
+            uint256 nextValue;
+        }
+        function leafCount() external view returns (uint256);
+        function leafAt(uint256 index) external view returns (IMTLeaf memory);
+    }
+}
 
 pub struct ZksNamespace<RpcStorage> {
     bridgehub_address: Address,
@@ -40,6 +62,9 @@ pub struct ZksNamespace<RpcStorage> {
     /// L1 provider, used (among other things) to build the L1 MessageRoot
     /// aggregation hop for proofs of L1-settled chains.
     l1_provider: DynProvider,
+    /// In-process eth_call handler, used to read commitment-tree leaves at a historical block
+    /// when reconstructing IMT inclusion proofs.
+    eth_call_handler: EthCallHandler<RpcStorage>,
 }
 
 impl<RpcStorage> ZksNamespace<RpcStorage> {
@@ -52,6 +77,7 @@ impl<RpcStorage> ZksNamespace<RpcStorage> {
         l2_chain_id: u64,
         gateway_provider: Option<DynProvider>,
         l1_provider: DynProvider,
+        eth_call_handler: EthCallHandler<RpcStorage>,
     ) -> Self {
         Self {
             bridgehub_address,
@@ -61,6 +87,7 @@ impl<RpcStorage> ZksNamespace<RpcStorage> {
             l2_chain_id,
             gateway_provider,
             l1_provider,
+            eth_call_handler,
         }
     }
 }
@@ -497,6 +524,76 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             l1_verification_data,
         }))
     }
+
+    /// Read a `L2InteropCommitmentTree` view function at `block`, returning the raw return bytes.
+    fn call_commitment_tree(
+        &self,
+        calldata: alloy::primitives::Bytes,
+        block: BlockId,
+    ) -> ZksResult<alloy::primitives::Bytes> {
+        let request = TransactionRequest::default()
+            .to(L2_INTEROP_COMMITMENT_TREE_ADDRESS)
+            .input(calldata.into());
+        self.eth_call_handler
+            .call_impl(request, Some(block), None, None)
+            .map_err(|err| ZksError::Batch(anyhow::anyhow!(err)))
+    }
+
+    /// Reconstruct the IMT inclusion proof for the leaf holding `commit_value` against the
+    /// commitment tree as of `block_number`.
+    ///
+    /// Reads the index-ordered leaf set via `leafCount()` / `leafAt(i)` at the historical block,
+    /// rebuilds the tree with the off-chain engine (bit-for-bit identical to the on-chain
+    /// `IndexedMerkleTreeLib`), and returns the leaf, its index, and its 32-sibling Merkle path.
+    fn get_imt_inclusion_proof_impl(
+        &self,
+        commit_value: U256,
+        block_number: u64,
+    ) -> ZksResult<Option<ImtInclusionProof>> {
+        let block = BlockId::from(block_number);
+
+        let count_bytes = self.call_commitment_tree(
+            IL2InteropCommitmentTree::leafCountCall {}.abi_encode().into(),
+            block,
+        )?;
+        let leaf_count = IL2InteropCommitmentTree::leafCountCall::abi_decode_returns(&count_bytes)
+            .map_err(|err| ZksError::Batch(anyhow::anyhow!(err)))?;
+        let leaf_count = leaf_count.to::<u64>();
+
+        let mut leaves = Vec::with_capacity(leaf_count as usize);
+        for i in 0..leaf_count {
+            let leaf_bytes = self.call_commitment_tree(
+                IL2InteropCommitmentTree::leafAtCall { index: U256::from(i) }
+                    .abi_encode()
+                    .into(),
+                block,
+            )?;
+            let leaf = IL2InteropCommitmentTree::leafAtCall::abi_decode_returns(&leaf_bytes)
+                .map_err(|err| ZksError::Batch(anyhow::anyhow!(err)))?;
+            leaves.push(EngineImtLeaf {
+                value: leaf.value,
+                next_index: leaf.nextIndex,
+                next_value: leaf.nextValue,
+            });
+        }
+
+        let tree = IndexedMerkleTree::new(leaves);
+        let Some(leaf_index) = tree.find_value_index(commit_value) else {
+            return Ok(None);
+        };
+        let leaf = tree.leaves()[leaf_index as usize];
+
+        Ok(Some(ImtInclusionProof {
+            chain_imt_root: tree.root(),
+            leaf: ImtLeaf {
+                value: leaf.value,
+                next_index: leaf.next_index,
+                next_value: leaf.next_value,
+            },
+            imt_leaf_index: leaf_index,
+            imt_proof: tree.merkle_path(leaf_index),
+        }))
+    }
 }
 
 #[async_trait]
@@ -540,6 +637,15 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
         batch_number: u64,
     ) -> RpcResult<Option<BatchStorageProof>> {
         self.get_proof_impl(account, &keys, batch_number)
+            .to_rpc_result()
+    }
+
+    async fn get_imt_inclusion_proof(
+        &self,
+        commit_value: U256,
+        block_number: u64,
+    ) -> RpcResult<Option<ImtInclusionProof>> {
+        self.get_imt_inclusion_proof_impl(commit_value, block_number)
             .to_rpc_result()
     }
 }

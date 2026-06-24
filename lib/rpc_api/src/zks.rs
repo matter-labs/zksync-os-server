@@ -1,5 +1,7 @@
-use crate::types::{BatchStorageProof, BlockMetadata, L2ToL1LogProof, LogProofTarget};
-use alloy::primitives::{Address, B256, TxHash};
+use crate::types::{
+    BatchStorageProof, BlockMetadata, ImtInclusionProof, L2ToL1LogProof, LogProofTarget,
+};
+use alloy::primitives::{Address, B256, TxHash, U256};
 use alloy::rpc::types::Index;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
@@ -25,6 +27,18 @@ pub trait ZksApi {
         index: Index,
         proof_target: Option<LogProofTarget>,
     ) -> RpcResult<Option<L2ToL1LogProof>>;
+
+    /// Returns the IMT membership proof for the atomic-interop commit leaf holding `commit_value`,
+    /// against this chain's commitment tree (`L2InteropCommitmentTree`) as of `block_number`.
+    ///
+    /// `block_number` must be the L2 block whose IMT root the caller's message proof authenticates
+    /// (typically the atomic-send block). Returns `None` if no leaf holds `commit_value` at that block.
+    #[method(name = "getImtInclusionProof")]
+    async fn get_imt_inclusion_proof(
+        &self,
+        commit_value: U256,
+        block_number: u64,
+    ) -> RpcResult<Option<ImtInclusionProof>>;
 
     #[method(name = "getGenesis")]
     async fn get_genesis(&self) -> RpcResult<GenesisInput>;
