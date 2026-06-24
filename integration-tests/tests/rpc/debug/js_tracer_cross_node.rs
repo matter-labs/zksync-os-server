@@ -5,7 +5,7 @@ use alloy::providers::ProviderBuilder;
 use alloy::providers::ext::DebugApi;
 use alloy::rpc::types::TransactionRequest;
 use alloy::rpc::types::trace::geth::{GethDebugTracerType, GethDebugTracingCallOptions, GethTrace};
-use alloy::signers::local::LocalSigner;
+use alloy::signers::local::{LocalSigner, Secp256k1Credential};
 use serde_json::Value;
 use std::env;
 use std::str::FromStr;
@@ -35,7 +35,7 @@ async fn compare_js_tracer_outputs_between_nodes() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    let wallet = EthereumWallet::new(LocalSigner::from_str(&private_key)?);
+    let wallet = EthereumWallet::new(LocalSigner::<Secp256k1Credential>::from_str(&private_key)?);
     let wallet_address = wallet.default_signer().address();
 
     let zksync_provider = ProviderBuilder::new()

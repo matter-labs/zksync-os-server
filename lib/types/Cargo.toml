@@ -14,7 +14,7 @@ zksync_os_contract_interface.workspace = true
 
 reth-primitives-traits = { workspace = true, optional = true }
 
-alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips", "serde", "rlp", "k256", "rpc-types"] }
+alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips", "serde", "rlp", "secp256k1", "rpc-types"] }
 alloy-rlp.workspace = true
 serde.workspace = true
 semver.workspace = true

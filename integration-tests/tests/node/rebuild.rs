@@ -4,7 +4,7 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::rpc::types::TransactionReceipt;
 use alloy::rpc::types::TransactionRequest;
-use alloy::signers::local::{LocalSigner, PrivateKeySigner};
+use alloy::signers::local::{LocalSigner, PrivateKeySigner, Secp256k1Credential};
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
 use std::num::NonZeroU64;
@@ -174,7 +174,7 @@ async fn rebuild_after_emptying_historical_block_preserves_unrelated_l2_txs(
     // transactions invalid because their nonces become too high. A second sender contributes the
     // last historical block so we can assert rebuild still reaches the tip and preserves
     // unrelated L2 transactions.
-    let second_wallet = EthereumWallet::new(LocalSigner::from_str(
+    let second_wallet = EthereumWallet::new(LocalSigner::<Secp256k1Credential>::from_str(
         "0xac1e09fe4f8c7b2e9e13ab632d2f6a77b8cf57fb9f3f35e6c5c7d8f1b2a3c4d5",
     )?);
     let second_signer = ProviderBuilder::new()

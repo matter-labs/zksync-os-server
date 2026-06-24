@@ -14,7 +14,7 @@ use alloy::providers::{
     DynProvider, Identity, PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider,
 };
 use alloy::rpc::types::TransactionRequest;
-use alloy::signers::local::{LocalSigner, PrivateKeySigner};
+use alloy::signers::local::{LocalSigner, PrivateKeySigner, Secp256k1Credential};
 use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
@@ -700,7 +700,7 @@ impl Tester {
 
         let l2_wallet = EthereumWallet::new(
             // Private key for 0x36615cf349d7f6344891b1e7ca7c72883f5dc049
-            LocalSigner::from_str(
+            LocalSigner::<Secp256k1Credential>::from_str(
                 "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110",
             )
             .unwrap(),

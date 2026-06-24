@@ -23,7 +23,7 @@ alloy = { workspace = true, default-features = false, features = [
     "rlp",
     "eips",
     "consensus",
-    "k256",
+    "secp256k1",
     "rand",
 ] }
 alloy-rlp.workspace = true

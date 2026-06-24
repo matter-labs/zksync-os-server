@@ -13,7 +13,7 @@ categories.workspace = true
 alloy = { workspace = true, default-features = false, features = [
     "signer-local",
     "signer-gcp",
-    "k256",
+    "secp256k1",
     "network",
     "consensus",
 ] }
