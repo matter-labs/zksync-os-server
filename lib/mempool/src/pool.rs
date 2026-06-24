@@ -114,6 +114,7 @@ impl<T: L2Subpool> Pool<T> {
             l1_state.settlement_layer_intervals.clone(),
             config.l1_watcher_config.clone(),
             config.chain_id,
+            l1_state.bridgehub_l1.clone(),
             interop_roots_subpool.clone(),
         )
         .context("failed to create interop roots watcher")?;

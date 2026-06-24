@@ -40,30 +40,26 @@ impl InteropWatcher {
         intervals: SettlementLayerIntervals,
         config: L1WatcherConfig,
         l2_chain_id: u64,
+        l1_bridgehub: Bridgehub<NodeProvider>,
         sink: impl EventSink<IndexedInteropRoot>,
     ) -> anyhow::Result<Option<SegmentResolver<u64, Self>>> {
-        // Whether there is anything to watch depends only on the (static) interval layout, so we
-        // can decide Some/None up front without resolving any block windows.
-        let has_gateway_segment = intervals.intervals().iter().any(|interval| {
-            matches!(
-                interval.settlement_layer,
-                IntervalSettlementLayer::Gateway(_)
-            ) && interval
-                .last_batch
-                .is_none_or(|lb| interval.first_batch <= lb)
-        });
-        if !has_gateway_segment {
-            tracing::info!("chain has no Gateway intervals; skipping interop roots watcher");
+        // Build the watcher if there is any active settlement interval. Gateway intervals emit
+        // interop roots from the gateway's message-root; L1 intervals emit them from L1's
+        // message-root too (interop roots are built on L1 — era-contracts
+        // `MessageRootBase.addChainBatchRoot`), so L1-settled chains must also import them for
+        // atomic / proof-based interop.
+        let has_active_segment = intervals
+            .intervals()
+            .iter()
+            .any(|interval| interval.last_batch.is_none_or(|lb| interval.first_batch <= lb));
+        if !has_active_segment {
+            tracing::info!("chain has no active settlement intervals; skipping interop roots watcher");
             return Ok(None);
         }
 
         let resolve_segments = move |starting_interop_root_id: u64| async move {
             let mut segments = Vec::new();
             for interval in intervals.intervals() {
-                // L1 intervals never emit interop roots; skip them outright.
-                let IntervalSettlementLayer::Gateway(_) = interval.settlement_layer else {
-                    continue;
-                };
                 // Empty intervals are possible when a migration closes without committing
                 // anything (`first_batch > last_batch`). Nothing to scan.
                 if interval
@@ -73,12 +69,20 @@ impl InteropWatcher {
                     continue;
                 }
 
-                let gw_zk_chain = &interval.proxy;
-                let bridgehub = Bridgehub::new(
-                    L2_BRIDGEHUB_ADDRESS,
-                    gw_zk_chain.provider().clone(),
-                    l2_chain_id,
-                );
+                // The bridgehub that owns this interval's message-root: a Gateway is an L2, so its
+                // bridgehub sits at the canonical L2 address on the gateway's provider; an L1
+                // interval uses the (deployed) L1 bridgehub. Both expose `NewInteropRoot` via their
+                // message-root, and `find_l1_block_by_interop_root_id` resolves the id cursor on
+                // whichever SL it is pointed at.
+                let sl_zk_chain = &interval.proxy;
+                let bridgehub = match interval.settlement_layer {
+                    IntervalSettlementLayer::Gateway(_) => Bridgehub::new(
+                        L2_BRIDGEHUB_ADDRESS,
+                        sl_zk_chain.provider().clone(),
+                        l2_chain_id,
+                    ),
+                    IntervalSettlementLayer::L1 => l1_bridgehub.clone(),
+                };
                 let message_root = bridgehub.message_root_address().await.with_context(|| {
                     format!("failed to fetch message_root address for interval {interval}")
                 })?;
@@ -105,7 +109,7 @@ impl InteropWatcher {
                 // is that they will be stuck in memory until the next restart.
                 let end_block = match interval.last_batch {
                     Some(last_batch) => Some(
-                        find_l1_execute_block_by_batch_number(gw_zk_chain.clone(), last_batch)
+                        find_l1_execute_block_by_batch_number(sl_zk_chain.clone(), last_batch)
                             .await
                             .with_context(|| {
                                 format!(
@@ -125,7 +129,7 @@ impl InteropWatcher {
                     "scheduling interop watcher segment"
                 );
                 segments.push(SegmentSpec {
-                    provider: gw_zk_chain.provider().clone(),
+                    provider: sl_zk_chain.provider().clone(),
                     address: message_root.into(),
                     start_block,
                     end_block,
