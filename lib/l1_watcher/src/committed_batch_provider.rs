@@ -1,5 +1,5 @@
 use crate::util;
-use alloy::primitives::BlockNumber;
+use alloy::primitives::{BlockNumber, TxHash};
 use anyhow::Context;
 use futures::stream::{self, StreamExt};
 use rangemap::RangeInclusiveMap;
@@ -226,7 +226,7 @@ fn startup_batch_numbers(
 
 /// Resolves a committed batch from L1 by first finding the block that committed it and then
 /// decoding the corresponding stored batch data.
-async fn fetch_batch(
+pub async fn fetch_batch(
     diamond_proxy_sl: &ZkChain<NodeProvider>,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
@@ -236,10 +236,37 @@ async fn fetch_batch(
         batch_number,
         max_l1_blocks_to_scan,
     )
-    .await?;
+    .await
+    .with_context(|| format!("failed to find L1 commit block for batch {batch_number}"))?;
+
     util::fetch_stored_batch_data(diamond_proxy_sl, sl_block_with_commit, batch_number)
         .await?
         .with_context(|| format!("failed to find committed batch {batch_number} on L1"))
+}
+
+/// Resolves the L1 transaction hash of the Commit transaction of batch `batch_number` (not to be confused with batch header hash itself)
+pub async fn fetch_batch_commit_tx_hash(
+    diamond_proxy_sl: &ZkChain<NodeProvider>,
+    batch_number: u64,
+    max_l1_blocks_to_scan: u64,
+) -> anyhow::Result<TxHash> {
+    let sl_block_with_commit = util::find_l1_commit_block_by_batch_number(
+        diamond_proxy_sl.clone(),
+        batch_number,
+        max_l1_blocks_to_scan,
+    )
+    .await
+    .with_context(|| format!("failed to find L1 commit block for batch {batch_number}"))?;
+
+    util::find_commit_log(diamond_proxy_sl, sl_block_with_commit, batch_number)
+        .await?
+        .map(|(_, tx_hash)| tx_hash)
+        .with_context(|| {
+            format!(
+                "failed to find commit tx for batch {batch_number} in L1 block \
+                 {sl_block_with_commit}"
+            )
+        })
 }
 
 #[cfg(test)]

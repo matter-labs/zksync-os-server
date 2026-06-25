@@ -48,6 +48,7 @@ use zksync_os_types::{
 pub mod assert_traits;
 pub mod config;
 pub mod contracts;
+pub mod l1_helpers;
 pub mod multi_node;
 mod node_log;
 mod prover_tester;
@@ -56,6 +57,7 @@ pub mod rpc_recorder;
 pub mod test_config;
 pub mod upgrade;
 mod utils;
+pub mod wallets;
 
 /// L1 chain id as expected by contracts deployed in `l1-state.json.gz`
 const L1_CHAIN_ID: u64 = 31337;
@@ -622,7 +624,7 @@ impl Tester {
 
     async fn launch_node_inner(
         l1: AnvilL1,
-        config: Config,
+        mut config: Config,
         tempdir: Arc<TempDir>,
         chain_layout: ChainLayout<'static>,
         log_state: Option<NodeLogState>,
@@ -633,6 +635,13 @@ impl Tester {
             Some(ports) => ports,
             None => Ports::from_config(&config).await?,
         };
+        // In-process fake provers use job managers directly; keep the HTTP API only for tests
+        // that can hand jobs to external prover workers.
+        if config.prover_api_config.fake_fri_provers.enabled
+            && config.prover_api_config.fake_snark_provers.enabled
+        {
+            config.prover_api_config.enabled = false;
+        }
         let l2_rpc_address = config.rpc_config.address.clone();
         let l2_rpc_ws_url = format!("ws://localhost:{}", parse_local_port(&l2_rpc_address)?);
         let status_server_url = config
@@ -1328,14 +1337,10 @@ impl AnvilL1 {
         std::fs::write(&l1_state_path, &l1_state)
             .context("failed to write L1 state to temporary state file")?;
 
-        let locked_port = LockedPort::acquire_unused().await?;
-        let address = format!("http://localhost:{}", locked_port.port);
-
         // --slots-in-an-epoch defines what blocks are "finalized" in Anvil, last finalized block is `latest - 2 * slots_in_an_epoch`
         // so we set block time to 0.25s and slots in epoch set to 10 and finalization delays is about 10*0.25s*2=5s which is reasonable for tests.
         let provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
             anvil
-                .port(locked_port.port)
                 .chain_id(L1_CHAIN_ID)
                 .arg("--block-time")
                 .arg("0.25")
@@ -1345,6 +1350,7 @@ impl AnvilL1 {
                 .arg("--slots-in-an-epoch")
                 .arg("10")
         })?;
+        let address = provider.inner().anvil().endpoint();
 
         let wallet = provider.wallet().clone();
 

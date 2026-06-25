@@ -13,6 +13,7 @@ categories.workspace = true
 zksync_os_types = { workspace = true, features = ["reth"] }
 zksync_os_storage_api.workspace = true
 zksync_os_reth_compat.workspace = true
+zksync_os_base_token_adjuster.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_genesis.workspace = true
@@ -27,11 +28,12 @@ reth-evm-ethereum = { workspace = true }
 reth-chainspec = { workspace = true }
 reth-tasks = { workspace = true }
 
-alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips"] }
+alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips", "providers", "rpc-types", "network", "contract"] }
 async-trait.workspace = true
 anyhow.workspace = true
 auto_impl.workspace = true
 futures.workspace = true
+num.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true

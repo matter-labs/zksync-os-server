@@ -2,7 +2,7 @@ pub use self::cli::ConfigArgs;
 pub(crate) use self::metrics::report_static_config_metrics;
 use self::util::{SecretKeyDeserializer, SignerConfigDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
-use alloy::primitives::{Address, Bytes, U128};
+use alloy::primitives::{Address, B256, BlockHash, Bytes, U128};
 use num::{BigInt, BigUint, rational::Ratio};
 use reth_net_nat::net_if::resolve_net_if_ip;
 use reth_network_peers::TrustedPeer;
@@ -17,7 +17,7 @@ use smart_config::{
 };
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_config_validation_macros::ConfigValidate;
@@ -760,21 +760,160 @@ pub struct StatusServerConfig {
     pub address: String,
 }
 
+/// Parameters shared by the `block_rebuild` and `danger_block_rebuild_with_l1_revert` modes:
+/// the starting boundary, the idempotency guard, which blocks to empty, and whether to reset
+/// block timestamps.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-pub struct RebuildBlocksConfig {
-    /// Number of the block to start rebuilding from.
-    /// All blocks starting from this number will be replayed - but unlike normal replay,
-    /// we'll not assert that the result will match the original ReplayRecord (block).
-    /// That is, a block may close earlier (with less transactions),
-    /// have different hash, have some transactions rejected etc
-    pub from_block: u64,
-    /// List of blocks to empty (i.e., remove all transactions from).
+pub struct RebuildBounds {
+    /// First block to rebuild from. All blocks from this number onward are rebuilt.
+    /// Depending on further settings and state, they may or may not change.
+    ///
+    /// For `danger_block_rebuild_with_l1_revert` this must fall within a committed-only batch
+    /// (not an executed one). It may be the first block of that batch or any block inside it.
+    pub from_block_number: u64,
+    /// Expected hash of block `from_block_number` before the rebuild.
+    ///
+    /// The rebuild/revert operation is skipped when the current hash does not match — prevents double-runs
+    /// on pod restarts after the operation already ran.
+    #[config(with = Serde![str])]
+    pub from_block_hash: BlockHash,
+    /// Blocks to empty (remove all transactions from) during the rebuild.
     #[config(default, with = Delimited::new(","))]
     pub blocks_to_empty: Vec<u64>,
-    /// Whether to reset timestamps of rebuilt blocks to the current time.
-    /// If false, original timestamps are kept. If true then current time is used.
+    /// If true, rebuilt blocks receive fresh timestamps instead of the originals.
+    /// If false, original timestamps are kept.
+    /// Note: when original timestamps are kept - and no block transactions are excluded, the rebuild
+    /// process may not amend any blocks - having essentially no effect on chain.
     #[config(default_t = false)]
     pub reset_timestamps: bool,
+}
+
+/// Startup block/batch revert configuration.
+///
+/// The `mode` field selects one of three operations:
+///
+/// - `block_rebuild` — replay local blocks from `from_block_number` without touching L1. In this
+///   mode, L1-committed blocks cannot be rebuilt.
+/// - `danger_block_rebuild_with_l1_revert` — revert committed L1 batches (batch auto-derived
+///   from `from_block_number`), then rebuild local blocks from the same boundary.
+/// - `l1_revert` — revert committed L1 batches only; local blocks are kept as-is.
+///
+/// # Examples
+///
+/// ## REVM divergence in uncommitted blocks → `block_rebuild`
+///
+/// Replay and rebuild local blocks from the divergence point without touching L1.
+/// `blocks_to_empty` drops the transactions of a bad block, `reset_timestamps` resets the timestamp
+/// for blocks:
+///
+/// ```yaml
+/// sequencer:
+///   rebuild:
+///     mode: block_rebuild
+///     from_block_number: 10
+///     from_block_hash: '<block hash>'
+///     reset_timestamps: true
+///     blocks_to_empty:
+///       - 10
+/// ```
+///
+/// ## Unprovable batch already committed to L1 → `danger_block_rebuild_with_l1_revert`
+///
+/// A bad block landed in a batch that was already committed to L1 but not yet executed. Revert
+/// the committed batch on L1 — auto-derived from `from_block_number` — and rebuild local blocks from
+/// the same boundary:
+///
+/// ```yaml
+/// sequencer:
+///   rebuild:
+///     mode: danger_block_rebuild_with_l1_revert
+///     from_block_number: 40
+///     from_block_hash: '<block hash>'
+///     reset_timestamps: true
+///     l1_reverter_sk: '<signer PK / GKMS resource>'
+/// ```
+///
+/// ## Undo an L1 commit while keeping local blocks → `l1_revert`
+///
+/// The committed batches on L1 need to be rolled back, but the locally-produced blocks are
+/// correct and should be kept (they will be re-committed afterwards):
+///
+/// ```yaml
+/// sequencer:
+///   rebuild:
+///     mode: l1_revert
+///     from_batch_number: 15
+///     from_batch_commit_tx_hash: '<batch commit tx hash>'
+///     l1_reverter_sk: '<signer PK / GKMS resource>'
+/// ```
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(tag = "mode", rename_all = "snake_case")]
+pub enum RebuildConfig {
+    /// Replay and rebuild local blocks from `from_block_number` without any L1 interaction.
+    BlockRebuild {
+        #[config(flatten)]
+        bounds: RebuildBounds,
+    },
+    /// Same as `BlockRebuild`, but also reverts L1 batch commits of `from_block_number` and subsequent
+    /// blocks. Panics if `from_block_number` is not committed yet - use `BlockRebuild` instead.
+    ///
+    /// The batch to revert is auto-derived from `from_block_number`: the committed-only batch that
+    /// contains `from_block_number` is reverted on L1 (along with all higher committed batches).
+    /// `from_block_number` may be the first block of that batch or any block inside it.
+    /// The `from_block_hash` guard covers both the L1 revert and the local rebuild — if the hash
+    /// no longer matches (operation already ran), both are skipped on the next startup.
+    DangerBlockRebuildWithL1Revert {
+        #[config(flatten)]
+        bounds: RebuildBounds,
+        /// Signer for `revertBatchesSharedBridge` transactions.
+        #[config(secret, with = SignerConfigDeserializer)]
+        l1_reverter_sk: SignerConfig,
+    },
+    /// Revert committed L1 batches only; local blocks are kept as-is.
+    ///
+    /// Use this when you want to undo L1 commits while keeping the locally-produced blocks.
+    L1Revert {
+        /// First batch to revert. All committed batches >= this number are reverted.
+        from_batch_number: NonZeroU64,
+        /// Hash of the L1 transaction that committed batch `from_batch_number`. Not to be confused
+        /// with L1 batch header hash.
+        ///
+        /// Used as an idempotency guard: the revert is skipped unless the transaction currently
+        /// committing `from_batch_number` on L1 matches this hash.
+        #[config(with = Serde![str])]
+        from_batch_commit_tx_hash: B256,
+        /// Signer for `revertBatchesSharedBridge` transactions.
+        #[config(secret, with = SignerConfigDeserializer)]
+        l1_reverter_sk: SignerConfig,
+    },
+}
+
+impl RebuildConfig {
+    /// Returns the block `bounds` for the modes that rebuild local blocks (carrying the
+    /// `from_block_hash` idempotency guard), `None` for `L1Revert` which has no local block bounds.
+    pub fn bounds(&self) -> Option<&RebuildBounds> {
+        match self {
+            Self::BlockRebuild { bounds } | Self::DangerBlockRebuildWithL1Revert { bounds, .. } => {
+                Some(bounds)
+            }
+            Self::L1Revert { .. } => None,
+        }
+    }
+
+    /// Returns `RebuildOptions` if this config triggers a local block rebuild, `None` for
+    /// `L1Revert` which only acts on L1 without replaying local blocks.
+    pub fn rebuild_options(&self) -> Option<RebuildOptions> {
+        match self {
+            Self::BlockRebuild { bounds } | Self::DangerBlockRebuildWithL1Revert { bounds, .. } => {
+                Some(RebuildOptions {
+                    from_block_number: bounds.from_block_number,
+                    blocks_to_empty: bounds.blocks_to_empty.iter().copied().collect(),
+                    reset_timestamps: bounds.reset_timestamps,
+                })
+            }
+            Self::L1Revert { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
@@ -839,13 +978,13 @@ pub struct SequencerConfig {
     #[config(default_t = false)]
     pub revm_consistency_checker_revert_on_divergence: bool,
 
-    /// Block rebuild options.
+    /// Block rebuild / L1 revert options. See [`RebuildConfig`] for the three modes.
     #[config(nest)]
     #[config_validate(custom(
-        |root: &Config, value: &Option<RebuildBlocksConfig>| !root.consensus_config.enabled || value.is_none(),
+        |root: &Config, value: &Option<RebuildConfig>| !root.consensus_config.enabled || value.is_none(),
         "requires `consensus.enabled=false`"
     ))]
-    pub block_rebuild: Option<RebuildBlocksConfig>,
+    pub rebuild: Option<RebuildConfig>,
 
     /// If set, external node will sync up to and including this block number and then stop processing blocks.
     #[config(default)]
@@ -1008,23 +1147,53 @@ pub struct RpcConfig {
     #[config(default_t = 2.0)]
     pub estimate_gas_pubdata_price_factor: f64,
 
-    /// Per-method rate limits: map from RPC method name to max requests per second (across all
-    /// callers).  Use `"*"` for a global limit applied before per-method limits.  Methods absent
-    /// from the map are unrestricted.
-    ///
-    /// Accepts a JSON object or a comma-separated `method=rps` string, e.g.
-    /// `*=500,eth_call=100,debug_traceTransaction=5`.
-    #[config(default, with = Entries::WELL_KNOWN.delimited(",", "="), validate(
-        rate_limits_within_global,
-        "each per-method limit must not exceed the global `*` limit"
-    ))]
-    pub rate_limits: HashMap<String, NonZeroU32>,
+    /// Rate limits for incoming JSON-RPC requests.
+    #[config(nest)]
+    pub rate_limits: RpcRateLimitsConfig,
 
     /// List of disabled methods.
     /// Some stateful methods like `eth_newFilter` don't make sense when running in a cluster behind a load-balancer.
     /// They get rejected with -32601 "Method disabled".
     #[config(default, with = Delimited::new(","))]
     pub method_filter: HashSet<String>,
+}
+
+/// Rate-limit configuration for the JSON-RPC server.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(tag = "type", derive(Default))]
+pub enum RpcRateLimitsConfig {
+    /// No rate limiting.
+    #[config(default)]
+    None,
+    /// One global cap, plus per-method buckets: `m_rps` applied to each entry in
+    /// `m_methods`, and the explicit RPS in `custom_methods` for each entry there.
+    Tiered {
+        global_rps: NonZeroU32,
+        m_rps: NonZeroU32,
+        #[config(default, with = Delimited::new(","))]
+        m_methods: HashSet<String>,
+        #[config(default, with = Entries::WELL_KNOWN.delimited(",", "="))]
+        custom_methods: HashMap<String, NonZeroU32>,
+    },
+}
+
+impl From<RpcRateLimitsConfig> for zksync_os_rpc::RateLimits {
+    fn from(c: RpcRateLimitsConfig) -> Self {
+        match c {
+            RpcRateLimitsConfig::None => Self::None,
+            RpcRateLimitsConfig::Tiered {
+                global_rps,
+                m_rps,
+                m_methods,
+                custom_methods,
+            } => Self::Tiered {
+                global_rps,
+                m_rps,
+                m_methods,
+                custom_methods,
+            },
+        }
+    }
 }
 
 /// L1 sender configuration. The signing key fields are only required on the Main Node;
@@ -1130,16 +1299,6 @@ pub struct ForceTransactionResubmissionConfig {
     /// Multiplier applied to `max_fee_per_blob_gas` when force transaction resubmission is enabled.
     #[config(default_t = 2.0, validate(is_positive_f64, "must be positive"))]
     pub max_fee_per_blob_gas_replacement_multiplier: f64,
-}
-
-fn rate_limits_within_global(limits: &HashMap<String, NonZeroU32>) -> bool {
-    let Some(&global) = limits.get("*") else {
-        return true;
-    };
-    limits
-        .iter()
-        .filter(|(k, _)| k.as_str() != "*")
-        .all(|(_, &v)| v <= global)
 }
 
 fn is_positive_f64(&val: &f64) -> bool {
@@ -1852,7 +2011,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
             gas_price_scale_factor: c.gas_price_scale_factor,
             estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
-            rate_limits: c.rate_limits.into_iter().map(Into::into).collect(),
+            rate_limits: c.rate_limits.into(),
             method_filter: c.method_filter,
         }
     }
@@ -2072,6 +2231,15 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
     }
 }
 
+impl From<InteropFeeUpdaterConfig> for zksync_os_mempool::InteropFeeUpdaterConfig {
+    fn from(c: InteropFeeUpdaterConfig) -> Self {
+        Self {
+            polling_interval: c.polling_interval,
+            update_deviation_percentage: c.update_deviation_percentage,
+        }
+    }
+}
+
 impl From<MempoolConfig> for zksync_os_mempool::PoolConfig {
     fn from(c: MempoolConfig) -> Self {
         Self {
@@ -2086,16 +2254,6 @@ impl From<MempoolTxValidatorConfig> for zksync_os_mempool::TxValidatorConfig {
     fn from(c: MempoolTxValidatorConfig) -> Self {
         Self {
             max_input_bytes: c.max_input_bytes,
-        }
-    }
-}
-
-impl From<RebuildBlocksConfig> for RebuildOptions {
-    fn from(c: RebuildBlocksConfig) -> Self {
-        Self {
-            from_block: c.from_block,
-            blocks_to_empty: c.blocks_to_empty.into_iter().collect(),
-            reset_timestamps: c.reset_timestamps,
         }
     }
 }

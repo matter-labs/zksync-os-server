@@ -3,25 +3,12 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use std::time::Duration;
-use zksync_os_alloy_ext::provider::ZksyncApi;
-use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert};
+use zksync_os_integration_tests::l1_helpers::fetch_l1_state;
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
-use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
+use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, test_multisetup};
 
 const TRANSACTIONS_TO_SEND_BEFORE_RESTART: usize = 5;
-
-async fn fetch_l1_state(tester: &Tester) -> anyhow::Result<L1State> {
-    let chain_id = tester.l2_provider.get_chain_id().await?;
-    let bridgehub_address = tester.l2_zk_provider.get_bridgehub_contract().await?;
-    L1State::fetch(
-        tester.l1_provider().clone(),
-        tester.gateway_eth_provider(),
-        bridgehub_address,
-        chain_id,
-    )
-    .await
-}
 
 /// Verifies that a node running with the batcher disabled can be restarted in normal mode and
 /// will commit all previously-accumulated blocks to L1.

@@ -300,6 +300,10 @@ pub enum L1WatcherError {
         "batch {0} was committed on L1 but not submitted by this session; likely a pending tx from a prior crash"
     )]
     UnexpectedCommit(u64),
+    #[error(
+        "L1 batches were reverted on the settlement layer (new committed batch count = {0}); restarting to re-sync from the main node"
+    )]
+    L1Reverted(u64),
     #[error("output has been closed")]
     OutputClosed,
 }

@@ -11,8 +11,8 @@ use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
-    Config, ConfigArgs, ConfigValidate, PrometheusConfig, ProofStorageConfig, RebuildBlocksConfig,
-    StateBackendConfig, build_external_config, load_config_file_sources,
+    Config, ConfigArgs, ConfigValidate, PrometheusConfig, ProofStorageConfig, RebuildBounds,
+    RebuildConfig, StateBackendConfig, build_external_config, load_config_file_sources,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -359,17 +359,23 @@ fn load_internal_config(config: &mut Config) {
         .l2_signer_blacklist
         .extend(internal_config.l2_signer_blacklist);
     if let Some(failing_block) = internal_config.failing_block {
-        if config.sequencer_config.block_rebuild.is_some() {
+        if config.sequencer_config.rebuild.is_some() {
             panic!(
                 "External config specifies block rebuild: {:?} and internal config specifies failing block: {}. \
                  Please remove one of these settings to avoid conflicts.",
-                config.sequencer_config.block_rebuild, failing_block
+                config.sequencer_config.rebuild, failing_block
             );
         } else {
-            config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
-                from_block: failing_block,
-                blocks_to_empty: vec![failing_block],
-                reset_timestamps: false,
+            config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
+                bounds: RebuildBounds {
+                    from_block_number: failing_block,
+                    from_block_hash: internal_config.failing_block_hash.expect(
+                        "internal_config.json has `failing_block` but no `failing_block_hash`; \
+                         clear `failing_block` manually if the rebuild already ran",
+                    ),
+                    blocks_to_empty: vec![failing_block],
+                    reset_timestamps: false,
+                },
             });
         }
     }

@@ -9,7 +9,7 @@ pub mod config;
 pub mod default_protocol_version;
 mod en_remote_config;
 mod init_tx_forwarder;
-mod migration_gate;
+mod l1_revert;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
 pub mod prover_api;
@@ -22,13 +22,16 @@ pub mod util;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
-use crate::command_source::{ConsensusNodeCommandSource, ExternalNodeCommandSource};
+use crate::command_source::{
+    ConsensusNodeCommandSource, ExternalNodeCommandSource, RebuildOptions,
+};
 use crate::config::{
-    Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
+    Config, ProverApiConfig, RebuildConfig, base_token_price_updater_config, gas_adjuster_config,
     report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
 use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
+use crate::l1_revert::revert_l1_on_startup;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -44,7 +47,7 @@ use crate::provider::{ProviderKind, build_node_provider};
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
-use alloy::primitives::BlockNumber;
+use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
 use anyhow::Context;
 use jsonrpsee::http_client::HttpClient;
@@ -66,7 +69,6 @@ use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
-use zksync_os_interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -75,8 +77,9 @@ use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::L1PersistBatchWatcher;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1FinalizedExecuteWatcher,
-    MigrationFinalizedWatcher, SettlementLayerWatcher,
+    L1RevertWatcher,
 };
+use zksync_os_mempool::LocalEthCall;
 use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
@@ -113,9 +116,7 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord,
     WriteReplay, WriteRepository, WriteState,
 };
-use zksync_os_types::{
-    ExecutionVersion, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
-};
+use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const RAFT_DB_NAME: &str = "raft";
@@ -183,6 +184,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .await
                 .expect("Cannot load remote config from Main Node")
         };
+
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
     let l1_provider = build_node_provider(
@@ -208,37 +210,73 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         None
     };
 
-    tracing::info!("Reading L1 state");
-    let l1_state = if node_role.is_main() && config.batcher_config.enabled {
-        // The batcher node must wait for any pending L1 commit/prove/execute transactions
-        // (from a prior run) to be mined before starting, so it doesn't conflict with itself.
-        // Non-batcher consensus nodes never submit L1 transactions, so they don't need this
-        // wait: calling fetch_finalized on them would spuriously fail when a concurrently
-        // running batcher node keeps submitting new batch transactions.
-        L1State::fetch_finalized(
-            l1_provider.clone(),
-            gateway_provider.clone(),
-            bridgehub_address,
-            chain_id,
-        )
-        .await
-        .expect("failed to fetch finalized L1 state")
+    // Genesis and the repository manager are initialized here (before the startup revert) so
+    // that the `from_block_hash` guard can read the current local block hash.
+    let diamond_proxy_l1 =
+        L1State::resolve_diamond_proxy_l1(l1_provider.clone(), bridgehub_address, chain_id)
+            .await
+            .expect("failed to resolve L1 diamond proxy");
+
+    let genesis = Genesis::new(
+        genesis_input_source.clone(),
+        diamond_proxy_l1.clone(),
+        chain_id,
+    );
+
+    tracing::info!("Initializing RepositoryManager");
+    let repositories = RepositoryManager::new(
+        config.general_config.blocks_to_retain_in_memory,
+        config.general_config.rocks_db_path.join(REPOSITORY_DB_NAME),
+        &genesis,
+    )
+    .await;
+
+    // Apply the `from_block_hash` idempotency guard once, up front, to derive the *effective*
+    // rebuild config used for the rest of startup. If the configured rebuild already ran on a
+    // prior startup (hash no longer matches), it is dropped here so BOTH the L1 revert (stage 1,
+    // below) and the local block rebuild (stage 2, downstream) are skipped.
+    let rebuild_config = if node_role.is_main() {
+        let configured = config.sequencer_config.rebuild.clone();
+        match configured.as_ref().and_then(|r| r.bounds()) {
+            Some(bounds)
+                if !from_block_hash_matches(
+                    &repositories,
+                    bounds.from_block_number,
+                    bounds.from_block_hash,
+                )
+                .expect("failed to evaluate startup rebuild from_block_hash guard") =>
+            {
+                None
+            }
+            _ => configured,
+        }
     } else {
-        L1State::fetch(
-            l1_provider.clone(),
-            gateway_provider.clone(),
-            bridgehub_address,
-            chain_id,
-        )
-        .await
-        .expect("failed to fetch L1 state")
+        config.sequencer_config.rebuild.clone()
     };
+    // What the local block-rebuild stage (stage 2) should replay, if anything.
+    let rebuild_options = rebuild_config.as_ref().and_then(|r| r.rebuild_options());
+
+    // Fetch the L1 state, performing the configured startup L1 revert first.
+    tracing::info!("Reading L1 state");
+    let l1_state = fetch_l1_state_with_startup_revert(
+        &config,
+        node_role,
+        rebuild_config.as_ref(),
+        &l1_provider,
+        gateway_provider.as_ref(),
+        bridgehub_address,
+        chain_id,
+    )
+    .await
+    .expect("failed to determine L1 state");
+
     let settles_on_gateway = l1_state.settles_on_gateway();
     let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
         l1_provider.clone()
     } else {
         gateway_provider.clone().unwrap()
     };
+
     tracing::info!(?l1_state, settles_on_gateway, "L1 state");
     l1_state.report_metrics();
     if node_role.is_main() {
@@ -279,12 +317,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         }
     }
 
-    let genesis = Genesis::new(
-        genesis_input_source.clone(),
-        l1_state.diamond_proxy_l1.clone(),
-        chain_id,
-    );
-
     prepare_raft_storage(&config).expect("failed to prepare raft storage");
 
     tracing::info!("Initializing BlockReplayStorage");
@@ -301,14 +333,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("Initializing Tree RocksDB");
     let tree_db = TreeManager::load_or_initialize_tree(
         Path::new(&config.general_config.rocks_db_path.join(STATE_TREE_DB_NAME)),
-        &genesis,
-    )
-    .await;
-
-    tracing::info!("Initializing RepositoryManager");
-    let repositories = RepositoryManager::new(
-        config.general_config.blocks_to_retain_in_memory,
-        config.general_config.rocks_db_path.join(REPOSITORY_DB_NAME),
         &genesis,
     )
     .await;
@@ -365,7 +389,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_l1_executed_block,
     };
 
-    if let Some(block_rebuild) = &config.sequencer_config.block_rebuild
+    if let Some(from_block_number) = rebuild_options.as_ref().map(|o| o.from_block_number)
         && node_role.is_main()
     {
         // The assertion is only relevant for the main node.
@@ -373,9 +397,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // But the main node is expected to only produce blocks on top of committed L1 blocks,
         // as those can't be re-sequenced.
         assert!(
-            block_rebuild.from_block > node_startup_state.last_l1_committed_block,
-            "rebuild_from_block must be > last_l1_committed_block, got {} <= {}",
-            block_rebuild.from_block,
+            from_block_number > node_startup_state.last_l1_committed_block,
+            "rebuild_from_block_number must be > last_l1_committed_block, got {} <= {}",
+            from_block_number,
             node_startup_state.last_l1_committed_block
         );
     }
@@ -405,7 +429,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 node_startup_state.repositories_persisted_block
             };
         // Some batches committed - starting from an already committed batch
-        determine_starting_block(&config, &node_startup_state, &state, last_matching_block)
+        determine_starting_block(
+            &config,
+            &node_startup_state,
+            &state,
+            last_matching_block,
+            rebuild_options.as_ref(),
+        )
     } else {
         // No batches committed - starting from genesis.
         0
@@ -592,6 +622,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .run(()),
     );
 
+    // External nodes restart themselves on an L1 batch revert to resync correct data.
+    if node_role.is_external() {
+        runtime.spawn_critical_task(
+            "l1 revert watcher",
+            L1RevertWatcher::create_watcher(
+                config.l1_watcher_config.clone().into(),
+                node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                node_startup_state.l1_state.sl_block_number,
+            )
+            .run(),
+        );
+    }
+
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
     assert!(
         first_replay_record.is_some() || starting_block == 1,
@@ -632,51 +675,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             exec_version >= ExecutionVersion::V6,
             "Policy service requires execution version V6 or later (protocol >= v31.0), \
              but current protocol version {current_protocol_version} uses {exec_version:?}"
-        );
-    }
-
-    // Last-finalized migration counter, the sole input to `MigrationGate`'s pause decision.
-    // Always created so the gate has a stable receiver regardless of protocol version; on
-    // pre-v31 chains it stays at 0 (no migrations exist) and the gate is transparent.
-    let (last_finalized_migration_sender, last_finalized_migration_receiver) =
-        watch::channel::<u64>(0);
-
-    // Carries the trigger batch number from MigrationGate to SettlementLayerWatcher.
-    // None until MigrationGate detects the SetSLChainId batch; Some(N) after detection.
-    let (migration_triggered_sender, migration_triggered_receiver) =
-        watch::channel::<Option<u64>>(None);
-
-    if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
-        // Initializes `last_finalized_migration` from the SL's `migrationNumber(chainId)` and,
-        // if the current SL interval migration has not yet finalized, spawns a watcher to track
-        // future `MigrationFinalized` events. When the migration is already finalized at startup
-        // the watcher is skipped — the seeded counter alone keeps the gate transparent.
-        let migration_finalized_watcher = MigrationFinalizedWatcher::create_watcher(
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
-            node_startup_state.l1_state.bridgehub_sl.clone(),
-            &node_startup_state.l1_state.settlement_layer_intervals,
-            chain_id,
-            node_startup_state.l1_state.l1_chain_id,
-            config.l1_watcher_config.clone().into(),
-            last_finalized_migration_sender,
-        )
-        .await
-        .expect("failed to start migration finalized watcher");
-        if let Some(watcher) = migration_finalized_watcher {
-            runtime.spawn_critical_task("migration finalized watcher", watcher.run(()));
-        }
-
-        // Crashes the node when getSettlementLayer() changes, forcing a restart against the
-        // new settlement layer.
-        runtime.spawn_critical_task(
-            "settlement layer watcher",
-            SettlementLayerWatcher::new(
-                node_startup_state.l1_state.diamond_proxy_l1.clone(),
-                node_startup_state.l1_state.settlement_layer_address,
-                config.l1_watcher_config.poll_interval,
-                migration_triggered_receiver,
-            )
-            .run(),
         );
     }
 
@@ -769,22 +767,49 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         effective_pubdata_mode,
     );
 
+    let persistent_batch_storage =
+        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
+    let rpc_storage = RpcStorage::new(
+        repositories.clone(),
+        block_replay_storage.clone(),
+        finality_storage.clone(),
+        persistent_batch_storage.clone(),
+        state.clone(),
+        tree_for_rpc,
+    );
+
+    // Mini-component capable of doing local `eth_call` without going through RPC. Needed for
+    // interop fee updater so it can query the current interop fee.
+    let local_eth_call = Box::new(EthCallHandler::new(
+        config.rpc_config.clone().into(),
+        rpc_storage.clone(),
+        chain_id,
+        last_constructed_block_ctx_receiver.clone(),
+        // Interop fee updater runs inside the node and is not a user-facing
+        // RPC surface, so the admit boundary doesn't apply.
+        None,
+    )) as Box<dyn LocalEthCall>;
+
     let pool = Pool::new(
         runtime.clone(),
         genesis.clone(),
         &node_startup_state.l1_state,
         zksync_os_mempool::Config {
+            node_role,
             chain_id,
             gateway_chain_id: config.general_config.gateway_chain_id,
             interop_roots_per_tx: config.sequencer_config.interop_roots_per_tx,
             bytecode_supplier_address,
             l1_watcher_config: config.l1_watcher_config.clone().into(),
+            interop_fee_updater_config: config.interop_fee_updater_config.clone().into(),
         },
+        local_eth_call,
+        base_token_price_handle.clone(),
+        // todo: eventually this should be initialized inside `Pool::new`
         l2_subpool.clone(),
     )
     .await
     .expect("failed to create mempool");
-    let interop_fee_subpool = pool.interop_fee_subpool().clone();
     let block_context_provider = BlockContextProvider::new(
         fee_provider,
         pool,
@@ -806,16 +831,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // ========== Start L1 Persist Batch Watcher ===========
 
-    let persistent_batch_storage =
-        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
-    let rpc_storage = RpcStorage::new(
-        repositories.clone(),
-        block_replay_storage.clone(),
-        finality_storage.clone(),
-        persistent_batch_storage.clone(),
-        state.clone(),
-        tree_for_rpc,
-    );
     runtime.spawn_critical_task("l1 batch persist watcher", {
         let config = config.l1_watcher_config.clone();
         let settlement_layer_intervals = node_startup_state
@@ -846,45 +861,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state_clone.compact_periodically_optional(),
     );
 
-    if node_role.is_main()
-        && settles_on_gateway
-        && current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0)
-    {
-        let eth_call_handler = EthCallHandler::new(
-            config.rpc_config.clone().into(),
-            rpc_storage.clone(),
-            chain_id,
-            last_constructed_block_ctx_receiver.clone(),
-            // Interop fee updater runs inside the node and is not a user-facing
-            // RPC surface, so the admit boundary doesn't apply.
-            None,
-        );
-        // todo: make this a subcomponent of mempool
-        let interop_fee_updater = InteropFeeUpdater::new(
-            eth_call_handler,
-            sl_provider.clone().erased(),
-            interop_fee_subpool,
-            base_token_price_handle.clone(),
-            InteropFeeUpdaterConfig {
-                polling_interval: config.interop_fee_updater_config.polling_interval,
-                update_deviation_percentage: config
-                    .interop_fee_updater_config
-                    .update_deviation_percentage,
-            },
-        );
-        runtime.spawn_critical_with_graceful_shutdown_signal(
-            "interop fee updater",
-            |shutdown| async move {
-                tokio::select! {
-                    _ = interop_fee_updater.run() => {}
-                    _guard = shutdown => {
-                        tracing::info!("interop fee updater graceful shutdown complete");
-                    }
-                }
-            },
-        );
-    }
-
     let replay_archive =
         init_replay_archive(config.replay_archive_config.clone().into(), runtime).await;
     if let (Some((replay_archive_sender, _)), Some(inserted_genesis_replay_record)) =
@@ -909,6 +885,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             runtime,
             state.clone(),
             starting_block,
+            rebuild_options,
             repositories.clone(),
             block_context_provider,
             tree_db,
@@ -923,8 +900,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             commit_submitted_tx,
             verify_request_tx,
             verify_result_rx,
-            last_finalized_migration_receiver,
-            migration_triggered_sender,
             settles_on_gateway,
             effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
             replay_archiver,
@@ -938,7 +913,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state,
             archiving_block_replay_storage,
             runtime,
-            starting_block,
             block_context_provider,
             state.clone(),
             tree_db,
@@ -1016,6 +990,104 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("All components scheduled for initialization in {startup_time:?}");
 }
 
+/// Checks whether block `rebuild.from_block_number` currently has the expected `rebuild.from_block_hash`.
+///
+/// Returns `Ok(false)` (operation should be skipped) when the hashes differ — distinguishing the
+/// two reasons in the logs:
+/// - block missing locally: likely a misconfigured `from_block_number` (typo / beyond local tip);
+/// - hash changed: the rebuild/revert already ran on a previous startup (the expected case).
+fn from_block_hash_matches(
+    repositories: &dyn ReadRepository,
+    from_block_number: u64,
+    from_block_hash: alloy::primitives::BlockHash,
+) -> anyhow::Result<bool> {
+    let current_hash = repositories
+        .get_block_by_number(from_block_number)
+        .with_context(|| format!("failed to read block {from_block_number} from local repository"))?
+        .map(|b| b.hash());
+    Ok(match current_hash {
+        Some(hash) if hash == from_block_hash => true,
+        Some(hash) => {
+            tracing::info!(
+                from_block_number,
+                current_hash = ?hash,
+                ?from_block_hash,
+                "skipping startup rebuild/revert: from_block_hash changed (already ran)"
+            );
+            false
+        }
+        None => {
+            tracing::warn!(
+                from_block_number,
+                ?from_block_hash,
+                "skipping startup rebuild/revert: block `from_block_number` not found locally \
+                 (check `from_block_number` is correct — it may be a typo or beyond the local tip)"
+            );
+            false
+        }
+    })
+}
+
+/// Fetches the L1 state, performing any configured startup L1 revert first, and returns the
+/// post-revert state.
+async fn fetch_l1_state_with_startup_revert(
+    config: &Config,
+    node_role: NodeRole,
+    rebuild: Option<&RebuildConfig>,
+    l1_provider: &NodeProvider,
+    gateway_provider: Option<&NodeProvider>,
+    bridgehub_address: Address,
+    chain_id: u64,
+) -> anyhow::Result<L1State> {
+    // The batcher node must wait for any pending L1 commit/prove/execute transactions (from a
+    // prior run) to be mined before starting, so it doesn't conflict with itself. Non-batcher
+    // consensus nodes never submit L1 transactions, so they don't need this wait: calling
+    // fetch_finalized on them would spuriously fail when a concurrently running batcher node keeps
+    // submitting new batch transactions.
+    let use_finalized = node_role.is_main() && config.batcher_config.enabled;
+    let l1_state = L1State::fetch_with_finality(
+        use_finalized,
+        l1_provider.clone(),
+        gateway_provider.cloned(),
+        bridgehub_address,
+        chain_id,
+    )
+    .await
+    .context("failed to fetch L1 state")?;
+
+    if node_role.is_main()
+        && let Some(rebuild) = rebuild
+    {
+        let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
+            l1_provider.clone()
+        } else {
+            gateway_provider
+                .cloned()
+                .context("chain settles on Gateway but no gateway RPC provider is configured")?
+        };
+
+        let l1_revert_ran = revert_l1_on_startup(rebuild, config, &l1_state, &sl_provider)
+            .await
+            .context("startup l1 revert failed")?;
+
+        if l1_revert_ran {
+            // The revert invalidated the batch-finality numbers; re-fetch so the returned state
+            // reflects the post-revert chain.
+            return L1State::fetch_with_finality(
+                use_finalized,
+                l1_provider.clone(),
+                gateway_provider.cloned(),
+                bridgehub_address,
+                chain_id,
+            )
+            .await
+            .context("failed to fetch L1 state after startup revert");
+        }
+    }
+
+    Ok(l1_state)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: &Config,
@@ -1025,6 +1097,7 @@ async fn run_main_node_pipeline(
     runtime: &Runtime,
     state: impl ReadStateHistory + WriteState + Clone,
     starting_block: u64,
+    rebuild_options: Option<RebuildOptions>,
     repositories: impl WriteRepository + Clone,
     block_context_provider: BlockContextProvider<impl L2Subpool>,
     tree: MerkleTree<RocksDBWrapper>,
@@ -1039,8 +1112,6 @@ async fn run_main_node_pipeline(
     commit_submitted_tx: watch::Sender<u64>,
     verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
-    last_finalized_migration: watch::Receiver<u64>,
-    migration_triggered: watch::Sender<Option<u64>>,
     settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
     replay_archiver: Option<impl ReplayArchiver>,
@@ -1060,18 +1131,13 @@ async fn run_main_node_pipeline(
     let pipeline_gate = monitor.subscribe_gate();
 
     let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::unbounded_channel();
-    let (applied_block_number_sender, applied_block_number_receiver) =
-        watch::channel(starting_block.saturating_sub(1));
+    let (applied_block_number_sender, applied_block_number_receiver) = watch::channel(None);
 
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ConsensusNodeCommandSource {
             block_replay_storage: block_replay_storage.clone(),
             starting_block,
-            rebuild_options: config
-                .sequencer_config
-                .block_rebuild
-                .clone()
-                .map(Into::into),
+            rebuild_options,
             replays_to_execute,
             pipeline_gate,
             leadership,
@@ -1241,10 +1307,6 @@ async fn run_main_node_pipeline(
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy_sl.clone(),
         ))
-        .pipe(migration_gate::MigrationGate {
-            last_finalized_migration,
-            migration_triggered,
-        })
         .pipe_opt(replay_archiver.map(|replay_archiver| {
             ReplayArchiveGateComponent::new(replay_archiver, block_replay_storage.clone())
         }))
@@ -1304,7 +1366,6 @@ async fn run_en_pipeline(
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     runtime: &Runtime,
-    starting_block: u64,
     block_context_provider: BlockContextProvider<impl L2Subpool>,
     state: impl ReadStateHistory + WriteState + Clone,
     tree: MerkleTree<RocksDBWrapper>,
@@ -1322,8 +1383,7 @@ async fn run_en_pipeline(
             .rocks_db_path
             .join(INTERNAL_CONFIG_FILE_NAME),
     );
-    let (applied_block_number_sender, applied_block_number_receiver) =
-        watch::channel(starting_block.saturating_sub(1));
+    let (applied_block_number_sender, applied_block_number_receiver) = watch::channel(None);
 
     let monitor =
         BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver.clone());
@@ -1627,6 +1687,7 @@ fn determine_starting_block(
     node_startup_state: &NodeStateOnStartup,
     state: &impl ReadStateHistory,
     last_matching_block: BlockNumber,
+    rebuild_options: Option<&RebuildOptions>,
 ) -> BlockNumber {
     assert!(
         node_startup_state.l1_state.last_committed_batch > 0,
@@ -1656,11 +1717,7 @@ fn determine_starting_block(
             *state.block_range_available().end(),
             // If block rebuild (aka block reversion) is configured, we should ensure we replay
             // all the blocks we are rebuilding
-            config
-                .sequencer_config
-                .block_rebuild
-                .as_ref()
-                .map_or(u64::MAX, |block_rebuild| block_rebuild.from_block),
+            rebuild_options.map_or(u64::MAX, |opts| opts.from_block_number),
         ]
         .into_iter()
         .min()

@@ -15,8 +15,6 @@ zksync_os_contract_interface.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_batch_types.workspace = true
-zk_os_api.workspace = true
-zk_os_basic_system.workspace = true
 
 reth-tasks.workspace = true
 
@@ -31,3 +29,7 @@ thiserror.workspace = true
 futures.workspace = true
 backon.workspace = true
 rangemap.workspace = true
+
+[dev-dependencies]
+zk_os_api.workspace = true
+zk_os_basic_system.workspace = true
