@@ -1,11 +1,10 @@
 genesis:
-  bridgehub_address: '0x69c3388f45f7f944300141ff5735d59f15e4c9f0'
-  bytecode_supplier_address: '0xa96c213b3a2db7d69eb4fd786b8e8d410860c06d'
+  bridgehub_address: '0x095078e6f0255e41ac88093f78998cdb1ca83712'
+  bytecode_supplier_address: '0xf8e8848493c916b29305044ba4348dfe70f0f26d'
   genesis_input_path: ./local-chains/v31.0/genesis.json
   chain_id: 6565
 l1_sender:
-  pubdata_mode: Blobs
-  operator_commit_sk: '0x62364ecc1a0007cc3ba165e57000a5d890f2d69d9e9b4a1e9e86af646c1f9b25'
-  operator_prove_sk: '0xcfa9ab3c4cf0c6e4d207cf84cb95bbf87885174182f91b9c947b2c7a6b89439d'
-  operator_execute_sk: '0xf292a0f460be19ab73c57c33d4a979ddf6cf4385c86d12158b393ece98ad4d30'
-
+  pubdata_mode: Validium
+  operator_commit_sk: '0x47b526089bf4054f4fd1c455f948ba91bba8be01f7220cb32c6eb43d43e84fc4'
+  operator_prove_sk: '0x47bf977990ae134882d8429b31a5d201d4085b0ab336766c09757590bc3a90c5'
+  operator_execute_sk: '0x4a2f5758e3394c9dbd5d09328d31f47821ef2edd94da90cedb3b8b04b1b6466e'

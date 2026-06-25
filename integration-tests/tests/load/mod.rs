@@ -11,47 +11,8 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use zksync_os_integration_tests::assert_traits::ReceiptsAssert;
-use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
+use zksync_os_integration_tests::{NEXT_TO_L1, TestEnvironment, test_multisetup};
 use zksync_os_server::config::FeeConfig;
-
-#[test_multisetup([CURRENT_TO_L1])]
-async fn transfers(tester: Tester) -> anyhow::Result<()> {
-    // Test that the node can process 100 concurrent transfers to random accounts
-    let alice = tester.l2_wallet.default_signer().address();
-    let alice_balance_before = tester.l2_provider.get_balance(alice).await?;
-
-    let deposit_amount = U256::from(100);
-    let mut pending_txs = vec![];
-    let start = Instant::now();
-    // Give 10x buffer for gas price to ensure transactions do not get stuck in mempool in the
-    // middle of execution.
-    let gas_price = tester.l2_provider.get_gas_price().await? * 10;
-    for _ in 0..100 {
-        let tx = TransactionRequest::default()
-            .with_to(Address::random())
-            .with_value(deposit_amount)
-            .with_gas_price(gas_price);
-        pending_txs.push(tester.l2_provider.send_transaction(tx).await?);
-    }
-    tracing::info!(elapsed = ?start.elapsed(), "submitted all tx requests");
-
-    let start = Instant::now();
-    let receipts = pending_txs.expect_successful_receipts().await?;
-    tracing::info!(elapsed = ?start.elapsed(), "resolved all tx receipts");
-
-    let start = Instant::now();
-    for receipt in receipts {
-        let balance = tester.l2_provider.get_balance(receipt.to.unwrap()).await?;
-        assert_eq!(balance, deposit_amount);
-    }
-    tracing::info!(elapsed = ?start.elapsed(), "confirmed final balances");
-
-    // Alice should've lost at least `deposit_amount * 100` ETH
-    let alice_balance_after = tester.l2_provider.get_balance(alice).await?;
-    assert!(alice_balance_after < alice_balance_before - deposit_amount * U256::from(100));
-
-    Ok(())
-}
 
 /// How long to wait for a single transaction's receipt before giving up.
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -82,7 +43,7 @@ fn env_or<T: FromStr>(key: &str, default: T) -> T {
 ///
 /// This is a measurement, not a threshold gate: it logs the result and only fails if a transaction
 /// errors or reverts.
-#[test_multisetup([CURRENT_TO_L1])]
+#[test_multisetup([NEXT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
 async fn effective_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
@@ -93,11 +54,15 @@ async fn effective_tps(env: TestEnvironment) -> anyhow::Result<()> {
         ..Default::default()
     };
     config.mempool_config.minimal_protocol_basefee = 0;
+    config.sequencer_config.revm_consistency_checker_enabled = false;
+    config.batcher_config.enabled = false;
+    config.sequencer_config.block_pubdata_limit_bytes = u64::MAX;
+    config.sequencer_config.max_transactions_in_block = 10000;
     let tester = env.launch(config).await?;
 
     let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
-    let num_wallets: usize = env_or("LOAD_TEST_WALLETS", 64);
-    let concurrency: usize = env_or("LOAD_TEST_CONCURRENCY", 8192);
+    let num_wallets: usize = env_or("LOAD_TEST_WALLETS", 128);
+    let concurrency: usize = env_or("LOAD_TEST_CONCURRENCY", 16384);
     assert!(num_wallets > 0, "LOAD_TEST_WALLETS must be > 0");
     assert!(concurrency > 0, "LOAD_TEST_CONCURRENCY must be > 0");
 

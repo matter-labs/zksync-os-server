@@ -84,6 +84,13 @@ impl TestCase {
         }
     }
 
+    pub const fn next_to_l1() -> Self {
+        Self {
+            protocol_version: NEXT_PROTOCOL_VERSION,
+            settlement_layer: SettlementLayer::L1,
+        }
+    }
+
     pub const fn next_to_gateway() -> Self {
         Self {
             protocol_version: NEXT_PROTOCOL_VERSION,
@@ -97,6 +104,7 @@ impl TestCase {
 }
 
 pub const CURRENT_TO_L1: TestCase = TestCase::current_to_l1();
+pub const NEXT_TO_L1: TestCase = TestCase::next_to_l1();
 pub const NEXT_TO_GATEWAY: TestCase = TestCase::next_to_gateway();
 
 /// Set of private keys for batch verification participants.
@@ -1073,14 +1081,16 @@ async fn ensure_test_wallet_funded(
                 .to(beneficiary)
                 .value(amount),
         )
-        .await?;
+        .await?
+        .max(1_000_000);
     let tx_base_cost = bridgehub
         .l2_transaction_base_cost(
             max_fee_per_gas + max_priority_fee_per_gas,
             gas_limit,
             REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
         )
-        .await?;
+        .await?
+        .max(U256::from(1_000_000_000_000_000u128));
 
     let receipt = l1
         .provider
@@ -1100,9 +1110,11 @@ async fn ensure_test_wallet_funded(
                 .max_priority_fee_per_gas(max_priority_fee_per_gas)
                 .into_transaction_request(),
         )
-        .await?
+        .await
+        .context("failed to send funding transaction")?
         .get_receipt()
-        .await?;
+        .await
+        .context("failed to wait for funding transaction")?;
     let l1_to_l2_tx_log = receipt
         .logs()
         .iter()
