@@ -17,4 +17,3 @@ anyhow.workspace = true
 tracing.workspace = true
 
 reth-tasks.workspace = true
-zksync_os_raft.workspace = true

@@ -1,12 +1,9 @@
 use alloy::primitives::{B256, Bytes};
 use alloy::providers::{DynProvider, Provider};
 use alloy::transports::{RpcError, TransportErrorKind};
-use std::collections::HashMap;
-use tokio::sync::watch;
-use zksync_os_raft::RaftConsensusStatus;
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
 
-/// ENs use `main_node_rpc_url`; with consensus they may hit any node, which forwards to leader.
+/// Forwards external-node transactions to `main_node_rpc_url`.
 #[derive(Clone)]
 pub struct TxForwarder {
     target: TxForwardTarget,
@@ -16,12 +13,6 @@ pub struct TxForwarder {
 enum TxForwardTarget {
     /// Used on ENs: forwards to `main_node_rpc_url`.
     StaticTarget(TxForwardEndpoint),
-    /// Used on consensus nodes: forwards to the current leader from Raft status.
-    ConsensusLeader {
-        node_id: String,
-        status_rx: watch::Receiver<Option<RaftConsensusStatus>>,
-        providers: HashMap<String, TxForwardEndpoint>,
-    },
 }
 
 #[derive(Clone)]
@@ -40,20 +31,6 @@ impl TxForwarder {
     pub fn static_target(endpoint: TxForwardEndpoint) -> Self {
         Self {
             target: TxForwardTarget::StaticTarget(endpoint),
-        }
-    }
-
-    pub fn consensus_leader(
-        node_id: String,
-        status_rx: watch::Receiver<Option<RaftConsensusStatus>>,
-        providers: HashMap<String, TxForwardEndpoint>,
-    ) -> Self {
-        Self {
-            target: TxForwardTarget::ConsensusLeader {
-                node_id,
-                status_rx,
-                providers,
-            },
         }
     }
 
@@ -84,30 +61,7 @@ impl TxForwarder {
     ) -> Result<Option<ZkTransactionReceipt>, TxForwardError> {
         match &self.target {
             TxForwardTarget::StaticTarget(endpoint) => {
-                Self::forward_to_endpoint(call, tx_hash, tx_bytes, None, endpoint).await
-            }
-            TxForwardTarget::ConsensusLeader {
-                node_id,
-                status_rx,
-                providers,
-            } => {
-                let status = status_rx.borrow().clone();
-                if status.as_ref().is_some_and(|status| status.is_leader) {
-                    Self::log_not_forwarding(call, tx_hash);
-                    return Ok(None);
-                }
-
-                let leader = status
-                    .and_then(|status| status.current_leader)
-                    .ok_or(TxForwardError::NoKnownLeader)?;
-                if leader == *node_id {
-                    return Err(TxForwardError::NoKnownLeader);
-                }
-                let endpoint = providers
-                    .get(&leader)
-                    .ok_or_else(|| TxForwardError::NoProvider(leader.clone()))?;
-
-                Self::forward_to_endpoint(call, tx_hash, tx_bytes, Some(&leader), endpoint).await
+                Self::forward_to_endpoint(call, tx_hash, tx_bytes, endpoint).await
             }
         }
     }
@@ -116,10 +70,9 @@ impl TxForwarder {
         call: TxForwardCall,
         tx_hash: B256,
         tx_bytes: &Bytes,
-        leader: Option<&str>,
         endpoint: &TxForwardEndpoint,
     ) -> Result<Option<ZkTransactionReceipt>, TxForwardError> {
-        Self::log_forwarding(call, tx_hash, leader, endpoint);
+        Self::log_forwarding(call, tx_hash, endpoint);
 
         match call {
             TxForwardCall::SendRawTransaction => {
@@ -135,44 +88,12 @@ impl TxForwarder {
         }
     }
 
-    fn log_not_forwarding(call: TxForwardCall, tx_hash: B256) {
+    fn log_forwarding(call: TxForwardCall, tx_hash: B256, endpoint: &TxForwardEndpoint) {
         match call {
             TxForwardCall::SendRawTransaction => {
-                tracing::debug!(%tx_hash, "not forwarding transaction: node is leader");
-            }
-            TxForwardCall::SendRawTransactionSync => {
-                tracing::debug!(%tx_hash, "not forwarding sync transaction: node is leader");
-            }
-        }
-    }
-
-    fn log_forwarding(
-        call: TxForwardCall,
-        tx_hash: B256,
-        leader: Option<&str>,
-        endpoint: &TxForwardEndpoint,
-    ) {
-        match (call, leader) {
-            (TxForwardCall::SendRawTransaction, Some(leader)) => {
-                tracing::debug!(
-                    %tx_hash,
-                    leader = %leader,
-                    rpc_url = %endpoint.rpc_url,
-                    "forwarding transaction to consensus leader"
-                );
-            }
-            (TxForwardCall::SendRawTransaction, None) => {
                 tracing::debug!(%tx_hash, rpc_url = %endpoint.rpc_url, "forwarding transaction");
             }
-            (TxForwardCall::SendRawTransactionSync, Some(leader)) => {
-                tracing::debug!(
-                    %tx_hash,
-                    leader = %leader,
-                    rpc_url = %endpoint.rpc_url,
-                    "forwarding sync transaction to consensus leader"
-                );
-            }
-            (TxForwardCall::SendRawTransactionSync, None) => {
+            TxForwardCall::SendRawTransactionSync => {
                 tracing::debug!(%tx_hash, rpc_url = %endpoint.rpc_url, "forwarding sync transaction");
             }
         }
@@ -187,10 +108,6 @@ enum TxForwardCall {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TxForwardError {
-    #[error("consensus leader is unknown")]
-    NoKnownLeader,
-    #[error("no RPC forwarder is configured for consensus leader {0}")]
-    NoProvider(String),
     #[error(transparent)]
     Rpc(#[from] RpcError<TransportErrorKind>),
 }
@@ -199,7 +116,6 @@ impl TxForwardError {
     pub(crate) fn as_rpc_error(&self) -> Option<&RpcError<TransportErrorKind>> {
         match self {
             Self::Rpc(err) => Some(err),
-            _ => None,
         }
     }
 }

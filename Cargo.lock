@@ -16197,24 +16197,10 @@ version = "0.20.7"
 dependencies = [
  "anyhow",
  "async-trait",
- "bincode 2.0.1",
- "dashmap 6.2.1",
  "futures",
- "openraft",
- "reth-network-peers",
- "reth-tasks",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.17",
  "tokio",
- "tracing",
- "zksync_os_consensus_types",
- "zksync_os_network",
- "zksync_os_rocksdb",
  "zksync_os_sequencer",
  "zksync_os_storage_api",
- "zksync_os_types",
 ]
 
 [[package]]
@@ -16357,7 +16343,6 @@ dependencies = [
  "zksync_os_metadata",
  "zksync_os_mini_merkle_tree",
  "zksync_os_multivm",
- "zksync_os_raft",
  "zksync_os_rpc_api",
  "zksync_os_storage",
  "zksync_os_storage_api",
@@ -16603,7 +16588,6 @@ dependencies = [
  "serde",
  "tokio",
  "tracing",
- "zksync_os_raft",
 ]
 
 [[package]]
