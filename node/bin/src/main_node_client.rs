@@ -34,7 +34,9 @@ where
 {
     call.retry(RETRY)
         .when(is_transient)
-        .notify(|err, after| tracing::warn!(%err, ?after, "main node unreachable; retrying"))
+        .notify(|err, after| {
+            tracing::warn!(%err, ?after, "main node unreachable; retrying in {after:?}: {err}")
+        })
         .await
 }
 
