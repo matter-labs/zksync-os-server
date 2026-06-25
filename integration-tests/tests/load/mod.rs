@@ -121,6 +121,17 @@ async fn effective_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let start = Instant::now();
     let deadline = start + duration;
 
+    // Optional CPU profiling: when `LOAD_TEST_FLAMEGRAPH=<path>` is set, sample the whole process
+    // (incl. the VM `spawn_blocking` thread) for the duration of the load and write a flamegraph SVG.
+    let flamegraph_path = std::env::var("LOAD_TEST_FLAMEGRAPH").ok();
+    let profiler_guard = flamegraph_path.as_ref().map(|_| {
+        pprof::ProfilerGuardBuilder::default()
+            .frequency(499)
+            .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+            .build()
+            .expect("failed to start profiler")
+    });
+
     let mut submitters = Vec::with_capacity(num_wallets);
     for provider in providers {
         let sem = sem.clone();
@@ -166,6 +177,18 @@ async fn effective_tps(env: TestEnvironment) -> anyhow::Result<()> {
     }
     for submitter in submitters {
         submitter.await??;
+    }
+
+    // Render the flamegraph (if profiling was enabled) before computing the summary.
+    if let (Some(guard), Some(path)) = (profiler_guard, flamegraph_path.as_ref()) {
+        match guard.report().build() {
+            Ok(report) => {
+                let file = std::fs::File::create(path)?;
+                report.flamegraph(file)?;
+                tracing::info!(path, "wrote flamegraph");
+            }
+            Err(err) => tracing::warn!(%err, "failed to build profiler report"),
+        }
     }
 
     // 5. Report. Effective TPS divides confirmed txs by the full elapsed time (submission window +
