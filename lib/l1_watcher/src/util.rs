@@ -1,6 +1,6 @@
 use crate::watcher::L1WatcherError;
 use alloy::consensus::Transaction;
-use alloy::primitives::{Address, BlockNumber, TxHash, U256};
+use alloy::primitives::{Address, BlockNumber, Log, TxHash, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
@@ -12,6 +12,7 @@ use zksync_os_batch_types::{CommittedBatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IChainAssetHandler;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
+use zksync_os_contract_interface::is_method_missing;
 use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
 use zksync_os_provider::NodeProvider;
 
@@ -59,11 +60,19 @@ pub async fn find_block_by_migration_number(
             if code.0.is_empty() {
                 return Ok(false);
             }
-            let res = instance
+            // At this block the address may have code but not yet be the ChainAssetHandler
+            // (e.g. a proxy upgraded to it only later), so `migrationNumber` reverts. Treat a
+            // revert as "not deployed yet" (false); real RPC errors still propagate.
+            let res = match instance
                 .migrationNumber(U256::from(chain_id))
                 .block(block.into())
                 .call()
-                .await?;
+                .await
+            {
+                Ok(res) => res,
+                Err(err) if is_method_missing(&err) => return Ok(false),
+                Err(err) => return Err(err.into()),
+            };
             Ok(res >= target)
         }
     })
@@ -360,6 +369,29 @@ pub async fn fetch_stored_batch_data(
     l1_block_number: BlockNumber,
     batch_number: u64,
 ) -> anyhow::Result<Option<DiscoveredCommittedBatch>> {
+    let Some((commit_log, tx_hash)) =
+        find_commit_log(zk_chain, l1_block_number, batch_number).await?
+    else {
+        return Ok(None);
+    };
+    let batch_info = fetch_committed_batch_data(zk_chain, tx_hash, l1_block_number, batch_number)
+        .await?
+        .into_stored();
+
+    Ok(Some(DiscoveredCommittedBatch {
+        batch_info,
+        block_range: commit_log.firstBlockNumber..=commit_log.lastBlockNumber,
+    }))
+}
+
+/// Finds the `ReportCommittedBatchRangeZKsyncOS` commit event for `batch_number` in
+/// `l1_block_number`, returning the decoded event together with the hash of the transaction that
+/// emitted it, or `None` if no matching event is present in that block.
+pub(crate) async fn find_commit_log(
+    zk_chain: &ZkChain<NodeProvider>,
+    l1_block_number: BlockNumber,
+    batch_number: u64,
+) -> anyhow::Result<Option<(Log<ReportCommittedBatchRangeZKsyncOS>, TxHash)>> {
     let logs = zk_chain
         .provider()
         .get_logs(
@@ -370,27 +402,15 @@ pub async fn fetch_stored_batch_data(
                 .to_block(l1_block_number),
         )
         .await?;
-    let Some((log, tx_hash)) = logs.into_iter().find_map(|log| {
+    Ok(logs.into_iter().find_map(|log| {
         let batch_log = ReportCommittedBatchRangeZKsyncOS::decode_log(&log.inner)
             .expect("unable to decode `ReportCommittedBatchRangeZKsyncOS` log");
-        if batch_log.batchNumber == batch_number {
-            Some((
+        (batch_log.batchNumber == batch_number).then(|| {
+            (
                 batch_log,
                 log.transaction_hash.expect("indexed log without tx hash"),
-            ))
-        } else {
-            None
-        }
-    }) else {
-        return Ok(None);
-    };
-    let batch_info = fetch_committed_batch_data(zk_chain, tx_hash, l1_block_number, batch_number)
-        .await?
-        .into_stored();
-
-    Ok(Some(DiscoveredCommittedBatch {
-        batch_info,
-        block_range: log.firstBlockNumber..=log.lastBlockNumber,
+            )
+        })
     }))
 }
 

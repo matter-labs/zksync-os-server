@@ -257,6 +257,15 @@ alloy::sol! {
         function upgradeCutDataBlock(uint256 protocolVersion) external view returns (uint256);
     }
 
+    // `ValidatorTimelock.sol`
+    // Used by the node startup flow to revert committed batches before local block rebuild.
+    #[sol(rpc)]
+    interface IValidatorTimelock {
+        function REVERTER_ROLE() external view returns (bytes32);
+        function hasRoleForChainId(uint256 _chainId, bytes32 _role, address _address) external view returns (bool);
+        function revertBatchesSharedBridge(address _chainAddress, uint256 _newLastBatch) external;
+    }
+
     // `SettlementLayerV31UpgradeBase.sol` — the per-chain upgrade init contract.
     // `NewUpgradeCutData` carries a placeholder `additionalForceDeploymentsData`
     // that `upgradeChainFromVersion` rewrites per-chain inside the delegatecall

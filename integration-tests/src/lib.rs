@@ -48,6 +48,7 @@ use zksync_os_types::{
 pub mod assert_traits;
 pub mod config;
 pub mod contracts;
+pub mod l1_helpers;
 pub mod multi_node;
 mod node_log;
 mod prover_tester;
@@ -56,6 +57,7 @@ pub mod rpc_recorder;
 pub mod test_config;
 pub mod upgrade;
 mod utils;
+pub mod wallets;
 
 /// L1 chain id as expected by contracts deployed in `l1-state.json.gz`
 const L1_CHAIN_ID: u64 = 31337;

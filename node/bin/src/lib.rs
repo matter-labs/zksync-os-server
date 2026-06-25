@@ -10,6 +10,7 @@ pub mod default_protocol_version;
 mod en_remote_config;
 mod init_tx_forwarder;
 mod main_node_client;
+mod l1_revert;
 mod node_state_on_startup;
 mod priority_tree_pipeline_step;
 pub mod prover_api;
@@ -22,14 +23,17 @@ pub mod util;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
-use crate::command_source::{ConsensusNodeCommandSource, ExternalNodeCommandSource};
+use crate::command_source::{
+    ConsensusNodeCommandSource, ExternalNodeCommandSource, RebuildOptions,
+};
 use crate::config::{
-    Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
+    Config, ProverApiConfig, RebuildConfig, base_token_price_updater_config, gas_adjuster_config,
     report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
 use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
 use crate::main_node_client::MainNodeClient;
+use crate::l1_revert::revert_l1_on_startup;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -45,7 +49,7 @@ use crate::provider::{ProviderKind, build_node_provider};
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
-use alloy::primitives::BlockNumber;
+use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
 use anyhow::Context;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
@@ -74,6 +78,7 @@ use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::L1PersistBatchWatcher;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1FinalizedExecuteWatcher,
+    L1RevertWatcher,
 };
 use zksync_os_mempool::LocalEthCall;
 use zksync_os_mempool::Pool;
@@ -111,7 +116,7 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord,
     WriteReplay, WriteRepository, WriteState,
 };
-use zksync_os_types::{ExecutionVersion, PubdataMode, TransactionAcceptanceState};
+use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const RAFT_DB_NAME: &str = "raft";
@@ -180,6 +185,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .await
                 .expect("Cannot load remote config from Main Node")
         };
+
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
     let l1_provider = build_node_provider(
@@ -205,37 +211,73 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         None
     };
 
-    tracing::info!("Reading L1 state");
-    let l1_state = if node_role.is_main() && config.batcher_config.enabled {
-        // The batcher node must wait for any pending L1 commit/prove/execute transactions
-        // (from a prior run) to be mined before starting, so it doesn't conflict with itself.
-        // Non-batcher consensus nodes never submit L1 transactions, so they don't need this
-        // wait: calling fetch_finalized on them would spuriously fail when a concurrently
-        // running batcher node keeps submitting new batch transactions.
-        L1State::fetch_finalized(
-            l1_provider.clone(),
-            gateway_provider.clone(),
-            bridgehub_address,
-            chain_id,
-        )
-        .await
-        .expect("failed to fetch finalized L1 state")
+    // Genesis and the repository manager are initialized here (before the startup revert) so
+    // that the `from_block_hash` guard can read the current local block hash.
+    let diamond_proxy_l1 =
+        L1State::resolve_diamond_proxy_l1(l1_provider.clone(), bridgehub_address, chain_id)
+            .await
+            .expect("failed to resolve L1 diamond proxy");
+
+    let genesis = Genesis::new(
+        genesis_input_source.clone(),
+        diamond_proxy_l1.clone(),
+        chain_id,
+    );
+
+    tracing::info!("Initializing RepositoryManager");
+    let repositories = RepositoryManager::new(
+        config.general_config.blocks_to_retain_in_memory,
+        config.general_config.rocks_db_path.join(REPOSITORY_DB_NAME),
+        &genesis,
+    )
+    .await;
+
+    // Apply the `from_block_hash` idempotency guard once, up front, to derive the *effective*
+    // rebuild config used for the rest of startup. If the configured rebuild already ran on a
+    // prior startup (hash no longer matches), it is dropped here so BOTH the L1 revert (stage 1,
+    // below) and the local block rebuild (stage 2, downstream) are skipped.
+    let rebuild_config = if node_role.is_main() {
+        let configured = config.sequencer_config.rebuild.clone();
+        match configured.as_ref().and_then(|r| r.bounds()) {
+            Some(bounds)
+                if !from_block_hash_matches(
+                    &repositories,
+                    bounds.from_block_number,
+                    bounds.from_block_hash,
+                )
+                .expect("failed to evaluate startup rebuild from_block_hash guard") =>
+            {
+                None
+            }
+            _ => configured,
+        }
     } else {
-        L1State::fetch(
-            l1_provider.clone(),
-            gateway_provider.clone(),
-            bridgehub_address,
-            chain_id,
-        )
-        .await
-        .expect("failed to fetch L1 state")
+        config.sequencer_config.rebuild.clone()
     };
+    // What the local block-rebuild stage (stage 2) should replay, if anything.
+    let rebuild_options = rebuild_config.as_ref().and_then(|r| r.rebuild_options());
+
+    // Fetch the L1 state, performing the configured startup L1 revert first.
+    tracing::info!("Reading L1 state");
+    let l1_state = fetch_l1_state_with_startup_revert(
+        &config,
+        node_role,
+        rebuild_config.as_ref(),
+        &l1_provider,
+        gateway_provider.as_ref(),
+        bridgehub_address,
+        chain_id,
+    )
+    .await
+    .expect("failed to determine L1 state");
+
     let settles_on_gateway = l1_state.settles_on_gateway();
     let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
         l1_provider.clone()
     } else {
         gateway_provider.clone().unwrap()
     };
+
     tracing::info!(?l1_state, settles_on_gateway, "L1 state");
     l1_state.report_metrics();
     if node_role.is_main() {
@@ -276,12 +318,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         }
     }
 
-    let genesis = Genesis::new(
-        genesis_input_source.clone(),
-        l1_state.diamond_proxy_l1.clone(),
-        chain_id,
-    );
-
     prepare_raft_storage(&config).expect("failed to prepare raft storage");
 
     tracing::info!("Initializing BlockReplayStorage");
@@ -298,14 +334,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("Initializing Tree RocksDB");
     let tree_db = TreeManager::load_or_initialize_tree(
         Path::new(&config.general_config.rocks_db_path.join(STATE_TREE_DB_NAME)),
-        &genesis,
-    )
-    .await;
-
-    tracing::info!("Initializing RepositoryManager");
-    let repositories = RepositoryManager::new(
-        config.general_config.blocks_to_retain_in_memory,
-        config.general_config.rocks_db_path.join(REPOSITORY_DB_NAME),
         &genesis,
     )
     .await;
@@ -362,7 +390,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_l1_executed_block,
     };
 
-    if let Some(block_rebuild) = &config.sequencer_config.block_rebuild
+    if let Some(from_block_number) = rebuild_options.as_ref().map(|o| o.from_block_number)
         && node_role.is_main()
     {
         // The assertion is only relevant for the main node.
@@ -370,9 +398,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // But the main node is expected to only produce blocks on top of committed L1 blocks,
         // as those can't be re-sequenced.
         assert!(
-            block_rebuild.from_block > node_startup_state.last_l1_committed_block,
-            "rebuild_from_block must be > last_l1_committed_block, got {} <= {}",
-            block_rebuild.from_block,
+            from_block_number > node_startup_state.last_l1_committed_block,
+            "rebuild_from_block_number must be > last_l1_committed_block, got {} <= {}",
+            from_block_number,
             node_startup_state.last_l1_committed_block
         );
     }
@@ -401,7 +429,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.repositories_persisted_block
         };
         // Some batches committed - starting from an already committed batch
-        determine_starting_block(&config, &node_startup_state, &state, last_matching_block)
+        determine_starting_block(
+            &config,
+            &node_startup_state,
+            &state,
+            last_matching_block,
+            rebuild_options.as_ref(),
+        )
     } else {
         // No batches committed - starting from genesis.
         0
@@ -587,6 +621,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to start finalized L1 execute watcher")
         .run(()),
     );
+
+    // External nodes restart themselves on an L1 batch revert to resync correct data.
+    if node_role.is_external() {
+        runtime.spawn_critical_task(
+            "l1 revert watcher",
+            L1RevertWatcher::create_watcher(
+                config.l1_watcher_config.clone().into(),
+                node_startup_state.l1_state.diamond_proxy_sl.clone(),
+                node_startup_state.l1_state.sl_block_number,
+            )
+            .run(),
+        );
+    }
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
     assert!(
@@ -838,6 +885,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             runtime,
             state.clone(),
             starting_block,
+            rebuild_options,
             repositories.clone(),
             block_context_provider,
             tree_db,
@@ -942,6 +990,104 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("All components scheduled for initialization in {startup_time:?}");
 }
 
+/// Checks whether block `rebuild.from_block_number` currently has the expected `rebuild.from_block_hash`.
+///
+/// Returns `Ok(false)` (operation should be skipped) when the hashes differ — distinguishing the
+/// two reasons in the logs:
+/// - block missing locally: likely a misconfigured `from_block_number` (typo / beyond local tip);
+/// - hash changed: the rebuild/revert already ran on a previous startup (the expected case).
+fn from_block_hash_matches(
+    repositories: &dyn ReadRepository,
+    from_block_number: u64,
+    from_block_hash: alloy::primitives::BlockHash,
+) -> anyhow::Result<bool> {
+    let current_hash = repositories
+        .get_block_by_number(from_block_number)
+        .with_context(|| format!("failed to read block {from_block_number} from local repository"))?
+        .map(|b| b.hash());
+    Ok(match current_hash {
+        Some(hash) if hash == from_block_hash => true,
+        Some(hash) => {
+            tracing::info!(
+                from_block_number,
+                current_hash = ?hash,
+                ?from_block_hash,
+                "skipping startup rebuild/revert: from_block_hash changed (already ran)"
+            );
+            false
+        }
+        None => {
+            tracing::warn!(
+                from_block_number,
+                ?from_block_hash,
+                "skipping startup rebuild/revert: block `from_block_number` not found locally \
+                 (check `from_block_number` is correct — it may be a typo or beyond the local tip)"
+            );
+            false
+        }
+    })
+}
+
+/// Fetches the L1 state, performing any configured startup L1 revert first, and returns the
+/// post-revert state.
+async fn fetch_l1_state_with_startup_revert(
+    config: &Config,
+    node_role: NodeRole,
+    rebuild: Option<&RebuildConfig>,
+    l1_provider: &NodeProvider,
+    gateway_provider: Option<&NodeProvider>,
+    bridgehub_address: Address,
+    chain_id: u64,
+) -> anyhow::Result<L1State> {
+    // The batcher node must wait for any pending L1 commit/prove/execute transactions (from a
+    // prior run) to be mined before starting, so it doesn't conflict with itself. Non-batcher
+    // consensus nodes never submit L1 transactions, so they don't need this wait: calling
+    // fetch_finalized on them would spuriously fail when a concurrently running batcher node keeps
+    // submitting new batch transactions.
+    let use_finalized = node_role.is_main() && config.batcher_config.enabled;
+    let l1_state = L1State::fetch_with_finality(
+        use_finalized,
+        l1_provider.clone(),
+        gateway_provider.cloned(),
+        bridgehub_address,
+        chain_id,
+    )
+    .await
+    .context("failed to fetch L1 state")?;
+
+    if node_role.is_main()
+        && let Some(rebuild) = rebuild
+    {
+        let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
+            l1_provider.clone()
+        } else {
+            gateway_provider
+                .cloned()
+                .context("chain settles on Gateway but no gateway RPC provider is configured")?
+        };
+
+        let l1_revert_ran = revert_l1_on_startup(rebuild, config, &l1_state, &sl_provider)
+            .await
+            .context("startup l1 revert failed")?;
+
+        if l1_revert_ran {
+            // The revert invalidated the batch-finality numbers; re-fetch so the returned state
+            // reflects the post-revert chain.
+            return L1State::fetch_with_finality(
+                use_finalized,
+                l1_provider.clone(),
+                gateway_provider.cloned(),
+                bridgehub_address,
+                chain_id,
+            )
+            .await
+            .context("failed to fetch L1 state after startup revert");
+        }
+    }
+
+    Ok(l1_state)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: &Config,
@@ -951,6 +1097,7 @@ async fn run_main_node_pipeline(
     runtime: &Runtime,
     state: impl ReadStateHistory + WriteState + Clone,
     starting_block: u64,
+    rebuild_options: Option<RebuildOptions>,
     repositories: impl WriteRepository + Clone,
     block_context_provider: BlockContextProvider<impl L2Subpool>,
     tree: MerkleTree<RocksDBWrapper>,
@@ -990,11 +1137,7 @@ async fn run_main_node_pipeline(
         .pipe(ConsensusNodeCommandSource {
             block_replay_storage: block_replay_storage.clone(),
             starting_block,
-            rebuild_options: config
-                .sequencer_config
-                .block_rebuild
-                .clone()
-                .map(Into::into),
+            rebuild_options,
             replays_to_execute,
             pipeline_gate,
             leadership,
@@ -1544,6 +1687,7 @@ fn determine_starting_block(
     node_startup_state: &NodeStateOnStartup,
     state: &impl ReadStateHistory,
     last_matching_block: BlockNumber,
+    rebuild_options: Option<&RebuildOptions>,
 ) -> BlockNumber {
     assert!(
         node_startup_state.l1_state.last_committed_batch > 0,
@@ -1573,11 +1717,7 @@ fn determine_starting_block(
             *state.block_range_available().end(),
             // If block rebuild (aka block reversion) is configured, we should ensure we replay
             // all the blocks we are rebuilding
-            config
-                .sequencer_config
-                .block_rebuild
-                .as_ref()
-                .map_or(u64::MAX, |block_rebuild| block_rebuild.from_block),
+            rebuild_options.map_or(u64::MAX, |opts| opts.from_block_number),
         ]
         .into_iter()
         .min()

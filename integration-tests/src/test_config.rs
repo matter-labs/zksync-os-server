@@ -7,6 +7,24 @@ use zksync_os_server::config::{Config, ProviderConfig};
 
 pub(crate) const TEST_PROVIDER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Configures the node to commit batches on L1 but never execute them: FRI proofs are faked,
+/// while SNARK proving is disabled. This keeps batches in the committed-but-not-executed state.
+pub fn make_commit_only_config(config: &mut Config) {
+    config.prover_api_config.fake_fri_provers.enabled = true;
+    config.prover_api_config.fake_fri_provers.compute_time = Duration::from_millis(200);
+    config.prover_api_config.fake_fri_provers.min_age = Duration::ZERO;
+    config.prover_api_config.fake_snark_provers.enabled = false;
+}
+
+/// Runs the full settlement pipeline so batches commit, prove, and execute on L1.
+pub fn make_full_pipeline_config(config: &mut Config) {
+    config.prover_api_config.fake_fri_provers.enabled = true;
+    config.prover_api_config.fake_fri_provers.compute_time = Duration::from_millis(200);
+    config.prover_api_config.fake_fri_provers.min_age = Duration::ZERO;
+    config.prover_api_config.fake_snark_provers.enabled = true;
+    config.prover_api_config.fake_snark_provers.max_batch_age = Duration::ZERO;
+}
+
 pub(crate) fn disable_prover_input_generation(config: &mut Config) {
     if config.prover_api_config.fake_fri_provers.enabled
         && config.prover_api_config.fake_snark_provers.enabled

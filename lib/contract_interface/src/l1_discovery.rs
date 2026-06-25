@@ -61,6 +61,36 @@ struct BatchFinality {
 }
 
 impl L1State {
+    /// Resolves the L1 diamond proxy for this chain via the L1 Bridgehub, without fetching any
+    /// batch-finality state.
+    ///
+    /// Startup uses this to initialize genesis and the repository manager *before* the startup L1
+    /// revert (the revert's `from_block_hash` guard reads the current local block hash via the
+    /// repository manager). The full [`L1State`] — including the batch-finality numbers
+    /// (`last_committed_batch`, ...) that a revert invalidates — is fetched only after the revert
+    /// decision point, so no stale batch-finality data can reach the components initialized here.
+    pub async fn resolve_diamond_proxy_l1(
+        l1_provider: NodeProvider,
+        bridgehub_address_l1: Address,
+        l2_chain_id: u64,
+    ) -> anyhow::Result<ZkChain<NodeProvider>> {
+        let (_, diamond_proxy_l1) =
+            Self::resolve_l1_bridgehub_and_proxy(l1_provider, bridgehub_address_l1, l2_chain_id)
+                .await?;
+        Ok(diamond_proxy_l1)
+    }
+
+    /// Builds the L1 Bridgehub handle and resolves the chain's L1 diamond proxy through it.
+    async fn resolve_l1_bridgehub_and_proxy(
+        l1_provider: NodeProvider,
+        bridgehub_address_l1: Address,
+        l2_chain_id: u64,
+    ) -> anyhow::Result<(Bridgehub<NodeProvider>, ZkChain<NodeProvider>)> {
+        let bridgehub_l1 = Bridgehub::new(bridgehub_address_l1, l1_provider, l2_chain_id);
+        let diamond_proxy_l1 = bridgehub_l1.zk_chain().await?;
+        Ok((bridgehub_l1, diamond_proxy_l1))
+    }
+
     /// Fetches L1 ecosystem contracts along with batch finality status as of latest block.
     ///
     /// `gateway_provider` must be `Some` when the chain is currently settling on the Gateway
@@ -76,8 +106,9 @@ impl L1State {
     ) -> anyhow::Result<Self> {
         let l1_chain_id = l1_provider.get_chain_id().await?;
 
-        let bridgehub_l1 = Bridgehub::new(bridgehub_address_l1, l1_provider, l2_chain_id);
-        let diamond_proxy_l1 = bridgehub_l1.zk_chain().await?;
+        let (bridgehub_l1, diamond_proxy_l1) =
+            Self::resolve_l1_bridgehub_and_proxy(l1_provider, bridgehub_address_l1, l2_chain_id)
+                .await?;
 
         // Call ZKChainStorage::getSettlementLayer() on the L1 diamond proxy to determine whether
         // this chain is currently settling on L1 or on the Gateway.
@@ -262,6 +293,21 @@ impl L1State {
             settlement_layer_address: this.settlement_layer_address,
             settlement_layer_intervals: this.settlement_layer_intervals,
         })
+    }
+
+    /// Fetch L1 state, optionally waiting for all pending L1 transactions to finalize first.
+    pub async fn fetch_with_finality(
+        use_finalized: bool,
+        l1_provider: NodeProvider,
+        gateway_provider: Option<NodeProvider>,
+        bridgehub_address: Address,
+        chain_id: u64,
+    ) -> anyhow::Result<Self> {
+        if use_finalized {
+            Self::fetch_finalized(l1_provider, gateway_provider, bridgehub_address, chain_id).await
+        } else {
+            Self::fetch(l1_provider, gateway_provider, bridgehub_address, chain_id).await
+        }
     }
 
     pub fn diamond_proxy_address_sl(&self) -> Address {

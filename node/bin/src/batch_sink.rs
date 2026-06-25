@@ -61,6 +61,7 @@ impl PipelineComponent for BatchSink {
                 let message = "Removing `failing_block` from the internal config";
                 tracing::info!(message);
                 internal_config.failing_block = None;
+                internal_config.failing_block_hash = None;
                 self.internal_config_manager
                     .write_config_and_panic(&internal_config, message)?;
             }
@@ -126,6 +127,7 @@ pub async fn clear_failing_block_config_task<F: ReadFinality>(
                 let message = "Removing `failing_block` from the internal config";
                 tracing::info!(message);
                 internal_config.failing_block = None;
+                internal_config.failing_block_hash = None;
                 internal_config_manager
                     .write_config_and_panic(&internal_config, message)
                     .expect("failed to write internal config");

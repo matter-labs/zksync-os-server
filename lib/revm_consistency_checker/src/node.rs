@@ -73,6 +73,7 @@ where
         if self.revert_enabled {
             let mut config = self.internal_config_manager.read_config()?;
             config.failing_block = Some(replay_record.block_context.block_number);
+            config.failing_block_hash = Some(block_output.header.hash());
 
             let initial_blacklist_size = config.l2_signer_blacklist.len();
             for tx in &replay_record.transactions {
