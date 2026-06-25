@@ -1020,7 +1020,9 @@ pub struct RpcConfig {
     ))]
     pub rate_limits: HashMap<String, NonZeroU32>,
 
-    /// List of RPC methods to reject with -32601. Default is empty.
+    /// List of disabled methods.
+    /// Some stateful methods like `eth_newFilter` don't make sense when running in a cluster behind a load-balancer.
+    /// They get rejected with -32601 "Method disabled".
     #[config(default, with = Delimited::new(","))]
     pub method_filter: HashSet<String>,
 }
