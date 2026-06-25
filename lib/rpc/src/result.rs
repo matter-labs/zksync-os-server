@@ -189,9 +189,7 @@ fn forward_error_to_rpc_err(
         TxForwardError::Rpc(RpcError::ErrorResp(payload)) => {
             rpc_error_with_code(payload.code as i32, display.to_string())
         }
-        TxForwardError::Rpc(_) | TxForwardError::NoKnownLeader | TxForwardError::NoProvider(_) => {
-            internal_rpc_err(display.to_string())
-        }
+        TxForwardError::Rpc(_) => internal_rpc_err(display.to_string()),
     }
 }
 

@@ -30,7 +30,7 @@ use crate::config::{
     report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
-use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
+use crate::init_tx_forwarder::build_static_tx_forwarder;
 use crate::l1_revert::revert_l1_on_startup;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
@@ -96,8 +96,7 @@ use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_provider::NodeProvider;
 use zksync_os_raft::{
-    BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, init_consensus,
-    loopback_consensus,
+    BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, loopback_consensus,
 };
 use zksync_os_replay_archive::{
     ReplayArchiveGateComponent, ReplayArchiver, ReplayArchivingWriteReplay, init_replay_archive,
@@ -119,7 +118,6 @@ use zksync_os_storage_api::{
 use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
-const RAFT_DB_NAME: &str = "raft";
 const STATE_TREE_DB_NAME: &str = "tree";
 const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
 const REPOSITORY_DB_NAME: &str = "repository";
@@ -317,8 +315,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         }
     }
 
-    prepare_raft_storage(&config).expect("failed to prepare raft storage");
-
     tracing::info!("Initializing BlockReplayStorage");
 
     let (block_replay_storage, inserted_genesis_replay_record) = BlockReplayStorage::new(
@@ -466,34 +462,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let ConsensusRuntimeParts {
         canonization_engine,
         leadership,
-        raft,
-    } = if config.consensus_config.enabled {
-        init_consensus(
-            runtime,
-            config
-                .consensus_config
-                .clone()
-                .into_raft_consensus_config(
-                    &config.network_config,
-                    config.general_config.rocks_db_path.join(RAFT_DB_NAME),
-                )
-                .expect("failed to build raft consensus config"),
-            Box::new(block_replay_storage.clone()),
-        )
-        .await
-        .expect("failed to initialize consensus engine")
-    } else {
-        tracing::info!("openraft consensus is disabled - assuming perpetual leader role");
-        loopback_consensus()
-    };
-    let (raft_protocol_handler, raft_bootstrapper, raft_status_rx) = match raft {
-        Some(raft) => (
-            Some(raft.protocol_handler),
-            raft.bootstrapper,
-            Some(raft.status_rx),
-        ),
-        None => (None, None, None),
-    };
+    } = loopback_consensus();
     if config.network_config.enabled {
         tracing::info!("initializing p2p networking");
         let batch_verification_policy_config: BatchVerificationPolicyConfig =
@@ -510,7 +479,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
-                raft_protocol_handler,
+                None,
             )
             .await
         } else {
@@ -543,18 +512,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
-                raft_protocol_handler,
+                None,
             )
             .await
         }
         .expect("failed to create network service");
         network_service.spawn(runtime, node_role.is_main().then_some(verify_request_rx));
-        if let Some(bootstrapper) = raft_bootstrapper {
-            bootstrapper
-                .bootstrap_if_needed()
-                .await
-                .expect("failed to run raft bootstrap process");
-        }
     } else if node_role.is_main() {
         tracing::info!(
             "p2p networking is disabled; to enable set `network.enabled=true` and populate `network.secret_key`"
@@ -693,11 +656,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let tx_forwarder = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
         Some(build_static_tx_forwarder(url).await)
-    } else if config.consensus_config.enabled {
-        let status_rx = raft_status_rx
-            .clone()
-            .expect("consensus status receiver must be present when consensus is enabled");
-        Some(build_consensus_tx_forwarder(&config, status_rx).await)
     } else {
         None
     };
@@ -947,7 +905,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "status server",
             |shutdown| async move {
-                run_status_server(addr, shutdown, raft_status_rx)
+                run_status_server(addr, shutdown)
                     .await
                     .expect("failed to run status server");
             },
@@ -1806,53 +1764,6 @@ async fn find_last_matching_main_node_block(
         }
     }
     Ok(left)
-}
-
-fn prepare_raft_storage(config: &Config) -> anyhow::Result<()> {
-    let raft_storage_path = config.general_config.rocks_db_path.join(RAFT_DB_NAME);
-    if config.consensus_config.force_clear_raft_history
-        && raft_storage_path_exists(&raft_storage_path)?
-    {
-        tracing::warn!(
-            path = %raft_storage_path.display(),
-            "force-clearing persisted raft history before startup"
-        );
-        // Use DB::destroy rather than remove_dir_all so that only files RocksDB
-        // tracks are removed; an arbitrary path misconfiguration cannot wipe more.
-        zksync_os_rocksdb::rocksdb::DB::destroy(
-            &zksync_os_rocksdb::rocksdb::Options::default(),
-            &raft_storage_path,
-        )
-        .with_context(|| {
-            format!(
-                "failed to destroy raft storage at {}",
-                raft_storage_path.display()
-            )
-        })?;
-        // DB::destroy leaves behind an empty directory; remove it so the next
-        // open starts completely clean (RocksDB recreates the dir on open).
-        let _ = std::fs::remove_dir(&raft_storage_path);
-    }
-
-    if !config.consensus_config.enabled && raft_storage_path_exists(&raft_storage_path)? {
-        anyhow::bail!(
-            "consensus is disabled but persisted raft history exists at {}; \
-             either re-enable consensus or set `consensus.force_clear_raft_history=true` \
-             to delete stale raft state before startup",
-            raft_storage_path.display()
-        );
-    }
-
-    Ok(())
-}
-
-fn raft_storage_path_exists(path: &Path) -> anyhow::Result<bool> {
-    path.try_exists().with_context(|| {
-        format!(
-            "failed to check whether raft storage exists at {}",
-            path.display()
-        )
-    })
 }
 
 #[cfg(test)]
