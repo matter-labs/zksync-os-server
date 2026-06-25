@@ -82,19 +82,19 @@ pub async fn load_remote_config(
 
 #[derive(Debug)]
 pub struct MainNodeGenesisInputSource {
-    client: MainNodeClient,
+    rpc_client: MainNodeClient,
 }
 
 impl MainNodeGenesisInputSource {
-    pub fn new(client: MainNodeClient) -> Self {
-        Self { client }
+    pub fn new(rpc_client: MainNodeClient) -> Self {
+        Self { rpc_client }
     }
 }
 
 #[async_trait::async_trait]
 impl GenesisInputSource for MainNodeGenesisInputSource {
     async fn genesis_input(&self) -> anyhow::Result<zksync_os_genesis::GenesisInput> {
-        let genesis = self.client.genesis_input().await?;
+        let genesis = self.rpc_client.genesis_input().await?;
         Ok(genesis)
     }
 }
