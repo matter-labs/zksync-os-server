@@ -12,8 +12,7 @@ use zksync_os_contract_interface::{Bytes32PushTree, IMessageRoot};
 /// `message_root_address` for proofs that aggregate on a gateway (an L2). For
 /// L1-settled chains the MessageRoot lives at a deployed L1 address instead,
 /// which callers must pass explicitly.
-pub const L2_MESSAGE_ROOT_ADDRESS: Address =
-    address!("0x0000000000000000000000000000000000010005");
+pub const L2_MESSAGE_ROOT_ADDRESS: Address = address!("0x0000000000000000000000000000000000010005");
 
 fn calculate_batch_tree_proof(
     mut tree: Bytes32PushTree,
