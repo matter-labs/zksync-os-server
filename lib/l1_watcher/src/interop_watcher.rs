@@ -48,12 +48,15 @@ impl InteropWatcher {
         // message-root too (interop roots are built on L1 — era-contracts
         // `MessageRootBase.addChainBatchRoot`), so L1-settled chains must also import them for
         // atomic / proof-based interop.
-        let has_active_segment = intervals
-            .intervals()
-            .iter()
-            .any(|interval| interval.last_batch.is_none_or(|lb| interval.first_batch <= lb));
+        let has_active_segment = intervals.intervals().iter().any(|interval| {
+            interval
+                .last_batch
+                .is_none_or(|lb| interval.first_batch <= lb)
+        });
         if !has_active_segment {
-            tracing::info!("chain has no active settlement intervals; skipping interop roots watcher");
+            tracing::info!(
+                "chain has no active settlement intervals; skipping interop roots watcher"
+            );
             return Ok(None);
         }
 

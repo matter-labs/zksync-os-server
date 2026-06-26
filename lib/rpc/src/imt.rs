@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 
-use alloy::primitives::{keccak256, B256, U256};
+use alloy::primitives::{B256, U256, keccak256};
 
 /// Fixed tree depth (matches `IndexedMerkleTreeLib`).
 pub const IMT_DEPTH: usize = 32;
@@ -75,8 +75,7 @@ pub struct IndexedMerkleTree {
 impl IndexedMerkleTree {
     pub fn new(leaves: Vec<ImtLeaf>) -> Self {
         let zeros = compute_zeros();
-        let mut nodes: Vec<HashMap<u64, B256>> =
-            (0..=IMT_DEPTH).map(|_| HashMap::new()).collect();
+        let mut nodes: Vec<HashMap<u64, B256>> = (0..=IMT_DEPTH).map(|_| HashMap::new()).collect();
 
         // Level 0: write each leaf hash at its index.
         for (i, leaf) in leaves.iter().enumerate() {
@@ -111,10 +110,7 @@ impl IndexedMerkleTree {
         level: usize,
         index: u64,
     ) -> B256 {
-        nodes[level]
-            .get(&index)
-            .copied()
-            .unwrap_or(zeros[level])
+        nodes[level].get(&index).copied().unwrap_or(zeros[level])
     }
 
     /// The current IMT root (level `IMT_DEPTH`, index 0).

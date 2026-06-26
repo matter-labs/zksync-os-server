@@ -1,8 +1,6 @@
-use crate::imt::{
-    calculate_root, indexed_leaf_hash, ImtLeaf as EngineImtLeaf, IndexedMerkleTree,
-};
+use crate::imt::{ImtLeaf as EngineImtLeaf, IndexedMerkleTree, calculate_root, indexed_leaf_hash};
 use crate::log_proof_utils::{
-    batch_tree_proof, chain_proof_vector, get_chain_log_proof, L2_MESSAGE_ROOT_ADDRESS,
+    L2_MESSAGE_ROOT_ADDRESS, batch_tree_proof, chain_proof_vector, get_chain_log_proof,
 };
 use crate::result::ToRpcResult;
 use crate::{EthCallHandler, ReadRpcStorage};
@@ -20,6 +18,7 @@ use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use std::sync::Arc;
 use zk_ee::common_structs::derive_flat_storage_key;
+use zksync_os_contract_interface::IBridgehub;
 use zksync_os_genesis::{GenesisInput, GenesisInputSource};
 use zksync_os_merkle_tree_api::flat::StorageSlotProof;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
@@ -30,7 +29,6 @@ use zksync_os_rpc_api::{
     },
     zks::ZksApiServer,
 };
-use zksync_os_contract_interface::IBridgehub;
 use zksync_os_storage_api::{PersistedBatch, RepositoryError, StateError, read_multichain_root};
 use zksync_os_types::L2_TO_L1_TREE_SIZE;
 
@@ -318,11 +316,14 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
 
                     // The L1 MessageRoot lives at a deployed address (unlike the canonical L2
                     // address used on a gateway); resolve it from the L1 bridgehub.
-                    let l1_message_root_address = IBridgehub::new(self.bridgehub_address, &self.l1_provider)
-                        .messageRoot()
-                        .call()
-                        .await
-                        .map_err(|e| anyhow::Error::from(e).context("bridgehub.messageRoot()"))?;
+                    let l1_message_root_address =
+                        IBridgehub::new(self.bridgehub_address, &self.l1_provider)
+                            .messageRoot()
+                            .call()
+                            .await
+                            .map_err(|e| {
+                                anyhow::Error::from(e).context("bridgehub.messageRoot()")
+                            })?;
 
                     let chain_log_proof_future = get_chain_log_proof(
                         self.l2_chain_id,
@@ -340,7 +341,11 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
                     let chain_proof_vector_future =
                         futures::future::try_join(chain_log_proof_future, l1_chain_id_future)
                             .map_ok(|(chain_log_proof, l1_chain_id)| {
-                                chain_proof_vector(execute_sl_block_number, chain_log_proof, l1_chain_id)
+                                chain_proof_vector(
+                                    execute_sl_block_number,
+                                    chain_log_proof,
+                                    l1_chain_id,
+                                )
                             });
 
                     let batch_tree_proof_future = batch_tree_proof(
@@ -544,7 +549,9 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
     /// Read the index-ordered commitment-tree leaf set as of `block` via `leafCount()` / `leafAt(i)`.
     fn read_commitment_tree(&self, block: BlockId) -> ZksResult<IndexedMerkleTree> {
         let count_bytes = self.call_commitment_tree(
-            IL2InteropCommitmentTree::leafCountCall {}.abi_encode().into(),
+            IL2InteropCommitmentTree::leafCountCall {}
+                .abi_encode()
+                .into(),
             block,
         )?;
         let leaf_count = IL2InteropCommitmentTree::leafCountCall::abi_decode_returns(&count_bytes)
@@ -554,9 +561,11 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         let mut leaves = Vec::with_capacity(leaf_count as usize);
         for i in 0..leaf_count {
             let leaf_bytes = self.call_commitment_tree(
-                IL2InteropCommitmentTree::leafAtCall { index: U256::from(i) }
-                    .abi_encode()
-                    .into(),
+                IL2InteropCommitmentTree::leafAtCall {
+                    index: U256::from(i),
+                }
+                .abi_encode()
+                .into(),
                 block,
             )?;
             let leaf = IL2InteropCommitmentTree::leafAtCall::abi_decode_returns(&leaf_bytes)
