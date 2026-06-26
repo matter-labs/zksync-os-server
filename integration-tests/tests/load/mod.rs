@@ -254,7 +254,8 @@ async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     config.sequencer_config.revm_consistency_checker_enabled = false;
     config.batcher_config.enabled = false;
     config.sequencer_config.block_pubdata_limit_bytes = u64::MAX;
-    config.sequencer_config.max_transactions_in_block = 10000;
+    // Blocks are sealed because of NativeCycles on 29205 transactions, we set limit just below that
+    config.sequencer_config.max_transactions_in_block = 29_200;
     // Raise the gas limit so blocks never seal on `GasLimit`. A limit-based seal consumes the
     // triggering tx from the stream without executing it; the mempool re-serves such a tx, but the
     // direct channel would drop it and open a permanent nonce gap. With this, blocks seal only on
