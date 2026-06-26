@@ -296,15 +296,27 @@ async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let signature = Signature::new(Default::default(), Default::default(), false);
 
     let submitted = Arc::new(AtomicU64::new(0));
+    // Producer-side diagnostics: time spent building txs vs blocked on `send()` (channel full).
+    // If send-block dominates, the channel is over-populated (pusher ahead) — the stream is NOT
+    // starved. If build dominates / send-block ~0, the pusher itself is the bottleneck.
+    let build_micros = Arc::new(AtomicU64::new(0));
+    let send_block_micros = Arc::new(AtomicU64::new(0));
     let stop = Arc::new(AtomicBool::new(false));
     let pusher = tokio::spawn({
         let (sender, submitted, stop) = (sender.clone(), submitted.clone(), stop.clone());
+        let (build_micros, send_block_micros) = (build_micros.clone(), send_block_micros.clone());
         async move {
             let mut nonce = start_nonce;
             while !stop.load(Ordering::Relaxed) {
+                let build_start = Instant::now();
                 let tx = build_direct_tx(chain_id, nonce, recipient, signer, signature);
+                build_micros.fetch_add(build_start.elapsed().as_micros() as u64, Ordering::Relaxed);
                 // Backpressure: blocks once the channel fills, pacing submission to the sequencer.
-                if sender.send(tx).await.is_err() {
+                let send_start = Instant::now();
+                let send_result = sender.send(tx).await;
+                send_block_micros
+                    .fetch_add(send_start.elapsed().as_micros() as u64, Ordering::Relaxed);
+                if send_result.is_err() {
                     break; // sequencer dropped the channel
                 }
                 nonce += 1;
@@ -330,6 +342,8 @@ async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     });
 
     let submitted_before = submitted.load(Ordering::Relaxed);
+    let build_before = build_micros.load(Ordering::Relaxed);
+    let send_block_before = send_block_micros.load(Ordering::Relaxed);
     let block_before = tester.l2_provider.get_block_number().await?;
     let measure_start = Instant::now();
 
@@ -337,6 +351,10 @@ async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
 
     let measured = measure_start.elapsed();
     let executed = submitted.load(Ordering::Relaxed) - submitted_before;
+    let pusher_build_time =
+        Duration::from_micros(build_micros.load(Ordering::Relaxed) - build_before);
+    let pusher_send_block_time =
+        Duration::from_micros(send_block_micros.load(Ordering::Relaxed) - send_block_before);
     let block_after = tester.l2_provider.get_block_number().await?;
     stop.store(true, Ordering::Relaxed);
     let _ = pusher.await;
@@ -358,6 +376,10 @@ async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
         ?measured,
         direct_injection_tps,
         blocks_produced = block_after - block_before,
+        // Over the measure window: time the single pusher task spent building txs vs blocked on
+        // `send()` (channel full). send_block ≫ build ⇒ pusher is ahead, stream not starved.
+        ?pusher_build_time,
+        ?pusher_send_block_time,
         "direct-injection load test complete"
     );
 
