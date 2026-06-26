@@ -15,6 +15,9 @@ path = "src/main.rs"
 
 [features]
 default = ["jemalloc"]
+# Bench-only: replace RocksDB-backed storage with in-memory implementations to measure the
+# execution/sequencing pipeline without RocksDB CPU. Never enable in production.
+in-memory-storage = []
 jemalloc = [
     "dep:tikv-jemallocator",
     "zksync_os_observability/jemalloc",

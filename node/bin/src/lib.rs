@@ -111,6 +111,9 @@ use zksync_os_sequencer::execution::{BlockApplier, BlockCanonizer, BlockExecutor
 use zksync_os_status_server::run_status_server;
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
+#[cfg(feature = "in-memory-storage")]
+use zksync_os_storage::in_memory::RepositoryInMemory;
+#[cfg(not(feature = "in-memory-storage"))]
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
     FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord,
@@ -124,6 +127,7 @@ const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const RAFT_DB_NAME: &str = "raft";
 const STATE_TREE_DB_NAME: &str = "tree";
 const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
+#[cfg_attr(feature = "in-memory-storage", allow(dead_code))]
 const REPOSITORY_DB_NAME: &str = "repository";
 const BATCH_DB_NAME: &str = "batch";
 pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
@@ -232,11 +236,20 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         chain_id,
     );
 
-    tracing::info!("Initializing RepositoryManager");
+    tracing::info!("Initializing repositories");
+    #[cfg(not(feature = "in-memory-storage"))]
     let repositories = RepositoryManager::new(
         config.general_config.blocks_to_retain_in_memory,
         config.general_config.rocks_db_path.join(REPOSITORY_DB_NAME),
         &genesis,
+    )
+    .await;
+    // Bench-only: pure in-memory repository (no RocksDB), keeping only the most recent
+    // `blocks_to_retain_in_memory` blocks to bound memory.
+    #[cfg(feature = "in-memory-storage")]
+    let repositories = RepositoryInMemory::from_genesis(
+        &genesis,
+        config.general_config.blocks_to_retain_in_memory as u64,
     )
     .await;
 
@@ -865,11 +878,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     });
 
     // ========== Start Sequencer ===========
-    let repositories_clone = repositories.clone();
-    runtime.spawn_critical_task(
-        "repository persist loop",
-        repositories_clone.run_persist_loop(),
-    );
+    // In-memory repository has nothing to persist, so its background drain loop is skipped.
+    #[cfg(not(feature = "in-memory-storage"))]
+    {
+        let repositories_clone = repositories.clone();
+        runtime.spawn_critical_task(
+            "repository persist loop",
+            repositories_clone.run_persist_loop(),
+        );
+    }
     let state_clone = state.clone();
     runtime.spawn_critical_task(
         "state compact loop",
@@ -970,13 +987,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     // =========== Start JSON RPC ========
-    let repositories_for_wait = repositories.clone();
-    let wait_for_db = async move {
-        // Wait for repositories to be ready to be used in RPC.
-        repositories_for_wait
-            .wait_for_db_ready_to_process_blocks()
-            .await;
+    // Wait for repositories to be ready to be used in RPC. The in-memory repo is ready immediately.
+    #[cfg(not(feature = "in-memory-storage"))]
+    let wait_for_db = {
+        let repositories_for_wait = repositories.clone();
+        async move {
+            repositories_for_wait
+                .wait_for_db_ready_to_process_blocks()
+                .await;
+        }
     };
+    #[cfg(feature = "in-memory-storage")]
+    let wait_for_db = async {};
     let rpc_policy_client = config
         .sequencer_config
         .tx_validator
@@ -1769,11 +1791,11 @@ fn determine_starting_block(
 
 /// Finds the last block number where the local node's block hash matches the main node's block hash.
 async fn find_last_matching_main_node_block(
-    repo: &RepositoryManager,
+    repo: &impl ReadRepository,
     main_node_rpc_url: &str,
 ) -> anyhow::Result<u64> {
     async fn check(
-        repo: &RepositoryManager,
+        repo: &impl ReadRepository,
         main_node_client: &HttpClient,
         block_number: u64,
     ) -> anyhow::Result<bool> {

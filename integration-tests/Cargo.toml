@@ -70,3 +70,5 @@ pprof = { version = "0.14", features = ["flamegraph"] }
 [features]
 prover-tests = []
 gpu-prover-tests = ["prover-tests"]
+# Bench-only: run the node with in-memory storage (see zksync_os_server::in-memory-storage).
+in-memory-storage = ["zksync_os_server/in-memory-storage"]

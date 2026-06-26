@@ -1,16 +1,27 @@
 use crate::metrics::REPOSITORIES_METRICS;
-use alloy::consensus::{Sealed, Transaction};
+use alloy::consensus::{Block, BlockBody, Sealed, Transaction};
 use alloy::eips::Encodable2718;
 use alloy::primitives::{Address, BlockHash, BlockNumber, Bloom, TxHash, TxNonce};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
+use zksync_os_genesis::Genesis;
+use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::ExecutionResult;
+use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
 use zksync_os_storage_api::{
     LogIndex, ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+    WriteRepository,
 };
 use zksync_os_types::{BlockOutput, L2ToL1Log, ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
+
+/// Size of the broadcast channel used to notify RPC subscribers about new blocks (mirrors
+/// `RepositoryManager`).
+const BLOCK_NOTIFICATION_CHANNEL_SIZE: usize = 256;
+/// Default retention when used as the in-memory cache of `RepositoryManager` (which prunes itself
+/// after persisting, so the standalone `WriteRepository::populate` path never trims).
+const UNBOUNDED_RETENTION: u64 = u64::MAX;
 
 /// In-memory repositories that store node data required for RPC but not for VM execution.
 ///
@@ -26,6 +37,12 @@ pub struct RepositoryInMemory {
     transaction_receipt_repository: TransactionReceiptRepository,
     /// Latest block number that's guaranteed to be present in all the repositories
     latest_block: watch::Sender<u64>,
+    /// Notifies RPC subscribers about new blocks (used when this is the standalone write target).
+    block_sender: broadcast::Sender<BlockNotification>,
+    /// Number of most-recent blocks to keep when used as a standalone `WriteRepository`. Older
+    /// blocks are pruned to bound memory. `u64::MAX` disables pruning (e.g. inside `RepositoryManager`,
+    /// which prunes itself).
+    max_blocks_to_retain: u64,
 }
 
 impl RepositoryInMemory {
@@ -38,6 +55,30 @@ impl RepositoryInMemory {
             block_receipt_repository,
             transaction_receipt_repository: TransactionReceiptRepository::new(),
             latest_block: watch::channel(0).0,
+            block_sender: broadcast::channel(BLOCK_NOTIFICATION_CHANNEL_SIZE).0,
+            max_blocks_to_retain: UNBOUNDED_RETENTION,
+        }
+    }
+
+    /// Build a standalone in-memory repository (no RocksDB) seeded with the genesis block, keeping
+    /// the most recent `max_blocks_to_retain` blocks. Bench-only: drops persistence and old-block
+    /// history.
+    pub async fn from_genesis(genesis: &Genesis, max_blocks_to_retain: u64) -> Self {
+        let (header, hash) = genesis.state().await.header.clone().into_parts();
+        let genesis_block = Sealed::new_unchecked(
+            Block {
+                header,
+                body: BlockBody {
+                    transactions: vec![],
+                    ommers: vec![],
+                    withdrawals: None,
+                },
+            },
+            hash,
+        );
+        Self {
+            max_blocks_to_retain,
+            ..Self::new(genesis_block)
         }
     }
 
@@ -248,6 +289,41 @@ impl ReadRepository for RepositoryInMemory {
 
     fn get_latest_block(&self) -> u64 {
         *self.latest_block.borrow()
+    }
+}
+
+impl WriteRepository for RepositoryInMemory {
+    async fn populate(
+        &self,
+        block_output: BlockOutput,
+        transactions: Vec<ZkTransaction>,
+        failed_transactions: Vec<(TxHash, InvalidTransaction)>,
+    ) -> RepositoryResult<()> {
+        let block_number = block_output.header.number;
+        let (block, transactions) = self.populate_in_memory(block_output, transactions);
+
+        // Notify RPC subscribers. Ignore the error when there are no receivers.
+        let _ = self.block_sender.send(BlockNotification {
+            block,
+            transactions,
+            failed_transactions: Arc::new(failed_transactions.into_iter().collect()),
+        });
+
+        // Bounded retention: drop the block that just fell out of the window. Genesis (0) is never
+        // pruned. Reads of blocks older than the window will miss — acceptable for bench use.
+        let prune_number = block_number.saturating_sub(self.max_blocks_to_retain);
+        if prune_number > 0
+            && let Some(block) = self.block_receipt_repository.get_by_number(prune_number)
+        {
+            self.remove_block_and_transactions(prune_number, &block.body.transactions);
+        }
+        Ok(())
+    }
+}
+
+impl SubscribeToBlocks for RepositoryInMemory {
+    fn subscribe_to_blocks(&self) -> broadcast::Receiver<BlockNotification> {
+        self.block_sender.subscribe()
     }
 }
 
