@@ -104,10 +104,12 @@ where
             }
             state_reporter.enter_state(SequencerState::WaitingForTransaction);
 
+            let t_prepare = Instant::now();
             let Some(prepared_command) = self.block_context_provider.prepare_command(cmd).await?
             else {
                 continue;
             };
+            let prepare_elapsed = t_prepare.elapsed();
 
             state_reporter.enter_state(SequencerState::InitializingVm);
 
@@ -126,8 +128,10 @@ where
                 prepared_command.block_context.execution_version,
             );
 
+            let t_sync = Instant::now();
             let exec_view = state_overlay_buffer
                 .sync_with_base_and_build_view_for_block(&self.state, block_number)?;
+            let sync_elapsed = t_sync.elapsed();
 
             let is_produce = matches!(cmd_type, BlockCommandType::Produce);
             // Policy priority: when a `PolicyClient` is configured for a
@@ -140,6 +144,7 @@ where
             let policy_client = is_produce
                 .then_some(self.config.tx_validator.policy_client.as_ref())
                 .flatten();
+            let t_exec = Instant::now();
             let exec_result = if let Some(policy_client) = policy_client {
                 let policy_session = policy_client.session(AccessType::Write);
                 let policy_tracer = policy_session.paired_tracer();
@@ -163,6 +168,7 @@ where
                 )
                 .await
             };
+            let exec_elapsed = t_exec.elapsed();
             let (block_output, replay_record, purged_txs, strict_subpool_cleanup) = exec_result
                 .map_err(|dump| {
                     let error = anyhow::anyhow!("{}", dump.error);
@@ -186,6 +192,7 @@ where
             tracing::info!(block_number, "Executed. Updating mempools...");
             state_reporter.enter_state(SequencerState::UpdatingMempool);
 
+            let t_canonical = Instant::now();
             self.block_context_provider
                 .on_canonical_state_change(
                     block_output.as_ref(),
@@ -193,6 +200,7 @@ where
                     strict_subpool_cleanup,
                 )
                 .await;
+            let canonical_elapsed = t_canonical.elapsed();
             let purged_txs_hashes = purged_txs.iter().map(|(hash, _)| *hash).collect();
             self.block_context_provider
                 .purge_transactions(purged_txs_hashes);
@@ -213,6 +221,7 @@ where
                 .last_execution_version
                 .set(replay_record.block_context.execution_version as u64);
 
+            let t_send = Instant::now();
             output.send_and_record(
                 BlockPayload {
                     output: block_output,
@@ -222,6 +231,17 @@ where
                 },
                 &state_reporter,
             )?;
+            let send_elapsed = t_send.elapsed();
+            tracing::info!(
+                block_number,
+                ?prepare_elapsed,
+                ?sync_elapsed,
+                ?exec_elapsed,
+                ?canonical_elapsed,
+                ?send_elapsed,
+                cycle = ?time_since_last_block,
+                "block_executor loop breakdown"
+            );
         }
     }
 }
