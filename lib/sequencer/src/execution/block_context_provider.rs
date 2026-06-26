@@ -288,6 +288,10 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             starting_cursors: next_cursors.clone(),
             interop_roots_per_block: self.config.interop_roots_per_block,
             strict_subpool_cleanup: true,
+            // Pipeline the VM only for plain direct-injection blocks. A block that still carries the
+            // one-off SetSLChainId system tx must seal specially, which the pipelined loop doesn't
+            // handle, so fall back to the serial loop there.
+            direct_injection: use_direct && !expect_sl_chain_id_tx_after_upgrade,
         }))
     }
 
@@ -364,6 +368,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             starting_cursors: record.starting_cursors,
             interop_roots_per_block: self.config.interop_roots_per_block,
             strict_subpool_cleanup: false,
+            direct_injection: false,
         }))
     }
 
@@ -494,6 +499,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             starting_cursors: next_cursors,
             interop_roots_per_block: self.config.interop_roots_per_block,
             strict_subpool_cleanup: false,
+            direct_injection: false,
         }))
     }
 

@@ -2,7 +2,9 @@ use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::utils::ReadRecordingState;
 use crate::model::blocks::BlockOutputWithReads;
 use anyhow::Context;
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tokio::{
     sync::mpsc::{Receiver, Sender, channel},
     task::{JoinHandle, spawn_blocking},
@@ -12,6 +14,13 @@ use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::traits::{EncodedTx, NextTxResponse, TxResultCallback, TxSource};
 use zksync_os_interface::types::TxProcessingOutputOwned;
 use zksync_os_storage_api::{BlockContext, ViewState};
+
+/// Capacity of the channels between the async driver and the VM worker thread. Production feeds one
+/// tx and awaits its result before sending the next, so it never uses more than one slot. The
+/// direct-injection bench (see `submit_tx`/`next_result`) feeds eagerly to keep the VM worker busy,
+/// so it relies on the deeper buffer. A bounded `tokio` channel only allocates slots lazily, so the
+/// large capacity is free when unused.
+const VM_CHANNEL_CAPACITY: usize = 1024;
 
 /// A one‐by‐one driver around `run_block`, enabling `execute_next_tx` interface
 /// (as opposed to pull interface of `run_block` in zksync-os)
@@ -29,14 +38,18 @@ impl VmWrapper {
         state_view: impl ViewState,
         mut tracer: impl AnyTracer + Send + 'static,
         mut validator: impl AnyTxValidator + Send + 'static,
+        // Accumulates the time the VM worker thread spends blocked waiting for the next tx
+        // (i.e. idle because the async side hasn't fed it yet). Used to confirm the per-tx
+        // hand-off ping-pong.
+        vm_idle_micros: Arc<AtomicU64>,
     ) -> Self {
         // Channel for sending NextTxResponse (Tx bytes or SealBlock).
-        let (tx_sender, tx_receiver) = channel(1);
+        let (tx_sender, tx_receiver) = channel(VM_CHANNEL_CAPACITY);
         // Channel for receiving per‐tx execution results.
-        let (res_sender, res_receiver) = channel(1);
+        let (res_sender, res_receiver) = channel(VM_CHANNEL_CAPACITY);
 
         // Wrap the channels in the traits run_block expects:
-        let tx_source = ChannelTxSource::new(tx_receiver);
+        let tx_source = ChannelTxSource::new(tx_receiver, vm_idle_micros);
         let tx_callback = ChannelTxResultCallback::new(res_sender);
 
         // Spawn the blocking run_block(...) call.
@@ -116,6 +129,45 @@ impl VmWrapper {
         res
     }
 
+    /// Submit a transaction to the VM without awaiting its result. Combined with
+    /// [`Self::next_result`], lets the caller keep several txs in flight so the VM worker runs them
+    /// back-to-back instead of stalling on the per-tx hand-off. Backpressures on the channel.
+    /// Only used by the direct-injection bench path (`PreparedBlockCommand::direct_injection`).
+    pub async fn submit_tx(&self, raw_tx: EncodedTx) -> anyhow::Result<()> {
+        if self
+            .tx_sender
+            .send(NextTxResponse::Tx(raw_tx))
+            .await
+            .is_err()
+        {
+            anyhow::bail!("BlockRunner: `tx_source` channel closed unexpectedly");
+        }
+        Ok(())
+    }
+
+    /// Await the next execution result (results arrive in submission order). See [`Self::submit_tx`].
+    pub async fn next_result(
+        &mut self,
+    ) -> anyhow::Result<Result<TxProcessingOutputOwned, InvalidTransaction>> {
+        match self.tx_result_receiver.recv().await {
+            Some(Ok(output)) => Ok(Ok(output)),
+            Some(Err(invalid)) => Ok(Err(invalid)),
+            None => {
+                let task = self.handle.take().unwrap();
+                match tokio::time::timeout(Duration::from_secs(5), task).await {
+                    Ok(Ok(Ok(_))) => {
+                        anyhow::bail!("`run_block` finished before `SealBlock` signal")
+                    }
+                    Ok(Ok(Err(e))) => anyhow::bail!("`run_block`: {e:?}"),
+                    Ok(Err(e)) => anyhow::bail!("failed to join `run_block`: {e:?}"),
+                    Err(_) => anyhow::bail!(
+                        "`tx_result` channel closed unexpectedly and `run_block` did not finish in time"
+                    ),
+                }
+            }
+        }
+    }
+
     /// Tell the VM to seal the block and return the final `BlockOutput`.
     pub async fn seal_block(self) -> anyhow::Result<BlockOutputWithReads> {
         // Request batch seal.
@@ -132,11 +184,16 @@ impl VmWrapper {
 /// A `TxSource` that drives `run_block` from a `tokio::sync::mpsc::Receiver`.
 struct ChannelTxSource {
     receiver: Receiver<NextTxResponse>,
+    /// Time spent blocked here waiting for the next tx = VM worker idle time.
+    vm_idle_micros: Arc<AtomicU64>,
 }
 
 impl ChannelTxSource {
-    fn new(receiver: Receiver<NextTxResponse>) -> Self {
-        Self { receiver }
+    fn new(receiver: Receiver<NextTxResponse>, vm_idle_micros: Arc<AtomicU64>) -> Self {
+        Self {
+            receiver,
+            vm_idle_micros,
+        }
     }
 }
 
@@ -144,9 +201,12 @@ impl TxSource for ChannelTxSource {
     fn get_next_tx(&mut self) -> NextTxResponse {
         // Block until we get a request.
         // If the sender is dropped, default to sealing.
-        self.receiver
-            .blocking_recv()
-            .unwrap_or(NextTxResponse::SealBlock)
+        // Time spent blocked here is the VM worker idle between transactions.
+        let started_at = Instant::now();
+        let response = self.receiver.blocking_recv();
+        self.vm_idle_micros
+            .fetch_add(started_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+        response.unwrap_or(NextTxResponse::SealBlock)
     }
 }
 

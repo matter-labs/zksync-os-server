@@ -9,6 +9,8 @@ use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
 use futures::StreamExt;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
@@ -55,7 +57,16 @@ pub async fn execute_block_in_vm<V: ViewState>(
         latency_tracker.clone(),
         state_view_with_force_preimages,
     );
-    let mut runner = VmWrapper::new(ctx, metered_state_view, tracer, validator);
+    // Tracks how long the VM worker thread sits idle waiting for the next tx (the per-tx hand-off
+    // ping-pong); reported in the per-block summary to gauge VM-thread utilization.
+    let vm_idle_micros = Arc::new(AtomicU64::new(0));
+    let mut runner = VmWrapper::new(
+        ctx,
+        metered_state_view,
+        tracer,
+        validator,
+        vm_idle_micros.clone(),
+    );
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
     let mut cumulative_gas_used = 0u64;
@@ -90,252 +101,382 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
     /* ---------- main loop ------------------------------------------ */
     // seal_reason must only be used for observability - handling must remain generic
-    let seal_reason = loop {
-        latency_tracker.enter_state(SequencerState::WaitingForTx);
-        let tx_wait_start = Instant::now();
-        tokio::select! {
-            /* -------- deadline branch ------------------------------ */
-            _ = async {
-                    if let Some(d) = &mut deadline {
-                        d.as_mut().await
+    let seal_reason = if command.direct_injection {
+        // ===== Direct-injection bench path =====
+        // Keep up to `VM_PIPELINE_DEPTH` transactions in flight so the VM worker runs them
+        // back-to-back instead of stalling on the per-tx hand-off (the dominant cost at high TPS).
+        // Valid only because direct injection feeds plain L2 transfers (no upgrade/SL-chain-id/
+        // system txs) with huge gas and pubdata limits, so the only seal reasons are the tx-count
+        // limit and the deadline. Set via `PreparedBlockCommand::direct_injection`.
+        use std::collections::VecDeque;
+        const VM_PIPELINE_DEPTH: usize = 1024;
+        let tx_limit = match command.seal_policy {
+            SealPolicy::Decide(_, limit) => limit,
+            SealPolicy::UntilExhausted { .. } => usize::MAX,
+        };
+        let mut pending: VecDeque<ZkTransaction> = VecDeque::new();
+        let mut pending_seal: Option<SealReason> = None;
+        loop {
+            // Feed up to the pipeline depth, unless we've decided to seal or would exceed the
+            // tx-count limit. `submit_tx` backpressures on the (depth-sized) channel, but the
+            // `pending.len() < VM_PIPELINE_DEPTH` guard keeps it from ever blocking here.
+            while pending_seal.is_none()
+                && pending.len() < VM_PIPELINE_DEPTH
+                && executed_txs.len() + pending.len() < tx_limit
+            {
+                let tx_wait_start = Instant::now();
+                let maybe_tx = tokio::select! {
+                    _ = async {
+                            if let Some(d) = &mut deadline {
+                                d.as_mut().await
+                            }
+                        },
+                        if deadline.is_some()
+                    => {
+                        pending_seal = Some(SealReason::Timeout);
+                        None
                     }
-                },
-                if deadline.is_some()
-            => {
-                tracing::info!(block_number = ctx.block_number,
-                               txs = executed_txs.len(),
-                               "deadline reached → sealing");
-                break SealReason::Timeout;                                     // leave the loop ⇒ seal
-            }
-
-            /* -------- stream branch ------------------------------- */
-            maybe_tx = command.tx_source.stream.next() => {
-                total_tx_stream_time += tx_wait_start.elapsed();
-                let Some(tx) = maybe_tx else {
-                    tracing::info!(
-                        block_number = ctx.block_number,
-                        txs = executed_txs.len(),
-                        "stream exhausted → sealing"
-                    );
-                    break SealReason::TxStreamExhausted;
+                    maybe_tx = command.tx_source.stream.next() => {
+                        total_tx_stream_time += tx_wait_start.elapsed();
+                        maybe_tx
+                    }
                 };
-
-                if let Some(reason) = should_exclude_and_seal(&ctx, cumulative_gas_used, interop_roots_count, command.interop_roots_per_block, &tx) {
-                    tracing::info!(block_number = ctx.block_number, "sealing block as next tx cannot be included");
-                    break reason;
+                if pending_seal.is_some() {
+                    break;
                 }
-
-                tracing::debug!(
-                    block_number=command.block_context.block_number,
-                    "Executing transaction {:?} ({:?}) in block {} at index {} signer {:?} nonce {} with gas limit {} and cumulative gas used {cumulative_gas_used}...",
-                    tx.hash(),
-                    tx.tx_type(),
-                    command.block_context.block_number,
-                    executed_txs.len(),
-                    tx.inner.signer(),
-                    tx.nonce(),
-                    tx.inner.gas_limit()
-                );
-
-                all_processed_txs.push(tx.clone());
-
-                // Arm the deadline on the first tx attempt (success or failure).
-                // This prevents indefinite hangs when all L2 txs fail validation
-                // (e.g. BaseFeeGreaterThanMaxFee) and no L1 txs arrive to break
-                // the deadlock. Without this, the block executor would wait forever
-                // because the deadline only armed on success, and the sender is
-                // marked invalid in the BestTransactions iterator after a failure.
-                // Note that this behavior may result in an empty block being mined,
-                // which is supported server behavour.
-                if deadline.is_none() && let Some(dur) = deadline_dur {
+                let Some(tx) = maybe_tx else {
+                    pending_seal = Some(SealReason::TxStreamExhausted);
+                    break;
+                };
+                // Arm the deadline on the first tx attempt (see the serial path for rationale).
+                if deadline.is_none()
+                    && let Some(dur) = deadline_dur
+                {
                     deadline = Some(Box::pin(tokio::time::sleep(dur)));
                 }
-
-                let exec_start = Instant::now();
-                let exec_result = runner
-                    .execute_next_tx(tx.clone().encode())
+                all_processed_txs.push(tx.clone());
+                runner
+                    .submit_tx(tx.clone().encode())
                     .await
-                    .map_err(|e| {
-                        BlockDump {
+                    .map_err(|e| BlockDump {
+                        ctx,
+                        txs: all_processed_txs.clone(),
+                        error: e.to_string(),
+                    })?;
+                pending.push_back(tx);
+            }
+            if pending_seal.is_none() && executed_txs.len() + pending.len() >= tx_limit {
+                pending_seal = Some(SealReason::TxCountLimit);
+            }
+
+            // Collect one result; results arrive in submission (FIFO) order.
+            let Some(tx) = pending.pop_front() else {
+                tracing::info!(
+                    block_number = ctx.block_number,
+                    txs = executed_txs.len(),
+                    "direct-injection block sealing: {:?}",
+                    pending_seal
+                );
+                break pending_seal.unwrap_or(SealReason::TxStreamExhausted);
+            };
+            let exec_start = Instant::now();
+            let exec_result = runner.next_result().await.map_err(|e| BlockDump {
+                ctx,
+                txs: all_processed_txs.clone(),
+                error: e.to_string(),
+            })?;
+            total_execute_tx_time += exec_start.elapsed();
+            match exec_result {
+                Ok(res) => {
+                    EXECUTION_METRICS.executed_transactions.inc();
+                    EXECUTION_METRICS.transaction_gas_used.observe(res.gas_used);
+                    EXECUTION_METRICS
+                        .transaction_native_used
+                        .observe(res.native_used);
+                    EXECUTION_METRICS
+                        .transaction_computation_native_used
+                        .observe(res.computational_native_used);
+                    EXECUTION_METRICS
+                        .transaction_pubdata_used
+                        .observe(res.pubdata_used);
+                    let status_str = if res.status { "success" } else { "failure" };
+                    EXECUTION_METRICS.transaction_status[&status_str].inc();
+                    cumulative_gas_used += res.gas_used;
+                    executed_txs.push(tx);
+                }
+                Err(e) => {
+                    if let ZkTxType::L2(_) = tx.tx_type() {
+                        // Direct injection feeds valid L2 transfers; treat any rejection as a purge.
+                        purged_txs.push((*tx.hash(), e.clone()));
+                        tracing::info!(
+                            block_number = ctx.block_number,
+                            "Invalid L2 tx {} purged in direct-injection block {}: error={e:?}, nonce={:?}",
+                            tx.hash(),
+                            ctx.block_number,
+                            tx.nonce(),
+                        );
+                    } else {
+                        return Err(BlockDump {
                             ctx,
                             txs: all_processed_txs.clone(),
-                            error: e.to_string(),
+                            error: format!(
+                                "unexpected non-L2 tx ({:?}) in direct-injection block: {e:?} ({})",
+                                tx.tx_type(),
+                                tx.hash()
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    } else {
+        loop {
+            latency_tracker.enter_state(SequencerState::WaitingForTx);
+            let tx_wait_start = Instant::now();
+            tokio::select! {
+                /* -------- deadline branch ------------------------------ */
+                _ = async {
+                        if let Some(d) = &mut deadline {
+                            d.as_mut().await
                         }
-                    })?;
-                total_execute_tx_time += exec_start.elapsed();
-                match exec_result {
-                    Ok(res) => {
-                        EXECUTION_METRICS.executed_transactions.inc();
-                        EXECUTION_METRICS.transaction_gas_used.observe(res.gas_used);
-                        EXECUTION_METRICS.transaction_native_used.observe(res.native_used);
-                        EXECUTION_METRICS.transaction_computation_native_used.observe(res.computational_native_used);
-                        EXECUTION_METRICS.transaction_pubdata_used.observe(res.pubdata_used);
-                        let status_str = if res.status  {"success"} else {"failure"};
-                        EXECUTION_METRICS.transaction_status[&status_str].inc();
-                        tracing::debug!(
-                            block_number=command.block_context.block_number,
-                            output=?res,
-                            "Transaction {:?} executed with status {status_str} in block {}",
-                            tx.hash(),
-                            command.block_context.block_number
+                    },
+                    if deadline.is_some()
+                => {
+                    tracing::info!(block_number = ctx.block_number,
+                                   txs = executed_txs.len(),
+                                   "deadline reached → sealing");
+                    break SealReason::Timeout;                                     // leave the loop ⇒ seal
+                }
+
+                /* -------- stream branch ------------------------------- */
+                maybe_tx = command.tx_source.stream.next() => {
+                    total_tx_stream_time += tx_wait_start.elapsed();
+                    let Some(tx) = maybe_tx else {
+                        tracing::info!(
+                            block_number = ctx.block_number,
+                            txs = executed_txs.len(),
+                            "stream exhausted → sealing"
                         );
+                        break SealReason::TxStreamExhausted;
+                    };
 
-                        if let Some(SystemTxType::ImportInteropRoots(roots_count)) = tx.as_system_tx_type() {
-                            interop_roots_count += roots_count;
-                        }
+                    if let Some(reason) = should_exclude_and_seal(&ctx, cumulative_gas_used, interop_roots_count, command.interop_roots_per_block, &tx) {
+                        tracing::info!(block_number = ctx.block_number, "sealing block as next tx cannot be included");
+                        break reason;
+                    }
 
-                        let tx_type = tx.tx_type();
-                        executed_txs.push(tx);
-                        cumulative_gas_used += res.gas_used;
-                        if tx_type == ZkTxType::Upgrade {
-                            if !res.status {
-                                let tx_hash = executed_txs.last().unwrap().hash();
-                                tracing::error!(
-                                    block_number = ctx.block_number,
-                                    ?tx_hash,
-                                    revert_output = ?res.output,
-                                    "Upgrade transaction reverted"
-                                );
-                                return Err(BlockDump {
-                                    ctx,
-                                    txs: all_processed_txs.clone(),
-                                    error: format!("upgrade tx {tx_hash} reverted"),
-                                });
+                    tracing::debug!(
+                        block_number=command.block_context.block_number,
+                        "Executing transaction {:?} ({:?}) in block {} at index {} signer {:?} nonce {} with gas limit {} and cumulative gas used {cumulative_gas_used}...",
+                        tx.hash(),
+                        tx.tx_type(),
+                        command.block_context.block_number,
+                        executed_txs.len(),
+                        tx.inner.signer(),
+                        tx.nonce(),
+                        tx.inner.gas_limit()
+                    );
+
+                    all_processed_txs.push(tx.clone());
+
+                    // Arm the deadline on the first tx attempt (success or failure).
+                    // This prevents indefinite hangs when all L2 txs fail validation
+                    // (e.g. BaseFeeGreaterThanMaxFee) and no L1 txs arrive to break
+                    // the deadlock. Without this, the block executor would wait forever
+                    // because the deadline only armed on success, and the sender is
+                    // marked invalid in the BestTransactions iterator after a failure.
+                    // Note that this behavior may result in an empty block being mined,
+                    // which is supported server behavour.
+                    if deadline.is_none() && let Some(dur) = deadline_dur {
+                        deadline = Some(Box::pin(tokio::time::sleep(dur)));
+                    }
+
+                    let exec_start = Instant::now();
+                    let exec_result = runner
+                        .execute_next_tx(tx.clone().encode())
+                        .await
+                        .map_err(|e| {
+                            BlockDump {
+                                ctx,
+                                txs: all_processed_txs.clone(),
+                                error: e.to_string(),
                             }
-                            if expect_sl_chain_id_tx_after_upgrade {
-                                tracing::info!(
-                                    block_number = ctx.block_number,
-                                    "upgrade tx executed, continuing with the sequencer-injected SL chain id tx"
-                                );
-                            } else {
+                        })?;
+                    total_execute_tx_time += exec_start.elapsed();
+                    match exec_result {
+                        Ok(res) => {
+                            EXECUTION_METRICS.executed_transactions.inc();
+                            EXECUTION_METRICS.transaction_gas_used.observe(res.gas_used);
+                            EXECUTION_METRICS.transaction_native_used.observe(res.native_used);
+                            EXECUTION_METRICS.transaction_computation_native_used.observe(res.computational_native_used);
+                            EXECUTION_METRICS.transaction_pubdata_used.observe(res.pubdata_used);
+                            let status_str = if res.status  {"success"} else {"failure"};
+                            EXECUTION_METRICS.transaction_status[&status_str].inc();
+                            tracing::debug!(
+                                block_number=command.block_context.block_number,
+                                output=?res,
+                                "Transaction {:?} executed with status {status_str} in block {}",
+                                tx.hash(),
+                                command.block_context.block_number
+                            );
+
+                            if let Some(SystemTxType::ImportInteropRoots(roots_count)) = tx.as_system_tx_type() {
+                                interop_roots_count += roots_count;
+                            }
+
+                            let tx_type = tx.tx_type();
+                            executed_txs.push(tx);
+                            cumulative_gas_used += res.gas_used;
+                            if tx_type == ZkTxType::Upgrade {
+                                if !res.status {
+                                    let tx_hash = executed_txs.last().unwrap().hash();
+                                    tracing::error!(
+                                        block_number = ctx.block_number,
+                                        ?tx_hash,
+                                        revert_output = ?res.output,
+                                        "Upgrade transaction reverted"
+                                    );
+                                    return Err(BlockDump {
+                                        ctx,
+                                        txs: all_processed_txs.clone(),
+                                        error: format!("upgrade tx {tx_hash} reverted"),
+                                    });
+                                }
+                                if expect_sl_chain_id_tx_after_upgrade {
+                                    tracing::info!(
+                                        block_number = ctx.block_number,
+                                        "upgrade tx executed, continuing with the sequencer-injected SL chain id tx"
+                                    );
+                                } else {
+                                    match &command.seal_policy {
+                                        SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
+                                            tracing::info!(block_number = ctx.block_number, "sealing block as upgrade tx was executed");
+                                            break SealReason::UpgradeTx;
+                                        }
+                                        SealPolicy::UntilExhausted { allowed_to_finish_early: false } => {
+                                            // We trust that the execution stream will not break protocol invariants.
+                                            tracing::info!(block_number = ctx.block_number, "upgrade tx executed, but seal policy requires full exhaustion");
+                                        }
+                                    }
+                                }
+                            }
+
+                            // If the transaction provided is an SL chain id update transaction, we need to seal the block.
+                            if let Some(SystemTxType::SetSLChainId(_, _)) = executed_txs.last().unwrap().as_system_tx_type() {
                                 match &command.seal_policy {
                                     SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
-                                        tracing::info!(block_number = ctx.block_number, "sealing block as upgrade tx was executed");
-                                        break SealReason::UpgradeTx;
+                                        tracing::info!(block_number = ctx.block_number, "sealing block as chain id update tx was executed");
+                                        break SealReason::SLChainIdUpdateTx;
                                     }
                                     SealPolicy::UntilExhausted { allowed_to_finish_early: false } => {
                                         // We trust that the execution stream will not break protocol invariants.
-                                        tracing::info!(block_number = ctx.block_number, "upgrade tx executed, but seal policy requires full exhaustion");
+                                        tracing::info!(block_number = ctx.block_number, "chain id update tx executed, but seal policy requires full exhaustion");
                                     }
                                 }
+                            }
+
+                            match command.seal_policy {
+                                SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
+                                    tracing::info!(block_number = ctx.block_number,
+                                                   txs = executed_txs.len(),
+                                                   "tx limit reached → sealing");
+                                    break SealReason::TxCountLimit
+                                },
+                                _ => {}
                             }
                         }
+                        Err(e) => {
+                            tracing::info!(
+                                block_number = command.block_context.block_number,
+                                "Transaction {:?} ({}) in block {} failed: {e:?}",
+                                tx.tx_type(),
+                                tx.hash(),
+                                command.block_context.block_number
+                            );
 
-                        // If the transaction provided is an SL chain id update transaction, we need to seal the block.
-                        if let Some(SystemTxType::SetSLChainId(_, _)) = executed_txs.last().unwrap().as_system_tx_type() {
-                            match &command.seal_policy {
-                                SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
-                                    tracing::info!(block_number = ctx.block_number, "sealing block as chain id update tx was executed");
-                                    break SealReason::SLChainIdUpdateTx;
+                            match (tx.tx_type(), command.invalid_tx_policy) {
+                                (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
+                                    return Err(
+                                        BlockDump {
+                                            ctx,
+                                            txs: all_processed_txs.clone(),
+                                            error: format!("invalid {} tx: {e:?} ({})", tx.tx_type(), tx.hash()),
+                                        }
+                                    )
                                 }
-                                SealPolicy::UntilExhausted { allowed_to_finish_early: false } => {
-                                    // We trust that the execution stream will not break protocol invariants.
-                                    tracing::info!(block_number = ctx.block_number, "chain id update tx executed, but seal policy requires full exhaustion");
+                                (ZkTxType::System, _) => {
+                                    return Err(
+                                        BlockDump {
+                                            ctx,
+                                            txs: all_processed_txs.clone(),
+                                            error: format!("invalid system tx with type {:?}: {e:?} ({})", tx.as_system_tx_type(), tx.hash()),
+                                        }
+                                    )
                                 }
-                            }
-                        }
+                                (
+                                    ZkTxType::L2(_),
+                                    InvalidTxPolicy::RejectAndContinue { mark_in_source },
+                                ) => {
+                                    let rejection_method = rejection_method(&e);
+                                    if mark_in_source {
+                                        command.tx_source.mark_last_l2_tx_as_invalid();
+                                    }
 
-                        match command.seal_policy {
-                            SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
-                                tracing::info!(block_number = ctx.block_number,
-                                               txs = executed_txs.len(),
-                                               "tx limit reached → sealing");
-                                break SealReason::TxCountLimit
-                            },
-                            _ => {}
-                        }
-                    }
-                    Err(e) => {
-                        tracing::info!(
-                            block_number = command.block_context.block_number,
-                            "Transaction {:?} ({}) in block {} failed: {e:?}",
-                            tx.tx_type(),
-                            tx.hash(),
-                            command.block_context.block_number
-                        );
-
-                        match (tx.tx_type(), command.invalid_tx_policy) {
-                            (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
-                                return Err(
-                                    BlockDump {
-                                        ctx,
-                                        txs: all_processed_txs.clone(),
-                                        error: format!("invalid {} tx: {e:?} ({})", tx.tx_type(), tx.hash()),
-                                    }
-                                )
-                            }
-                            (ZkTxType::System, _) => {
-                                return Err(
-                                    BlockDump {
-                                        ctx,
-                                        txs: all_processed_txs.clone(),
-                                        error: format!("invalid system tx with type {:?}: {e:?} ({})", tx.as_system_tx_type(), tx.hash()),
-                                    }
-                                )
-                            }
-                            (
-                                ZkTxType::L2(_),
-                                InvalidTxPolicy::RejectAndContinue { mark_in_source },
-                            ) => {
-                                let rejection_method = rejection_method(&e);
-                                if mark_in_source {
-                                    command.tx_source.mark_last_l2_tx_as_invalid();
-                                }
-
-                                match (rejection_method, command.seal_policy, executed_txs.is_empty()) {
-                                    (TxRejectionMethod::Purge, _, _) => {
-                                        purged_txs.push((*tx.hash(), e.clone()));
-                                        tracing::info!(
-                                            block_number = ctx.block_number,
-                                            "Invalid L2 tx {} was purged in block {}: error={e:?}, source_marked_invalid={}, nonce={:?}",
-                                            tx.hash(),
-                                            ctx.block_number,
-                                            mark_in_source,
-                                            tx.nonce(),
-                                        );
-                                    }
-                                    (TxRejectionMethod::Skip, _, _) => {
-                                        tracing::info!(
-                                            block_number = ctx.block_number,
-                                            "Invalid L2 tx {} was skipped in block {}: error={e:?}, source_marked_invalid={}, nonce={:?}",
-                                            tx.hash(),
-                                            ctx.block_number,
-                                            mark_in_source,
-                                            tx.nonce(),
-                                        );
-                                    },
-                                    // For Produce, don't seal if no transactions have been executed yet
-                                    (TxRejectionMethod::SealBlock(reason), SealPolicy::Decide(..), true) => {
-                                        purged_txs.push((*tx.hash(), e.clone()));
-                                        tracing::info!(
-                                            block_number = ctx.block_number,
-                                            "Block {} hit a sealing criterion while processing first L2 tx {}: reason={reason:?}, error={e:?}, source_marked_invalid={}, nonce={:?}; rejecting tx instead of sealing",
-                                            ctx.block_number,
-                                            tx.hash(),
-                                            mark_in_source,
-                                            tx.nonce(),
-                                        );
-                                    }
-                                    (TxRejectionMethod::SealBlock(reason), _, _) => {
-                                        tracing::info!(
-                                            block_number = ctx.block_number,
-                                            "Sealing block {} before L2 tx {} because it hit a sealing criterion: reason={reason:?}, error={e:?}, nonce={:?}",
-                                            ctx.block_number,
-                                            tx.hash(),
-                                            tx.nonce(),
-                                        );
-                                        break reason;
+                                    match (rejection_method, command.seal_policy, executed_txs.is_empty()) {
+                                        (TxRejectionMethod::Purge, _, _) => {
+                                            purged_txs.push((*tx.hash(), e.clone()));
+                                            tracing::info!(
+                                                block_number = ctx.block_number,
+                                                "Invalid L2 tx {} was purged in block {}: error={e:?}, source_marked_invalid={}, nonce={:?}",
+                                                tx.hash(),
+                                                ctx.block_number,
+                                                mark_in_source,
+                                                tx.nonce(),
+                                            );
+                                        }
+                                        (TxRejectionMethod::Skip, _, _) => {
+                                            tracing::info!(
+                                                block_number = ctx.block_number,
+                                                "Invalid L2 tx {} was skipped in block {}: error={e:?}, source_marked_invalid={}, nonce={:?}",
+                                                tx.hash(),
+                                                ctx.block_number,
+                                                mark_in_source,
+                                                tx.nonce(),
+                                            );
+                                        },
+                                        // For Produce, don't seal if no transactions have been executed yet
+                                        (TxRejectionMethod::SealBlock(reason), SealPolicy::Decide(..), true) => {
+                                            purged_txs.push((*tx.hash(), e.clone()));
+                                            tracing::info!(
+                                                block_number = ctx.block_number,
+                                                "Block {} hit a sealing criterion while processing first L2 tx {}: reason={reason:?}, error={e:?}, source_marked_invalid={}, nonce={:?}; rejecting tx instead of sealing",
+                                                ctx.block_number,
+                                                tx.hash(),
+                                                mark_in_source,
+                                                tx.nonce(),
+                                            );
+                                        }
+                                        (TxRejectionMethod::SealBlock(reason), _, _) => {
+                                            tracing::info!(
+                                                block_number = ctx.block_number,
+                                                "Sealing block {} before L2 tx {} because it hit a sealing criterion: reason={reason:?}, error={e:?}, nonce={:?}",
+                                                ctx.block_number,
+                                                tx.hash(),
+                                                tx.nonce(),
+                                            );
+                                            break reason;
+                                        }
                                     }
                                 }
-                            }
-                            (ZkTxType::L2(_), InvalidTxPolicy::Abort) => {
-                                return Err(
-                                    BlockDump {
-                                        ctx,
-                                        txs: all_processed_txs.clone(),
-                                        error: format!("invalid l2 tx: {e:?} ({})", tx.hash()),
-                                    }
-                                )
+                                (ZkTxType::L2(_), InvalidTxPolicy::Abort) => {
+                                    return Err(
+                                        BlockDump {
+                                            ctx,
+                                            txs: all_processed_txs.clone(),
+                                            error: format!("invalid l2 tx: {e:?} ({})", tx.hash()),
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -414,6 +555,10 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
     let block_hash_output = hash_block_output(output);
 
+    // How long the VM worker thread spent blocked waiting for the next tx. If this is a large
+    // fraction of `execute_tx_time`, the VM is idle between txs (hand-off ping-pong, not CPU-bound).
+    let vm_idle_time = Duration::from_micros(vm_idle_micros.load(Ordering::Relaxed));
+
     tracing::info!(
         block_number = output.header.number,
         "Block {block_number} ({label}) sealed because of {seal_reason:?} in block executor \
@@ -421,7 +566,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         Block hash output: {block_hash_output:?}, canonical hash: {canonical_hash:?}. \
         storage writes: {write_count}, unique reads: {unique_reads_count}, preimages: {preimages_count}, pubdata bytes: {pubdata_len}. \
         execute_tx_time: {total_execute_tx_time:?}, tx_stream_time: {total_tx_stream_time:?}, \
-        read_time: {total_read_time:?} over {read_count} reads.",
+        read_time: {total_read_time:?} over {read_count} reads, vm_idle_time: {vm_idle_time:?}.",
         block_number = output.header.number,
         label = command.metrics_label,
         tx_count = executed_txs.len(),

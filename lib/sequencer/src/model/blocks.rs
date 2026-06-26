@@ -205,6 +205,10 @@ pub struct PreparedBlockCommand<'a> {
     /// Whether canonical state transition should strictly consume executed txs from live subpools.
     /// `true` for produced blocks, `false` for replay/rebuild.
     pub strict_subpool_cleanup: bool,
+    /// Bench-only: when set, `execute_block_in_vm` keeps several txs in flight in the VM instead of
+    /// the one-at-a-time hand-off, so the VM worker isn't starved. Only ever `true` for
+    /// direct-injection load tests (no upgrade/SL-chain-id/system txs, huge gas/pubdata limits).
+    pub direct_injection: bool,
 }
 
 /// Behaviour when VM returns an InvalidTransaction error.
