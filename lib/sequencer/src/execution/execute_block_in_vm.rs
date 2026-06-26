@@ -109,7 +109,11 @@ pub async fn execute_block_in_vm<V: ViewState>(
         // system txs) with huge gas and pubdata limits, so the only seal reasons are the tx-count
         // limit and the deadline. Set via `PreparedBlockCommand::direct_injection`.
         use std::collections::VecDeque;
-        const VM_PIPELINE_DEPTH: usize = 1024;
+        // Sized above the bench's max transactions-per-block so the feeder submits the whole block
+        // before draining: the collector isn't parked while feeding (no wakes) and the result
+        // buffer is full while draining (no parks), removing the per-tx cross-thread park/unpark.
+        // Must be <= `VM_CHANNEL_CAPACITY` (the channels backpressure at that bound).
+        const VM_PIPELINE_DEPTH: usize = 30_000;
         let tx_limit = match command.seal_policy {
             SealPolicy::Decide(_, limit) => limit,
             SealPolicy::UntilExhausted { .. } => usize::MAX,

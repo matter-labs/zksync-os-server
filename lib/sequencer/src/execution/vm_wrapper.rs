@@ -20,7 +20,12 @@ use zksync_os_storage_api::{BlockContext, ViewState};
 /// direct-injection bench (see `submit_tx`/`next_result`) feeds eagerly to keep the VM worker busy,
 /// so it relies on the deeper buffer. A bounded `tokio` channel only allocates slots lazily, so the
 /// large capacity is free when unused.
-const VM_CHANNEL_CAPACITY: usize = 1024;
+///
+/// Sized above the bench's max transactions-per-block so the feeder can submit a whole block without
+/// blocking and the VM can push every result without blocking — eliminating the per-tx cross-thread
+/// park/unpark (each result-send otherwise wakes the parked collector task). Must be paired with an
+/// equally large `VM_PIPELINE_DEPTH` in `execute_block_in_vm`, otherwise the in-flight cap dominates.
+const VM_CHANNEL_CAPACITY: usize = 30_000;
 
 /// A one‐by‐one driver around `run_block`, enabling `execute_next_tx` interface
 /// (as opposed to pull interface of `run_block` in zksync-os)
