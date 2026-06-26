@@ -1,0 +1,58 @@
+ecosystem:
+  owner:
+    address: '0xd5e5bc64b8eb265479de369545d44cda89bd4592'
+    private_key: '0xdf2a39a713b1b28c125351184b10329eadbbd9677279cec281b8ac03f9f7631e'
+  governor:
+    address: '0x806cd593425cbd39bfc23968a5cdb68a09fe09af'
+    private_key: '0x1f68b79de919e91808808318724dd2fbcb0e09a8781acf25c8b3cac15ca3a177'
+  token_multiplier_setter:
+    address: '0x96bbcd26f909f7995268be6e7fb5ac521317b58f'
+    private_key: '0x2e580ec6ac80d49a18abc698462b00299243c1a77ef6a7de89f5ca744174c548'
+6565:
+  owner:
+    address: '0x2b7b4554e8db6472f4c2cb2da55e1373fefa851c'
+    private_key: '0xbabb1f73d4ab492850bc85d04c648002cef2a4dac6f19391afb197623ebf7a75'
+  fee_account:
+    address: '0x8a497de567b4a6c416bfd4e182903d988be006eb'
+    private_key: '0x9556a256587f42abe1d1468b8e94341639694973dfb85d8143ff6eea07ee7e04'
+  operator_commit_sk:
+    address: '0x37b96b3b6ebf586c0dd1e8d752d367545b1b2cfb'
+    private_key: '0xc0eb3791bb7bdb37048d379b7bf4d4e7e422e839f48016628136330ea7c46dab'
+  operator_prove_sk:
+    address: '0xdadfbbb2dab24fa36824ab2e95d41f49dfd0b20a'
+    private_key: '0x94f2be50a96eb5fa06d37e9af702a3a0304f4a8e1b00c3cea6c55a214aa6184a'
+  operator_execute_sk:
+    address: '0xbc083017670f52ae7e73b434de85a32d73c0214e'
+    private_key: '0xe047e59626543af623502ae68a42483bed3450168b2c67d1f821a194fbedefc1'
+6566:
+  owner:
+    address: '0x28d153a3b1d147fead07bcfcec0f2a9af69dd86a'
+    private_key: '0xd5d47a6fd967b08149011cb7624dc66083d71eb96bb11c36150a853da4110c71'
+  fee_account:
+    address: '0x741e9ac3916e1892b1dd6972d7965e05882f040e'
+    private_key: '0x79dc08f9a4bc8f56045f48d151a0cd29973a8d1d8a6cd133336f02f19ea3acbf'
+  operator_commit_sk:
+    address: '0xb82ecff0efa550bc3eeb8dcfdcdb863fc52d7878'
+    private_key: '0x184101e421324713dae15ec104dbdada9a5ae2427ea5fe0b7dffc43007eda890'
+  operator_prove_sk:
+    address: '0x56749724625010fc55bb5a43a433d7515ee6b134'
+    private_key: '0x6e8edc65c3a1bffcdcd88bb5851b039deaa80531317b5de4a75f92ece4f73bc4'
+  operator_execute_sk:
+    address: '0xecdd73a37a4cee521fd1e8f9f577dd778a0dcf36'
+    private_key: '0xaab971e3760af3990b8665258bb099d917be7c29a7f6a2ae50870ceca0789872'
+6567:
+  owner:
+    address: '0x399eb6aafed7842d14b98d429a2b11104165bfea'
+    private_key: '0x570dc984bb2c9a07ea43807cc84ee8c2973672a5abe0a2a011fd4bc37abb0c6e'
+  fee_account:
+    address: '0x36450e60730d4059c0760a6d3cf643fe5647a2c3'
+    private_key: '0x32c32988695c434ceba364f13ce50101cef2c2664b267fd4860ae2084b2e36d9'
+  operator_commit_sk:
+    address: '0xc0561156892edbf3e0459e032fd702c490ef1f9f'
+    private_key: '0x4c44c83dd60a46b6f512f58240b20846e8c7024e3de3d17cfa43bead3d5ab491'
+  operator_prove_sk:
+    address: '0xb1c92bb2bb2606180064bd31eb7298fdc4ac5fa2'
+    private_key: '0xbce3ab1ba5945bb1f6117189dff4d74965b007afc4a76cc3fcd458e70d1a113d'
+  operator_execute_sk:
+    address: '0xe0bfa5f732a4025147100b2c40898a77f54e406b'
+    private_key: '0x07f06c59375f09d401d44449458840e7d21495ac26e05fbff25e63767ff7b380'
