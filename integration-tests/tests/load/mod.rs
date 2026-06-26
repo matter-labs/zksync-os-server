@@ -1,18 +1,21 @@
+use alloy::consensus::transaction::Recovered;
+use alloy::consensus::{SignableTransaction, TxEip1559};
 use alloy::network::{EthereumWallet, ReceiptResponse, TransactionBuilder, TxSigner};
-use alloy::primitives::{Address, U128, U256};
+use alloy::primitives::{Address, Signature, TxKind, U128, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
-use zksync_os_integration_tests::assert_traits::ReceiptsAssert;
+use zksync_os_integration_tests::assert_traits::{ReceiptAssert, ReceiptsAssert};
 use zksync_os_integration_tests::{NEXT_TO_L1, TestEnvironment, test_multisetup};
 use zksync_os_server::config::FeeConfig;
+use zksync_os_types::{L2Envelope, ZkTransaction};
 
 /// How long to wait for a single transaction's receipt before giving up.
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -54,6 +57,7 @@ async fn effective_tps(env: TestEnvironment) -> anyhow::Result<()> {
         ..Default::default()
     };
     config.mempool_config.minimal_protocol_basefee = 0;
+    config.mempool_config.max_account_slots = 8192;
     config.sequencer_config.revm_consistency_checker_enabled = false;
     config.batcher_config.enabled = false;
     config.sequencer_config.block_pubdata_limit_bytes = u64::MAX;
@@ -224,4 +228,163 @@ fn build_transfer(recipient: Address, gas_price: u128) -> TransactionRequest {
         .with_value(U256::from(1))
         .with_gas_price(gas_price)
         .with_gas_limit(LOAD_GAS_LIMIT)
+}
+
+/// Like [`effective_tps`], but bypasses the RPC and mempool layers entirely: transactions are
+/// streamed straight into block production through the sequencer's direct tx channel (activated via
+/// [`Tester::activate_direct_injection`]). This isolates the cost of the sequencer + execution
+/// pipeline from RPC ingestion, signature recovery, and receipt polling — which the flamegraph
+/// showed dominate the RPC-based path.
+///
+/// Submission is backpressured by the channel, so once the pipeline reaches steady state the submit
+/// rate equals the sequencer's execution rate. We warm up, then measure that rate.
+///
+/// Tunable: `LOAD_TEST_DURATION_SECS` (default 60), `LOAD_TEST_WARMUP_SECS` (default 5).
+#[test_multisetup([NEXT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
+    let mut config = env.default_config().await?;
+    config.prover_input_generator_config.enable_input_generation = false;
+    config.fee_config = FeeConfig {
+        base_fee_override: Some(U128::from(0)),
+        pubdata_price_override: Some(U128::from(0)),
+        ..Default::default()
+    };
+    config.mempool_config.minimal_protocol_basefee = 0;
+    config.sequencer_config.revm_consistency_checker_enabled = false;
+    config.batcher_config.enabled = false;
+    config.sequencer_config.block_pubdata_limit_bytes = u64::MAX;
+    config.sequencer_config.max_transactions_in_block = 10000;
+    // Raise the gas limit so blocks never seal on `GasLimit`. A limit-based seal consumes the
+    // triggering tx from the stream without executing it; the mempool re-serves such a tx, but the
+    // direct channel would drop it and open a permanent nonce gap. With this, blocks seal only on
+    // the deadline or the tx-count limit, neither of which drops a tx. 1e12 is far above what
+    // `max_transactions_in_block` txs need, yet well under the VM's `MAX_BLOCK_GAS_LIMIT`
+    // (`u64::MAX / 256`), which `u64::MAX` would exceed.
+    config.sequencer_config.block_gas_limit = 1_000_000_000_000;
+    let tester = env.launch(config).await?;
+
+    let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
+    let warmup = Duration::from_secs(env_or("LOAD_TEST_WARMUP_SECS", 5));
+
+    let sender = tester.direct_tx_sender();
+    let signer = tester.l2_wallet.default_signer().address();
+    let chain_id = tester.l2_provider.get_chain_id().await?;
+    let recipient = Address::repeat_byte(0x42);
+
+    // Switch block production over to the direct channel, then send one tx through the normal RPC
+    // path. That tx flushes the block producer that is parked waiting on the (now empty) mempool;
+    // from the next block on, production pulls exclusively from the direct channel.
+    tester.activate_direct_injection();
+    let kick = TransactionRequest::default()
+        .with_to(recipient)
+        .with_value(U256::ZERO)
+        .with_gas_price(0)
+        .with_gas_limit(LOAD_GAS_LIMIT);
+    tester
+        .l2_provider
+        .send_transaction(kick)
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    // Start injecting from the sender's current on-chain nonce (after the kick tx).
+    let start_nonce = tester.l2_provider.get_transaction_count(signer).await?;
+    // The VM does not validate EOA signatures in forward-running mode and the signer is provided
+    // out-of-band, so a fixed dummy signature is fine — this avoids per-tx ECDSA signing entirely.
+    let signature = Signature::new(Default::default(), Default::default(), false);
+
+    let submitted = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let pusher = tokio::spawn({
+        let (sender, submitted, stop) = (sender.clone(), submitted.clone(), stop.clone());
+        async move {
+            let mut nonce = start_nonce;
+            while !stop.load(Ordering::Relaxed) {
+                let tx = build_direct_tx(chain_id, nonce, recipient, signer, signature);
+                // Backpressure: blocks once the channel fills, pacing submission to the sequencer.
+                if sender.send(tx).await.is_err() {
+                    break; // sequencer dropped the channel
+                }
+                nonce += 1;
+                submitted.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    });
+
+    // Warm up so the channel fills and the pipeline reaches steady state, then measure the
+    // steady-state consumption rate.
+    tokio::time::sleep(warmup).await;
+
+    // Optional CPU profiling of the steady-state window only (excludes startup/warmup), when
+    // `LOAD_TEST_FLAMEGRAPH=<path>` is set. With RPC + mempool bypassed, this isolates the
+    // sequencer + execution pipeline.
+    let flamegraph_path = std::env::var("LOAD_TEST_FLAMEGRAPH").ok();
+    let profiler_guard = flamegraph_path.as_ref().map(|_| {
+        pprof::ProfilerGuardBuilder::default()
+            .frequency(499)
+            .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+            .build()
+            .expect("failed to start profiler")
+    });
+
+    let submitted_before = submitted.load(Ordering::Relaxed);
+    let block_before = tester.l2_provider.get_block_number().await?;
+    let measure_start = Instant::now();
+
+    tokio::time::sleep(duration).await;
+
+    let measured = measure_start.elapsed();
+    let executed = submitted.load(Ordering::Relaxed) - submitted_before;
+    let block_after = tester.l2_provider.get_block_number().await?;
+    stop.store(true, Ordering::Relaxed);
+    let _ = pusher.await;
+
+    if let (Some(guard), Some(path)) = (profiler_guard, flamegraph_path.as_ref()) {
+        match guard.report().build() {
+            Ok(report) => {
+                let file = std::fs::File::create(path)?;
+                report.flamegraph(file)?;
+                tracing::info!(path, "wrote flamegraph");
+            }
+            Err(err) => tracing::warn!(%err, "failed to build profiler report"),
+        }
+    }
+
+    let direct_injection_tps = executed as f64 / measured.as_secs_f64();
+    tracing::info!(
+        executed,
+        ?measured,
+        direct_injection_tps,
+        blocks_produced = block_after - block_before,
+        "direct-injection load test complete"
+    );
+
+    Ok(())
+}
+
+/// Build a `ZkTransaction` directly with a known signer and a dummy signature (no ECDSA), as cheaply
+/// as possible — used to feed the sequencer's direct tx channel without RPC / mempool / signing.
+fn build_direct_tx(
+    chain_id: u64,
+    nonce: u64,
+    recipient: Address,
+    signer: Address,
+    signature: Signature,
+) -> ZkTransaction {
+    let envelope = L2Envelope::from(
+        TxEip1559 {
+            chain_id,
+            nonce,
+            gas_limit: LOAD_GAS_LIMIT,
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            to: TxKind::Call(recipient),
+            value: U256::ZERO,
+            access_list: Default::default(),
+            input: Default::default(),
+        }
+        .into_signed(signature),
+    );
+    ZkTransaction::from(Recovered::new_unchecked(envelope, signer))
 }

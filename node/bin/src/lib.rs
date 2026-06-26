@@ -55,7 +55,7 @@ use priority_tree_pipeline_step::PriorityTreePipelineStep;
 use reth_tasks::Runtime;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
@@ -116,7 +116,9 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord,
     WriteReplay, WriteRepository, WriteState,
 };
-use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState};
+use zksync_os_types::{
+    ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState, ZkTransaction,
+};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const RAFT_DB_NAME: &str = "raft";
@@ -130,6 +132,13 @@ pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
     runtime: &Runtime,
     config: Config,
+    // Test/bench only: when `Some`, once the `AtomicBool` is set the sequencer streams transactions
+    // directly from this channel (bypassing RPC + mempool) instead of
+    // `pool.best_transactions_stream()`. Always `None` in the production binary.
+    direct_tx: Option<(
+        tokio::sync::mpsc::Receiver<ZkTransaction>,
+        Arc<std::sync::atomic::AtomicBool>,
+    )>,
 ) {
     report_static_config_metrics(&config);
 
@@ -827,6 +836,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         },
         &node_startup_state.l1_state.settlement_layer_intervals,
         last_constructed_block_ctx_sender,
+        direct_tx.map(|(rx, active)| {
+            zksync_os_sequencer::execution::block_context_provider::DirectTxSource {
+                rx: Arc::new(Mutex::new(rx)),
+                active,
+            }
+        }),
     );
 
     // ========== Start L1 Persist Batch Watcher ===========

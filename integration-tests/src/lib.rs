@@ -42,7 +42,7 @@ use zksync_os_server::default_protocol_version::{
 use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
-    L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+    L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTransaction,
 };
 
 pub mod assert_traits;
@@ -309,6 +309,12 @@ pub struct Tester {
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
     owned_supporting_nodes: Vec<SupportingNode>,
+    /// Feeds transactions straight into the sequencer, bypassing RPC + mempool. Always wired, but
+    /// dormant until [`Tester::activate_direct_injection`] flips `direct_tx_active` (load tests only).
+    direct_tx_sender: tokio::sync::mpsc::Sender<ZkTransaction>,
+    /// Flips direct injection on. Kept dormant so the node first finishes startup (upgrade + initial
+    /// deposit) via the normal mempool path before any direct streaming begins.
+    direct_tx_active: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(feature = "prover-tests")]
     prover_api_address: String,
 }
@@ -699,9 +705,20 @@ impl Tester {
             role = %node_role,
         );
         tracing::info!(parent: &node_span, "Launching test node");
-        zksync_os_server::run::<FullDiffsState>(&runtime, config.clone())
-            .instrument(node_span)
-            .await;
+        // When direct tx injection is enabled, create the channel here so we can keep the sender
+        // (handed to the load test) while the receiver is wired into the sequencer's tx source.
+        // Always wire an (inactive) direct-injection channel. Block production stays on the normal
+        // mempool path until `Tester::activate_direct_injection` flips it on (load tests only), so
+        // this has no effect on regular tests.
+        let direct_tx_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (direct_tx_sender, direct_tx_rx) = tokio::sync::mpsc::channel(200_000);
+        zksync_os_server::run::<FullDiffsState>(
+            &runtime,
+            config.clone(),
+            Some((direct_tx_rx, direct_tx_active.clone())),
+        )
+        .instrument(node_span)
+        .await;
         let task_manager_handle = runtime
             .take_task_manager_handle()
             .expect("Runtime must contain a TaskManager handle");
@@ -788,6 +805,8 @@ impl Tester {
             tempdir: tempdir.clone(),
             chain_layout,
             owned_supporting_nodes: Vec::new(),
+            direct_tx_sender,
+            direct_tx_active,
             #[cfg(feature = "prover-tests")]
             prover_api_address,
         };
@@ -795,6 +814,19 @@ impl Tester {
             tester.wait_for_initial_deposit().await?;
         }
         Ok(tester)
+    }
+
+    /// Sender that feeds transactions directly into the sequencer, bypassing RPC + mempool. Always
+    /// available, but only takes effect after [`Tester::activate_direct_injection`].
+    pub fn direct_tx_sender(&self) -> tokio::sync::mpsc::Sender<ZkTransaction> {
+        self.direct_tx_sender.clone()
+    }
+
+    /// Switches block production over to the direct tx channel. Call this only after the node has
+    /// finished startup (protocol upgrade + initial deposit), which must go through the mempool.
+    pub fn activate_direct_injection(&self) {
+        self.direct_tx_active
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn owned_supporting_nodes(&self) -> &[SupportingNode] {

@@ -6,8 +6,13 @@ use crate::model::blocks::{
 use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use anyhow::Context as _;
 use futures::StreamExt;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::{sync::watch, time::Instant};
+use tokio::{
+    sync::{mpsc, watch},
+    time::Instant,
+};
 use zksync_os_contract_interface::settlement_layer_intervals::{
     IntervalSettlementLayer, SettlementLayerIntervals,
 };
@@ -41,6 +46,21 @@ pub struct BlockContextProvider<Subpool> {
     /// is a migration in the process.
     current_sl_chain_id: u64,
     last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
+    /// Test/bench-only: when present and `active`, block production bypasses the mempool and streams
+    /// transactions directly from this channel instead of `pool.best_transactions_stream()`.
+    direct_tx: Option<DirectTxSource>,
+}
+
+/// Test/bench-only handle that feeds transactions straight into block production, bypassing the
+/// mempool. See [`BlockContextProvider`].
+pub struct DirectTxSource {
+    /// Wrapped in `Arc<Mutex<_>>` so each block's stream can own a clone (no borrow of `self`) while
+    /// the receiver persists across blocks.
+    pub rx: Arc<Mutex<mpsc::Receiver<ZkTransaction>>>,
+    /// Direct injection only takes over once this is set, so the node can first replay genesis /
+    /// apply the protocol upgrade / process the initial deposit through the normal mempool path
+    /// (which blocks on an empty mempool, so it cannot be used for an empty bench stream).
+    pub active: Arc<AtomicBool>,
 }
 
 pub struct Config {
@@ -68,6 +88,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         config: Config,
         intervals: &SettlementLayerIntervals,
         last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
+        direct_tx: Option<DirectTxSource>,
     ) -> Self {
         let current_sl_chain_id = match intervals.current_settlement_layer() {
             IntervalSettlementLayer::L1 => config.l1_chain_id,
@@ -81,6 +102,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             next_interop_tx_allowed_after: Instant::now(),
             current_sl_chain_id,
             last_constructed_block_ctx_sender,
+            direct_tx,
         }
     }
 
@@ -123,22 +145,33 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         // Create stream:
         // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
         // - L1 transactions first, then L2 transactions.
-        let best_txs = self
-            .pool
-            .best_transactions_stream(
-                self.next_interop_tx_allowed_after,
-                self.settles_on_gateway(),
-            )
-            .await
-            .context("mempool is closed")?;
+        // Obtain the base transaction stream and any upgrade metadata. In direct-injection mode
+        // (test/bench only) we bypass the mempool entirely and stream transactions straight from
+        // the injected channel.
+        let use_direct = self
+            .direct_tx
+            .as_ref()
+            .is_some_and(|d| d.active.load(Ordering::Relaxed));
+        let (upgrade_metadata, pool_stream) = if use_direct {
+            (None, None)
+        } else {
+            let best_txs = self
+                .pool
+                .best_transactions_stream(
+                    self.next_interop_tx_allowed_after,
+                    self.settles_on_gateway(),
+                )
+                .await
+                .context("mempool is closed")?;
+            (best_txs.upgrade_metadata, Some(best_txs.stream))
+        };
 
         let timestamp = (millis_since_epoch() / 1000) as u64;
 
         // Check if we peeked an upgrade transaction info.
         // It is possible that we peek an upgrade with version <= self.protocol_version
         // since we do not consume patch upgrades when replaying/rebuilding blocks. Such upgrade can be safely skipped.
-        let (protocol_version, force_preimages) = if let Some(upgrade_metadata) =
-            best_txs.upgrade_metadata
+        let (protocol_version, force_preimages) = if let Some(upgrade_metadata) = upgrade_metadata
             && upgrade_metadata.protocol_version > previous_record.protocol_version
         {
             tracing::info!(
@@ -171,21 +204,41 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         // Append a SetSLChainId system transaction exactly once: when the protocol
         // version is v31 (either via upgrade from v30, or on the first block of a
         // fresh v31 chain). After it fires once, the condition can never trigger again.
-        let (tx_source, expect_sl_chain_id_tx_after_upgrade) = if protocol_version.minor == 31
+        let expect_sl_chain_id_tx_after_upgrade = protocol_version.minor == 31
             && (previous_record.protocol_version.minor < 31
-                || previous_record.block_context.block_number == 0)
-        {
-            let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
-                self.current_sl_chain_id,
-                // We use `u64::MAX` as a placeholder, since it is not an actual migration
-                u64::MAX,
-            );
-            let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
-                futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
-            ));
-            (tx_source, true)
-        } else {
-            (best_txs.stream, false)
+                || previous_record.block_context.block_number == 0);
+        // `u64::MAX` is a placeholder, since this is not an actual migration.
+        let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(self.current_sl_chain_id, u64::MAX);
+
+        let tx_source = match pool_stream {
+            Some(stream) => {
+                if expect_sl_chain_id_tx_after_upgrade {
+                    MarkingTxStream::unmarkable(stream.stream.chain(futures::stream::once(
+                        async move { ZkTransaction::from(sl_chain_id_tx) },
+                    )))
+                } else {
+                    stream
+                }
+            }
+            None => {
+                // Direct injection: the stream owns an `Arc` clone of the receiver (so it does not
+                // borrow `self` and survives across blocks) and is pending when the channel is
+                // empty, letting the block seal on its deadline.
+                let rx = self
+                    .direct_tx
+                    .as_ref()
+                    .expect("direct_tx present")
+                    .rx
+                    .clone();
+                let direct = futures::stream::poll_fn(move |cx| rx.lock().unwrap().poll_recv(cx));
+                if expect_sl_chain_id_tx_after_upgrade {
+                    MarkingTxStream::unmarkable(direct.chain(futures::stream::once(async move {
+                        ZkTransaction::from(sl_chain_id_tx)
+                    })))
+                } else {
+                    MarkingTxStream::unmarkable(direct)
+                }
+            }
         };
 
         let FeeParams {
@@ -222,7 +275,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 self.config.max_transactions_in_block,
             ),
             invalid_tx_policy: InvalidTxPolicy::RejectAndContinue {
-                mark_in_source: true,
+                // The direct-injection channel is an unmarkable stream, so invalid txs must be
+                // dropped without trying to mark them back in the (non-existent) source pool.
+                mark_in_source: !use_direct,
             },
             metrics_label: "produce",
             protocol_version,
