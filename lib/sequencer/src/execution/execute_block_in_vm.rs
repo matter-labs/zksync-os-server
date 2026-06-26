@@ -9,6 +9,7 @@ use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
 use futures::StreamExt;
 use std::pin::Pin;
+use std::time::{Duration, Instant};
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
 use zk_ee::memory::stack_trait::Stack;
@@ -60,6 +61,11 @@ pub async fn execute_block_in_vm<V: ViewState>(
     let mut cumulative_gas_used = 0u64;
     let mut purged_txs = Vec::new();
 
+    // Per-block wall-clock accumulators (summed across all txs in this block), reported in the
+    // per-block summary log when the block seals.
+    let mut total_execute_tx_time = Duration::ZERO;
+    let mut total_tx_stream_time = Duration::ZERO;
+
     let mut all_processed_txs = Vec::new();
 
     /* ---------- deadline config ------------------------------------ */
@@ -86,6 +92,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     // seal_reason must only be used for observability - handling must remain generic
     let seal_reason = loop {
         latency_tracker.enter_state(SequencerState::WaitingForTx);
+        let tx_wait_start = Instant::now();
         tokio::select! {
             /* -------- deadline branch ------------------------------ */
             _ = async {
@@ -103,6 +110,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
             /* -------- stream branch ------------------------------- */
             maybe_tx = command.tx_source.stream.next() => {
+                total_tx_stream_time += tx_wait_start.elapsed();
                 let Some(tx) = maybe_tx else {
                     tracing::info!(
                         block_number = ctx.block_number,
@@ -143,7 +151,9 @@ pub async fn execute_block_in_vm<V: ViewState>(
                     deadline = Some(Box::pin(tokio::time::sleep(dur)));
                 }
 
-                match runner.execute_next_tx(tx.clone().encode())
+                let exec_start = Instant::now();
+                let exec_result = runner
+                    .execute_next_tx(tx.clone().encode())
                     .await
                     .map_err(|e| {
                         BlockDump {
@@ -151,7 +161,9 @@ pub async fn execute_block_in_vm<V: ViewState>(
                             txs: all_processed_txs.clone(),
                             error: e.to_string(),
                         }
-                    })? {
+                    })?;
+                total_execute_tx_time += exec_start.elapsed();
+                match exec_result {
                     Ok(res) => {
                         EXECUTION_METRICS.executed_transactions.inc();
                         EXECUTION_METRICS.transaction_gas_used.observe(res.gas_used);
@@ -366,6 +378,8 @@ pub async fn execute_block_in_vm<V: ViewState>(
         error: e.context("seal_block()").to_string(),
     })?;
     let unique_reads_count = output_with_reads.read_keys().len();
+    let total_read_time = output_with_reads.total_read_time();
+    let read_count = output_with_reads.read_count();
     let output = output_with_reads.inner_mut();
 
     // Since we've overridden the state, we need to insert any forced preimages into the output as well.
@@ -405,7 +419,9 @@ pub async fn execute_block_in_vm<V: ViewState>(
         "Block {block_number} ({label}) sealed because of {seal_reason:?} in block executor \
         with {tx_count} transactions ({purged_tx_count} purged) and {cumulative_gas_used} gas. \
         Block hash output: {block_hash_output:?}, canonical hash: {canonical_hash:?}. \
-        storage writes: {write_count}, unique reads: {unique_reads_count}, preimages: {preimages_count}, pubdata bytes: {pubdata_len}.",
+        storage writes: {write_count}, unique reads: {unique_reads_count}, preimages: {preimages_count}, pubdata bytes: {pubdata_len}. \
+        execute_tx_time: {total_execute_tx_time:?}, tx_stream_time: {total_tx_stream_time:?}, \
+        read_time: {total_read_time:?} over {read_count} reads.",
         block_number = output.header.number,
         label = command.metrics_label,
         tx_count = executed_txs.len(),

@@ -15,17 +15,41 @@ pub struct BlockOutputWithReads {
     inner: BlockOutput,
     /// Keys read, but not written during block execution.
     read_keys: HashSet<B256>,
+    /// Total wall-clock time spent in storage `read` calls during execution.
+    total_read_time: Duration,
+    /// Number of storage `read` calls, including repeated reads of the same key.
+    read_count: u64,
 }
 
 impl BlockOutputWithReads {
-    pub(crate) fn new(inner: BlockOutput, mut read_keys: HashSet<B256>) -> Self {
+    pub(crate) fn new(
+        inner: BlockOutput,
+        mut read_keys: HashSet<B256>,
+        total_read_time: Duration,
+        read_count: u64,
+    ) -> Self {
         for write in &inner.storage_writes {
             read_keys.remove(&write.key);
         }
         // Reclaim unnecessary capacity; the read keys are immutable after this point.
         read_keys.shrink_to_fit();
 
-        Self { inner, read_keys }
+        Self {
+            inner,
+            read_keys,
+            total_read_time,
+            read_count,
+        }
+    }
+
+    /// Total wall-clock time spent in storage `read` calls during block execution.
+    pub(crate) fn total_read_time(&self) -> Duration {
+        self.total_read_time
+    }
+
+    /// Number of storage `read` calls during block execution (including repeated keys).
+    pub(crate) fn read_count(&self) -> u64 {
+        self.read_count
     }
 
     /// Returns block output + keys read, but not written during block execution.

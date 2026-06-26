@@ -6,17 +6,31 @@ use std::collections::HashSet;
 use std::mem;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zksync_os_interface::traits::ReadStorage;
 use zksync_os_storage_api::BlockContext;
 use zksync_os_types::{BlockOutput, ZkTransaction};
 
-/// [`ReadStorage`] wrapper that tracks read storage slots.
+/// Storage reads recorded during a single block's execution.
+#[derive(Debug)]
+pub(super) struct ReadRecording {
+    /// Keys read during block execution.
+    pub(super) read_keys: HashSet<B256>,
+    /// Total wall-clock time spent in the underlying `read` calls. Used to attribute how much of
+    /// block execution is spent blocking on server-side state reads vs VM compute.
+    pub(super) total_read_time: Duration,
+    /// Number of `read` calls, including repeated reads of the same key.
+    pub(super) read_count: u64,
+}
+
+/// [`ReadStorage`] wrapper that tracks read storage slots and how long reads take.
 #[derive(Debug)]
 pub(super) struct ReadRecordingState<S> {
     inner: S,
     local_read_keys: HashSet<B256>,
-    read_keys_handle: Rc<OnceCell<HashSet<B256>>>,
+    total_read_time: Duration,
+    read_count: u64,
+    handle: Rc<OnceCell<ReadRecording>>,
 }
 
 impl<S: ReadStorage> ReadRecordingState<S> {
@@ -25,7 +39,9 @@ impl<S: ReadStorage> ReadRecordingState<S> {
         let this = Self {
             inner,
             local_read_keys: HashSet::new(),
-            read_keys_handle: handle.0.clone(),
+            total_read_time: Duration::ZERO,
+            read_count: 0,
+            handle: handle.0.clone(),
         };
         (this, handle)
     }
@@ -34,28 +50,36 @@ impl<S: ReadStorage> ReadRecordingState<S> {
 impl<S: ReadStorage> ReadStorage for ReadRecordingState<S> {
     fn read(&mut self, key: B256) -> Option<B256> {
         self.local_read_keys.insert(key);
-        self.inner.read(key)
+        let started_at = Instant::now();
+        let value = self.inner.read(key);
+        self.total_read_time += started_at.elapsed();
+        self.read_count += 1;
+        value
     }
 }
 
 impl<S> Drop for ReadRecordingState<S> {
     fn drop(&mut self) {
-        let read_keys = mem::take(&mut self.local_read_keys);
+        let recording = ReadRecording {
+            read_keys: mem::take(&mut self.local_read_keys),
+            total_read_time: self.total_read_time,
+            read_count: self.read_count,
+        };
         // `unwrap()` is safe: the recording state is never duplicated
-        self.read_keys_handle.set(read_keys).unwrap();
+        self.handle.set(recording).unwrap();
     }
 }
 
-/// Handle for [`ReadRecordingState`] that allows to extract read storage slots after the state is dropped.
+/// Handle for [`ReadRecordingState`] that allows to extract recorded reads after the state is dropped.
 #[derive(Debug)]
-pub(super) struct ReadRecordingHandle(Rc<OnceCell<HashSet<B256>>>);
+pub(super) struct ReadRecordingHandle(Rc<OnceCell<ReadRecording>>);
 
 impl ReadRecordingHandle {
-    pub(super) fn into_read_keys(self) -> HashSet<B256> {
+    pub(super) fn into_recording(self) -> ReadRecording {
         Rc::try_unwrap(self.0)
-            .expect("`into_read_keys()` called before the recording state is dropped")
+            .expect("`into_recording()` called before the recording state is dropped")
             .into_inner()
-            .expect("recording state didn't set read keys")
+            .expect("recording state didn't set reads")
     }
 }
 

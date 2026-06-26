@@ -52,9 +52,12 @@ impl VmWrapper {
                 &mut validator,
             )?;
 
+            let recording = recording_handle.into_recording();
             Ok(BlockOutputWithReads::new(
                 block_output,
-                recording_handle.into_read_keys(),
+                recording.read_keys,
+                recording.total_read_time,
+                recording.read_count,
             ))
         });
 
