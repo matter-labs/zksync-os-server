@@ -1,41 +1,29 @@
-use crate::limits::LoggingLimiter;
 use jsonrpsee::MethodResponse;
 use jsonrpsee::core::middleware::{Batch, Notification};
-use jsonrpsee::core::to_json_raw_value;
 use jsonrpsee::server::middleware::rpc::{RpcService, RpcServiceT};
 use jsonrpsee::types::Request;
-use jsonrpsee::types::error::ErrorObject;
-use serde::Serialize;
+use jsonrpsee::types::error::{ErrorObject, METHOD_NOT_FOUND_CODE};
+use std::collections::HashSet;
 use std::sync::Arc;
 
-/// EIP-1474 "Limit exceeded" — the de facto Ethereum rate-limit error code used by Infura, Alchemy, etc.
-const RATE_LIMIT_ERROR_CODE: i32 = -32005;
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RetryData {
-    retry_after_ms: u64,
+fn method_disabled_err() -> ErrorObject<'static> {
+    ErrorObject::owned(METHOD_NOT_FOUND_CODE, "Method disabled", None::<()>)
 }
 
-fn rate_limited_err(retry_after_ms: u64) -> ErrorObject<'static> {
-    let data = to_json_raw_value(&RetryData { retry_after_ms }).expect("infallible serialization");
-    ErrorObject::owned(RATE_LIMIT_ERROR_CODE, "Too many requests", Some(data))
-}
-
-/// JSON-RPC middleware that enforces per-method rate limits.
+/// JSON-RPC middleware that rejects filtered methods with -32601 and emits a warning.
 #[derive(Clone)]
-pub(crate) struct RateLimiting<S = RpcService> {
+pub(crate) struct MethodFiltering<S = RpcService> {
     inner: S,
-    limiter: Arc<LoggingLimiter>,
+    filter: Arc<HashSet<String>>,
 }
 
-impl<S> RateLimiting<S> {
-    pub(crate) fn new(inner: S, limiter: Arc<LoggingLimiter>) -> Self {
-        Self { inner, limiter }
+impl<S> MethodFiltering<S> {
+    pub(crate) fn new(inner: S, filter: Arc<HashSet<String>>) -> Self {
+        Self { inner, filter }
     }
 }
 
-impl<S> RpcServiceT for RateLimiting<S>
+impl<S> RpcServiceT for MethodFiltering<S>
 where
     S: RpcServiceT<
             MethodResponse = MethodResponse,
@@ -53,12 +41,16 @@ where
         &self,
         request: Request<'a>,
     ) -> impl Future<Output = Self::MethodResponse> + Send + 'a {
-        let retry_after_ms = self.limiter.check(request.method_name());
+        let rejected = self.filter.contains(request.method_name());
         let inner = self.inner.clone();
         async move {
-            if let Some(ms) = retry_after_ms {
+            if rejected {
+                tracing::warn!(
+                    method = request.method_name(),
+                    "rpc method rejected by filter",
+                );
                 let id = request.id.clone().into_owned();
-                return MethodResponse::error(id, rate_limited_err(ms));
+                return MethodResponse::error(id, method_disabled_err());
             }
             inner.call(request).await
         }

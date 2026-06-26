@@ -117,6 +117,28 @@ async fn wait_for_block_hash_change(
     .await
 }
 
+/// Waits until an in-progress block rebuild has reached `pre_restart_tip` (the chain tip snapshotted
+/// before the restart).
+async fn wait_for_rebuild_to_reach_tip(
+    tester: &Tester,
+    pre_restart_tip: u64,
+) -> anyhow::Result<()> {
+    (|| async {
+        let tip = tester.l2_provider.get_block_number().await?;
+        if tip >= pre_restart_tip {
+            Ok(())
+        } else {
+            anyhow::bail!("rebuild has not reached the tip yet: {tip} < {pre_restart_tip}")
+        }
+    })
+    .retry(
+        ConstantBuilder::default()
+            .with_delay(Duration::from_millis(200))
+            .with_max_times(150),
+    )
+    .await
+}
+
 fn make_reverter_config(stopped: &StoppedTester) -> anyhow::Result<SignerConfig> {
     let chain_id = stopped
         .config()
@@ -461,6 +483,7 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
     // last_executed_batch == 0 so we want to keep batch 0, reverting all committed batches
     // (batch 1+). Batch 1 always starts at block 1, so from_block_number = 1.
     let block1_hash = block_hash(&tester, 1).await?;
+    let pre_restart_tip = tester.l2_provider.get_block_number().await?;
 
     let stopped = tester.stop().await?;
     let reverter_signer = make_reverter_config(&stopped)?;
@@ -475,6 +498,9 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
         l1_reverter_sk: reverter_signer,
     });
     let restarted = stopped.start_with_config(restart_config).await?;
+
+    // Wait for the async block rebuild to complete.
+    wait_for_rebuild_to_reach_tip(&restarted, pre_restart_tip).await?;
 
     // Confirm the node is alive and accepting new L2 transactions after rebuild.
     send_throwaway_tx(&restarted).await?;
@@ -766,6 +792,7 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
     // On-chain hash of the surviving batch — must be unchanged after the revert+rebuild, proving
     // the revert kept everything up to and including `survivor_batch`.
     let survivor_hash_before = fetch_on_chain_batch_hash(&tester, survivor_batch).await?;
+    let pre_restart_tip = tester.l2_provider.get_block_number().await?;
 
     let stopped = tester.stop().await?;
     let reverter_signer = make_reverter_config(&stopped)?;
@@ -782,6 +809,9 @@ async fn danger_block_rebuild_with_l1_revert_from_mid_batch(
     // Startup panics if the derived revert boundary is wrong (`from_block_number` would not be
     // strictly greater than `last_l1_committed_block`), so a successful start already proves the derivation.
     let restarted = stopped.start_with_config(restart_config).await?;
+
+    // Wait for the async block rebuild to complete.
+    wait_for_rebuild_to_reach_tip(&restarted, pre_restart_tip).await?;
 
     // The surviving batch must be byte-for-byte identical: it was never reverted.
     let survivor_hash_after = fetch_on_chain_batch_hash(&restarted, survivor_batch).await?;

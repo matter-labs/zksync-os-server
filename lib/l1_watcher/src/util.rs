@@ -34,11 +34,18 @@ pub async fn find_block_by_migration_number(
     ));
     let target = U256::from(migration_number);
     let latest = instance.provider().get_block_number().await?;
-    let latest_migration_number = instance
+    let latest_migration_number = match instance
         .migrationNumber(U256::from(chain_id))
         .block(latest.into())
         .call()
-        .await?;
+        .await
+    {
+        Ok(n) => n,
+        // Pre-V31 `ChainAssetHandler` does not expose `migrationNumber`. No Gateway migrations can
+        // exist in that era, so there is nothing to scan for — start from the latest block.
+        Err(err) if is_method_missing(&err) => return Ok(latest),
+        Err(err) => return Err(err.into()),
+    };
     // If this migration has not been reached yet, return the latest block.
     if latest_migration_number < migration_number {
         return Ok(latest);

@@ -1,22 +1,17 @@
 use crate::config::GenesisConfig;
+use crate::main_node_client::MainNodeClient;
 use alloy::primitives::Address;
 use anyhow::Context;
-use jsonrpsee::http_client::HttpClient;
 use std::sync::Arc;
 use zksync_os_genesis::{FileGenesisInputSource, GenesisInputSource};
-use zksync_os_rpc_api::eth::EthApiClient;
-use zksync_os_rpc_api::zks::ZksApiClient;
 
 /// Returns
 /// (bridgehub_address, bytecode_supplier_address, chain_id, genesis_input_source)
 pub async fn load_remote_config(
-    main_node_rpc_url: &str,
+    main_node_client: &MainNodeClient,
     en_local_genesis_config: &GenesisConfig,
 ) -> anyhow::Result<(Address, Address, u64, Arc<dyn GenesisInputSource>)> {
-    let main_node_rpc_client =
-        jsonrpsee::http_client::HttpClientBuilder::new().build(main_node_rpc_url)?;
-
-    let remote_bridgehub_address = main_node_rpc_client.get_bridgehub_contract().await?;
+    let remote_bridgehub_address = main_node_client.bridgehub_contract().await?;
     if let Some(local_bridgehub_address) = en_local_genesis_config.bridgehub_address {
         anyhow::ensure!(
             remote_bridgehub_address == local_bridgehub_address,
@@ -24,10 +19,7 @@ pub async fn load_remote_config(
         );
     }
 
-    let bytecode_supplier_address = match main_node_rpc_client
-        .get_bytecode_supplier_contract()
-        .await
-    {
+    let bytecode_supplier_address = match main_node_client.bytecode_supplier_contract().await {
         Ok(result) => {
             if let Some(local_bytecode_supplier_address) =
                 en_local_genesis_config.bytecode_supplier_address
@@ -51,7 +43,7 @@ pub async fn load_remote_config(
     };
 
     let remote_chain_id: u64 = u64::from_be_bytes(
-        main_node_rpc_client
+        main_node_client
             .chain_id()
             .await?
             .context("missing chain_id")?
@@ -64,7 +56,7 @@ pub async fn load_remote_config(
         );
     }
 
-    let genesis_input_source = Arc::new(MainNodeGenesisInputSource::new(main_node_rpc_client));
+    let genesis_input_source = Arc::new(MainNodeGenesisInputSource::new(main_node_client.clone()));
     if let Some(local_genesis_path) = en_local_genesis_config.genesis_input_path.clone() {
         let remote_genesis_input = genesis_input_source.genesis_input().await?;
         let local_genesis_input = FileGenesisInputSource::new(local_genesis_path)
@@ -90,11 +82,11 @@ pub async fn load_remote_config(
 
 #[derive(Debug)]
 pub struct MainNodeGenesisInputSource {
-    rpc_client: HttpClient,
+    rpc_client: MainNodeClient,
 }
 
 impl MainNodeGenesisInputSource {
-    pub fn new(rpc_client: HttpClient) -> Self {
+    pub fn new(rpc_client: MainNodeClient) -> Self {
         Self { rpc_client }
     }
 }
@@ -102,7 +94,7 @@ impl MainNodeGenesisInputSource {
 #[async_trait::async_trait]
 impl GenesisInputSource for MainNodeGenesisInputSource {
     async fn genesis_input(&self) -> anyhow::Result<zksync_os_genesis::GenesisInput> {
-        let genesis = self.rpc_client.get_genesis().await?;
+        let genesis = self.rpc_client.genesis_input().await?;
         Ok(genesis)
     }
 }

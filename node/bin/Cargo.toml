@@ -79,6 +79,7 @@ reth-network-peers.workspace = true
 reth-net-nat.workspace = true
 
 anyhow.workspace = true
+backon.workspace = true
 alloy = { workspace = true, default-features = false, features = [
     "rlp",
     "eips",

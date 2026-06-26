@@ -49,7 +49,6 @@ pub mod assert_traits;
 pub mod config;
 pub mod contracts;
 pub mod l1_helpers;
-pub mod multi_node;
 mod node_log;
 mod prover_tester;
 pub mod provider;
@@ -574,39 +573,6 @@ impl Tester {
         let ports = Ports::acquire_unused().await?;
         Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config, &ports);
         Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, Some(ports)).await
-    }
-
-    pub(crate) async fn launch_node_with_ports(
-        l1: AnvilL1,
-        enable_prover: bool,
-        config_overrides: Option<impl FnOnce(&mut Config)>,
-        chain_layout: ChainLayout<'static>,
-        ports: Ports,
-        wait_for_initial_deposit: bool,
-    ) -> anyhow::Result<Self> {
-        let tempdir = Arc::new(tempfile::tempdir()?);
-        let mut config = build_node_config(&l1, chain_layout, false).await?;
-        if enable_prover {
-            config.prover_api_config.fake_fri_provers.enabled = false;
-            config.prover_api_config.fake_snark_provers.enabled = false;
-        }
-        if !prover_input_generation_enabled() {
-            disable_prover_input_generation(&mut config);
-        }
-        Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config, &ports);
-        if let Some(config_overrides) = config_overrides {
-            config_overrides(&mut config);
-        }
-        Self::launch_node_inner(
-            l1,
-            config,
-            tempdir,
-            chain_layout,
-            None,
-            wait_for_initial_deposit,
-            Some(ports),
-        )
-        .await
     }
 
     fn bind_runtime_config(l1: &AnvilL1, tempdir: &TempDir, config: &mut Config, ports: &Ports) {
