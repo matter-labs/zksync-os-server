@@ -131,6 +131,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             )
             .await
             .context("mempool is closed")?;
+        let upgrade_tx_in_stream = best_txs.upgrade_tx_in_stream;
 
         let timestamp = (millis_since_epoch() / 1000) as u64;
 
@@ -168,25 +169,27 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .try_into()
             .context("Cannot instantiate a block for unsupported execution version")?;
 
-        // Append a SetSLChainId system transaction exactly once: when the protocol
-        // version is v31 (either via upgrade from v30, or on the first block of a
-        // fresh v31 chain). After it fires once, the condition can never trigger again.
-        let (tx_source, expect_sl_chain_id_tx_after_upgrade) = if protocol_version.minor == 31
-            && (previous_record.protocol_version.minor < 31
-                || previous_record.block_context.block_number == 0)
-        {
-            let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
-                self.current_sl_chain_id,
-                // We use `u64::MAX` as a placeholder, since it is not an actual migration
-                u64::MAX,
-            );
-            let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
-                futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
-            ));
-            (tx_source, true)
-        } else {
-            (best_txs.stream, false)
-        };
+        // Post-v31 protocols need the settlement-layer chain id to be explicitly re-established
+        // in the block whenever a protocol upgrade runs, since the upgrade may replace the system
+        // context implementation that exposes it to the batch commitment path. We also keep the
+        // original "exactly once on the v30->v31 boundary, or on the first block of a fresh
+        // post-v31 chain" behavior.
+        let first_post_v31_block = previous_record.protocol_version.minor < 31
+            || previous_record.block_context.block_number == 0;
+        let (tx_source, expect_sl_chain_id_tx_after_upgrade) =
+            if protocol_version.is_post_v31() && (upgrade_tx_in_stream || first_post_v31_block) {
+                let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
+                    self.current_sl_chain_id,
+                    // We use `u64::MAX` as a placeholder, since it is not an actual migration
+                    u64::MAX,
+                );
+                let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
+                    futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
+                ));
+                (tx_source, upgrade_tx_in_stream)
+            } else {
+                (best_txs.stream, false)
+            };
 
         let FeeParams {
             eip1559_basefee,

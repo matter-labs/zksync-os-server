@@ -29,6 +29,25 @@ pub struct PendingBatchInfo {
     pub protocol_version: ProtocolSemanticVersion,
 }
 
+#[derive(Debug, Clone)]
+pub struct CanonicalBatchCommitData {
+    pub first_block_number: u64,
+    pub last_block_number: u64,
+    pub first_block_timestamp: u64,
+    pub last_block_timestamp: u64,
+    pub new_state_commitment: B256,
+    pub da_commitment: B256,
+    pub number_of_layer1_txs: u64,
+    pub number_of_layer2_txs: u64,
+    pub priority_operations_hash: B256,
+    pub dependency_roots_rolling_hash: B256,
+    pub l2_to_l1_logs_root_hash: B256,
+    pub upgrade_tx_hash: Option<B256>,
+    pub chain_id: u64,
+    pub sl_chain_id: u64,
+    pub pubdata: Vec<u8>,
+}
+
 impl PendingBatchInfo {
     #[allow(clippy::too_many_arguments)]
     pub fn build(
@@ -55,7 +74,7 @@ impl PendingBatchInfo {
         let mut dependency_roots_rolling_hash = B256::ZERO;
 
         for (block_output, transactions, _) in blocks {
-            total_pubdata.extend(block_output.pubdata.clone());
+            total_pubdata.extend_from_slice(block_output.expect_pubdata_bytes());
 
             for tx in transactions {
                 match tx.envelope() {
@@ -177,6 +196,49 @@ impl PendingBatchInfo {
             },
             da_fields.blob_sidecar,
         )
+    }
+
+    pub fn build_from_canonical_output(
+        batch_number: u64,
+        pubdata_mode: PubdataMode,
+        protocol_version: &ProtocolSemanticVersion,
+        batch: CanonicalBatchCommitData,
+    ) -> anyhow::Result<(Self, Option<BlobTransactionSidecar>)> {
+        let da_fields = calculate_da_fields(&batch.pubdata, pubdata_mode);
+        anyhow::ensure!(
+            da_fields.da_commitment == batch.da_commitment,
+            "canonical batch DA commitment mismatch: expected {}, got {}",
+            batch.da_commitment,
+            da_fields.da_commitment,
+        );
+
+        let commit_info = CommitBatchInfo {
+            batch_number,
+            new_state_commitment: batch.new_state_commitment,
+            number_of_layer1_txs: batch.number_of_layer1_txs,
+            number_of_layer2_txs: batch.number_of_layer2_txs,
+            priority_operations_hash: batch.priority_operations_hash,
+            dependency_roots_rolling_hash: batch.dependency_roots_rolling_hash,
+            l2_to_l1_logs_root_hash: batch.l2_to_l1_logs_root_hash,
+            l2_da_commitment_scheme: pubdata_mode.da_commitment_scheme(),
+            da_commitment: batch.da_commitment,
+            first_block_timestamp: batch.first_block_timestamp,
+            first_block_number: Some(batch.first_block_number),
+            last_block_timestamp: batch.last_block_timestamp,
+            last_block_number: Some(batch.last_block_number),
+            chain_id: batch.chain_id,
+            operator_da_input: da_fields.operator_da_input,
+            sl_chain_id: batch.sl_chain_id,
+        };
+
+        Ok((
+            Self {
+                commit_info,
+                upgrade_tx_hash: batch.upgrade_tx_hash,
+                protocol_version: protocol_version.clone(),
+            },
+            da_fields.blob_sidecar,
+        ))
     }
 
     /// Calculate keccak256 hash of BatchOutput part of public input (the batch commitment).
@@ -368,5 +430,93 @@ impl DiscoveredCommittedBatch {
 
     pub fn block_count(&self) -> u64 {
         self.block_range.end() - self.block_range.start() + 1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CanonicalBatchCommitData, PendingBatchInfo, calculate_da_fields};
+    use alloy::primitives::B256;
+    use zksync_os_types::{ProtocolSemanticVersion, PubdataMode};
+
+    fn canonical_batch_data(pubdata_mode: PubdataMode) -> CanonicalBatchCommitData {
+        let pubdata = vec![1, 2, 3, 4, 5, 6];
+        let da_fields = calculate_da_fields(&pubdata, pubdata_mode);
+        CanonicalBatchCommitData {
+            first_block_number: 11,
+            last_block_number: 13,
+            first_block_timestamp: 100,
+            last_block_timestamp: 120,
+            new_state_commitment: B256::repeat_byte(0x11),
+            da_commitment: da_fields.da_commitment,
+            number_of_layer1_txs: 3,
+            number_of_layer2_txs: 8,
+            priority_operations_hash: B256::repeat_byte(0x22),
+            dependency_roots_rolling_hash: B256::repeat_byte(0x33),
+            l2_to_l1_logs_root_hash: B256::repeat_byte(0x44),
+            upgrade_tx_hash: Some(B256::repeat_byte(0x55)),
+            chain_id: 270,
+            sl_chain_id: 123,
+            pubdata,
+        }
+    }
+
+    #[test]
+    fn builds_commit_info_from_canonical_batch_output() {
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 1);
+        let batch = canonical_batch_data(PubdataMode::Calldata);
+        let expected_da_fields = calculate_da_fields(&batch.pubdata, PubdataMode::Calldata);
+
+        let (batch_info, blob_sidecar) = PendingBatchInfo::build_from_canonical_output(
+            42,
+            PubdataMode::Calldata,
+            &protocol_version,
+            batch,
+        )
+        .unwrap();
+
+        assert_eq!(batch_info.batch_number, 42);
+        assert_eq!(batch_info.new_state_commitment, B256::repeat_byte(0x11));
+        assert_eq!(batch_info.number_of_layer1_txs, 3);
+        assert_eq!(batch_info.number_of_layer2_txs, 8);
+        assert_eq!(batch_info.priority_operations_hash, B256::repeat_byte(0x22));
+        assert_eq!(
+            batch_info.dependency_roots_rolling_hash,
+            B256::repeat_byte(0x33)
+        );
+        assert_eq!(batch_info.l2_to_l1_logs_root_hash, B256::repeat_byte(0x44));
+        assert_eq!(batch_info.upgrade_tx_hash, Some(B256::repeat_byte(0x55)));
+        assert_eq!(batch_info.first_block_number, Some(11));
+        assert_eq!(batch_info.last_block_number, Some(13));
+        assert_eq!(batch_info.first_block_timestamp, 100);
+        assert_eq!(batch_info.last_block_timestamp, 120);
+        assert_eq!(batch_info.chain_id, 270);
+        assert_eq!(batch_info.sl_chain_id, 123);
+        assert_eq!(batch_info.da_commitment, expected_da_fields.da_commitment);
+        assert_eq!(
+            batch_info.operator_da_input,
+            expected_da_fields.operator_da_input
+        );
+        assert!(blob_sidecar.is_none());
+    }
+
+    #[test]
+    fn detects_canonical_da_commitment_mismatch() {
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 1);
+        let mut batch = canonical_batch_data(PubdataMode::Blobs);
+        batch.da_commitment = B256::ZERO;
+
+        let err = PendingBatchInfo::build_from_canonical_output(
+            42,
+            PubdataMode::Blobs,
+            &protocol_version,
+            batch,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("canonical batch DA commitment mismatch")
+        );
     }
 }

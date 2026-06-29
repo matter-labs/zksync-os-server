@@ -6,6 +6,7 @@ use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV6;
 use zk_os_forward_system_0_0_28::run::RunBlockForward as RunBlockForwardV3;
 use zk_os_forward_system_0_1_2::run::RunBlockForward as RunBlockForwardV4;
 use zk_os_forward_system_0_2_8::run::RunBlockForward as RunBlockForwardV5Simulation;
+use zk_os_forward_system_0_4_0::run::RunBlockForward as RunBlockForwardV7;
 use zk_os_forward_system_prev::run::RunBlockForward as RunBlockForwardV5Running;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
@@ -20,19 +21,35 @@ mod adapter;
 pub mod apps;
 
 pub use adapter::AbiTxSource;
-use zksync_os_types::{BlockOutput, ExecutionVersion};
-macro_rules! into_block_output {
-    ($o:expr) => {
+use zksync_os_types::{BlockOutput, BlockPubdata, ExecutionVersion};
+macro_rules! into_legacy_block_output {
+    ($o:expr) => {{
+        let output = $o;
         BlockOutput {
-            header: $o.header,
-            tx_results: $o.tx_results,
-            storage_writes: $o.storage_writes,
-            account_diffs: $o.account_diffs,
-            published_preimages: $o.published_preimages,
-            pubdata: $o.pubdata,
-            computational_native_used: $o.computational_native_used,
+            header: output.header,
+            tx_results: output.tx_results,
+            storage_writes: output.storage_writes,
+            account_diffs: output.account_diffs,
+            published_preimages: output.published_preimages,
+            pubdata: BlockPubdata::Bytes(output.pubdata),
+            computational_native_used: output.computational_native_used,
         }
-    };
+    }};
+}
+
+macro_rules! into_pubdata_used_block_output {
+    ($o:expr) => {{
+        let output = $o;
+        BlockOutput {
+            header: output.header,
+            tx_results: output.tx_results,
+            storage_writes: output.storage_writes,
+            account_diffs: output.account_diffs,
+            published_preimages: output.published_preimages,
+            pubdata: BlockPubdata::Length(output.pubdata_used),
+            computational_native_used: output.computational_native_used,
+        }
+    }};
 }
 
 pub fn run_block<
@@ -55,7 +72,7 @@ pub fn run_block<
         .execution_version
         .try_into()
         .expect("Unsupported ZKsync OS execution version");
-    match execution_version {
+    let output = match execution_version {
         ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
             let object = RunBlockForwardV3 {};
             object
@@ -71,7 +88,7 @@ pub fn run_block<
                     validator,
                 )
                 .map_err(|err| anyhow::anyhow!(err))
-                .map(|o| into_block_output!(o))
+                .map(|o| into_legacy_block_output!(o))
         }
         ExecutionVersion::V4 => {
             let object = RunBlockForwardV4 {};
@@ -88,7 +105,7 @@ pub fn run_block<
                     validator,
                 )
                 .map_err(|err| anyhow::anyhow!(err))
-                .map(|o| into_block_output!(o))
+                .map(|o| into_legacy_block_output!(o))
         }
         ExecutionVersion::V5 => {
             // We use two different versions of zksync-os for execution and simulation:
@@ -111,7 +128,7 @@ pub fn run_block<
                     validator,
                 )
                 .map_err(|err| anyhow::anyhow!(err))
-                .map(|o| into_block_output!(o))
+                .map(|o| into_legacy_block_output!(o))
         }
         ExecutionVersion::V6 => {
             let object = RunBlockForwardV6 {};
@@ -128,9 +145,30 @@ pub fn run_block<
                     validator,
                 )
                 .map_err(|err| anyhow::anyhow!(err))
-                .map(|o| into_block_output!(o))
+                .map(|o| into_legacy_block_output!(o))
         }
-    }
+        ExecutionVersion::V7 => {
+            let object = RunBlockForwardV7 {
+                fri_verifier_artifacts: None,
+            };
+            object
+                .run_block(
+                    (),
+                    block_context,
+                    storage,
+                    preimage_source,
+                    tx_source,
+                    NoFriProofSidecar,
+                    tx_result_callback,
+                    tracer,
+                    validator,
+                )
+                .map_err(|err| anyhow::anyhow!(err))
+                .map(|o| into_pubdata_used_block_output!(o))
+        }
+    }?;
+    output.assert_pubdata_form_for_execution(execution_version);
+    Ok(output)
 }
 
 pub fn simulate_tx<
@@ -201,6 +239,22 @@ pub fn simulate_tx<
         }
         ExecutionVersion::V6 => {
             let object = RunBlockForwardV6 {};
+            object
+                .simulate_tx(
+                    (),
+                    transaction,
+                    block_context,
+                    storage,
+                    preimage_source,
+                    tracer,
+                    validator,
+                )
+                .map_err(|err| anyhow::anyhow!(err))
+        }
+        ExecutionVersion::V7 => {
+            let object = RunBlockForwardV7 {
+                fri_verifier_artifacts: None,
+            };
             object
                 .simulate_tx(
                     (),

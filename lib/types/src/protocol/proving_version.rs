@@ -17,6 +17,7 @@ pub enum ProvingVersion {
     V5 = 5,
     V6 = 6,
     V7 = 7,
+    V8 = 8,
 }
 
 impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
@@ -35,6 +36,7 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
             (31, 0) => Ok(ProvingVersion::V7),
             (31, 1) => Ok(ProvingVersion::V7),
             (32, 0) => Ok(ProvingVersion::V7),
+            (32, 1) => Ok(ProvingVersion::V8),
             _ => Err(ProvingVersionError::UnsupportedVersion(version)),
         }
     }
@@ -69,6 +71,12 @@ impl ProvingVersion {
     const V7_VK_HASH: &'static str =
         "0x23156cf220288cd1e436dccfc09aa4883ea8288da61aa69e2c7251b0c0c44ccd";
 
+    /// TODO: replace with the actual V8 VK hash for the zksync-os v0.4.0 native batch prover.
+    /// Placeholder sentinel: must stay distinct from every real VK hash so `try_from_vk_hash`
+    /// can round-trip V8 and the match arm stays reachable.
+    const V8_VK_HASH: &'static str =
+        "0x0000000000000000000000000000000000000000000000000000000000000008";
+
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
         match self {
@@ -79,6 +87,7 @@ impl ProvingVersion {
             Self::V5 => Self::V5_VK_HASH,
             Self::V6 => Self::V6_VK_HASH,
             Self::V7 => Self::V7_VK_HASH,
+            Self::V8 => Self::V8_VK_HASH,
         }
     }
 
@@ -92,6 +101,7 @@ impl ProvingVersion {
             Self::V5_VK_HASH => Ok(Self::V5),
             Self::V6_VK_HASH => Ok(Self::V6),
             Self::V7_VK_HASH => Ok(Self::V7),
+            Self::V8_VK_HASH => Ok(Self::V8),
             val => Err(ProvingVersionError::UnsupportedVkHash(val.to_string())),
         }
     }
@@ -122,6 +132,7 @@ mod tests {
             ((0, 31, 0), ProvingVersion::V7),
             ((0, 31, 1), ProvingVersion::V7),
             ((0, 32, 0), ProvingVersion::V7),
+            ((0, 32, 1), ProvingVersion::V8),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
@@ -152,6 +163,8 @@ mod tests {
             (ProvingVersion::V4, ProvingVersion::V4_VK_HASH),
             (ProvingVersion::V5, ProvingVersion::V5_VK_HASH),
             (ProvingVersion::V6, ProvingVersion::V6_VK_HASH),
+            (ProvingVersion::V7, ProvingVersion::V7_VK_HASH),
+            (ProvingVersion::V8, ProvingVersion::V8_VK_HASH),
         ];
 
         for (proving_version, expected_vk_hash) in test_vector.iter() {

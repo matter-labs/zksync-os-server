@@ -16,6 +16,7 @@ use zksync_os_batch_types::batcher_model::{
 use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_l1_watcher::CommittedBatchProvider;
+use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::ReadStateHistory;
@@ -51,6 +52,7 @@ pub struct Batcher<ReadState> {
     pub sidecar_sender: mpsc::Sender<BlobTransactionSidecar>,
     pub committed_batch_provider: CommittedBatchProvider,
     pub read_state: ReadState,
+    pub merkle_tree: MerkleTree<RocksDBWrapper>,
 }
 
 #[async_trait]
@@ -328,6 +330,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 .adapt_for_protocol_version(protocol_version),
             self.sl_chain_id,
             &self.read_state,
+            &self.merkle_tree,
         )?;
         Ok(Some(batch_envelope))
     }
@@ -400,6 +403,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
             self.pubdata_mode,
             self.sl_chain_id,
             &self.read_state,
+            &self.merkle_tree,
         )?;
 
         // Verify that the rebuilt batch matches the stored batch by comparing hashes

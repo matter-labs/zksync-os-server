@@ -47,3 +47,8 @@ reth-tasks.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemalloc-ctl = { workspace = true, optional = true }
+
+[lints.rust]
+# `tokio_unstable` is enabled globally via .cargo/config.toml rustflags; declare it so the
+# `#[cfg(tokio_unstable)]` gates in tokio_runtime.rs don't trip the `unexpected_cfgs` lint.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }

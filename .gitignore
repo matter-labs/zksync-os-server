@@ -2,6 +2,7 @@
 /loadbase/target
 
 .idea
+.claude
 
 db/*
 block_dumps/*

@@ -20,7 +20,7 @@ zksync_os_pipeline.workspace = true
 
 zksync_os_interface.workspace = true
 
-alloy.workspace = true
+alloy = { workspace = true, features = ["kzg", "signers", "signer-local"] }
 thiserror.workspace = true
 serde.workspace = true
 blake2.workspace = true
