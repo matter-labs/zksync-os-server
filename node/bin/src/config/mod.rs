@@ -929,6 +929,12 @@ pub struct SequencerConfig {
     #[config(default_t = 1000)]
     pub max_transactions_in_block: usize,
 
+    /// Bench-only: number of slot-disjoint blocks to execute in parallel per round on the
+    /// direct-injection path. `1` = serial production (default / all production). Only takes effect
+    /// together with direct injection.
+    #[config(default_t = 1)]
+    pub parallel_blocks: usize,
+
     /// Max gas used per block.
     /// One of the block Seal Criteria. Only affects the Main Node.
     #[config(default_t = 100_000_000)]
@@ -2057,6 +2063,7 @@ impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
             node_role: c.general_config.node_role,
             block_time: c.sequencer_config.block_time,
             max_transactions_in_block: c.sequencer_config.max_transactions_in_block,
+            parallel_blocks: c.sequencer_config.parallel_blocks,
             block_dump_path: c.sequencer_config.block_dump_path.clone(),
             block_gas_limit: c.sequencer_config.block_gas_limit,
             block_pubdata_limit_bytes: c.sequencer_config.block_pubdata_limit_bytes,

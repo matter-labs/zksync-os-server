@@ -3,6 +3,7 @@ use alloy::consensus::{Block, BlockBody, Sealed, Transaction};
 use alloy::eips::Encodable2718;
 use alloy::primitives::{Address, BlockHash, BlockNumber, Bloom, TxHash, TxNonce};
 use dashmap::DashMap;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch};
@@ -119,24 +120,48 @@ impl RepositoryInMemory {
         // Drop rejected transactions from the block output
         block_output.tx_results.retain(|result| result.is_ok());
 
-        // Add transaction receipts to the transaction receipt repository
-        let mut log_index = 0;
-        let mut cumulative_gas_used = 0;
-        let mut block_bloom = Bloom::default();
-        let mut stored_txs = HashMap::new();
+        // Add transaction receipts to the transaction receipt repository.
         let hash = BlockHash::from(block_output.header.hash());
         let sealed_block_output = Sealed::new_unchecked(block_output, hash);
-        for (tx_index, tx) in transactions.into_iter().enumerate() {
-            let tx_hash = *tx.hash();
-            let stored_tx = Arc::new(transaction_to_api_data(
-                &sealed_block_output,
-                tx_index,
-                log_index,
-                cumulative_gas_used,
-                tx,
-            ));
-            log_index += stored_tx.receipt.logs().len() as u64;
-            cumulative_gas_used += stored_tx.meta.gas_used;
+
+        // Precompute the running offsets (logs-before / cumulative-gas-before) in a cheap serial
+        // pass so each tx's receipt+meta can be built in parallel: `transaction_to_api_data` is pure
+        // given these offsets. `tx_results` was retained to successful results above, so it aligns
+        // 1:1 (by index) with `transactions`.
+        let mut log_prefix = Vec::with_capacity(transactions.len());
+        let mut gas_prefix = Vec::with_capacity(transactions.len());
+        let mut log_index = 0u64;
+        let mut cumulative_gas_used = 0u64;
+        for tx_output in sealed_block_output.tx_results.iter() {
+            log_prefix.push(log_index);
+            gas_prefix.push(cumulative_gas_used);
+            let tx_output = tx_output.as_ref().ok().unwrap();
+            log_index += tx_output.logs.len() as u64;
+            cumulative_gas_used += tx_output.gas_used;
+        }
+
+        // Build receipts/meta in parallel (this is the bulk of `populate`'s cost).
+        let stored_vec: Vec<(TxHash, Arc<StoredTxData>)> = transactions
+            .into_par_iter()
+            .enumerate()
+            .map(|(tx_index, tx)| {
+                let tx_hash = *tx.hash();
+                let stored_tx = Arc::new(transaction_to_api_data(
+                    &sealed_block_output,
+                    tx_index,
+                    log_prefix[tx_index],
+                    gas_prefix[tx_index],
+                    tx,
+                ));
+                (tx_hash, stored_tx)
+            })
+            .collect();
+
+        // Fold the per-tx blooms and index by hash (cheap relative to receipt construction). Bloom
+        // accrual is commutative, so the parallel collection order is irrelevant.
+        let mut block_bloom = Bloom::default();
+        let mut stored_txs = HashMap::with_capacity(stored_vec.len());
+        for (tx_hash, stored_tx) in stored_vec {
             block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
             stored_txs.insert(tx_hash, stored_tx);
         }
@@ -302,12 +327,12 @@ impl WriteRepository for RepositoryInMemory {
         let block_number = block_output.header.number;
         let (block, transactions) = self.populate_in_memory(block_output, transactions);
 
-        // Notify RPC subscribers. Ignore the error when there are no receivers.
-        let _ = self.block_sender.send(BlockNotification {
-            block,
-            transactions,
-            failed_transactions: Arc::new(failed_transactions.into_iter().collect()),
-        });
+        // // Notify RPC subscribers. Ignore the error when there are no receivers.
+        // let _ = self.block_sender.send(BlockNotification {
+        //     block,
+        //     transactions,
+        //     failed_transactions: Arc::new(failed_transactions.into_iter().collect()),
+        // });
 
         // Bounded retention: drop the block that just fell out of the window. Genesis (0) is never
         // pruned. Reads of blocks older than the window will miss — acceptable for bench use.

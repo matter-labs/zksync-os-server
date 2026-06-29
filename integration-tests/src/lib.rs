@@ -315,6 +315,9 @@ pub struct Tester {
     /// Flips direct injection on. Kept dormant so the node first finishes startup (upgrade + initial
     /// deposit) via the normal mempool path before any direct streaming begins.
     direct_tx_active: Arc<std::sync::atomic::AtomicBool>,
+    /// Bench hook: the node's (shared) state handle, captured at startup. Lets parallel-execution
+    /// benchmarks snapshot the live post-upgrade state and drive `run_block` directly against it.
+    state: FullDiffsState,
     #[cfg(feature = "prover-tests")]
     prover_api_address: String,
 }
@@ -712,13 +715,20 @@ impl Tester {
         // this has no effect on regular tests.
         let direct_tx_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (direct_tx_sender, direct_tx_rx) = tokio::sync::mpsc::channel(200_000);
+        // Bench hook: capture the node's (shared) state handle so parallel-execution benchmarks can
+        // drive `run_block` directly against the live post-upgrade state.
+        let (state_tx, state_rx) = tokio::sync::oneshot::channel();
         zksync_os_server::run::<FullDiffsState>(
             &runtime,
             config.clone(),
             Some((direct_tx_rx, direct_tx_active.clone())),
+            Some(state_tx),
         )
         .instrument(node_span)
         .await;
+        let state = state_rx
+            .await
+            .expect("node did not export its state handle");
         let task_manager_handle = runtime
             .take_task_manager_handle()
             .expect("Runtime must contain a TaskManager handle");
@@ -807,6 +817,7 @@ impl Tester {
             owned_supporting_nodes: Vec::new(),
             direct_tx_sender,
             direct_tx_active,
+            state,
             #[cfg(feature = "prover-tests")]
             prover_api_address,
         };
@@ -820,6 +831,12 @@ impl Tester {
     /// available, but only takes effect after [`Tester::activate_direct_injection`].
     pub fn direct_tx_sender(&self) -> tokio::sync::mpsc::Sender<ZkTransaction> {
         self.direct_tx_sender.clone()
+    }
+
+    /// Bench hook: the node's (shared, `Arc`-backed) state handle. Lets parallel-execution benchmarks
+    /// snapshot the live post-upgrade state and drive `run_block` directly against it.
+    pub fn state(&self) -> FullDiffsState {
+        self.state.clone()
     }
 
     /// Switches block production over to the direct tx channel. Call this only after the node has

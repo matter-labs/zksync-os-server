@@ -143,6 +143,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         tokio::sync::mpsc::Receiver<ZkTransaction>,
         Arc<std::sync::atomic::AtomicBool>,
     )>,
+    // Test/bench only: when `Some`, the freshly built `State` handle (shared / `Arc`-backed) is sent
+    // here right after construction, so a benchmark can snapshot the live post-upgrade state and
+    // drive `run_block` directly against it. Always `None` in the production binary.
+    state_export: Option<tokio::sync::oneshot::Sender<State>>,
 ) {
     report_static_config_metrics(&config);
 
@@ -380,6 +384,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     .expect("failed to init CommittedBatchProvider");
 
     let state = State::new(&config.general_config, &genesis).await;
+    if let Some(state_export) = state_export {
+        // Bench hook: hand the (shared) state handle to the harness; it stays live as the node
+        // applies the upgrade/initial blocks, so the harness can read the post-upgrade V6 state.
+        let _ = state_export.send(state.clone());
+    }
 
     tracing::info!("Initializing mempools");
     let zk_provider_factory = ZkProviderFactory::new(state.clone(), repositories.clone(), chain_id);

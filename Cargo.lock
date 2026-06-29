@@ -15578,6 +15578,7 @@ dependencies = [
  "anyhow",
  "bincode 2.0.1",
  "dashmap 6.2.1",
+ "rayon",
  "roaring",
  "serde_json",
  "tempfile",

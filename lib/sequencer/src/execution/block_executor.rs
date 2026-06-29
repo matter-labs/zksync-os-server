@@ -104,6 +104,105 @@ where
             }
             state_reporter.enter_state(SequencerState::WaitingForTransaction);
 
+            // Bench-only parallel path: execute K slot-disjoint blocks concurrently against a shared
+            // base state, then flush them downstream in block order. Gated on direct injection, so
+            // the production (serial) path below stays untouched.
+            if matches!(cmd, BlockCommand::Produce(_))
+                && self.config.parallel_blocks > 1
+                && self.block_context_provider.is_direct_active()
+            {
+                let k = self.config.parallel_blocks;
+                let commands = self.block_context_provider.produce_parallel(k).await?;
+                if commands.is_empty() {
+                    continue;
+                }
+                // All K disjoint blocks read the same base state at `base_block_number - 1`; build
+                // one overlay-aware view and hand a clone to each block.
+                let base_block_number = commands[0].block_context.block_number;
+                let base_view = state_overlay_buffer
+                    .sync_with_base_and_build_view_for_block(&self.state, base_block_number)?;
+
+                state_reporter.enter_state(SequencerState::InitializingVm);
+                let t_exec = Instant::now();
+                let mut handles = Vec::with_capacity(commands.len());
+                for command in commands {
+                    let view = base_view.clone();
+                    let reporter = state_reporter.clone();
+                    // Direct injection only runs on the main node, so `is_produce` is always true here.
+                    let (tracer, validator) =
+                        make_deployment_filter(true, &self.config.tx_validator.deployment_filter);
+                    handles.push(tokio::spawn(async move {
+                        execute_block_in_vm(command, view, &reporter, tracer, validator).await
+                    }));
+                }
+                // Release the base view's borrow before mutating the overlay buffer below; the K
+                // clones live inside the spawned tasks until they complete.
+                drop(base_view);
+                let exec_elapsed = t_exec.elapsed();
+
+                // Join ALL tasks first so every cloned base view is dropped (overlay Arc refcount
+                // back to 1) before we mutate the buffer below; awaiting one at a time and applying
+                // immediately would leave slower siblings' clones alive and trip the refcount assert.
+                let mut results = Vec::with_capacity(handles.len());
+                for handle in handles {
+                    results.push(handle.await.context("execute_block_in_vm task join")?);
+                }
+
+                // Apply state + flush downstream strictly in block order.
+                let t_downstream = Instant::now();
+                for exec_result in results {
+                    let (block_output, replay_record, purged_txs, strict_subpool_cleanup) =
+                        exec_result
+                            .map_err(|dump| {
+                                let error = anyhow::anyhow!("{}", dump.error);
+                                if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump)
+                                {
+                                    tracing::error!(?err, "Failed to write block dump");
+                                }
+                                error
+                            })
+                            .context("execute_block_in_vm")?;
+                    let block_number = replay_record.block_context.block_number;
+                    self.block_context_provider
+                        .on_canonical_state_change(
+                            block_output.as_ref(),
+                            &replay_record,
+                            strict_subpool_cleanup,
+                        )
+                        .await;
+                    let purged_txs_hashes = purged_txs.iter().map(|(hash, _)| *hash).collect();
+                    self.block_context_provider
+                        .purge_transactions(purged_txs_hashes);
+                    state_overlay_buffer.add_block(
+                        block_number,
+                        block_output.as_ref().storage_writes.clone(),
+                        block_output.as_ref().published_preimages.clone(),
+                    )?;
+                    EXECUTION_METRICS.block_number.set(block_number);
+                    EXECUTION_METRICS
+                        .last_execution_version
+                        .set(replay_record.block_context.execution_version as u64);
+                    output.send_and_record(
+                        BlockPayload {
+                            output: block_output,
+                            record: replay_record,
+                            command_type: cmd_type,
+                            failed_transactions: purged_txs,
+                        },
+                        &state_reporter,
+                    )?;
+                }
+                last_processed_block_at = Some(Instant::now());
+                tracing::info!(
+                    k,
+                    base_block_number,
+                    ?exec_elapsed,
+                    downstream_elapsed = ?t_downstream.elapsed(),
+                    "block_executor parallel round done"
+                );
+                continue;
+            }
+
             let t_prepare = Instant::now();
             let Some(prepared_command) = self.block_context_provider.prepare_command(cmd).await?
             else {

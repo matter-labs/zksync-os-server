@@ -295,6 +295,136 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         }))
     }
 
+    /// `true` when direct injection (test/bench only) is configured and currently active.
+    pub fn is_direct_active(&self) -> bool {
+        self.direct_tx
+            .as_ref()
+            .is_some_and(|d| d.active.load(Ordering::Relaxed))
+    }
+
+    /// Bench-only: build up to `k` slot-disjoint blocks for one parallel round.
+    ///
+    /// Drains a batch (`k * max_transactions_in_block`) of direct-injection transactions and buckets
+    /// them **by sender** into disjoint groups; each group becomes one block (numbered `N..N+K-1`),
+    /// sealed on stream exhaustion. All blocks share the previous block's base hash ring (no
+    /// inter-block hash chaining - the bench disregards chain validity, and native transfers don't
+    /// read `BLOCKHASH`), so the contexts are built up front and the blocks can execute in parallel
+    /// against the same base state at `N-1`. `last_block` is taken here and re-established by the
+    /// caller via `on_canonical_state_change` for each produced block, in order.
+    ///
+    /// Requires direct injection to be active. Ignores `max_blocks_to_produce` (bench).
+    pub async fn produce_parallel(
+        &mut self,
+        k: usize,
+    ) -> anyhow::Result<Vec<PreparedBlockCommand<'static>>> {
+        let LastBlock {
+            record: previous_record,
+            hash: previous_block_hash,
+            next_cursors,
+        } = self
+            .last_block
+            .take()
+            .expect("tried to produce a block without replaying at least one record");
+        let fee_params = self.fee_provider.produce_fee_params().await?;
+        self.pool
+            .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
+        let base_block_number = previous_record.block_context.block_number + 1;
+        let base_timestamp = (millis_since_epoch() / 1000) as u64;
+        let protocol_version = previous_record.protocol_version.clone();
+        let execution_version: ExecutionVersion = (&protocol_version)
+            .try_into()
+            .context("Cannot instantiate a block for unsupported execution version")?;
+        let base_ring = previous_record
+            .block_context
+            .block_hashes
+            .push(previous_block_hash);
+
+        // Drain a batch from the direct channel and bucket by sender into disjoint groups.
+        let rx = self
+            .direct_tx
+            .as_ref()
+            .expect("produce_parallel requires direct injection")
+            .rx
+            .clone();
+        let target = k.saturating_mul(self.config.max_transactions_in_block);
+        let mut groups: std::collections::HashMap<Address, Vec<ZkTransaction>> =
+            std::collections::HashMap::new();
+        // Await the first tx (parks on an empty channel instead of busy-looping, matching the serial
+        // direct path's `poll_fn`); the lock is released between polls, not held across the await.
+        let Some(first) =
+            std::future::poll_fn(|cx| rx.lock().unwrap().poll_recv(cx)).await
+        else {
+            return Ok(Vec::new()); // channel closed
+        };
+        groups.entry(first.signer()).or_default().push(first);
+        {
+            let mut guard = rx.lock().unwrap();
+            let mut pulled = 1usize;
+            while pulled < target {
+                match guard.try_recv() {
+                    Ok(tx) => {
+                        groups.entry(tx.signer()).or_default().push(tx);
+                        pulled += 1;
+                    }
+                    // Channel momentarily empty (pusher behind) - produce what we have.
+                    Err(_) => break,
+                }
+            }
+        }
+
+        let FeeParams {
+            eip1559_basefee,
+            native_price,
+            pubdata_price,
+        } = fee_params;
+        let mut commands = Vec::new();
+        for (i, txs) in groups.into_values().take(k).enumerate() {
+            if txs.is_empty() {
+                continue;
+            }
+            let block_number = base_block_number + i as u64;
+            let block_context = BlockContext {
+                eip1559_basefee,
+                native_price,
+                pubdata_price,
+                block_number,
+                timestamp: base_timestamp + i as u64,
+                chain_id: self.config.l2_chain_id,
+                coinbase: self.config.fee_collector_address,
+                // Same base ring for every block in the round - no inter-block chaining (bench).
+                block_hashes: base_ring,
+                gas_limit: self.config.gas_limit,
+                pubdata_limit: self.config.pubdata_limit,
+                mix_hash: Default::default(),
+                execution_version: execution_version as u32,
+                blob_fee: U256::ONE,
+            };
+            commands.push(PreparedBlockCommand {
+                block_context,
+                tx_source: MarkingTxStream::unmarkable(futures::stream::iter(txs)),
+                // Fixed group: seal when the group's stream is exhausted. `allowed_to_finish_early`
+                // stops the pipelined loop from treating exhaustion as an unexpected early seal.
+                seal_policy: SealPolicy::UntilExhausted {
+                    allowed_to_finish_early: true,
+                },
+                invalid_tx_policy: InvalidTxPolicy::RejectAndContinue {
+                    mark_in_source: false,
+                },
+                metrics_label: "produce_parallel",
+                protocol_version: protocol_version.clone(),
+                expected_block_output_hash: None,
+                previous_block_timestamp: previous_record.block_context.timestamp,
+                force_preimages: Vec::new(),
+                expect_sl_chain_id_tx_after_upgrade: false,
+                starting_cursors: next_cursors.clone(),
+                interop_roots_per_block: self.config.interop_roots_per_block,
+                strict_subpool_cleanup: false,
+                direct_injection: true,
+            });
+        }
+        Ok(commands)
+    }
+
     async fn replay(
         &mut self,
         record: Box<ReplayRecord>,

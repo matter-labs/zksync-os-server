@@ -27,6 +27,10 @@ pub struct SequencerConfig {
     /// Max number of transactions in a block.
     pub max_transactions_in_block: usize,
 
+    /// Bench-only: number of slot-disjoint blocks to execute in parallel per round on the
+    /// direct-injection path. `1` = serial production (default).
+    pub parallel_blocks: usize,
+
     /// Path to the directory where block dumps for unexpected failures will be saved.
     pub block_dump_path: PathBuf,
 

@@ -184,8 +184,8 @@ pub async fn main() {
     let prometheus_port = prometheus_config.port;
 
     match config.general_config.state_backend {
-        StateBackendConfig::FullDiffs => run::<FullDiffsState>(&runtime, config, None).await,
-        StateBackendConfig::Compacted => run::<StateHandle>(&runtime, config, None).await,
+        StateBackendConfig::FullDiffs => run::<FullDiffsState>(&runtime, config, None, None).await,
+        StateBackendConfig::Compacted => run::<StateHandle>(&runtime, config, None, None).await,
     };
 
     let prometheus_push_shutdown = if ephemeral_enabled {

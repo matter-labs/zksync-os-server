@@ -15,7 +15,11 @@ use tokio::time::Instant;
 use zksync_os_integration_tests::assert_traits::{ReceiptAssert, ReceiptsAssert};
 use zksync_os_integration_tests::{NEXT_TO_L1, TestEnvironment, test_multisetup};
 use zksync_os_server::config::FeeConfig;
-use zksync_os_types::{L2Envelope, ZkTransaction};
+use zksync_os_interface::traits::EncodedTx;
+use zksync_os_sequencer::execution::vm_wrapper::VmWrapper;
+use zksync_os_storage_api::{BlockContext, BlockHashes, ReadStateHistory};
+use zksync_os_tx_validators::deployment_filter;
+use zksync_os_types::{L2Envelope, ZkTransaction, ZksyncOsEncode};
 
 /// How long to wait for a single transaction's receipt before giving up.
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -410,4 +414,271 @@ fn build_direct_tx(
         .into_signed(signature),
     );
     ZkTransaction::from(Recovered::new_unchecked(envelope, signer))
+}
+
+/// Deterministic, distinct bench address from an index. The `0xBE` prefix keeps these clear of system
+/// / funded accounts so different indices never share a storage slot.
+fn bench_addr(n: u64) -> Address {
+    let mut bytes = [0u8; 20];
+    bytes[0] = 0xBE;
+    bytes[12..20].copy_from_slice(&n.to_be_bytes());
+    Address::from(bytes)
+}
+
+/// Proves the FAFO-style thesis: zksync-os's serial `run_block` can be run on K threads over
+/// **disjoint** state to multiply execution throughput, without touching the VM or the prover.
+///
+/// It bypasses the whole sequencer pipeline — it grabs the node's (shared) post-upgrade state handle
+/// and drives K [`VmWrapper`] instances concurrently, each executing one block of `M` native
+/// transfers from a distinct sender to a distinct recipient (so the K blocks touch disjoint storage
+/// slots and are conflict-free). Each `VmWrapper` runs `run_block` on its own `spawn_blocking`
+/// thread, so K of them = K parallel `run_block` calls. We sweep K and report aggregate TPS +
+/// speedup over the K=1 serial baseline.
+///
+/// Tunable: `PARALLEL_BENCH_M` (transfers per block, default 29_200).
+#[test_multisetup([NEXT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn parallel_blocks_tps(env: TestEnvironment) -> anyhow::Result<()> {
+    // Same bench knobs as `direct_injection_tps`: gas/fees 0, no prover input, no batcher, huge
+    // limits, count-based seal. (Fees 0 means senders need no balance.)
+    let mut config = env.default_config().await?;
+    config.prover_input_generator_config.enable_input_generation = false;
+    config.fee_config = FeeConfig {
+        base_fee_override: Some(U128::from(0)),
+        pubdata_price_override: Some(U128::from(0)),
+        ..Default::default()
+    };
+    config.mempool_config.minimal_protocol_basefee = 0;
+    config.sequencer_config.revm_consistency_checker_enabled = false;
+    config.batcher_config.enabled = false;
+    config.sequencer_config.block_pubdata_limit_bytes = u64::MAX;
+    config.sequencer_config.max_transactions_in_block = 29_200;
+    config.sequencer_config.block_gas_limit = 1_000_000_000_000;
+
+    let tester = env.launch(config).await?;
+    let chain_id = tester.l2_provider.get_chain_id().await?;
+    // Shared, live state handle. After startup (upgrade + initial deposit) it reflects post-upgrade
+    // V6 state. The node now idles (we send no txs), so the base snapshot stays stable.
+    let state = tester.state();
+    let base = *state.block_range_available().end();
+    tracing::info!(base, chain_id, "parallel-blocks bench: base block + chain id");
+
+    let signature = Signature::new(Default::default(), Default::default(), false);
+    let m: usize = env_or("PARALLEL_BENCH_M", 29_200);
+
+    // V6 block context for the bench blocks (all K execute at base+1 against the base snapshot).
+    // `block_hashes` is unread for native transfers (no BLOCKHASH); `native_price` mirrors an observed
+    // produced block so native-resource accounting behaves.
+    let ctx = BlockContext {
+        chain_id,
+        block_number: base + 1,
+        block_hashes: BlockHashes([U256::ZERO; 256]),
+        timestamp: 4_000_000_000,
+        eip1559_basefee: U256::ZERO,
+        pubdata_price: U256::ZERO,
+        native_price: U256::from(974_992u64),
+        coinbase: Address::ZERO,
+        gas_limit: 1_000_000_000_000,
+        pubdata_limit: u64::MAX,
+        mix_hash: U256::ZERO,
+        execution_version: 6,
+        blob_fee: U256::ONE,
+    };
+
+    let mut baseline_tps = 0.0;
+    for k in [1usize, 2, 4, 8, 16] {
+        // Pre-encode K disjoint groups of M transfers (untimed). Group i: sender 2i+1 -> recipient
+        // 2i+2 (distinct 0xBE addresses), nonces 0..M.
+        let groups: Vec<Vec<EncodedTx>> = (0..k)
+            .map(|i| {
+                let signer = bench_addr(2 * i as u64 + 1);
+                let recipient = bench_addr(2 * i as u64 + 2);
+                (0..m)
+                    .map(|n| build_direct_tx(chain_id, n as u64, recipient, signer, signature).encode())
+                    .collect()
+            })
+            .collect();
+
+        let view = state.state_view_at(base).expect("state_view_at(base)");
+
+        // Timed parallel region: K VmWrappers, each its own `run_block` thread.
+        let start = Instant::now();
+        let mut set = JoinSet::new();
+        for txs in groups {
+            let view = view.clone();
+            let ctx = ctx.clone();
+            set.spawn(async move {
+                let tracer = deployment_filter::Tracer::new(
+                    Arc::new(AtomicBool::new(false)),
+                    deployment_filter::Config::Unrestricted,
+                );
+                let validator = deployment_filter::Validator::new(Arc::new(AtomicBool::new(false)));
+                let mut vm =
+                    VmWrapper::new(ctx, view, tracer, validator, Arc::new(AtomicU64::new(0)));
+                let n = txs.len();
+                for tx in txs {
+                    vm.submit_tx(tx).await.expect("submit_tx");
+                }
+                let mut ok = 0usize;
+                for _ in 0..n {
+                    match vm.next_result().await.expect("next_result") {
+                        Ok(_) => ok += 1,
+                        Err(e) => panic!("parallel-bench transfer failed: {e:?}"),
+                    }
+                }
+                let out = vm.seal_block().await.expect("seal_block");
+                (ok, out)
+            });
+        }
+        let mut outputs = Vec::new();
+        while let Some(res) = set.join_next().await {
+            outputs.push(res.expect("join VmWrapper task"));
+        }
+        let elapsed = start.elapsed();
+
+        // Correctness: every transfer executed, and the K blocks are slot-disjoint (the thesis
+        // precondition — proves we actually ran conflict-free work in parallel).
+        for (ok, _) in &outputs {
+            assert_eq!(*ok, m, "every transfer must execute successfully");
+        }
+        let mut keys = std::collections::HashSet::new();
+        for (_, out) in &outputs {
+            for w in out.as_ref().storage_writes.iter() {
+                assert!(
+                    keys.insert(w.key),
+                    "slot {:?} written by two parallel blocks — not disjoint",
+                    w.key
+                );
+            }
+        }
+
+        let total = (k * m) as f64;
+        let tps = total / elapsed.as_secs_f64();
+        if k == 1 {
+            baseline_tps = tps;
+        }
+        tracing::error!(
+            k,
+            txs_per_block = m,
+            total_txs = k * m,
+            ?elapsed,
+            tps,
+            speedup = tps / baseline_tps,
+            "parallel-blocks bench"
+        );
+    }
+    Ok(())
+}
+
+/// End-to-end counterpart to [`parallel_blocks_tps`], but through the **real sequencer pipeline**:
+/// sets `parallel_blocks = K` so `BlockExecutor` executes K slot-disjoint blocks per round in parallel
+/// (see `BlockContextProvider::produce_parallel`), then flushes them through canonizer -> applier ->
+/// tree. The pusher feeds K distinct senders -> K distinct recipients (round-robin) so the executor's
+/// sender-bucketing yields K conflict-free groups. Unlike the standalone harness, this measures where
+/// the *sequential downstream tail* (applier) caps the full-pipeline speedup.
+///
+/// Run once per K: `PARALLEL_BLOCKS=2` (default), `=4`, ... K=1 reproduces `direct_injection_tps`.
+/// Tunables: `PARALLEL_BLOCKS` (default 2), `LOAD_TEST_DURATION_SECS` (60), `LOAD_TEST_WARMUP_SECS` (5).
+#[test_multisetup([NEXT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
+    let k: usize = env_or("PARALLEL_BLOCKS", 2);
+    let mut config = env.default_config().await?;
+    config.prover_input_generator_config.enable_input_generation = false;
+    config.fee_config = FeeConfig {
+        base_fee_override: Some(U128::from(0)),
+        pubdata_price_override: Some(U128::from(0)),
+        ..Default::default()
+    };
+    config.mempool_config.minimal_protocol_basefee = 0;
+    config.sequencer_config.revm_consistency_checker_enabled = false;
+    config.batcher_config.enabled = false;
+    config.sequencer_config.block_pubdata_limit_bytes = u64::MAX;
+    config.sequencer_config.max_transactions_in_block = 29_200;
+    config.sequencer_config.block_gas_limit = 1_000_000_000_000;
+    config.sequencer_config.parallel_blocks = k;
+    let tester = env.launch(config).await?;
+
+    let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
+    let warmup = Duration::from_secs(env_or("LOAD_TEST_WARMUP_SECS", 5));
+
+    let sender = tester.direct_tx_sender();
+    let chain_id = tester.l2_provider.get_chain_id().await?;
+
+    // Let the producer settle into the serial `produce()` parked on the (empty) mempool before we
+    // activate. Then the kick below is processed by that in-flight serial call; only the *next* loop
+    // iteration hits the parallel gate. Activating while the producer is already in `produce_parallel`
+    // would strand the (mempool-only) kick and hang on its receipt.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    tester.activate_direct_injection();
+    let kick = TransactionRequest::default()
+        .with_to(Address::repeat_byte(0x42))
+        .with_value(U256::ZERO)
+        .with_gas_price(0)
+        .with_gas_limit(LOAD_GAS_LIMIT);
+    tester
+        .l2_provider
+        .send_transaction(kick)
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    // Dummy signature (VM does not validate EOA signatures in forward mode; signer is out-of-band).
+    let signature = Signature::new(Default::default(), Default::default(), false);
+
+    let submitted = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    // Single pusher round-robining K distinct senders -> K distinct recipients (0xBE-prefixed,
+    // disjoint slots), independent per-sender nonce, so `produce_parallel` buckets each batch into K
+    // conflict-free groups. Backpressured by the channel, so the submit rate == the pipeline's consume
+    // rate. NOTE: this single task tops out near ~1.24M tx/s (cost of `build_direct_tx`); spreading it
+    // over K tasks is *slower* (oversubscribes cores vs the executor's VM threads + applier populates,
+    // and contends on the channel lock).
+    let pusher = tokio::spawn({
+        let (sender, submitted, stop) = (sender.clone(), submitted.clone(), stop.clone());
+        async move {
+            let mut nonces = vec![0u64; k];
+            let mut i = 0usize;
+            while !stop.load(Ordering::Relaxed) {
+                let signer = bench_addr(2 * i as u64 + 1);
+                let recipient = bench_addr(2 * i as u64 + 2);
+                let tx = build_direct_tx(chain_id, nonces[i], recipient, signer, signature);
+                if sender.send(tx).await.is_err() {
+                    break; // sequencer dropped the channel
+                }
+                nonces[i] += 1;
+                submitted.fetch_add(1, Ordering::Relaxed);
+                i = (i + 1) % k;
+            }
+        }
+    });
+
+    // Warm up so the channel fills and the pipeline reaches steady state, then measure the rate.
+    tokio::time::sleep(warmup).await;
+
+    let submitted_before = submitted.load(Ordering::Relaxed);
+    let block_before = tester.l2_provider.get_block_number().await?;
+    let measure_start = Instant::now();
+
+    tokio::time::sleep(duration).await;
+
+    let measured = measure_start.elapsed();
+    let executed = submitted.load(Ordering::Relaxed) - submitted_before;
+    let block_after = tester.l2_provider.get_block_number().await?;
+    stop.store(true, Ordering::Relaxed);
+    let _ = pusher.await;
+
+    let tps = executed as f64 / measured.as_secs_f64();
+    let blocks_produced = block_after - block_before;
+    tracing::error!(
+        k,
+        executed,
+        ?measured,
+        parallel_injection_tps = tps,
+        blocks_produced,
+        blocks_per_sec = blocks_produced as f64 / measured.as_secs_f64(),
+        "parallel-injection load test complete"
+    );
+
+    Ok(())
 }
