@@ -147,7 +147,6 @@ fn compute_batch_prover_input(
     pubdata_mode: PubdataMode,
 ) -> anyhow::Result<ProverInput> {
     use zk_os_forward_system::run::generate_batch_proof_input;
-    use zk_os_forward_system_prev::run::generate_batch_proof_input as generate_batch_proof_input_prev;
 
     if blocks
         .iter()
@@ -161,24 +160,10 @@ fn compute_batch_prover_input(
         | ProvingVersion::V2
         | ProvingVersion::V3
         | ProvingVersion::V4
-        | ProvingVersion::V5 => {
-            panic!("sealing batch with prover version v1-v5 is not supported");
-        }
-        ProvingVersion::V6 => {
-            // TODO: in the long-term we should generate proof input per batch
-            ProverInput::Real(generate_batch_proof_input_prev(
-                blocks
-                    .iter()
-                    .map(|(_, _, _, prover_input)| prover_input.unwrap_real())
-                    .collect(),
-                (pubdata_mode.da_commitment_scheme() as u8)
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
-                blocks
-                    .iter()
-                    .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
-                    .collect(),
-            ))
+        | ProvingVersion::V5
+        | ProvingVersion::V6 => {
+            // V6 (pre-0.3.0) proving dropped for the native-transfers bench; restore before merging.
+            panic!("sealing batch with prover version v1-v6 is not supported in this build");
         }
         ProvingVersion::V7 => {
             // TODO: in the long-term we should generate proof input per batch

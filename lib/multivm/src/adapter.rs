@@ -5,7 +5,7 @@ use zksync_os_types::{L2Transaction, TransactionData, ZkEnvelope};
 pub(crate) fn convert_tx_to_abi(encoded_tx: EncodedTx) -> EncodedTx {
     match encoded_tx {
         EncodedTx::Abi(b) => EncodedTx::Abi(b),
-        EncodedTx::Rlp(rlp_bytes, signer) => {
+        EncodedTx::Rlp(rlp_bytes, signer, _) => {
             let envelope = ZkEnvelope::decode_2718(&mut rlp_bytes.as_slice())
                 .expect("Failed to decode 2718 transaction");
             let tx = match envelope {

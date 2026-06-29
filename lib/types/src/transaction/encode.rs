@@ -4,7 +4,7 @@ use crate::transaction::{L1TxType, system::utils::BOOTLOADER_FORMAL_ADDRESS};
 use crate::{SystemTxEnvelope, ZkEnvelope, ZkTransaction};
 use alloy::consensus::Transaction;
 use alloy::eips::Encodable2718;
-use alloy::primitives::{Address, B256, U256};
+use alloy::primitives::{Address, B256, U256, keccak256};
 use alloy::sol_types::SolValue;
 use zksync_os_interface::traits::EncodedTx;
 
@@ -25,14 +25,22 @@ impl<T: L1TxType> ZksyncOsEncode for L1Envelope<T> {
 
 impl ZksyncOsEncode for SystemTxEnvelope {
     fn encode(self) -> EncodedTx {
-        EncodedTx::Rlp(self.encoded_2718(), BOOTLOADER_FORMAL_ADDRESS)
+        // The V6 forward run always reads the tx hash from the oracle, so every RLP tx must carry it
+        // (the responder panics on `None`). System txs are rare (block 1), so just hash the encoding;
+        // this matches the VM's `keccak256(buffer)`.
+        let bytes = self.encoded_2718();
+        let tx_hash = keccak256(&bytes);
+        EncodedTx::Rlp(bytes, BOOTLOADER_FORMAL_ADDRESS, Some(tx_hash))
     }
 }
 
 impl ZksyncOsEncode for L2Transaction {
     fn encode(self) -> EncodedTx {
         let (envelope, signer) = self.into_parts();
-        EncodedTx::Rlp(envelope.encoded_2718(), signer)
+        // Pass the cached tx hash so the forward (sequencer) VM run reads it from the oracle instead
+        // of recomputing keccak256 of the encoding (`EncodedTx::Rlp`'s 3rd field).
+        let tx_hash = *envelope.hash();
+        EncodedTx::Rlp(envelope.encoded_2718(), signer, Some(tx_hash))
     }
 }
 

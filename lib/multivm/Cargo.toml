@@ -14,10 +14,8 @@ build = "build.rs"
 [dependencies]
 zksync_os_interface.workspace = true
 zksync_os_storage_api.workspace = true
-zk_os_forward_system_0_1_2.workspace = true
-zk_os_forward_system_0_0_28.workspace = true
-zk_os_forward_system_0_2_8.workspace = true
-zk_os_forward_system_prev.workspace = true
+# Pre-0.3.0 forward_system versions dropped for the native-transfers bench (V6-only dispatch).
+# Restore zk_os_forward_system_{0_1_2,0_0_28,0_2_8,prev} before merging.
 zk_os_forward_system.workspace = true
 anyhow.workspace = true
 zksync_os_types.workspace = true

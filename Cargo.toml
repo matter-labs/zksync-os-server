@@ -144,8 +144,12 @@ zk_os_basic_system_prev = { package = "basic_system", git = "https://github.com/
 #
 # When a new version is released this version gets downgraded to the "previous version" section above.
 
-# NOTE: temporarily repointed to a local checkout of zksync-os (tag v0.3.1-interface-v0.1.3, commit
-# b4193659) to profile/optimize the VM. Revert to git+tag before merging. Original declarations:
+# NOTE: temporarily repointed to a local checkout of zksync-os to profile/optimize the VM. The
+# checkout is on branch `native-transfers-on-v0.3.1` = tag v0.3.1-interface-v0.1.3 + Antonio's
+# interface-INDEPENDENT native-transfer perf commits cherry-picked (system_log compile-out, tx
+# rolling-hash skip, signed-hash skip). His tx-hash-from-oracle commit is omitted: it needs a
+# breaking `EncodedTx::Rlp` interface change that breaks the git-pinned historical V3/V4/V5 crates.
+# Revert to git+tag before merging. Original declarations:
 #   zk_os_forward_system = { package = "forward_system", git = "...zksync-os", tag = "v0.3.1-interface-v0.1.3", features = ["production", "no_print"], default-features = false }
 #   zk_ee = { git = "...zksync-os", tag = "v0.3.1-interface-v0.1.3" }
 #   zk_os_basic_system = { package = "basic_system", git = "...zksync-os", tag = "v0.3.1-interface-v0.1.3" }
@@ -351,3 +355,12 @@ overflow-checks = true
 inherits = "release"
 lto = "fat"
 codegen-units = 1
+
+# NOTE (native-transfers bench, TEMPORARY — remove before merging):
+# Redirect `zksync_os_interface` (and its lockstep `zksync_os_evm_errors`) to a local checkout of the
+# official interface at v0.1.3 with Antonio's additive `EncodedTx::Rlp` precomputed-tx-hash field
+# applied on top. This lets the sequencer pass the tx hash to the VM (tx-hash-from-oracle), and is
+# only safe because pre-0.3.0 VM versions (which match the old 2-field `EncodedTx::Rlp`) were dropped.
+[patch.crates-io]
+zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
+zksync_os_evm_errors = { path = "../zksync-os-interface/crates/evm-errors" }

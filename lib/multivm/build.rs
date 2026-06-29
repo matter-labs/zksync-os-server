@@ -106,10 +106,10 @@ fn main() {
         }
         let tag = match parse_git_tag(&package.id) {
             Ok(tag) => tag,
-            Err(err) => {
-                println!("cargo::error=failed to parse forward_system's git tag: {err}");
-                return;
-            }
+            // NOTE (native-transfers bench, TEMPORARY): the current forward_system is a local path
+            // dep (no git tag), so treat it as the v0.3.1 release it was branched from. Restore the
+            // hard error before merging.
+            Err(_) => "v0.3.1-interface-v0.1.3".to_owned(),
         };
 
         if let Some(proving_version) = proving_version_from_tag(&tag) {
@@ -143,5 +143,31 @@ fn main() {
             println!("cargo:rustc-env=ZKSYNC_OS_{proving_version}_SOURCE_PATH={dir}");
             continue;
         }
+    }
+
+    // NOTE (native-transfers bench, TEMPORARY): the pre-0.3.0 forward_system dep that provided
+    // proving V6 was dropped from the graph, but `apps::v6` still references its app.bins (e.g. from
+    // integration-tests). Ensure they're present (from the v0.2.5 release, per the V6 hack above) and
+    // export the source path so the `env!` in `apps::v6` resolves. Restore the dep-driven logic
+    // before merging.
+    {
+        let tag = "v0.2.5";
+        let dir = format!("{manifest_dir}/apps/{tag}");
+        std::fs::create_dir_all(&dir).expect("failed to create directory");
+        for variant in [
+            "multiblock_batch",
+            "singleblock_batch",
+            "singleblock_batch_logging_enabled",
+        ] {
+            let url = format!(
+                "https://github.com/matter-labs/zksync-os/releases/download/{tag}/{variant}.bin"
+            );
+            let path = format!("{dir}/{variant}.bin");
+            if std::fs::exists(&path).expect("failed to check file existence") {
+                continue;
+            }
+            download_with_retry(&client, &url, &path).expect("failed to download");
+        }
+        println!("cargo:rustc-env=ZKSYNC_OS_V6_SOURCE_PATH={dir}");
     }
 }

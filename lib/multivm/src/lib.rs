@@ -3,10 +3,10 @@
 //! Also, update the `LATEST_EXECUTION_VERSION` constant accordingly.
 
 use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV6;
-use zk_os_forward_system_0_0_28::run::RunBlockForward as RunBlockForwardV3;
-use zk_os_forward_system_0_1_2::run::RunBlockForward as RunBlockForwardV4;
-use zk_os_forward_system_0_2_8::run::RunBlockForward as RunBlockForwardV5Simulation;
-use zk_os_forward_system_prev::run::RunBlockForward as RunBlockForwardV5Running;
+// NOTE (native-transfers bench, TEMPORARY): pre-0.3.0 execution versions (V1–V5) are dropped so the
+// whole graph can build against the modified (3-field `EncodedTx`) interface. Only the current V6
+// forward system is wired; multivm errors on older versions (the bench chain runs at V6). Restore the
+// historical `RunBlockForwardV3/V4/V5*` imports + dispatch arms before merging.
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::traits::{
@@ -56,63 +56,6 @@ pub fn run_block<
         .try_into()
         .expect("Unsupported ZKsync OS execution version");
     match execution_version {
-        ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
-            let object = RunBlockForwardV3 {};
-            object
-                .run_block(
-                    (),
-                    block_context,
-                    storage,
-                    preimage_source,
-                    AbiTxSource::new(tx_source),
-                    NoFriProofSidecar,
-                    tx_result_callback,
-                    tracer,
-                    validator,
-                )
-                .map_err(|err| anyhow::anyhow!(err))
-                .map(|o| into_block_output!(o))
-        }
-        ExecutionVersion::V4 => {
-            let object = RunBlockForwardV4 {};
-            object
-                .run_block(
-                    (),
-                    block_context,
-                    storage,
-                    preimage_source,
-                    tx_source,
-                    NoFriProofSidecar,
-                    tx_result_callback,
-                    tracer,
-                    validator,
-                )
-                .map_err(|err| anyhow::anyhow!(err))
-                .map(|o| into_block_output!(o))
-        }
-        ExecutionVersion::V5 => {
-            // We use two different versions of zksync-os for execution and simulation:
-            // * v0.2.5 is used to forward-run and prove blocks
-            // * v0.2.6-simulation-only is used for simulation
-            //
-            // This is needed so that `eth_estimateGas` can work with 0-balance accounts. The fix was
-            // not a part of v0.2.5 and unfortunately cannot be included without changing `app.bin`.
-            let object = RunBlockForwardV5Running {};
-            object
-                .run_block(
-                    (),
-                    block_context,
-                    storage,
-                    preimage_source,
-                    tx_source,
-                    NoFriProofSidecar,
-                    tx_result_callback,
-                    tracer,
-                    validator,
-                )
-                .map_err(|err| anyhow::anyhow!(err))
-                .map(|o| into_block_output!(o))
-        }
         ExecutionVersion::V6 => {
             let object = RunBlockForwardV6 {};
             object
@@ -130,6 +73,9 @@ pub fn run_block<
                 .map_err(|err| anyhow::anyhow!(err))
                 .map(|o| into_block_output!(o))
         }
+        other => Err(anyhow::anyhow!(
+            "pre-0.3.0 execution version {other:?} is not supported in this native-transfers bench build"
+        )),
     }
 }
 
@@ -151,54 +97,6 @@ pub fn simulate_tx<
         .try_into()
         .expect("Unsupported ZKsync OS execution version");
     match execution_version {
-        ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
-            let object = RunBlockForwardV3 {};
-            object
-                .simulate_tx(
-                    (),
-                    adapter::convert_tx_to_abi(transaction),
-                    block_context,
-                    storage,
-                    preimage_source,
-                    tracer,
-                    validator,
-                )
-                .map_err(|err| anyhow::anyhow!(err))
-        }
-        ExecutionVersion::V4 => {
-            let object = RunBlockForwardV4 {};
-            object
-                .simulate_tx(
-                    (),
-                    transaction,
-                    block_context,
-                    storage,
-                    preimage_source,
-                    tracer,
-                    validator,
-                )
-                .map_err(|err| anyhow::anyhow!(err))
-        }
-        ExecutionVersion::V5 => {
-            // We use two different versions of zksync-os for execution and simulation:
-            // * v0.2.5 is used to forward-run and prove blocks
-            // * v0.2.6-simulation-only is used for simulation
-            //
-            // This is needed so that `eth_estimateGas` can work with 0-balance accounts. The fix was
-            // not a part of v0.2.5 and unfortunately cannot be included without changing `app.bin`.
-            let object = RunBlockForwardV5Simulation {};
-            object
-                .simulate_tx(
-                    (),
-                    transaction,
-                    block_context,
-                    storage,
-                    preimage_source,
-                    tracer,
-                    validator,
-                )
-                .map_err(|err| anyhow::anyhow!(err))
-        }
         ExecutionVersion::V6 => {
             let object = RunBlockForwardV6 {};
             object
@@ -213,5 +111,8 @@ pub fn simulate_tx<
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
+        other => Err(anyhow::anyhow!(
+            "pre-0.3.0 execution version {other:?} is not supported in this native-transfers bench build"
+        )),
     }
 }

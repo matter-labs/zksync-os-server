@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::thread;
 use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
-use zk_os_basic_system_prev::system_implementation::flat_storage_model::FlatStorageLeaf as FlatStorageLeafDev;
+// Pre-0.3.0 (`_prev`) proving support dropped for the native-transfers bench; restore before merging.
 use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_merkle_tree::{
@@ -346,13 +346,6 @@ impl ReadStorage for EfficientTreeAdapter {
     }
 }
 
-impl zk_os_forward_system_prev::run::ReadStorage for EfficientTreeAdapter {
-    fn read(&mut self, key: zk_ee_prev::utils::Bytes32) -> Option<zk_ee_prev::utils::Bytes32> {
-        self.read_inner(key.as_u8_array().into())
-            .map(|value| value.0.into())
-    }
-}
-
 impl ReadStorageTree for EfficientTreeAdapter {
     fn tree_index(&mut self, key: Bytes32) -> Option<u64> {
         self.tree_index_inner(key.as_u8_array().into())
@@ -363,29 +356,6 @@ impl ReadStorageTree for EfficientTreeAdapter {
     }
 
     fn prev_tree_index(&mut self, key: Bytes32) -> u64 {
-        self.prev_tree_index_inner(key.as_u8_array().into())
-    }
-}
-
-impl zk_os_forward_system_prev::run::ReadStorageTree for EfficientTreeAdapter {
-    fn tree_index(&mut self, key: zk_ee_prev::utils::Bytes32) -> Option<u64> {
-        self.tree_index_inner(key.as_u8_array().into())
-    }
-
-    fn merkle_proof(&mut self, tree_index: u64) -> zk_os_forward_system_prev::run::LeafProof {
-        let LeafProof {
-            index, leaf, path, ..
-        } = self.merkle_proof_inner(tree_index);
-        let leaf = FlatStorageLeafDev {
-            key: leaf.key.as_u8_array().into(),
-            value: leaf.value.as_u8_array().into(),
-            next: leaf.next,
-        };
-        let path = Box::new(path.map(|hash| hash.as_u8_array().into()));
-        zk_os_forward_system_prev::run::LeafProof::new(index, leaf, path)
-    }
-
-    fn prev_tree_index(&mut self, key: zk_ee_prev::utils::Bytes32) -> u64 {
         self.prev_tree_index_inner(key.as_u8_array().into())
     }
 }
