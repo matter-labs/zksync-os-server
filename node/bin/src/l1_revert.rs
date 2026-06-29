@@ -162,7 +162,6 @@ async fn perform_l1_revert(
     );
 
     // Ensure L1 node returns the proper last committed batch number after the revert.
-    // This is a sanity check for the L1 node's RPC: a lagging or load-balanced
     ensure_revert(&l1_state.diamond_proxy_sl, plan.last_l1_batch_to_keep).await?;
 
     Ok(())
