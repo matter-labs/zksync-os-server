@@ -106,8 +106,8 @@ fn main() {
         }
         let tag = match parse_git_tag(&package.id) {
             Ok(tag) => tag,
-            // NOTE (native-transfers bench, TEMPORARY): the current forward_system is a local path
-            // dep (no git tag), so treat it as the v0.3.1 release it was branched from. Restore the
+            // NOTE (native-transfers bench, TEMPORARY): the current forward_system is pinned to a git
+            // branch (no git tag), so treat it as the v0.3.1 release it was branched from. Restore the
             // hard error before merging.
             Err(_) => "v0.3.1-interface-v0.1.3".to_owned(),
         };
