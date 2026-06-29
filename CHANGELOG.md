@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.20.8](https://github.com/matter-labs/zksync-os-server/compare/v0.20.7...v0.20.8) (2026-06-29)
+
+
+### Features
+
+* **external-node:** retry main-node RPC instead of crash-looping on startup ([#1405](https://github.com/matter-labs/zksync-os-server/issues/1405)) ([df3f9d7](https://github.com/matter-labs/zksync-os-server/commit/df3f9d78848b1ded760271fb5dba45291aa58da7))
+* **gateway:** drop support for live gateway migration ([#1401](https://github.com/matter-labs/zksync-os-server/issues/1401)) ([aea7b88](https://github.com/matter-labs/zksync-os-server/commit/aea7b88aa37c9b4619aa8903c8670d79fded5b77))
+* **rpc:** add method_filter to disable stateful methods ([#1396](https://github.com/matter-labs/zksync-os-server/issues/1396)) ([1f772e7](https://github.com/matter-labs/zksync-os-server/commit/1f772e77df652af7614af8ff47bf865dbe5d6bd1))
+* **rpc:** configurable rate limits via RateLimits enum ([#1397](https://github.com/matter-labs/zksync-os-server/issues/1397)) ([9a60352](https://github.com/matter-labs/zksync-os-server/commit/9a6035273e4b2b1abe182efd51084113e61240d9))
+* **sequencer:** L1 batch revert ([#1328](https://github.com/matter-labs/zksync-os-server/issues/1328)) ([e6f0575](https://github.com/matter-labs/zksync-os-server/commit/e6f0575b33c1f0b8eb2069a7e7c2881e7ff9cdad))
+
+
+### Bug Fixes
+
+* bump memmap2, quinn-proto versions ([#1411](https://github.com/matter-labs/zksync-os-server/issues/1411)) ([f82477c](https://github.com/matter-labs/zksync-os-server/commit/f82477c58d6bc600ab8916b7e1060b4ec97371e4))
+* **l1_watcher:** tolerate migrationNumber reverts when resolving gateway migration start block ([#1404](https://github.com/matter-labs/zksync-os-server/issues/1404)) ([b7be022](https://github.com/matter-labs/zksync-os-server/commit/b7be02268adf4afafc9761476ced74be8de8e997))
+* **l1-watcher:** handle pre-v31 CAH interface ([#1418](https://github.com/matter-labs/zksync-os-server/issues/1418)) ([47aa445](https://github.com/matter-labs/zksync-os-server/commit/47aa445cbe1cb3f6256fb1da9f9d9e844db5cfa3))
+* **rpc:** bound RPC metric label cardinality by method name ([#1419](https://github.com/matter-labs/zksync-os-server/issues/1419)) ([878fc3b](https://github.com/matter-labs/zksync-os-server/commit/878fc3b09bbd0bd09ae247f6cd73788bbe7bfa4a))
+
 ## [0.20.7](https://github.com/matter-labs/zksync-os-server/compare/v0.20.6...v0.20.7) (2026-06-16)
 
 
