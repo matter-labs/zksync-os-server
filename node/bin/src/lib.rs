@@ -85,6 +85,7 @@ use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
+use zksync_os_network::NetworkPorts;
 use zksync_os_network::RecordOverride;
 use zksync_os_network::VerifyBatch;
 use zksync_os_network::protocol::{
@@ -108,7 +109,7 @@ use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{EthCallHandler, RpcStorage};
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::{BlockApplier, BlockCanonizer, BlockExecutor, FeeProvider};
-use zksync_os_status_server::run_status_server;
+use zksync_os_status_server::run_status_server_on_listener;
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
@@ -117,6 +118,28 @@ use zksync_os_storage_api::{
     WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState};
+
+/// Actual ports bound by each service after `run()` starts.
+/// Fields are `None` when the corresponding service is disabled in config.
+#[derive(Debug)]
+pub struct BoundPorts {
+    pub rpc: u16,
+    pub status: Option<u16>,
+    pub prover_api: Option<u16>,
+    pub network: Option<NetworkPorts>,
+}
+
+async fn bind_tcp_listener(
+    address: &str,
+    service_name: &str,
+) -> anyhow::Result<tokio::net::TcpListener> {
+    let addr: SocketAddr = address
+        .parse()
+        .with_context(|| format!("malformed {service_name} bind address {address:?}"))?;
+    tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("failed to prebind {service_name} listener at {address}"))
+}
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const RAFT_DB_NAME: &str = "raft";
@@ -130,7 +153,36 @@ pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
     runtime: &Runtime,
     config: Config,
-) {
+) -> BoundPorts {
+    // Bind the externally-facing TCP listeners up-front so we can report the actual ports
+    // back to the caller (config may request port 0, letting the OS pick a free one). Each
+    // listener is bound exactly once and handed to its server, so there is no bind/drop/rebind
+    // gap for another process to race into.
+    let rpc_listener = bind_tcp_listener(&config.rpc_config.address, "RPC")
+        .await
+        .expect("failed to bind RPC listener");
+    let prebound_status_listener = if config.status_server_config.enabled {
+        Some(
+            bind_tcp_listener(&config.status_server_config.address, "status")
+                .await
+                .expect("failed to bind status listener"),
+        )
+    } else {
+        None
+    };
+    let prebound_prover_api_listener = if config.general_config.node_role.is_main()
+        && config.batcher_config.enabled
+        && config.prover_api_config.enabled
+    {
+        Some(
+            bind_tcp_listener(&config.prover_api_config.address, "prover API")
+                .await
+                .expect("failed to bind prover API listener"),
+        )
+    } else {
+        None
+    };
+
     report_static_config_metrics(&config);
 
     let node_role = config.general_config.node_role;
@@ -494,11 +546,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         ),
         None => (None, None, None),
     };
-    if config.network_config.enabled {
+    let network = if config.network_config.enabled {
         tracing::info!("initializing p2p networking");
         let batch_verification_policy_config: BatchVerificationPolicyConfig =
             config.batch_verification_config.clone().into();
-        let network_service = if node_role.is_main() {
+        let (network_service, bound_network_ports) = if node_role.is_main() {
             let (_, accepted_verifier_signers) =
                 effective_verification_policy(&batch_verification_policy_config, &l1_state);
             NetworkService::new(
@@ -550,15 +602,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to create network service");
         network_service.spawn(runtime, node_role.is_main().then_some(verify_request_rx));
         if let Some(bootstrapper) = raft_bootstrapper {
-            bootstrapper
-                .bootstrap_if_needed()
-                .await
-                .expect("failed to run raft bootstrap process");
+            runtime.spawn_critical_task("raft bootstrapper", async move {
+                bootstrapper
+                    .bootstrap_if_needed()
+                    .await
+                    .expect("failed to run raft bootstrap process");
+            });
         }
+        Some(bound_network_ports)
     } else if node_role.is_main() {
         tracing::info!(
             "p2p networking is disabled; to enable set `network.enabled=true` and populate `network.secret_key`"
         );
+        None
     } else {
         panic!(
             "EN cannot run without p2p networking; to fix: \
@@ -567,7 +623,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             populate `network.boot_nodes` with at least one known node from the chain. \
             See https://github.com/matter-labs/zksync-os-server/pull/873 for full rollout instructions."
         );
-    }
+    };
 
     // Channel from L1Sender<CommitCommand> to L1CommitWatcher.
     // Initialized to startup's last_committed_batch so any commit above that value
@@ -879,7 +935,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let archiving_block_replay_storage =
         ReplayArchivingWriteReplay::new(block_replay_storage, replay_archive_sender);
 
-    let backpressure_acceptance_rx = if node_role.is_main() {
+    let (backpressure_acceptance_rx, prover_api_port) = if node_role.is_main() {
         run_main_node_pipeline(
             &config,
             sl_provider.clone(),
@@ -906,28 +962,32 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             settles_on_gateway,
             effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
             replay_archiver,
+            prebound_prover_api_listener,
         )
         .await
     } else {
-        run_en_pipeline(
-            &config,
-            replays_for_sequencer,
-            committed_batch_provider.clone(),
-            node_startup_state,
-            archiving_block_replay_storage,
-            runtime,
-            block_context_provider,
-            state.clone(),
-            tree_db,
-            repositories.clone(),
-            finality_storage.clone(),
-            stop_receiver.clone(),
-            tx_acceptance_state_sender,
-            chain_id,
-            verify_batch_rx,
-            outgoing_verify_results.clone(),
+        (
+            run_en_pipeline(
+                &config,
+                replays_for_sequencer,
+                committed_batch_provider.clone(),
+                node_startup_state,
+                archiving_block_replay_storage,
+                runtime,
+                block_context_provider,
+                state.clone(),
+                tree_db,
+                repositories.clone(),
+                finality_storage.clone(),
+                stop_receiver.clone(),
+                tx_acceptance_state_sender,
+                chain_id,
+                verify_batch_rx,
+                outgoing_verify_results.clone(),
+            )
+            .await,
+            None,
         )
-        .await
     };
 
     // Aggregate all "not accepting" signals into a single combined receiver for the RPC server.
@@ -941,23 +1001,50 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
 
     // ======== Start Status Server ========
-    if config.status_server_config.enabled {
-        let addr: SocketAddr = config
-            .status_server_config
-            .address
-            .parse()
-            .expect("malformed `status_server.address`");
+    let status_port = if config.status_server_config.enabled {
+        let status_listener = prebound_status_listener
+            .expect("status_server is enabled but status listener was not prebound");
+        let port = status_listener
+            .local_addr()
+            .expect("status server local_addr")
+            .port();
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "status server",
             |shutdown| async move {
-                run_status_server(addr, shutdown, raft_status_rx)
+                run_status_server_on_listener(status_listener, shutdown, raft_status_rx)
                     .await
                     .expect("failed to run status server");
             },
         );
-    }
+        Some(port)
+    } else {
+        None
+    };
 
     // =========== Start JSON RPC ========
+    debug_assert!(
+        {
+            let config_port = config
+                .rpc_config
+                .address
+                .parse::<SocketAddr>()
+                .ok()
+                .map(|a| a.port())
+                .unwrap_or(0);
+            let prebound_port = rpc_listener
+                .local_addr()
+                .ok()
+                .map(|a| a.port())
+                .unwrap_or(0);
+            config_port == 0 || prebound_port == 0 || config_port == prebound_port
+        },
+        "prebound RPC port does not match config port"
+    );
+    let rpc_port = rpc_listener
+        .local_addr()
+        .expect("rpc server local_addr")
+        .port();
+
     let repositories_for_wait = repositories.clone();
     let wait_for_db = async move {
         // Wait for repositories to be ready to be used in RPC.
@@ -972,6 +1059,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .build_client(zksync_os_tx_validators::policy_client::Component::Rpc);
     zksync_os_rpc::spawn(
         config.rpc_config.into(),
+        rpc_listener,
         chain_id,
         bridgehub_address,
         bytecode_supplier_address,
@@ -991,6 +1079,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let startup_time = process_started_at.elapsed();
     GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
     tracing::info!("All components scheduled for initialization in {startup_time:?}");
+
+    BoundPorts {
+        rpc: rpc_port,
+        status: status_port,
+        prover_api: prover_api_port,
+        network,
+    }
 }
 
 /// Checks whether block `rebuild.from_block_number` currently has the expected `rebuild.from_block_hash`.
@@ -1118,7 +1213,8 @@ async fn run_main_node_pipeline(
     settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
     replay_archiver: Option<impl ReplayArchiver>,
-) -> watch::Receiver<TransactionAcceptanceState> {
+    prebound_prover_api_listener: Option<tokio::net::TcpListener>,
+) -> (watch::Receiver<TransactionAcceptanceState>, Option<u16>) {
     let priority_tree_db_path = config
         .general_config
         .rocks_db_path
@@ -1191,7 +1287,7 @@ async fn run_main_node_pipeline(
             clear_failing_block_config_task(finality, internal_config_manager),
         );
         let snapshot_rx = PipelineTracker::spawn(runtime, components);
-        return monitor.spawn(runtime, snapshot_rx);
+        return (monitor.spawn(runtime, snapshot_rx), None);
     }
 
     tracing::info!("Initializing ProofStorage");
@@ -1213,17 +1309,26 @@ async fn run_main_node_pipeline(
         config.prover_api_config.max_assigned_batch_range,
     );
 
-    if config.prover_api_config.enabled {
+    let prover_api_port = if config.prover_api_config.enabled {
+        let prover_listener = prebound_prover_api_listener
+            .expect("prover API is enabled but prover API listener was not prebound");
+        let port = prover_listener
+            .local_addr()
+            .expect("prover server local_addr")
+            .port();
         runtime.spawn_critical_with_graceful_shutdown_signal("prover server", |shutdown| {
-            prover_server::run(
+            prover_server::run_on_listener(
                 fri_job_manager.clone(),
                 snark_job_manager.clone(),
                 proof_storage.clone(),
-                config.prover_api_config.address.clone(),
+                prover_listener,
                 shutdown,
             )
         });
-    }
+        Some(port)
+    } else {
+        None
+    };
 
     if config.prover_api_config.fake_fri_provers.enabled {
         run_fake_fri_provers(&config.prover_api_config, runtime, fri_job_manager);
@@ -1356,7 +1461,7 @@ async fn run_main_node_pipeline(
     let components = pipeline.components();
     pipeline.spawn();
     let snapshot_rx = PipelineTracker::spawn(runtime, components);
-    monitor.spawn(runtime, snapshot_rx)
+    (monitor.spawn(runtime, snapshot_rx), prover_api_port)
 }
 
 /// Only for EN - we still populate channels destined for the batcher subsystem -

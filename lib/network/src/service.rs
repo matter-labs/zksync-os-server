@@ -27,7 +27,7 @@ use reth_tasks::Runtime;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -42,6 +42,12 @@ const BOOT_NODE_RESOLUTION_MAX_RETRIES: usize = 24;
 const BOOT_NODE_RESOLUTION_RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new()
     .with_delay(BOOT_NODE_RESOLUTION_RETRY_DELAY)
     .with_max_times(BOOT_NODE_RESOLUTION_MAX_RETRIES);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetworkPorts {
+    pub tcp: u16,
+    pub udp: u16,
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to resolve any configured boot nodes before starting the p2p network")]
@@ -66,17 +72,16 @@ async fn resolve_boot_nodes_with_retry(
         resolved_boot_nodes: Vec::with_capacity(boot_nodes.len()),
         unresolved_boot_nodes: boot_nodes,
     }));
-    let resolve = Arc::new(|boot_node: TrustedPeer| async move { boot_node.resolve().await });
 
-    {
+    (|| {
         let state = Arc::clone(&state);
-        let resolve = Arc::clone(&resolve);
-        move || {
-            let state = Arc::clone(&state);
-            let resolve = Arc::clone(&resolve);
-            async move { resolve_boot_nodes_once(&state, resolve.as_ref()).await }
+        async move {
+            resolve_boot_nodes_once(&state, &|boot_node: TrustedPeer| async move {
+                boot_node.resolve().await
+            })
+            .await
         }
-    }
+    })
     .retry(BOOT_NODE_RESOLUTION_RETRY_BUILDER)
     .notify(|error, retry_in| {
         tracing::info!(
@@ -176,7 +181,7 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
         raft_handler: Option<RaftProtocolHandler>,
-    ) -> Result<Self, NetworkError> {
+    ) -> Result<(Self, NetworkPorts), NetworkError> {
         // Install ViseRecorder before creating the NetworkManager so that reth-network metrics
         // are captured. This must happen before `NetworkManager::builder()` because that is where
         // reth initializes its metric handles (via `Default::default()` on each metrics struct).
@@ -189,7 +194,11 @@ impl NetworkService {
                 tracing::info!(%ip, "resolved external IP (STUN)");
             }
         };
-        let rlpx_address = SocketAddr::V4(SocketAddrV4::new(config.address, config.port));
+        let rlpx_address = SocketAddr::new(IpAddr::V4(config.address), config.port);
+        let discv5_listen_config = discv5::ListenConfig::Ipv4 {
+            ip: config.address,
+            port: config.port,
+        };
         let chain_spec = client.chain_spec();
         let genesis = Head {
             hash: chain_spec.genesis_hash(),
@@ -225,22 +234,20 @@ impl NetworkService {
             .discovery_v5(
                 reth_discv5::Config::builder(rlpx_address)
                     .discv5_config(
-                        discv5::ConfigBuilder::new(discv5::ListenConfig::from_ip(
-                            rlpx_address.ip(),
-                            config.port,
-                        ))
-                        // Require only 2 peers to agree on our external IP to update our local ENR
-                        .enr_peer_update_min(2)
-                        // 2 peers from above must agree on external IP within 1h from each other.
-                        // This can make the node less responsive to dynamic IP changes.
-                        .vote_duration(Duration::from_secs(3600))
-                        // Sets peer ban duration to 1 second, effectively disabling it
-                        .ban_duration(Some(Duration::from_secs(1)))
-                        .build(),
+                        discv5::ConfigBuilder::new(discv5_listen_config)
+                            // Require only 2 peers to agree on our external IP to update our local ENR
+                            .enr_peer_update_min(2)
+                            // 2 peers from above must agree on external IP within 1h from each other.
+                            // This can make the node less responsive to dynamic IP changes.
+                            .vote_duration(Duration::from_secs(3600))
+                            // Sets peer ban duration to 1 second, effectively disabling it
+                            .ban_duration(Some(Duration::from_secs(1)))
+                            .build(),
                     )
                     // Specify custom fork id configuration
                     .fork(b"zksync-os", fork_id),
             )
+            .listener_addr(rlpx_address)
             .peer_config(
                 PeersConfig::default()
                     // Sets peer ban duration to 1 second, effectively disabling it
@@ -260,8 +267,6 @@ impl NetworkService {
                     // chains.
                     .with_enforce_enr_fork_id(true),
             )
-            // Use the same port for RLPx (TCP) and for discv5 (UDP)
-            .listener_addr(rlpx_address)
             .discovery_addr(rlpx_address)
             // Disable transaction gossip as it is unsupported by ZKsync OS
             .disable_tx_gossip(true)
@@ -300,12 +305,24 @@ impl NetworkService {
         let (network_manager, _txpool, _request_handler) =
             NetworkManager::builder(net_cfg).await?.split();
 
-        Ok(Self {
-            network_manager,
-            protocol_rx,
-            peer_sessions: Arc::new(RwLock::new(PeerSessionStore::default())),
-            connection_registry,
-        })
+        let bound_tcp_port = network_manager.local_addr().port();
+        let bound_udp_port = network_manager
+            .handle()
+            .discv5()
+            .map(|discv5| discv5.local_port())
+            .unwrap_or(bound_tcp_port);
+        Ok((
+            Self {
+                network_manager,
+                protocol_rx,
+                peer_sessions: Arc::new(RwLock::new(PeerSessionStore::default())),
+                connection_registry,
+            },
+            NetworkPorts {
+                tcp: bound_tcp_port,
+                udp: bound_udp_port,
+            },
+        ))
     }
 
     fn register_main_node_rlpx_sub_protocols(
