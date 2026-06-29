@@ -58,6 +58,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tokio::net::TcpListener;
 use tokio::sync::watch;
 use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
 use zksync_os_base_token_adjuster::{BaseTokenPriceHandle, BaseTokenPriceUpdater};
@@ -121,7 +122,7 @@ use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAccept
 
 /// Actual ports bound by each service after `run()` starts.
 /// Fields are `None` when the corresponding service is disabled in config.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BoundPorts {
     pub rpc: u16,
     pub status: Option<u16>,
@@ -129,14 +130,80 @@ pub struct BoundPorts {
     pub network: Option<NetworkPorts>,
 }
 
-async fn bind_tcp_listener(
-    address: &str,
-    service_name: &str,
-) -> anyhow::Result<tokio::net::TcpListener> {
+/// Sockets bound before node startup and then handed to their HTTP servers.
+#[derive(Debug)]
+pub struct PreboundPorts {
+    rpc: TcpListener,
+    status: Option<TcpListener>,
+    prover_api: Option<TcpListener>,
+}
+
+impl PreboundPorts {
+    pub async fn bind_from_config(config: &Config) -> anyhow::Result<Self> {
+        let status_address = config
+            .status_server_config
+            .enabled
+            .then_some(config.status_server_config.address.as_str());
+        let prover_api_address = (config.general_config.node_role.is_main()
+            && config.batcher_config.enabled
+            && config.prover_api_config.enabled)
+            .then_some(config.prover_api_config.address.as_str());
+
+        Self::bind(
+            &config.rpc_config.address,
+            status_address,
+            prover_api_address,
+        )
+        .await
+    }
+
+    async fn bind(
+        rpc_address: &str,
+        status_address: Option<&str>,
+        prover_api_address: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        let rpc = bind_tcp_listener(rpc_address, "RPC").await?;
+        let status = match status_address {
+            Some(address) => Some(bind_tcp_listener(address, "status").await?),
+            None => None,
+        };
+        let prover_api = match prover_api_address {
+            Some(address) => Some(bind_tcp_listener(address, "prover API").await?),
+            None => None,
+        };
+
+        Ok(Self {
+            rpc,
+            status,
+            prover_api,
+        })
+    }
+
+    pub fn bound_ports(&self) -> BoundPorts {
+        BoundPorts {
+            rpc: self.rpc.local_addr().expect("rpc server local_addr").port(),
+            status: self.status.as_ref().map(|listener| {
+                listener
+                    .local_addr()
+                    .expect("status server local_addr")
+                    .port()
+            }),
+            prover_api: self.prover_api.as_ref().map(|listener| {
+                listener
+                    .local_addr()
+                    .expect("prover API server local_addr")
+                    .port()
+            }),
+            network: None,
+        }
+    }
+}
+
+async fn bind_tcp_listener(address: &str, service_name: &str) -> anyhow::Result<TcpListener> {
     let addr: SocketAddr = address
         .parse()
         .with_context(|| format!("malformed {service_name} bind address {address:?}"))?;
-    tokio::net::TcpListener::bind(addr)
+    TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to prebind {service_name} listener at {address}"))
 }
@@ -154,35 +221,25 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     runtime: &Runtime,
     config: Config,
 ) -> BoundPorts {
-    // Bind the externally-facing TCP listeners up-front so we can report the actual ports
-    // back to the caller (config may request port 0, letting the OS pick a free one). Each
-    // listener is bound exactly once and handed to its server, so there is no bind/drop/rebind
-    // gap for another process to race into.
-    let rpc_listener = bind_tcp_listener(&config.rpc_config.address, "RPC")
+    let prebound_ports = PreboundPorts::bind_from_config(&config)
         .await
-        .expect("failed to bind RPC listener");
-    let prebound_status_listener = if config.status_server_config.enabled {
-        Some(
-            bind_tcp_listener(&config.status_server_config.address, "status")
-                .await
-                .expect("failed to bind status listener"),
-        )
-    } else {
-        None
-    };
-    let prebound_prover_api_listener = if config.general_config.node_role.is_main()
-        && config.batcher_config.enabled
-        && config.prover_api_config.enabled
-    {
-        Some(
-            bind_tcp_listener(&config.prover_api_config.address, "prover API")
-                .await
-                .expect("failed to bind prover API listener"),
-        )
-    } else {
-        None
-    };
+        .expect("failed to prebind node ports");
+    run_with_prebound_ports::<State>(runtime, config, prebound_ports).await
+}
 
+#[allow(clippy::too_many_arguments)]
+pub async fn run_with_prebound_ports<
+    State: ReadStateHistory + WriteState + StateInitializer + Clone,
+>(
+    runtime: &Runtime,
+    config: Config,
+    prebound_ports: PreboundPorts,
+) -> BoundPorts {
+    let PreboundPorts {
+        rpc: rpc_listener,
+        status: prebound_status_listener,
+        prover_api: prebound_prover_api_listener,
+    } = prebound_ports;
     report_static_config_metrics(&config);
 
     let node_role = config.general_config.node_role;
@@ -553,7 +610,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let (network_service, bound_network_ports) = if node_role.is_main() {
             let (_, accepted_verifier_signers) =
                 effective_verification_policy(&batch_verification_policy_config, &l1_state);
-            NetworkService::new(
+            NetworkService::new_with_port_retry(
                 config.network_config.clone().into(),
                 runtime.clone(),
                 ZksProtocolConfig::MainNode(MainNodeProtocolConfig {
@@ -575,7 +632,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                     db_key: db_key.clone(),
                 })
                 .collect();
-            NetworkService::new(
+            NetworkService::new_with_port_retry(
                 config.network_config.clone().into(),
                 runtime.clone(),
                 ZksProtocolConfig::ExternalNode(ExternalNodeProtocolConfig {
@@ -1213,7 +1270,7 @@ async fn run_main_node_pipeline(
     settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
     replay_archiver: Option<impl ReplayArchiver>,
-    prebound_prover_api_listener: Option<tokio::net::TcpListener>,
+    prebound_prover_api_listener: Option<TcpListener>,
 ) -> (watch::Receiver<TransactionAcceptanceState>, Option<u16>) {
     let priority_tree_db_path = config
         .general_config
@@ -1963,7 +2020,7 @@ fn raft_storage_path_exists(path: &Path) -> anyhow::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::check_batch_verification_mismatch;
+    use super::{PreboundPorts, check_batch_verification_mismatch};
     use crate::config::BatchVerificationConfig;
     use alloy::primitives::address;
     use zksync_os_contract_interface::l1_discovery::{
@@ -2030,5 +2087,18 @@ mod tests {
         let warned = check_batch_verification_mismatch(&server_config, &l1_config);
 
         assert!(!warned);
+    }
+
+    #[tokio::test]
+    async fn prebound_ports_bind_http_listeners() {
+        let prebound = PreboundPorts::bind("127.0.0.1:0", Some("127.0.0.1:0"), Some("127.0.0.1:0"))
+            .await
+            .unwrap();
+        let ports = prebound.bound_ports();
+
+        assert_ne!(ports.rpc, 0);
+        assert_ne!(ports.status, Some(0));
+        assert_ne!(ports.prover_api, Some(0));
+        assert!(ports.network.is_none());
     }
 }

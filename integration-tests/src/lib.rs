@@ -324,17 +324,6 @@ pub struct SupportingNode {
     _tempdir: Arc<TempDir>,
 }
 
-/// Returns a likely-free localhost TCP port by binding an ephemeral socket and immediately
-/// releasing it. There is a small TOCTOU window before the real listener binds, but it is the
-/// only option for the p2p port, where discv5 needs a concrete port at configuration time.
-fn get_free_port() -> u16 {
-    std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .expect("failed to bind probe socket for free port")
-        .local_addr()
-        .expect("probe socket local_addr")
-        .port()
-}
-
 impl Tester {
     pub fn config(&self) -> &Config {
         &self.config
@@ -343,9 +332,9 @@ impl Tester {
     fn apply_external_node_defaults(&self, config: &mut Config) {
         config.general_config.node_role = NodeRole::ExternalNode;
         config.network_config.boot_nodes = vec![self.node_record.into()];
-        // This config is cloned from the main node, which already bound the p2p port above; give
-        // the external node its own concrete port and identity so it doesn't collide with it.
-        config.network_config.port = get_free_port();
+        // This config is cloned from the main node; ask startup to pick a fresh concrete TCP+UDP
+        // port and identity so the external node doesn't collide with it.
+        config.network_config.port = 0;
         config.network_config.secret_key = Some(zksync_os_network::rng_secret_key());
         config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
         config.gateway_provider_config = self
@@ -588,10 +577,9 @@ impl Tester {
         config.status_server_config.address = "0.0.0.0:0".to_string();
         config.network_config.address = Ipv4Addr::LOCALHOST;
         config.network_config.interface = None;
-        // Unlike the HTTP servers, the p2p port cannot use port 0: reth builds the discv5 ENR
-        // (which peers use to dial this node) from the *configured* listen port, so port 0 would
-        // advertise `discport=0` and make the node undiscoverable. Pick a concrete free port.
-        config.network_config.port = get_free_port();
+        // The server turns port 0 into a concrete TCP+UDP p2p port immediately before building
+        // reth's network config, so the advertised ENR remains dialable without test-side probing.
+        config.network_config.port = 0;
         config.network_config.secret_key = Some(zksync_os_network::rng_secret_key());
     }
 

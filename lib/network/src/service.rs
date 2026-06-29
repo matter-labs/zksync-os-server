@@ -27,7 +27,9 @@ use reth_tasks::Runtime;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{
+    IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener as StdTcpListener, UdpSocket,
+};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -42,6 +44,7 @@ const BOOT_NODE_RESOLUTION_MAX_RETRIES: usize = 24;
 const BOOT_NODE_RESOLUTION_RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new()
     .with_delay(BOOT_NODE_RESOLUTION_RETRY_DELAY)
     .with_max_times(BOOT_NODE_RESOLUTION_MAX_RETRIES);
+const EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NetworkPorts {
@@ -59,6 +62,87 @@ struct BootNodeResolutionError {
 struct BootNodeResolutionState {
     unresolved_boot_nodes: Vec<TrustedPeer>,
     resolved_boot_nodes: Vec<TrustedPeer>,
+}
+
+#[derive(Debug)]
+struct ReservedTcpUdpPort {
+    port: u16,
+    _tcp_listener: StdTcpListener,
+    _udp_socket: UdpSocket,
+}
+
+impl ReservedTcpUdpPort {
+    fn port(&self) -> u16 {
+        self.port
+    }
+
+    #[cfg(test)]
+    fn tcp_port(&self) -> u16 {
+        self._tcp_listener
+            .local_addr()
+            .expect("reserved TCP listener local_addr")
+            .port()
+    }
+
+    #[cfg(test)]
+    fn udp_port(&self) -> u16 {
+        self._udp_socket
+            .local_addr()
+            .expect("reserved UDP socket local_addr")
+            .port()
+    }
+}
+
+fn try_reserve_tcp_udp_port(address: Ipv4Addr, port: u16) -> io::Result<ReservedTcpUdpPort> {
+    let tcp_listener = StdTcpListener::bind(SocketAddrV4::new(address, port))?;
+    let port = tcp_listener.local_addr()?.port();
+    let udp_socket = UdpSocket::bind(SocketAddrV4::new(address, port))?;
+    Ok(ReservedTcpUdpPort {
+        port,
+        _tcp_listener: tcp_listener,
+        _udp_socket: udp_socket,
+    })
+}
+
+fn reserve_ephemeral_tcp_udp_port(
+    address: Ipv4Addr,
+    preferred_port: Option<u16>,
+) -> io::Result<ReservedTcpUdpPort> {
+    if let Some(port) = preferred_port {
+        return try_reserve_tcp_udp_port(address, port);
+    }
+
+    let mut last_error = None;
+    for _ in 0..EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS {
+        match try_reserve_tcp_udp_port(address, 0) {
+            Ok(reservation) => return Ok(reservation),
+            Err(err) => last_error = Some(err),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            "no ephemeral TCP+UDP port reservation was attempted",
+        )
+    }))
+}
+
+fn network_error_is_addr_in_use(error: &NetworkError) -> bool {
+    match error {
+        NetworkError::AddressAlreadyInUse { .. } => true,
+        NetworkError::Io(err) | NetworkError::Discovery(_, err) => {
+            err.kind() == io::ErrorKind::AddrInUse
+        }
+        NetworkError::Discv5Error(err) => {
+            let err = err.to_string().to_ascii_lowercase();
+            err.contains("address already in use")
+                || err.contains("addrinuse")
+                || err.contains("os error 48")
+                || err.contains("os error 98")
+        }
+        NetworkError::DnsResolver(_) => false,
+    }
 }
 
 async fn resolve_boot_nodes_with_retry(
@@ -174,6 +258,75 @@ pub struct PeerVerifyBatchResult {
 }
 
 impl NetworkService {
+    pub async fn new_with_port_retry<Replay, Client>(
+        mut config: NetworkConfig,
+        runtime: Runtime,
+        protocol_config: ZksProtocolConfig,
+        replay: Replay,
+        client: Client,
+        raft_handler: Option<RaftProtocolHandler>,
+    ) -> Result<(Self, NetworkPorts), NetworkError>
+    where
+        Replay: ReadReplay + Clone,
+        Client: ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + Clone + 'static,
+    {
+        if config.port != 0 {
+            return Self::new(
+                config,
+                runtime,
+                protocol_config,
+                replay,
+                client,
+                raft_handler,
+            )
+            .await;
+        }
+
+        let mut last_error = None;
+        for attempt in 1..=EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS {
+            let reservation =
+                reserve_ephemeral_tcp_udp_port(config.address, None).map_err(NetworkError::from)?;
+            config.port = reservation.port();
+            drop(reservation);
+
+            match Self::new(
+                config.clone(),
+                runtime.clone(),
+                protocol_config.clone(),
+                replay.clone(),
+                client.clone(),
+                raft_handler.clone(),
+            )
+            .await
+            {
+                Ok(service) => return Ok(service),
+                Err(err)
+                    if network_error_is_addr_in_use(&err)
+                        && attempt < EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS =>
+                {
+                    tracing::info!(
+                        port = config.port,
+                        attempt,
+                        %err,
+                        "ephemeral p2p port was claimed before reth could bind; retrying"
+                    );
+                    config.port = 0;
+                    last_error = Some(err);
+                    tokio::task::yield_now().await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::AddrNotAvailable,
+                "failed to bind an ephemeral TCP+UDP p2p port",
+            )
+            .into()
+        }))
+    }
+
     pub async fn new(
         config: NetworkConfig,
         runtime: Runtime,
@@ -195,6 +348,7 @@ impl NetworkService {
             }
         };
         let rlpx_address = SocketAddr::new(IpAddr::V4(config.address), config.port);
+        let configured_port = config.port;
         let discv5_listen_config = discv5::ListenConfig::Ipv4 {
             ip: config.address,
             port: config.port,
@@ -310,7 +464,9 @@ impl NetworkService {
             .handle()
             .discv5()
             .map(|discv5| discv5.local_port())
-            .unwrap_or(bound_tcp_port);
+            .expect("discv5 must be configured for zksync-os networking");
+        debug_assert_eq!(bound_tcp_port, configured_port);
+        debug_assert_eq!(bound_udp_port, configured_port);
         Ok((
             Self {
                 network_manager,
@@ -609,6 +765,7 @@ mod tests {
     use super::BootNodeResolutionState;
     use super::ConnectionRegistry;
     use super::dispatch_verify_batch;
+    use super::reserve_ephemeral_tcp_udp_port;
     use super::resolve_boot_nodes_once;
     use crate::VerifyBatch;
     use crate::protocol::PeerConnectionHandle;
@@ -623,7 +780,7 @@ mod tests {
     use std::collections::{HashMap, VecDeque};
     use std::future::Future;
     use std::io;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
     use std::sync::{Arc, Mutex, RwLock};
     use std::time::Instant;
     use tokio::sync::mpsc;
@@ -834,6 +991,23 @@ mod tests {
 
     fn socket_addr(port: u16) -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+    }
+
+    #[test]
+    fn ephemeral_network_port_reservation_checks_tcp_and_udp() {
+        let udp_socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let occupied_port = udp_socket.local_addr().unwrap().port();
+
+        assert!(
+            reserve_ephemeral_tcp_udp_port(Ipv4Addr::LOCALHOST, Some(occupied_port)).is_err(),
+            "a UDP-occupied port must not be accepted as an available p2p port"
+        );
+
+        let reservation = reserve_ephemeral_tcp_udp_port(Ipv4Addr::LOCALHOST, None)
+            .expect("must reserve an ephemeral TCP+UDP port");
+        assert_ne!(reservation.port(), occupied_port);
+        assert_eq!(reservation.tcp_port(), reservation.port());
+        assert_eq!(reservation.udp_port(), reservation.port());
     }
 
     fn verify_request() -> VerifyBatch {

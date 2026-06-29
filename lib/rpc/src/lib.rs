@@ -182,7 +182,14 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         .set_http_middleware(middleware)
         .set_rpc_middleware(rpc_middleware);
 
-    tracing::info!("Starting JSON-RPC server at {}", config.address);
+    let local_addr = listener
+        .local_addr()
+        .context("failed to get RPC listener local address")?;
+    tracing::info!(
+        configured_addr = %config.address,
+        bound_addr = %local_addr,
+        "Starting JSON-RPC server"
+    );
     let server = server_builder
         .build_from_tcp(
             listener

@@ -15852,6 +15852,7 @@ dependencies = [
  "zksync_os_operator_signer",
  "zksync_os_provider",
  "zksync_os_replay_archive",
+ "zksync_os_rocksdb",
  "zksync_os_rpc_api",
  "zksync_os_server",
  "zksync_os_state_full_diffs",
