@@ -2,6 +2,7 @@
 //! When adding new ZKsync OS execution version, make sure it is handled in `run_block` and `simulate_tx` methods.
 //! Also, update the `LATEST_EXECUTION_VERSION` constant accordingly.
 
+use zk_ee_0_4_0::system::metadata::chain_config::{ChainConfig, DEFAULT_MAX_TX_GAS_LIMIT};
 use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV6;
 use zk_os_forward_system_0_0_28::run::RunBlockForward as RunBlockForwardV3;
 use zk_os_forward_system_0_1_2::run::RunBlockForward as RunBlockForwardV4;
@@ -148,12 +149,16 @@ pub fn run_block<
                 .map(|o| into_legacy_block_output!(o))
         }
         ExecutionVersion::V7 => {
+            // Chain id moved from per-block metadata into the per-batch chain config.
+            let chain_config =
+                ChainConfig::new(block_context.chain_id, false, DEFAULT_MAX_TX_GAS_LIMIT)
+                    .map_err(|err| anyhow::anyhow!("invalid chain config: {err:?}"))?;
             let object = RunBlockForwardV7 {
                 fri_verifier_artifacts: None,
             };
             object
                 .run_block(
-                    (),
+                    chain_config,
                     block_context,
                     storage,
                     preimage_source,
@@ -252,12 +257,16 @@ pub fn simulate_tx<
                 .map_err(|err| anyhow::anyhow!(err))
         }
         ExecutionVersion::V7 => {
+            // Chain id moved from per-block metadata into the per-batch chain config.
+            let chain_config =
+                ChainConfig::new(block_context.chain_id, false, DEFAULT_MAX_TX_GAS_LIMIT)
+                    .map_err(|err| anyhow::anyhow!("invalid chain config: {err:?}"))?;
             let object = RunBlockForwardV7 {
                 fri_verifier_artifacts: None,
             };
             object
                 .simulate_tx(
-                    (),
+                    chain_config,
                     transaction,
                     block_context,
                     storage,

@@ -3,6 +3,7 @@ use alloy::primitives::{B256, ruint::aliases::B160};
 use anyhow::Context as _;
 use std::collections::{HashMap, VecDeque};
 use zk_ee_0_4_0::common_structs::{ProofData, da_commitment_scheme::DACommitmentScheme};
+use zk_ee_0_4_0::system::metadata::chain_config::{ChainConfig, DEFAULT_MAX_TX_GAS_LIMIT};
 use zk_ee_0_4_0::system::metadata::zk_metadata::{BlockHashes, BlockMetadataFromOracle};
 use zk_ee_0_4_0::utils::Bytes32;
 use zk_os_basic_system_0_4_0::system_implementation::flat_storage_model::FlatStorageLeaf;
@@ -32,6 +33,11 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
     );
 
     let first_replay_record = &replay_records[0];
+    // The chain config is frozen for the whole batch; chain id lives there now rather than in
+    // per-block metadata. All blocks in a batch share the same chain.
+    let chain_id = first_replay_record.block_context.chain_id;
+    let chain_config = ChainConfig::new(chain_id, false, DEFAULT_MAX_TX_GAS_LIMIT)
+        .map_err(|err| anyhow::anyhow!("invalid chain config: {err:?}"))?;
     let first_state_version = first_replay_record
         .block_context
         .block_number
@@ -85,6 +91,7 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
         batch_state,
         blocks,
         da_commitment_scheme(pubdata_mode)?,
+        chain_config,
     )
     .map_err(|err| anyhow::anyhow!("native batch run failed: {err:?}"))?;
 
@@ -111,7 +118,7 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
         l2_to_l1_logs_root_hash: b256_from_bytes32(batch_output.l2_logs_tree_root),
         first_block_timestamp: batch_output.first_block_timestamp,
         last_block_timestamp: batch_output.last_block_timestamp,
-        chain_id: u256_to_u64("batch_output.chain_id", batch_output.chain_id)?,
+        chain_id,
         sl_chain_id: u256_to_u64(
             "batch_output.settlement_layer_chain_id",
             batch_output.settlement_layer_chain_id,
@@ -123,7 +130,6 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
 fn batch_block_input(replay_record: &ReplayRecord) -> BatchBlockInput<TxListSource> {
     BatchBlockInput {
         block_context: BlockMetadataFromOracle {
-            chain_id: replay_record.block_context.chain_id,
             block_number: replay_record.block_context.block_number,
             block_hashes: BlockHashes(replay_record.block_context.block_hashes.0),
             timestamp: replay_record.block_context.timestamp,
@@ -135,7 +141,6 @@ fn batch_block_input(replay_record: &ReplayRecord) -> BatchBlockInput<TxListSour
             pubdata_limit: replay_record.block_context.pubdata_limit,
             mix_hash: replay_record.block_context.mix_hash,
             blob_fee: replay_record.block_context.blob_fee,
-            is_gateway: false,
         },
         tx_source: TxListSource {
             transactions: replay_record

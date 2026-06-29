@@ -160,12 +160,12 @@ full_statement_verifier = { git = "https://github.com/antoniolocascio-bot/zksync
 # zksync-os v0.4.0 lane for the new STF and native batch proving.
 # This stays separate from the current released version because it is wired as distinct
 # execution/proving versions (V7/V8) on the server side.
-zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/use-airbender-platform-2418efa", features = [
+zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/use-airbender-platform-2418efa" }
-zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/antoniolocascio-bot/zksync-os.git", branch = "antonio/use-airbender-platform-2418efa" }
+zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0" }
+zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0" }
 
 # Other dependencies.
 

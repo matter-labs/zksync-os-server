@@ -23,8 +23,8 @@ The server currently carries three kinds of temporary dependency state in `Cargo
    - `...-v0.3.1-interface-v0.1.3`
 2. Direct old airbender deps point to a bot-fork compatibility branch:
    - `antoniolocascio-bot/zksync-airbender:antonio/compat-nightly-2026-02-10-v0.5.2`
-3. The V8 lane points to a bot-fork branch instead of an upstream tag / rev:
-   - `antoniolocascio-bot/zksync-os:antonio/use-airbender-platform-2418efa`
+3. The V8 lane points to an upstream branch instead of a tagged release:
+   - `matter-labs/zksync-os:draft-0.4.0`
 
 ### `airbender-platform`
 
@@ -34,7 +34,7 @@ That fix has now been merged upstream in:
 
 - `matter-labs/airbender-platform@2418efaafd96139723b51c6ba51ae48ffce5e06c`
 
-The server no longer needs a direct `airbender-platform` patch. The remaining temporary state is that the V8 `zksync-os` lane points to a fork branch that already consumes this merged upstream ref.
+The server no longer needs a direct `airbender-platform` patch, and the V8 `zksync-os` lane now consumes the upstream `draft-0.4.0` branch (which pulls in the merged `airbender-platform` ref) rather than the fork branch. The remaining temporary state is that this is still a branch, not a tagged release.
 
 Baseline for the regression:
 
@@ -47,9 +47,9 @@ Baseline for the regression:
 
 ### `zksync-os`
 
-The V8 / native PIG lane is still consumed from a branch, not a tagged release:
+The V8 / native PIG lane is now consumed from the upstream `draft-0.4.0` branch, but not yet a tagged release:
 
-- `antoniolocascio-bot/zksync-os:antonio/use-airbender-platform-2418efa`
+- `matter-labs/zksync-os:draft-0.4.0`
 
 That is acceptable while the integration is in flight, but it should not be the steady-state dependency.
 
@@ -153,7 +153,7 @@ After the upstream repos are cleaned up, the server should do the following:
 Delete these only after the corresponding upstream replacement exists or the lane is dropped:
 
 - all `antoniolocascio-bot/zksync-os:antonio/compat-nightly-2026-02-10-*` refs in `Cargo.toml`
-- `antoniolocascio-bot/zksync-os:antonio/use-airbender-platform-2418efa` in `Cargo.toml`
+- the V8 lane `matter-labs/zksync-os:draft-0.4.0` branch ref in `Cargo.toml` (move to a tagged release once cut; the bot-fork `antonio/use-airbender-platform-2418efa` ref it replaced is already gone)
 - `antoniolocascio-bot/zksync-airbender:antonio/compat-nightly-2026-02-10-v0.5.2` refs in `Cargo.toml`
 - branch-name special-casing in `lib/multivm/build.rs`
 - the V6 `download_tag = "v0.2.5"` remap in `lib/multivm/build.rs`
