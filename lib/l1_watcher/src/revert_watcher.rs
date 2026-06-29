@@ -14,11 +14,12 @@ pub struct L1RevertWatcher {
 }
 
 impl L1RevertWatcher {
-    pub fn create_watcher(
+    pub async fn create_watcher(
         config: L1WatcherConfig,
         zk_chain: ZkChain<NodeProvider>,
         startup_sl_block: u64,
-    ) -> L1Watcher<L1RevertWatcher> {
+        l1_chain_id: u64,
+    ) -> anyhow::Result<L1Watcher<L1RevertWatcher>> {
         tracing::info!(
             startup_sl_block,
             zk_chain_address = ?zk_chain.address(),
@@ -26,14 +27,16 @@ impl L1RevertWatcher {
         );
         let this = Self { startup_sl_block };
         // Process forward from the startup SL block; reverts in earlier blocks are already accounted for.
-        L1Watcher::new_finalized(
+        L1Watcher::new_confirmed(
             config,
             zk_chain.provider().clone(),
             (*zk_chain.address()).into(),
             startup_sl_block + 1,
             None,
+            l1_chain_id,
             this,
         )
+        .await
     }
 }
 
