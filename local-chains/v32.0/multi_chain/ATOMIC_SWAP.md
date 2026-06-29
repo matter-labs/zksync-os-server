@@ -34,18 +34,19 @@ cast send --private-key $K0 $BH 'registerChain(uint256,uint256)' 6565 6566 --rpc
 ## 3. Run the atomic-swap driver
 
 The driver (TypeScript, ethers v6) sends both legs, fetches the real per-leg proofs
-from this server's RPCs, waits for interop-root import, then executes. It lives in
-the interop SDK under `local-prividium-3chains/sdk` (`examples/atomic-swap-3chains.ts`)
-— this Rust repo ships no node tooling, so the driver stays there. Point it at the
-preset's RPCs:
+from this server's RPCs, waits for interop-root import, then executes. It ships
+self-contained in this preset under [`atomic-swap/`](./atomic-swap) (the driver plus
+the minimal vendored interop helpers it needs — only `ethers` at runtime). Point it
+at the preset's RPCs:
 
 ```bash
-cd <interop-sdk>            # e.g. local-prividium-3chains/sdk
+cd local-chains/v32.0/multi_chain/atomic-swap
+npm install
 PRIVATE_KEY=0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110 \
 L2_RPC_URL=http://127.0.0.1:3050 \
 L2_RPC_URL_SECOND=http://127.0.0.1:3051 \
 L1_RPC_URL=http://127.0.0.1:8545 \
-  npx ts-node examples/atomic-swap-3chains.ts
+  npm run atomic-swap
 ```
 
 ## What the driver does (mirrors the `atomic_swap_l1_settled` integration test)
