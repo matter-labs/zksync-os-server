@@ -1,7 +1,10 @@
+use alloy::eips::BlockId;
 use alloy::primitives::U256;
 use anyhow::Context as _;
-use zksync_os_contract_interface::IValidatorTimelock;
+use backon::{ConstantBuilder, Retryable};
+use std::time::Duration;
 use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_contract_interface::{IValidatorTimelock, ZkChain};
 use zksync_os_l1_watcher::{fetch_batch, fetch_batch_commit_tx_hash};
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_provider::{EthWalletProvider, NodeProvider};
@@ -158,6 +161,61 @@ async fn perform_l1_revert(
         "startup L1 revert completed"
     );
 
+    // Ensure L1 node returns the proper last committed batch number after the revert.
+    // This is a sanity check for the L1 node's RPC: a lagging or load-balanced
+    ensure_revert(&l1_state.diamond_proxy_sl, plan.last_l1_batch_to_keep).await?;
+
+    Ok(())
+}
+
+/// Waits until the settlement layer reports a committed-batch count consistent with the revert.
+async fn ensure_revert(
+    diamond_proxy_sl: &ZkChain<NodeProvider>,
+    last_l1_batch_to_keep: u64,
+) -> anyhow::Result<()> {
+    const RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new()
+        .with_delay(Duration::from_secs(2))
+        .with_max_times(30);
+
+    let observed = match (|| async {
+        let committed = diamond_proxy_sl
+            .get_total_batches_committed(BlockId::latest())
+            .await
+            .context("failed to read totalBatchesCommitted")?;
+        anyhow::ensure!(
+            committed == last_l1_batch_to_keep,
+            "last committed batch is {committed}, expected == {last_l1_batch_to_keep}"
+        );
+        anyhow::Ok(committed)
+    })
+    .retry(RETRY_BUILDER)
+    .notify(|err, _| {
+        tracing::warn!(
+            error = %err,
+            last_l1_batch_to_keep,
+            "L1 revert not yet observable at the latest block; retrying"
+        );
+    })
+    .await
+    {
+        Ok(committed) => committed,
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                last_l1_batch_to_keep,
+                "L1 revert did not become observable within the retry timeout; the SL \
+                 RPC kept reporting a committed batch different from the kept batch"
+            );
+            return Err(err)
+                .context("L1 revert not observable at the latest block within the retry timeout");
+        }
+    };
+
+    tracing::info!(
+        last_committed_batch = observed,
+        last_l1_batch_to_keep,
+        "L1 revert observable: settlement-layer committed batch decreased to the expected value"
+    );
     Ok(())
 }
 
