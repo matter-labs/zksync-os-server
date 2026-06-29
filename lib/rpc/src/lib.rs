@@ -3,6 +3,7 @@ mod call_fees;
 mod config;
 
 pub use config::{RateLimits, RpcConfig};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -158,9 +159,14 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     let limiter = LoggingLimiter::new(Limiter::new(config.rate_limits.clone().into_limits()));
     let rate_limit_logging = LoggingLimiter::run(limiter.clone());
     let method_filter = Arc::new(config.method_filter.clone());
+    // Snapshot the registered method names so monitoring can bound metric label cardinality:
+    // any other method name (e.g. junk sent to pollute metrics) is collapsed to a single label.
+    let known_methods = Arc::new(rpc.method_names().collect::<HashSet<&'static str>>());
     let rpc_middleware = RpcServiceBuilder::new()
         // Monitoring is outermost so rate-limited responses still appear in error metrics.
-        .layer_fn(move |service| Monitoring::new(service, max_response_size_bytes))
+        .layer_fn(move |service| {
+            Monitoring::new(service, max_response_size_bytes, known_methods.clone())
+        })
         .layer_fn(move |service| MethodFiltering::new(service, method_filter.clone()))
         .layer_fn(move |service| RateLimiting::new(service, limiter.clone()));
 
