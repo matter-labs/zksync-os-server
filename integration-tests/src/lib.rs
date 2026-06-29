@@ -308,6 +308,7 @@ pub struct Tester {
 pub struct StoppedTester {
     l1: AnvilL1,
     config: Config,
+    previous_bound_ports: BoundPorts,
     tempdir: Arc<tempfile::TempDir>,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
@@ -505,6 +506,7 @@ impl Tester {
             runtime,
             l1,
             config,
+            bound_ports,
             tempdir,
             log_state,
             chain_layout,
@@ -521,6 +523,7 @@ impl Tester {
             log_state,
             chain_layout,
             config,
+            previous_bound_ports: bound_ports,
             owned_supporting_nodes,
         })
     }
@@ -785,11 +788,12 @@ impl StoppedTester {
             chain_layout,
             log_state,
             owned_supporting_nodes,
+            previous_bound_ports,
             config: _,
             ..
         } = self;
-        // With port-0 binding the restarted node simply binds fresh ephemeral ports; `stop()`
-        // has already awaited full shutdown of the previous run, so there is nothing to wait on.
+        let mut config = config;
+        preserve_http_ports_on_restart(&mut config, previous_bound_ports)?;
         let mut tester = Tester::launch_node_inner(
             l1,
             config,
@@ -811,6 +815,31 @@ impl StoppedTester {
         config_overrides(&mut config);
         self.start_with_config(config).await
     }
+}
+
+fn preserve_http_ports_on_restart(
+    config: &mut Config,
+    previous_bound_ports: BoundPorts,
+) -> anyhow::Result<()> {
+    config.rpc_config.address =
+        socket_address_with_port(&config.rpc_config.address, previous_bound_ports.rpc)?;
+    if let Some(status_port) = previous_bound_ports.status {
+        config.status_server_config.address =
+            socket_address_with_port(&config.status_server_config.address, status_port)?;
+    }
+    if let Some(prover_api_port) = previous_bound_ports.prover_api {
+        config.prover_api_config.address =
+            socket_address_with_port(&config.prover_api_config.address, prover_api_port)?;
+    }
+    Ok(())
+}
+
+fn socket_address_with_port(address: &str, port: u16) -> anyhow::Result<String> {
+    let mut address: SocketAddr = address
+        .parse()
+        .with_context(|| format!("failed to parse socket address {address:?}"))?;
+    address.set_port(port);
+    Ok(address.to_string())
 }
 
 impl SupportingNode {
@@ -1485,4 +1514,21 @@ async fn download_prover_binary(url: &str) -> anyhow::Result<reqwest::Response> 
         }
     }
     unreachable!("loop always returns on success or final attempt");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn socket_address_with_port_preserves_host_and_replaces_port() {
+        assert_eq!(
+            socket_address_with_port("0.0.0.0:0", 12345).unwrap(),
+            "0.0.0.0:12345"
+        );
+        assert_eq!(
+            socket_address_with_port("[::1]:0", 23456).unwrap(),
+            "[::1]:23456"
+        );
+    }
 }
