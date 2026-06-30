@@ -719,8 +719,17 @@ impl Tester {
         let direct_tx_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (direct_tx_sender, direct_tx_rx) = tokio::sync::mpsc::channel(500_000);
         let direct_tx_lane_count = config.sequencer_config.parallel_blocks.max(1);
-        let direct_tx_lane_capacity = (500_000usize / direct_tx_lane_count)
-            .max(config.sequencer_config.max_transactions_in_block);
+        let direct_tx_lane_blocks = std::env::var("DIRECT_TX_LANE_BLOCKS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|blocks| *blocks > 0)
+            .unwrap_or(4);
+        let direct_tx_lane_capacity = (500_000usize / direct_tx_lane_count).max(
+            config
+                .sequencer_config
+                .max_transactions_in_block
+                .saturating_mul(direct_tx_lane_blocks),
+        );
         let mut direct_tx_lane_senders = Vec::with_capacity(direct_tx_lane_count);
         let mut direct_tx_lane_rxs = Vec::with_capacity(direct_tx_lane_count);
         for _ in 0..direct_tx_lane_count {

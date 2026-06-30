@@ -760,6 +760,10 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     // Warm up so the channel fills and the pipeline reaches steady state, then measure the rate.
     tokio::time::sleep(warmup).await;
 
+    if env_or("DIRECT_TX_STOP_PUSHERS_AFTER_WARMUP", false) {
+        stop.store(true, Ordering::Relaxed);
+    }
+
     let submitted_before = submitted.load(Ordering::Relaxed);
     let block_before = tester.l2_provider.get_block_number().await?;
     let measure_start = Instant::now();
