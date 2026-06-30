@@ -101,4 +101,4 @@ jobs:
     uses: ./.github/workflows/sbom-analysis-reusable.yaml
     secrets: inherit
     with:
-      version: ${{ inputs.tag_name || (github.ref_type == 'tag' && github.ref_name) || github.sha }}"
+      version: ${{ inputs.tag_name || (github.ref_type == 'tag' && github.ref_name) || github.sha }}
