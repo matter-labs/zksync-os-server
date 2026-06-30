@@ -53,6 +53,9 @@ pub struct BlockContextProvider<Subpool> {
     /// direct-injection feed never packs a block beyond `max_transactions_in_block` (which the VM
     /// would seal early on NativeCycles, dropping the excess and opening a nonce gap).
     direct_buffers: std::collections::HashMap<Address, std::collections::VecDeque<ZkTransaction>>,
+    /// Test/bench-only: per-lane overflow for parallel direct injection. This avoids re-bucketing a
+    /// shared channel by signer every round when the benchmark already knows each signer's lane.
+    direct_lane_buffers: Vec<std::collections::VecDeque<ZkTransaction>>,
 }
 
 /// Test/bench-only handle that feeds transactions straight into block production, bypassing the
@@ -61,6 +64,8 @@ pub struct DirectTxSource {
     /// Wrapped in `Arc<Mutex<_>>` so each block's stream can own a clone (no borrow of `self`) while
     /// the receiver persists across blocks.
     pub rx: Arc<Mutex<mpsc::Receiver<ZkTransaction>>>,
+    /// Optional per-signer receivers for parallel direct-injection load tests.
+    pub lanes: Vec<Arc<Mutex<mpsc::Receiver<ZkTransaction>>>>,
     /// Direct injection only takes over once this is set, so the node can first replay genesis /
     /// apply the protocol upgrade / process the initial deposit through the normal mempool path
     /// (which blocks on an empty mempool, so it cannot be used for an empty bench stream).
@@ -108,6 +113,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             last_constructed_block_ctx_sender,
             direct_tx,
             direct_buffers: std::collections::HashMap::new(),
+            direct_lane_buffers: Vec::new(),
         }
     }
 
@@ -345,6 +351,97 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .push(previous_block_hash);
 
         let max_tx = self.config.max_transactions_in_block;
+        let FeeParams {
+            eip1559_basefee,
+            native_price,
+            pubdata_price,
+        } = fee_params;
+        let direct_lanes = self
+            .direct_tx
+            .as_ref()
+            .expect("produce_parallel requires direct injection")
+            .lanes
+            .clone();
+        if direct_lanes.len() >= k {
+            if self.direct_lane_buffers.len() < direct_lanes.len() {
+                self.direct_lane_buffers
+                    .resize_with(direct_lanes.len(), Default::default);
+            }
+
+            let mut commands = Vec::with_capacity(k);
+            for (lane_index, rx) in direct_lanes.into_iter().take(k).enumerate() {
+                if self.direct_lane_buffers[lane_index].is_empty() {
+                    // Park each empty lane until its pusher supplies at least one tx. The parallel
+                    // benchmark has one pusher per lane, so no shared receiver drain/rebucket is
+                    // needed on the hot path.
+                    let Some(first) =
+                        std::future::poll_fn(|cx| rx.lock().unwrap().poll_recv(cx)).await
+                    else {
+                        continue;
+                    };
+                    self.direct_lane_buffers[lane_index].push_back(first);
+                }
+                {
+                    let queue = &mut self.direct_lane_buffers[lane_index];
+                    let mut guard = rx.lock().unwrap();
+                    while queue.len() < max_tx {
+                        match guard.try_recv() {
+                            Ok(tx) => queue.push_back(tx),
+                            // Lane momentarily empty (reader behind) - emit what this lane has.
+                            Err(_) => break,
+                        }
+                    }
+                }
+
+                let queue = &mut self.direct_lane_buffers[lane_index];
+                if queue.is_empty() {
+                    continue;
+                }
+                let take = queue.len().min(max_tx);
+                let txs: Vec<ZkTransaction> = queue.drain(..take).collect();
+                let i = commands.len();
+                let block_context = BlockContext {
+                    eip1559_basefee,
+                    native_price,
+                    pubdata_price,
+                    block_number: base_block_number + i as u64,
+                    timestamp: base_timestamp + i as u64,
+                    chain_id: self.config.l2_chain_id,
+                    coinbase: self.config.fee_collector_address,
+                    // Same base ring for every block in the round - no inter-block chaining (bench).
+                    block_hashes: base_ring,
+                    gas_limit: self.config.gas_limit,
+                    pubdata_limit: self.config.pubdata_limit,
+                    mix_hash: Default::default(),
+                    execution_version: execution_version as u32,
+                    blob_fee: U256::ONE,
+                };
+                commands.push(PreparedBlockCommand {
+                    block_context,
+                    tx_source: MarkingTxStream::unmarkable(futures::stream::iter(txs)),
+                    // Group is <= max_tx (< the NativeCycles seal), so the stream exhausts before
+                    // the VM seals: no tx is dropped. `allowed_to_finish_early` accepts exhaustion.
+                    seal_policy: SealPolicy::UntilExhausted {
+                        allowed_to_finish_early: true,
+                    },
+                    invalid_tx_policy: InvalidTxPolicy::RejectAndContinue {
+                        mark_in_source: false,
+                    },
+                    metrics_label: "produce_parallel",
+                    protocol_version: protocol_version.clone(),
+                    expected_block_output_hash: None,
+                    previous_block_timestamp: previous_record.block_context.timestamp,
+                    force_preimages: Vec::new(),
+                    expect_sl_chain_id_tx_after_upgrade: false,
+                    starting_cursors: next_cursors.clone(),
+                    interop_roots_per_block: self.config.interop_roots_per_block,
+                    strict_subpool_cleanup: false,
+                    direct_injection: true,
+                });
+            }
+            return Ok(commands);
+        }
+
         // Refill the per-signer buffers from the direct channel. Carry-over from the previous round is
         // kept, so an uneven feed never forces a block past `max_tx` (which would seal early on
         // NativeCycles and drop the excess, opening a nonce gap). A bounded drain plus the channel's
@@ -387,11 +484,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             }
         }
 
-        let FeeParams {
-            eip1559_basefee,
-            native_price,
-            pubdata_price,
-        } = fee_params;
         // Emit up to `k` blocks, one signer each, capped at `max_tx`; the remainder (a signer's
         // overflow, or signers beyond `k`) stays buffered for the next round so each signer's nonces
         // stay contiguous.

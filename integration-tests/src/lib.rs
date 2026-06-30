@@ -312,6 +312,9 @@ pub struct Tester {
     /// Feeds transactions straight into the sequencer, bypassing RPC + mempool. Always wired, but
     /// dormant until [`Tester::activate_direct_injection`] flips `direct_tx_active` (load tests only).
     direct_tx_sender: tokio::sync::mpsc::Sender<ZkTransaction>,
+    /// Per-lane counterpart used by parallel direct-injection load tests. Each signer can feed a
+    /// dedicated lane, avoiding the sequencer-side shared-channel rebucketing hot path.
+    direct_tx_lane_senders: Vec<tokio::sync::mpsc::Sender<ZkTransaction>>,
     /// Flips direct injection on. Kept dormant so the node first finishes startup (upgrade + initial
     /// deposit) via the normal mempool path before any direct streaming begins.
     direct_tx_active: Arc<std::sync::atomic::AtomicBool>,
@@ -714,14 +717,24 @@ impl Tester {
         // mempool path until `Tester::activate_direct_injection` flips it on (load tests only), so
         // this has no effect on regular tests.
         let direct_tx_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (direct_tx_sender, direct_tx_rx) = tokio::sync::mpsc::channel(200_000);
+        let (direct_tx_sender, direct_tx_rx) = tokio::sync::mpsc::channel(500_000);
+        let direct_tx_lane_count = config.sequencer_config.parallel_blocks.max(1);
+        let direct_tx_lane_capacity = (500_000usize / direct_tx_lane_count)
+            .max(config.sequencer_config.max_transactions_in_block);
+        let mut direct_tx_lane_senders = Vec::with_capacity(direct_tx_lane_count);
+        let mut direct_tx_lane_rxs = Vec::with_capacity(direct_tx_lane_count);
+        for _ in 0..direct_tx_lane_count {
+            let (sender, rx) = tokio::sync::mpsc::channel(direct_tx_lane_capacity);
+            direct_tx_lane_senders.push(sender);
+            direct_tx_lane_rxs.push(rx);
+        }
         // Bench hook: capture the node's (shared) state handle so parallel-execution benchmarks can
         // drive `run_block` directly against the live post-upgrade state.
         let (state_tx, state_rx) = tokio::sync::oneshot::channel();
         zksync_os_server::run::<FullDiffsState>(
             &runtime,
             config.clone(),
-            Some((direct_tx_rx, direct_tx_active.clone())),
+            Some((direct_tx_rx, direct_tx_lane_rxs, direct_tx_active.clone())),
             Some(state_tx),
         )
         .instrument(node_span)
@@ -816,6 +829,7 @@ impl Tester {
             chain_layout,
             owned_supporting_nodes: Vec::new(),
             direct_tx_sender,
+            direct_tx_lane_senders,
             direct_tx_active,
             state,
             #[cfg(feature = "prover-tests")]
@@ -831,6 +845,19 @@ impl Tester {
     /// available, but only takes effect after [`Tester::activate_direct_injection`].
     pub fn direct_tx_sender(&self) -> tokio::sync::mpsc::Sender<ZkTransaction> {
         self.direct_tx_sender.clone()
+    }
+
+    /// Per-lane direct-injection senders for parallel load tests.
+    pub fn direct_tx_lane_senders(
+        &self,
+        lanes: usize,
+    ) -> Vec<tokio::sync::mpsc::Sender<ZkTransaction>> {
+        assert!(
+            lanes <= self.direct_tx_lane_senders.len(),
+            "requested {lanes} direct tx lanes, but only {} are configured",
+            self.direct_tx_lane_senders.len()
+        );
+        self.direct_tx_lane_senders[..lanes].to_vec()
     }
 
     /// Bench hook: the node's (shared, `Arc`-backed) state handle. Lets parallel-execution benchmarks

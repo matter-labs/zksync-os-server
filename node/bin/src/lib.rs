@@ -137,10 +137,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     runtime: &Runtime,
     config: Config,
     // Test/bench only: when `Some`, once the `AtomicBool` is set the sequencer streams transactions
-    // directly from this channel (bypassing RPC + mempool) instead of
-    // `pool.best_transactions_stream()`. Always `None` in the production binary.
+    // directly from these channels (bypassing RPC + mempool) instead of
+    // `pool.best_transactions_stream()`. The first receiver is the serial path; lane receivers are
+    // used by parallel load tests. Always `None` in the production binary.
     direct_tx: Option<(
         tokio::sync::mpsc::Receiver<ZkTransaction>,
+        Vec<tokio::sync::mpsc::Receiver<ZkTransaction>>,
         Arc<std::sync::atomic::AtomicBool>,
     )>,
     // Test/bench only: when `Some`, the freshly built `State` handle (shared / `Arc`-backed) is sent
@@ -858,9 +860,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         },
         &node_startup_state.l1_state.settlement_layer_intervals,
         last_constructed_block_ctx_sender,
-        direct_tx.map(|(rx, active)| {
+        direct_tx.map(|(rx, lane_rxs, active)| {
             zksync_os_sequencer::execution::block_context_provider::DirectTxSource {
                 rx: Arc::new(Mutex::new(rx)),
+                lanes: lane_rxs
+                    .into_iter()
+                    .map(|rx| Arc::new(Mutex::new(rx)))
+                    .collect(),
                 active,
             }
         }),

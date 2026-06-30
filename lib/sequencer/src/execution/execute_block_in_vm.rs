@@ -113,7 +113,13 @@ pub async fn execute_block_in_vm<V: ViewState>(
         // before draining: the collector isn't parked while feeding (no wakes) and the result
         // buffer is full while draining (no parks), removing the per-tx cross-thread park/unpark.
         // Must be <= `VM_CHANNEL_CAPACITY` (the channels backpressure at that bound).
-        const VM_PIPELINE_DEPTH: usize = 30_000;
+        const DEFAULT_VM_PIPELINE_DEPTH: usize = 30_000;
+        let vm_pipeline_depth = std::env::var("DIRECT_INJECTION_VM_PIPELINE_DEPTH")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|depth| *depth > 0)
+            .map(|depth| depth.min(DEFAULT_VM_PIPELINE_DEPTH))
+            .unwrap_or(DEFAULT_VM_PIPELINE_DEPTH);
         let tx_limit = match command.seal_policy {
             SealPolicy::Decide(_, limit) => limit,
             SealPolicy::UntilExhausted { .. } => usize::MAX,
@@ -123,9 +129,9 @@ pub async fn execute_block_in_vm<V: ViewState>(
         loop {
             // Feed up to the pipeline depth, unless we've decided to seal or would exceed the
             // tx-count limit. `submit_tx` backpressures on the (depth-sized) channel, but the
-            // `pending.len() < VM_PIPELINE_DEPTH` guard keeps it from ever blocking here.
+            // `pending.len() < vm_pipeline_depth` guard keeps it from ever blocking here.
             while pending_seal.is_none()
-                && pending.len() < VM_PIPELINE_DEPTH
+                && pending.len() < vm_pipeline_depth
                 && executed_txs.len() + pending.len() < tx_limit
             {
                 let tx_wait_start = Instant::now();

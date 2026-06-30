@@ -9,6 +9,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use zksync_os_mempool::subpools::l2::L2Subpool;
@@ -112,15 +113,19 @@ where
                 && self.block_context_provider.is_direct_active()
             {
                 let k = self.config.parallel_blocks;
+                let t_produce_parallel = Instant::now();
                 let commands = self.block_context_provider.produce_parallel(k).await?;
+                let produce_parallel_elapsed = t_produce_parallel.elapsed();
                 if commands.is_empty() {
                     continue;
                 }
                 // All K disjoint blocks read the same base state at `base_block_number - 1`; build
                 // one overlay-aware view and hand a clone to each block.
                 let base_block_number = commands[0].block_context.block_number;
+                let t_base_view = Instant::now();
                 let base_view = state_overlay_buffer
                     .sync_with_base_and_build_view_for_block(&self.state, base_block_number)?;
+                let base_view_elapsed = t_base_view.elapsed();
 
                 state_reporter.enter_state(SequencerState::InitializingVm);
                 let t_exec = Instant::now();
@@ -138,7 +143,6 @@ where
                 // Release the base view's borrow before mutating the overlay buffer below; the K
                 // clones live inside the spawned tasks until they complete.
                 drop(base_view);
-                let exec_elapsed = t_exec.elapsed();
 
                 // Join ALL tasks first so every cloned base view is dropped (overlay Arc refcount
                 // back to 1) before we mutate the buffer below; awaiting one at a time and applying
@@ -147,10 +151,18 @@ where
                 for handle in handles {
                     results.push(handle.await.context("execute_block_in_vm task join")?);
                 }
+                let exec_elapsed = t_exec.elapsed();
 
                 // Apply state + flush downstream strictly in block order.
                 let t_downstream = Instant::now();
+                let mut decode_elapsed = Duration::ZERO;
+                let mut canonical_elapsed = Duration::ZERO;
+                let mut purge_elapsed = Duration::ZERO;
+                let mut overlay_elapsed = Duration::ZERO;
+                let mut output_send_elapsed = Duration::ZERO;
+                let mut downstream_txs = 0usize;
                 for exec_result in results {
+                    let t_decode = Instant::now();
                     let (block_output, replay_record, purged_txs, strict_subpool_cleanup) =
                         exec_result
                             .map_err(|dump| {
@@ -162,7 +174,10 @@ where
                                 error
                             })
                             .context("execute_block_in_vm")?;
+                    decode_elapsed += t_decode.elapsed();
+                    downstream_txs += replay_record.transactions.len();
                     let block_number = replay_record.block_context.block_number;
+                    let t_canonical = Instant::now();
                     self.block_context_provider
                         .on_canonical_state_change(
                             block_output.as_ref(),
@@ -170,18 +185,24 @@ where
                             strict_subpool_cleanup,
                         )
                         .await;
+                    canonical_elapsed += t_canonical.elapsed();
+                    let t_purge = Instant::now();
                     let purged_txs_hashes = purged_txs.iter().map(|(hash, _)| *hash).collect();
                     self.block_context_provider
                         .purge_transactions(purged_txs_hashes);
+                    purge_elapsed += t_purge.elapsed();
+                    let t_overlay = Instant::now();
                     state_overlay_buffer.add_block(
                         block_number,
                         block_output.as_ref().storage_writes.clone(),
                         block_output.as_ref().published_preimages.clone(),
                     )?;
+                    overlay_elapsed += t_overlay.elapsed();
                     EXECUTION_METRICS.block_number.set(block_number);
                     EXECUTION_METRICS
                         .last_execution_version
                         .set(replay_record.block_context.execution_version as u64);
+                    let t_output_send = Instant::now();
                     output.send_and_record(
                         BlockPayload {
                             output: block_output,
@@ -191,13 +212,22 @@ where
                         },
                         &state_reporter,
                     )?;
+                    output_send_elapsed += t_output_send.elapsed();
                 }
                 last_processed_block_at = Some(Instant::now());
                 tracing::info!(
                     k,
                     base_block_number,
+                    downstream_txs,
+                    ?produce_parallel_elapsed,
+                    ?base_view_elapsed,
                     ?exec_elapsed,
                     downstream_elapsed = ?t_downstream.elapsed(),
+                    ?decode_elapsed,
+                    ?canonical_elapsed,
+                    ?purge_elapsed,
+                    ?overlay_elapsed,
+                    ?output_send_elapsed,
                     "block_executor parallel round done"
                 );
                 continue;

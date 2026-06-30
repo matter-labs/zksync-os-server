@@ -709,7 +709,7 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
     let warmup = Duration::from_secs(env_or("LOAD_TEST_WARMUP_SECS", 5));
 
-    let sender = tester.direct_tx_sender();
+    let senders = tester.direct_tx_lane_senders(k);
     let chain_id = tester.l2_provider.get_chain_id().await?;
 
     // Ensure the K signer corpora exist (signer i = bench_addr(2i+1) -> bench_addr(2i+2)), built once
@@ -739,9 +739,9 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
 
     let submitted = Arc::new(AtomicU64::new(0));
     let stop = Arc::new(AtomicBool::new(false));
-    // One blocking reader per signer file streams pre-built txs into the shared channel; the sequencer
-    // buckets by signer into K conflict-free groups. Reading from disk (no build, no keccak) is cheap,
-    // so K parallel readers feed far faster than the old single build-loop pusher (~1.24M ceiling).
+    // One blocking reader per signer file streams pre-built txs into its own sequencer lane. The
+    // signer -> lane mapping is known here, so `produce_parallel` can avoid shared-channel signer
+    // rebucketing on every round.
     let pushers: Vec<_> = paths
         .into_iter()
         .enumerate()
@@ -750,7 +750,7 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
             spawn_corpus_pusher(
                 path,
                 signer,
-                sender.clone(),
+                senders[i].clone(),
                 submitted.clone(),
                 stop.clone(),
             )
