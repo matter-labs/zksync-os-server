@@ -7,7 +7,7 @@ use super::ProtocolSemanticVersion;
 /// The main difference is that even if the state transition function remains the same,
 /// there might be changes in the proving circuit which would not change the outcome of execution,
 /// but would require different proving and verification keys.
-#[derive(Debug, Clone, Copy, TryFromPrimitive, PartialEq)]
+#[derive(Debug, Clone, Copy, TryFromPrimitive, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum ProvingVersion {
     V1 = 1,

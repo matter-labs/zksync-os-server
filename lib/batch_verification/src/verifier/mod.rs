@@ -121,7 +121,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
         let proving_version =
             ProvingVersion::try_from(protocol_version.clone()).map_err(anyhow::Error::from)?;
 
-        let (batch_info, _) = if proving_version == ProvingVersion::V8 {
+        let (batch_info, _) = if proving_version >= ProvingVersion::V8 {
             let native_batch_run = generate_batch_run(
                 proving_version,
                 &blocks

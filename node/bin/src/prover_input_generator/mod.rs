@@ -167,7 +167,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             block_number,
             replay_record.transactions.len(),
         );
-        if proving_version == ProvingVersion::V8 {
+        if proving_version >= ProvingVersion::V8 {
             let _ = result_tx.send(ProverBlock {
                 output: block_output,
                 record: replay_record,

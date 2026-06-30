@@ -462,7 +462,8 @@ pub struct StreamOutcome<'a> {
     /// this is `Some`, `stream` is not guaranteed to contain an upgrade transaction. The stream may
     /// contain other transaction types if the upgrade is a patch upgrade.
     pub upgrade_metadata: Option<UpgradeMetadata>,
-    /// Whether `stream` starts with an actual upgrade transaction.
+    /// Whether `stream`'s first transaction is an actual upgrade transaction. `false` for patch
+    /// upgrades, where `upgrade_metadata` is `Some` but the transactions come from another subpool.
     pub upgrade_tx_in_stream: bool,
     /// Non-empty stream of transactions.
     pub stream: MarkingTxStream<'a>,

@@ -227,7 +227,7 @@ fn compute_batch_prover_input(
     use zk_os_forward_system::run::generate_batch_proof_input;
     use zk_os_forward_system_prev::run::generate_batch_proof_input as generate_batch_proof_input_prev;
 
-    if proving_version != ProvingVersion::V8
+    if proving_version < ProvingVersion::V8
         && blocks
             .iter()
             .any(|(_, _, _, prover_input)| matches!(prover_input, ProverInput::Fake))
