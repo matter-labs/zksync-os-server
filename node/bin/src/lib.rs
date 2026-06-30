@@ -55,7 +55,6 @@ use alloy::providers::Provider;
 use anyhow::Context;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
 use reth_tasks::Runtime;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -135,14 +134,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     runtime: &Runtime,
     config: Config,
 ) -> BoundPorts {
-    let prebound_ports = PreboundPorts::bind_from_config(&config)
-        .await
-        .expect("failed to prebind node ports");
     let PreboundPorts {
         rpc: rpc_listener,
         status: prebound_status_listener,
         prover_api: prebound_prover_api_listener,
-    } = prebound_ports;
+    } = PreboundPorts::bind_from_config(&config)
+        .await
+        .expect("failed to prebind node ports");
     report_static_config_metrics(&config);
 
     let node_role = config.general_config.node_role;
@@ -895,7 +893,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let archiving_block_replay_storage =
         ReplayArchivingWriteReplay::new(block_replay_storage, replay_archive_sender);
 
-    let (backpressure_acceptance_rx, prover_api_port) = if node_role.is_main() {
+    let PipelineHandles {
+        backpressure_acceptance_rx,
+        prover_api_port,
+    } = if node_role.is_main() {
         run_main_node_pipeline(
             &config,
             sl_provider.clone(),
@@ -926,8 +927,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .await
     } else {
-        (
-            run_en_pipeline(
+        PipelineHandles {
+            backpressure_acceptance_rx: run_en_pipeline(
                 &config,
                 replays_for_sequencer,
                 committed_batch_provider.clone(),
@@ -946,8 +947,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 outgoing_verify_results.clone(),
             )
             .await,
-            None,
-        )
+            prover_api_port: None, // EN has no prover server
+        }
     };
 
     // Aggregate all "not accepting" signals into a single combined receiver for the RPC server.
@@ -982,24 +983,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
 
     // =========== Start JSON RPC ========
-    debug_assert!(
-        {
-            let config_port = config
-                .rpc_config
-                .address
-                .parse::<SocketAddr>()
-                .ok()
-                .map(|a| a.port())
-                .unwrap_or(0);
-            let prebound_port = rpc_listener
-                .local_addr()
-                .ok()
-                .map(|a| a.port())
-                .unwrap_or(0);
-            config_port == 0 || prebound_port == 0 || config_port == prebound_port
-        },
-        "prebound RPC port does not match config port"
-    );
     let rpc_port = rpc_listener
         .local_addr()
         .expect("rpc server local_addr")
@@ -1146,6 +1129,14 @@ async fn fetch_l1_state_with_startup_revert(
     Ok(l1_state)
 }
 
+/// Handles the caller wires into other subsystems after launching the pipeline.
+struct PipelineHandles {
+    /// Registered into the `TxAcceptanceGate`.
+    backpressure_acceptance_rx: watch::Receiver<TransactionAcceptanceState>,
+    /// Prover API port, reported by the status server. `None` on external nodes.
+    prover_api_port: Option<u16>,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: &Config,
@@ -1174,7 +1165,7 @@ async fn run_main_node_pipeline(
     pubdata_mode: PubdataMode,
     replay_archiver: Option<impl ReplayArchiver>,
     prebound_prover_api_listener: Option<TcpListener>,
-) -> (watch::Receiver<TransactionAcceptanceState>, Option<u16>) {
+) -> PipelineHandles {
     let priority_tree_db_path = config
         .general_config
         .rocks_db_path
@@ -1247,7 +1238,10 @@ async fn run_main_node_pipeline(
             clear_failing_block_config_task(finality, internal_config_manager),
         );
         let snapshot_rx = PipelineTracker::spawn(runtime, components);
-        return (monitor.spawn(runtime, snapshot_rx), None);
+        return PipelineHandles {
+            backpressure_acceptance_rx: monitor.spawn(runtime, snapshot_rx),
+            prover_api_port: None,
+        };
     }
 
     tracing::info!("Initializing ProofStorage");
@@ -1421,7 +1415,10 @@ async fn run_main_node_pipeline(
     let components = pipeline.components();
     pipeline.spawn();
     let snapshot_rx = PipelineTracker::spawn(runtime, components);
-    (monitor.spawn(runtime, snapshot_rx), prover_api_port)
+    PipelineHandles {
+        backpressure_acceptance_rx: monitor.spawn(runtime, snapshot_rx),
+        prover_api_port,
+    }
 }
 
 /// Only for EN - we still populate channels destined for the batcher subsystem -

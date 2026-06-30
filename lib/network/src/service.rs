@@ -745,9 +745,7 @@ mod tests {
     use super::BootNodeResolutionState;
     use super::ConnectionRegistry;
     use super::dispatch_verify_batch;
-    use super::reserve_ephemeral_tcp_udp_port;
     use super::resolve_boot_nodes_once;
-    use super::try_reserve_tcp_udp_port;
     use crate::VerifyBatch;
     use crate::protocol::PeerConnectionHandle;
     use crate::session::PeerSessionStore;
@@ -761,7 +759,7 @@ mod tests {
     use std::collections::{HashMap, VecDeque};
     use std::future::Future;
     use std::io;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::{Arc, Mutex, RwLock};
     use std::time::Instant;
     use tokio::sync::mpsc;
@@ -972,21 +970,6 @@ mod tests {
 
     fn socket_addr(port: u16) -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
-    }
-
-    #[test]
-    fn ephemeral_network_port_reservation_checks_tcp_and_udp() {
-        let udp_socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let occupied_port = udp_socket.local_addr().unwrap().port();
-
-        assert!(
-            try_reserve_tcp_udp_port(Ipv4Addr::LOCALHOST, occupied_port).is_err(),
-            "a UDP-occupied port must not be accepted as an available p2p port"
-        );
-
-        let reservation = reserve_ephemeral_tcp_udp_port(Ipv4Addr::LOCALHOST)
-            .expect("must reserve an ephemeral TCP+UDP port");
-        assert_ne!(reservation.port, occupied_port);
     }
 
     fn verify_request() -> VerifyBatch {

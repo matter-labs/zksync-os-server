@@ -186,9 +186,8 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         .local_addr()
         .context("failed to get RPC listener local address")?;
     tracing::info!(
-        configured_addr = %config.address,
-        bound_addr = %local_addr,
-        "Starting JSON-RPC server"
+        "Starting JSON-RPC server at {local_addr} (configured: {})",
+        config.address
     );
     let server = server_builder
         .build_from_tcp(
