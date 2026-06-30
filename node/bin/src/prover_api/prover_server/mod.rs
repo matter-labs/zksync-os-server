@@ -4,7 +4,7 @@
 //! and proof storage.
 mod v1;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use crate::prover_api::{
     fri_job_manager::FriJobManager, proof_storage::ProofStorage, prover_server::v1::v1_routes,
@@ -24,30 +24,8 @@ pub(in crate::prover_api::prover_server) struct AppState {
 }
 
 /// Entry point for prover API server.
-/// Starts an HTTP server listening on the specified bind address.
+/// Starts an HTTP server on a pre-bound listener.
 pub async fn run(
-    fri_job_manager: Arc<FriJobManager>,
-    snark_job_manager: Arc<SnarkJobManager>,
-    proof_storage: ProofStorage,
-    bind_address: String,
-    shutdown: GracefulShutdown,
-) {
-    let bind_address: SocketAddr = bind_address.parse().expect("failed to parse bind address");
-    tracing::info!("starting proof data server on {bind_address}");
-    let listener = TcpListener::bind(bind_address)
-        .await
-        .expect("failed to bind prover server");
-    run_on_listener(
-        fri_job_manager,
-        snark_job_manager,
-        proof_storage,
-        listener,
-        shutdown,
-    )
-    .await;
-}
-
-pub(crate) async fn run_on_listener(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
     proof_storage: ProofStorage,

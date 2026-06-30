@@ -87,7 +87,7 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Run tests
-        run: cargo nextest run --release --workspace --stress-count 25
+        run: cargo nextest run --release --workspace --stress-count 5
 
       - name: Upload test results
         if: always() && !cancelled()

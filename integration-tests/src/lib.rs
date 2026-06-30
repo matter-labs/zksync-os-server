@@ -499,8 +499,7 @@ impl Tester {
     ///
     /// Returns a new `Tester` connected to the restarted node. The original `Tester` is consumed.
     ///
-    /// A later restart preserves explicit configured ports. Port-0 services may get new
-    /// OS-assigned ports.
+    /// A later restart preserves HTTP ports. Port-0 p2p networking may get a new OS-assigned port.
     pub async fn stop(self) -> anyhow::Result<StoppedTester> {
         let Self {
             runtime,
@@ -1514,21 +1513,4 @@ async fn download_prover_binary(url: &str) -> anyhow::Result<reqwest::Response> 
         }
     }
     unreachable!("loop always returns on success or final attempt");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn socket_address_with_port_preserves_host_and_replaces_port() {
-        assert_eq!(
-            socket_address_with_port("0.0.0.0:0", 12345).unwrap(),
-            "0.0.0.0:12345"
-        );
-        assert_eq!(
-            socket_address_with_port("[::1]:0", 23456).unwrap(),
-            "[::1]:23456"
-        );
-    }
 }

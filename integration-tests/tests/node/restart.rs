@@ -149,7 +149,6 @@ async fn node_stop_and_restart_preserves_state() -> anyhow::Result<()> {
     let tx_hash = receipt.transaction_hash;
 
     // Restart the same node (same DB, same L1).
-    // With port-0 binding, the OS may assign a different port on restart.
     let restarted = tester.restart().await?;
     // Wait for receipt's block to be available. It might not be immediately available because
     // repository DB did not persist the receipt during previous run.

@@ -12,6 +12,7 @@ mod init_tx_forwarder;
 mod l1_revert;
 mod main_node_client;
 mod node_state_on_startup;
+mod ports;
 mod priority_tree_pipeline_step;
 pub mod prover_api;
 mod prover_block;
@@ -86,7 +87,6 @@ use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
-use zksync_os_network::NetworkPorts;
 use zksync_os_network::RecordOverride;
 use zksync_os_network::VerifyBatch;
 use zksync_os_network::protocol::{
@@ -120,93 +120,7 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState};
 
-/// Actual ports bound by each service after `run()` starts.
-/// Fields are `None` when the corresponding service is disabled in config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BoundPorts {
-    pub rpc: u16,
-    pub status: Option<u16>,
-    pub prover_api: Option<u16>,
-    pub network: Option<NetworkPorts>,
-}
-
-/// Sockets bound before node startup and then handed to their HTTP servers.
-#[derive(Debug)]
-pub struct PreboundPorts {
-    rpc: TcpListener,
-    status: Option<TcpListener>,
-    prover_api: Option<TcpListener>,
-}
-
-impl PreboundPorts {
-    pub async fn bind_from_config(config: &Config) -> anyhow::Result<Self> {
-        let status_address = config
-            .status_server_config
-            .enabled
-            .then_some(config.status_server_config.address.as_str());
-        let prover_api_address = (config.general_config.node_role.is_main()
-            && config.batcher_config.enabled
-            && config.prover_api_config.enabled)
-            .then_some(config.prover_api_config.address.as_str());
-
-        Self::bind(
-            &config.rpc_config.address,
-            status_address,
-            prover_api_address,
-        )
-        .await
-    }
-
-    async fn bind(
-        rpc_address: &str,
-        status_address: Option<&str>,
-        prover_api_address: Option<&str>,
-    ) -> anyhow::Result<Self> {
-        let rpc = bind_tcp_listener(rpc_address, "RPC").await?;
-        let status = match status_address {
-            Some(address) => Some(bind_tcp_listener(address, "status").await?),
-            None => None,
-        };
-        let prover_api = match prover_api_address {
-            Some(address) => Some(bind_tcp_listener(address, "prover API").await?),
-            None => None,
-        };
-
-        Ok(Self {
-            rpc,
-            status,
-            prover_api,
-        })
-    }
-
-    pub fn bound_ports(&self) -> BoundPorts {
-        BoundPorts {
-            rpc: self.rpc.local_addr().expect("rpc server local_addr").port(),
-            status: self.status.as_ref().map(|listener| {
-                listener
-                    .local_addr()
-                    .expect("status server local_addr")
-                    .port()
-            }),
-            prover_api: self.prover_api.as_ref().map(|listener| {
-                listener
-                    .local_addr()
-                    .expect("prover API server local_addr")
-                    .port()
-            }),
-            network: None,
-        }
-    }
-}
-
-async fn bind_tcp_listener(address: &str, service_name: &str) -> anyhow::Result<TcpListener> {
-    let addr: SocketAddr = address
-        .parse()
-        .with_context(|| format!("malformed {service_name} bind address {address:?}"))?;
-    TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("failed to prebind {service_name} listener at {address}"))
-}
+pub use ports::{BoundPorts, PreboundPorts};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const RAFT_DB_NAME: &str = "raft";
@@ -1374,7 +1288,7 @@ async fn run_main_node_pipeline(
             .expect("prover server local_addr")
             .port();
         runtime.spawn_critical_with_graceful_shutdown_signal("prover server", |shutdown| {
-            prover_server::run_on_listener(
+            prover_server::run(
                 fri_job_manager.clone(),
                 snark_job_manager.clone(),
                 proof_storage.clone(),
@@ -2020,7 +1934,7 @@ fn raft_storage_path_exists(path: &Path) -> anyhow::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PreboundPorts, check_batch_verification_mismatch};
+    use super::check_batch_verification_mismatch;
     use crate::config::BatchVerificationConfig;
     use alloy::primitives::address;
     use zksync_os_contract_interface::l1_discovery::{
@@ -2087,18 +2001,5 @@ mod tests {
         let warned = check_batch_verification_mismatch(&server_config, &l1_config);
 
         assert!(!warned);
-    }
-
-    #[tokio::test]
-    async fn prebound_ports_bind_http_listeners() {
-        let prebound = PreboundPorts::bind("127.0.0.1:0", Some("127.0.0.1:0"), Some("127.0.0.1:0"))
-            .await
-            .unwrap();
-        let ports = prebound.bound_ports();
-
-        assert_ne!(ports.rpc, 0);
-        assert_ne!(ports.status, Some(0));
-        assert_ne!(ports.prover_api, Some(0));
-        assert!(ports.network.is_none());
     }
 }

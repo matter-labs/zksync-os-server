@@ -16590,7 +16590,6 @@ version = "0.20.8"
 dependencies = [
  "anyhow",
  "axum",
- "reqwest 0.12.28",
  "reth-tasks",
  "serde",
  "tokio",
