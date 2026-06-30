@@ -1,9 +1,11 @@
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559};
-use alloy::network::{EthereumWallet, ReceiptResponse, TransactionBuilder, TxSigner};
-use alloy::primitives::{Address, Signature, TxKind, U128, U256};
+use alloy::eips::eip2718::{Decodable2718, Encodable2718};
+use alloy::network::{ReceiptResponse, TransactionBuilder};
+use alloy::primitives::{Address, Signature, TxKind, U128, U256, keccak256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::types::TransactionRequest;
+use alloy::signers::SignerSync;
 use alloy::signers::local::PrivateKeySigner;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -14,12 +16,14 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 use zksync_os_integration_tests::assert_traits::{ReceiptAssert, ReceiptsAssert};
 use zksync_os_integration_tests::{NEXT_TO_L1, TestEnvironment, test_multisetup};
-use zksync_os_server::config::FeeConfig;
 use zksync_os_interface::traits::EncodedTx;
 use zksync_os_sequencer::execution::vm_wrapper::VmWrapper;
+use zksync_os_server::config::FeeConfig;
 use zksync_os_storage_api::{BlockContext, BlockHashes, ReadStateHistory};
 use zksync_os_tx_validators::deployment_filter;
-use zksync_os_types::{L2Envelope, ZkTransaction, ZksyncOsEncode};
+use zksync_os_types::{L2Envelope, ZkEnvelope, ZkTransaction, ZksyncOsEncode};
+
+mod corpus;
 
 /// How long to wait for a single transaction's receipt before giving up.
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -33,6 +37,131 @@ fn env_or<T: FromStr>(key: &str, default: T) -> T {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
+}
+
+/// Default per-signer corpus size (env `LOADTEST_TXS_PER_FILE`). 100M is ample for sustained
+/// multi-million-TPS runs without exhausting a signer mid-test. Lower it (and/or the signer count)
+/// for `effective_tps`, whose real-signed corpus is far more expensive to generate + store.
+fn txs_per_file() -> u64 {
+    env_or("LOADTEST_TXS_PER_FILE", 100_000_000u64)
+}
+
+/// Corpus family for the dummy-signed direct-injection / VM tests (shared `bench_addr(2i+1)` ->
+/// `bench_addr(2i+2)` scheme across `direct_injection_tps`, `parallel_injection_tps`,
+/// `parallel_blocks_tps`).
+const DIRECT_FAMILY: &str = "direct";
+
+/// Dummy signature for VM-bypass txs: the forward-running VM does not validate EOA signatures and the
+/// signer is supplied out of band. Recovering a signer from this would yield garbage, so corpus
+/// reconstruction uses the known signer via `Recovered::new_unchecked` instead of recovery.
+fn dummy_signature() -> Signature {
+    Signature::new(Default::default(), Default::default(), false)
+}
+
+/// Reconstruct a `ZkTransaction` from stored RLP envelope bytes + the known signer, WITHOUT ECDSA
+/// recovery (cheap — the corpus is dummy-signed and the signer is fixed per file index). The keccak
+/// tx hash is then computed lazily by the executor's `.encode()`, off the bottleneck feed path.
+fn rebuild_zk_tx(rlp: &[u8], signer: Address) -> ZkTransaction {
+    let envelope = ZkEnvelope::decode_2718(&mut &rlp[..]).expect("decode_2718 corpus tx");
+    let tx = ZkTransaction {
+        inner: Recovered::new_unchecked(envelope, signer),
+    };
+    // Force + cache the keccak tx hash here, on the (parallel) reader thread, so the executor's
+    // `.encode()` reads it from the oracle for free — preserving the tx-hash-from-oracle optimization
+    // and parallelizing the keccak across the K readers instead of serializing it in the executor.
+    let _ = tx.hash();
+    tx
+}
+
+/// Ensure the dummy-signed corpus for signer index `i` exists — signer `bench_addr(2i+1)` ->
+/// recipient `bench_addr(2i+2)`, nonces `0..count`, for `chain_id` — generating it once if needed.
+/// Returns the file path.
+fn ensure_direct_corpus(
+    chain_id: u64,
+    signer_index: usize,
+    count: u64,
+) -> anyhow::Result<std::path::PathBuf> {
+    let signer = bench_addr(2 * signer_index as u64 + 1);
+    let recipient = bench_addr(2 * signer_index as u64 + 2);
+    let sig = dummy_signature();
+    let fp = corpus::fingerprint(&[
+        chain_id,
+        2 * signer_index as u64 + 1,
+        2 * signer_index as u64 + 2,
+    ]);
+    let path = corpus::signer_file(DIRECT_FAMILY, signer_index);
+    corpus::ensure_corpus(&path, count, fp, |n| {
+        build_direct_tx(chain_id, n, recipient, signer, sig)
+            .inner
+            .encoded_2718()
+    })?;
+    Ok(path)
+}
+
+/// Spawn a blocking reader that streams signer `signer`'s dummy corpus (`path`) into `sender` as
+/// reconstructed `ZkTransaction`s until `stop` is set, the channel closes, or the file is exhausted.
+/// Runs on the blocking pool (file reads + `blocking_send` backpressure); counts each tx in
+/// `submitted`. Reconstruction skips ECDSA recovery and the keccak tx hash, so the feed is cheap.
+fn spawn_corpus_pusher(
+    path: std::path::PathBuf,
+    signer: Address,
+    sender: tokio::sync::mpsc::Sender<ZkTransaction>,
+    submitted: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+) -> tokio::task::JoinHandle<anyhow::Result<()>> {
+    tokio::task::spawn_blocking(move || {
+        let mut reader = corpus::CorpusReader::open(&path)?;
+        while !stop.load(Ordering::Relaxed) {
+            let Some(rlp) = reader.next_record()? else {
+                tracing::warn!(
+                    path = %path.display(),
+                    "corpus exhausted; reader stopping (raise LOADTEST_TXS_PER_FILE)"
+                );
+                break;
+            };
+            let tx = rebuild_zk_tx(&rlp, signer);
+            if sender.blocking_send(tx).is_err() {
+                break; // sequencer dropped the channel
+            }
+            submitted.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(())
+    })
+}
+
+/// Ensure the REAL-signed RPC corpus for wallet `index` exists: `count` EIP-1559 transfers to
+/// `recipient` (value `value`, fee 0, nonces `0..count`), signed with `signer`'s key and EIP-2718
+/// encoded for `eth_sendRawTransaction`. Generated once — real ECDSA signing (~tens of µs each), so
+/// this is by far the most expensive corpus to build; keep `count` and the wallet count modest.
+fn ensure_rpc_corpus(
+    chain_id: u64,
+    index: usize,
+    signer: &PrivateKeySigner,
+    recipient: Address,
+    value: U256,
+    count: u64,
+) -> anyhow::Result<std::path::PathBuf> {
+    let fp = corpus::fingerprint(&[chain_id, 1 /* rpc scheme version */]);
+    let path = corpus::signer_file("rpc", index);
+    let signer = signer.clone();
+    corpus::ensure_corpus(&path, count, fp, move |n| {
+        let tx = TxEip1559 {
+            chain_id,
+            nonce: n,
+            gas_limit: LOAD_GAS_LIMIT,
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            to: TxKind::Call(recipient),
+            value,
+            access_list: Default::default(),
+            input: Default::default(),
+        };
+        let sig = signer
+            .sign_hash_sync(&tx.signature_hash())
+            .expect("sign corpus tx");
+        tx.into_signed(sig).encoded_2718()
+    })?;
+    Ok(path)
 }
 
 /// Drives sustained transaction load for a configurable duration and reports the effective TPS
@@ -80,29 +209,39 @@ async fn effective_tps(env: TestEnvironment) -> anyhow::Result<()> {
     // transaction.
     let recipient = Address::repeat_byte(0x42);
 
-    // 1. Derive sender wallets and build one provider per wallet (each gets its own cached nonce
-    //    manager, so nonces auto-increment correctly under concurrency).
-    let mut wallets = Vec::with_capacity(num_wallets);
+    let chain_id = tester.l2_provider.get_chain_id().await?;
+    let value = U256::from(1);
+
+    // 1. Deterministic sender wallets (so the pre-signed corpus is reusable across runs) + a plain
+    //    provider per wallet for RPC concurrency (no wallet attached — we submit pre-signed raw bytes).
+    let mut signers = Vec::with_capacity(num_wallets);
     let mut providers = Vec::with_capacity(num_wallets);
-    for _ in 0..num_wallets {
-        let signer = PrivateKeySigner::random();
-        wallets.push(signer.address());
-        let provider = ProviderBuilder::new()
-            .wallet(EthereumWallet::new(signer))
-            .connect(tester.l2_rpc_url())
-            .await?;
+    for i in 0..num_wallets {
+        let key = keccak256(format!("zksync-os-loadtest-signer-{i}"));
+        let signer = PrivateKeySigner::from_slice(key.as_slice()).expect("valid signing key");
+        signers.push(signer);
+        let provider = ProviderBuilder::new().connect(tester.l2_rpc_url()).await?;
         providers.push(DynProvider::new(provider));
     }
 
-    // 2. Fund every sender from alice in one concurrent batch. Split (at most) half of alice's
-    //    balance evenly so total funding never exceeds what she holds, regardless of wallet count.
+    // Ensure each wallet's real-signed corpus exists (one-time; real ECDSA signing is expensive — at
+    // 100M/wallet x many wallets this is very large + slow, so lower LOAD_TEST_WALLETS and/or
+    // LOADTEST_TXS_PER_FILE for this test).
+    let paths: Vec<std::path::PathBuf> = signers
+        .iter()
+        .enumerate()
+        .map(|(i, signer)| ensure_rpc_corpus(chain_id, i, signer, recipient, value, txs_per_file()))
+        .collect::<anyhow::Result<_>>()?;
+
+    // 2. Fund every sender from alice (covers the per-tx value; fees are 0). Split at most half of
+    //    alice's balance evenly so total funding never exceeds what she holds.
     let alice = tester.l2_wallet.default_signer().address();
     let alice_balance = tester.l2_provider.get_balance(alice).await?;
     let funding = alice_balance / U256::from((num_wallets * 2) as u64);
     let mut funding_txs = Vec::with_capacity(num_wallets);
-    for &wallet in &wallets {
+    for signer in &signers {
         let tx = TransactionRequest::default()
-            .with_to(wallet)
+            .with_to(signer.address())
             .with_value(funding)
             .with_gas_price(gas_price)
             .with_gas_limit(LOAD_GAS_LIMIT);
@@ -111,14 +250,8 @@ async fn effective_tps(env: TestEnvironment) -> anyhow::Result<()> {
     funding_txs.expect_successful_receipts().await?;
     tracing::info!(num_wallets, %funding, "funded sender wallets");
 
-    // 3. Prime each wallet with one confirmed tx: warms its nonce cache and creates the recipient
-    //    account, so the timed window measures steady-state throughput rather than first-tx setup.
-    let mut prime_txs = Vec::with_capacity(num_wallets);
-    for provider in &providers {
-        let tx = build_transfer(recipient, gas_price);
-        prime_txs.push(provider.send_transaction(tx).await?);
-    }
-    prime_txs.expect_successful_receipts().await?;
+    // No separate priming step: each wallet's first corpus tx (nonce 0) warms it up + creates the
+    // recipient account; the warmup absorbed in the timed window's tail.
 
     // 4. Timed load: one submitter task per wallet, all sharing the in-flight semaphore + counters.
     let sem = Arc::new(Semaphore::new(concurrency));
@@ -141,19 +274,24 @@ async fn effective_tps(env: TestEnvironment) -> anyhow::Result<()> {
     });
 
     let mut submitters = Vec::with_capacity(num_wallets);
-    for provider in providers {
+    for (provider, path) in providers.into_iter().zip(paths) {
         let sem = sem.clone();
         let submitted = submitted.clone();
         let confirmed = confirmed.clone();
         let latency_micros = latency_micros.clone();
         submitters.push(tokio::spawn(async move {
+            // Stream pre-signed raw txs from this wallet's corpus and submit via
+            // eth_sendRawTransaction (no client-side signing in the hot loop).
+            let mut reader = corpus::CorpusReader::open(&path)?;
             let mut receipts = JoinSet::new();
             while Instant::now() < deadline {
                 // Acquiring a permit blocks once `concurrency` txs are in flight — backpressure.
                 let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
-                let tx = build_transfer(recipient, gas_price);
+                let Some(raw) = reader.next_record()? else {
+                    break; // corpus exhausted
+                };
                 let sent_at = Instant::now();
-                let pending = provider.send_transaction(tx).await?;
+                let pending = provider.send_raw_transaction(&raw).await?;
                 submitted.fetch_add(1, Ordering::Relaxed);
 
                 let confirmed = confirmed.clone();
@@ -224,16 +362,6 @@ async fn effective_tps(env: TestEnvironment) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Build a minimal value transfer with a fixed gas price and gas limit so the provider performs no
-/// per-transaction gas estimation (only `eth_sendRawTransaction` hits the node).
-fn build_transfer(recipient: Address, gas_price: u128) -> TransactionRequest {
-    TransactionRequest::default()
-        .with_to(recipient)
-        .with_value(U256::from(1))
-        .with_gas_price(gas_price)
-        .with_gas_limit(LOAD_GAS_LIMIT)
-}
-
 /// Like [`effective_tps`], but bypasses the RPC and mempool layers entirely: transactions are
 /// streamed straight into block production through the sequencer's direct tx channel (activated via
 /// [`Tester::activate_direct_injection`]). This isolates the cost of the sequencer + execution
@@ -273,16 +401,18 @@ async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let warmup = Duration::from_secs(env_or("LOAD_TEST_WARMUP_SECS", 5));
 
     let sender = tester.direct_tx_sender();
-    let signer = tester.l2_wallet.default_signer().address();
     let chain_id = tester.l2_provider.get_chain_id().await?;
-    let recipient = Address::repeat_byte(0x42);
+
+    // Signer 0 of the shared dummy corpus: bench_addr(1) -> bench_addr(2). Built once, reused.
+    let signer = bench_addr(1);
+    let path = ensure_direct_corpus(chain_id, 0, txs_per_file())?;
 
     // Switch block production over to the direct channel, then send one tx through the normal RPC
-    // path. That tx flushes the block producer that is parked waiting on the (now empty) mempool;
-    // from the next block on, production pulls exclusively from the direct channel.
+    // path to flush the producer parked on the (now empty) mempool; from the next block on, production
+    // pulls exclusively from the direct channel (fed by the corpus reader below).
     tester.activate_direct_injection();
     let kick = TransactionRequest::default()
-        .with_to(recipient)
+        .with_to(bench_addr(2))
         .with_value(U256::ZERO)
         .with_gas_price(0)
         .with_gas_limit(LOAD_GAS_LIMIT);
@@ -293,41 +423,16 @@ async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
         .expect_successful_receipt()
         .await?;
 
-    // Start injecting from the sender's current on-chain nonce (after the kick tx).
-    let start_nonce = tester.l2_provider.get_transaction_count(signer).await?;
-    // The VM does not validate EOA signatures in forward-running mode and the signer is provided
-    // out-of-band, so a fixed dummy signature is fine — this avoids per-tx ECDSA signing entirely.
-    let signature = Signature::new(Default::default(), Default::default(), false);
-
     let submitted = Arc::new(AtomicU64::new(0));
-    // Producer-side diagnostics: time spent building txs vs blocked on `send()` (channel full).
-    // If send-block dominates, the channel is over-populated (pusher ahead) — the stream is NOT
-    // starved. If build dominates / send-block ~0, the pusher itself is the bottleneck.
-    let build_micros = Arc::new(AtomicU64::new(0));
-    let send_block_micros = Arc::new(AtomicU64::new(0));
     let stop = Arc::new(AtomicBool::new(false));
-    let pusher = tokio::spawn({
-        let (sender, submitted, stop) = (sender.clone(), submitted.clone(), stop.clone());
-        let (build_micros, send_block_micros) = (build_micros.clone(), send_block_micros.clone());
-        async move {
-            let mut nonce = start_nonce;
-            while !stop.load(Ordering::Relaxed) {
-                let build_start = Instant::now();
-                let tx = build_direct_tx(chain_id, nonce, recipient, signer, signature);
-                build_micros.fetch_add(build_start.elapsed().as_micros() as u64, Ordering::Relaxed);
-                // Backpressure: blocks once the channel fills, pacing submission to the sequencer.
-                let send_start = Instant::now();
-                let send_result = sender.send(tx).await;
-                send_block_micros
-                    .fetch_add(send_start.elapsed().as_micros() as u64, Ordering::Relaxed);
-                if send_result.is_err() {
-                    break; // sequencer dropped the channel
-                }
-                nonce += 1;
-                submitted.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    });
+    // Stream pre-built txs from disk instead of constructing them in the hot loop.
+    let pusher = spawn_corpus_pusher(
+        path,
+        signer,
+        sender.clone(),
+        submitted.clone(),
+        stop.clone(),
+    );
 
     // Warm up so the channel fills and the pipeline reaches steady state, then measure the
     // steady-state consumption rate.
@@ -346,8 +451,6 @@ async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     });
 
     let submitted_before = submitted.load(Ordering::Relaxed);
-    let build_before = build_micros.load(Ordering::Relaxed);
-    let send_block_before = send_block_micros.load(Ordering::Relaxed);
     let block_before = tester.l2_provider.get_block_number().await?;
     let measure_start = Instant::now();
 
@@ -355,10 +458,6 @@ async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
 
     let measured = measure_start.elapsed();
     let executed = submitted.load(Ordering::Relaxed) - submitted_before;
-    let pusher_build_time =
-        Duration::from_micros(build_micros.load(Ordering::Relaxed) - build_before);
-    let pusher_send_block_time =
-        Duration::from_micros(send_block_micros.load(Ordering::Relaxed) - send_block_before);
     let block_after = tester.l2_provider.get_block_number().await?;
     stop.store(true, Ordering::Relaxed);
     let _ = pusher.await;
@@ -380,10 +479,6 @@ async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
         ?measured,
         direct_injection_tps,
         blocks_produced = block_after - block_before,
-        // Over the measure window: time the single pusher task spent building txs vs blocked on
-        // `send()` (channel full). send_block ≫ build ⇒ pusher is ahead, stream not starved.
-        ?pusher_build_time,
-        ?pusher_send_block_time,
         "direct-injection load test complete"
     );
 
@@ -461,9 +556,12 @@ async fn parallel_blocks_tps(env: TestEnvironment) -> anyhow::Result<()> {
     // V6 state. The node now idles (we send no txs), so the base snapshot stays stable.
     let state = tester.state();
     let base = *state.block_range_available().end();
-    tracing::info!(base, chain_id, "parallel-blocks bench: base block + chain id");
+    tracing::info!(
+        base,
+        chain_id,
+        "parallel-blocks bench: base block + chain id"
+    );
 
-    let signature = Signature::new(Default::default(), Default::default(), false);
     let m: usize = env_or("PARALLEL_BENCH_M", 29_200);
 
     // V6 block context for the bench blocks (all K execute at base+1 against the base snapshot).
@@ -487,17 +585,26 @@ async fn parallel_blocks_tps(env: TestEnvironment) -> anyhow::Result<()> {
 
     let mut baseline_tps = 0.0;
     for k in [1usize, 2, 4, 8, 16] {
-        // Pre-encode K disjoint groups of M transfers (untimed). Group i: sender 2i+1 -> recipient
-        // 2i+2 (distinct 0xBE addresses), nonces 0..M.
+        // Load K disjoint groups of M transfers from the per-signer corpus (untimed). Group i: signer
+        // bench_addr(2i+1) -> recipient bench_addr(2i+2), nonces 0..M. Each tx is reconstructed from
+        // its stored RLP and `.encode()`d for the VM (the keccak hash is computed here, off the timed
+        // region). Only M records/signer are needed, so this corpus is sized to M (not the sustained
+        // tests' 100M).
         let groups: Vec<Vec<EncodedTx>> = (0..k)
-            .map(|i| {
+            .map(|i| -> anyhow::Result<Vec<EncodedTx>> {
                 let signer = bench_addr(2 * i as u64 + 1);
-                let recipient = bench_addr(2 * i as u64 + 2);
-                (0..m)
-                    .map(|n| build_direct_tx(chain_id, n as u64, recipient, signer, signature).encode())
-                    .collect()
+                let path = ensure_direct_corpus(chain_id, i, m as u64)?;
+                let mut reader = corpus::CorpusReader::open(&path)?;
+                let mut group = Vec::with_capacity(m);
+                for _ in 0..m {
+                    let rlp = reader
+                        .next_record()?
+                        .expect("corpus must contain at least M records");
+                    group.push(rebuild_zk_tx(&rlp, signer).encode());
+                }
+                Ok(group)
             })
-            .collect();
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         let view = state.state_view_at(base).expect("state_view_at(base)");
 
@@ -605,6 +712,13 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let sender = tester.direct_tx_sender();
     let chain_id = tester.l2_provider.get_chain_id().await?;
 
+    // Ensure the K signer corpora exist (signer i = bench_addr(2i+1) -> bench_addr(2i+2)), built once
+    // and reused. Do this BEFORE activating direct injection so the producer stays parked on the
+    // mempool during any (one-time) generation rather than spinning on an empty direct channel.
+    let paths: Vec<std::path::PathBuf> = (0..k)
+        .map(|i| ensure_direct_corpus(chain_id, i, txs_per_file()))
+        .collect::<anyhow::Result<_>>()?;
+
     // Let the producer settle into the serial `produce()` parked on the (empty) mempool before we
     // activate. Then the kick below is processed by that in-flight serial call; only the *next* loop
     // iteration hits the parallel gate. Activating while the producer is already in `produce_parallel`
@@ -623,35 +737,25 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
         .expect_successful_receipt()
         .await?;
 
-    // Dummy signature (VM does not validate EOA signatures in forward mode; signer is out-of-band).
-    let signature = Signature::new(Default::default(), Default::default(), false);
-
     let submitted = Arc::new(AtomicU64::new(0));
     let stop = Arc::new(AtomicBool::new(false));
-    // Single pusher round-robining K distinct senders -> K distinct recipients (0xBE-prefixed,
-    // disjoint slots), independent per-sender nonce, so `produce_parallel` buckets each batch into K
-    // conflict-free groups. Backpressured by the channel, so the submit rate == the pipeline's consume
-    // rate. NOTE: this single task tops out near ~1.24M tx/s (cost of `build_direct_tx`); spreading it
-    // over K tasks is *slower* (oversubscribes cores vs the executor's VM threads + applier populates,
-    // and contends on the channel lock).
-    let pusher = tokio::spawn({
-        let (sender, submitted, stop) = (sender.clone(), submitted.clone(), stop.clone());
-        async move {
-            let mut nonces = vec![0u64; k];
-            let mut i = 0usize;
-            while !stop.load(Ordering::Relaxed) {
-                let signer = bench_addr(2 * i as u64 + 1);
-                let recipient = bench_addr(2 * i as u64 + 2);
-                let tx = build_direct_tx(chain_id, nonces[i], recipient, signer, signature);
-                if sender.send(tx).await.is_err() {
-                    break; // sequencer dropped the channel
-                }
-                nonces[i] += 1;
-                submitted.fetch_add(1, Ordering::Relaxed);
-                i = (i + 1) % k;
-            }
-        }
-    });
+    // One blocking reader per signer file streams pre-built txs into the shared channel; the sequencer
+    // buckets by signer into K conflict-free groups. Reading from disk (no build, no keccak) is cheap,
+    // so K parallel readers feed far faster than the old single build-loop pusher (~1.24M ceiling).
+    let pushers: Vec<_> = paths
+        .into_iter()
+        .enumerate()
+        .map(|(i, path)| {
+            let signer = bench_addr(2 * i as u64 + 1);
+            spawn_corpus_pusher(
+                path,
+                signer,
+                sender.clone(),
+                submitted.clone(),
+                stop.clone(),
+            )
+        })
+        .collect();
 
     // Warm up so the channel fills and the pipeline reaches steady state, then measure the rate.
     tokio::time::sleep(warmup).await;
@@ -666,7 +770,9 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let executed = submitted.load(Ordering::Relaxed) - submitted_before;
     let block_after = tester.l2_provider.get_block_number().await?;
     stop.store(true, Ordering::Relaxed);
-    let _ = pusher.await;
+    for pusher in pushers {
+        let _ = pusher.await;
+    }
 
     let tps = executed as f64 / measured.as_secs_f64();
     let blocks_produced = block_after - block_before;

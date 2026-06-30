@@ -70,6 +70,8 @@ httpmock.workspace = true
 # In-process CPU sampler for the `effective_tps` load test (opt-in via `LOAD_TEST_FLAMEGRAPH`).
 # Needs no `perf`/root; samples via SIGPROF and renders a flamegraph SVG.
 pprof = { version = "0.14", features = ["flamegraph"] }
+# Parallel generation of the pre-built tx corpus (load tests).
+rayon.workspace = true
 
 [features]
 prover-tests = []
