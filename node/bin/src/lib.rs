@@ -560,12 +560,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to create network service");
         network_service.spawn(runtime, node_role.is_main().then_some(verify_request_rx));
         if let Some(bootstrapper) = raft_bootstrapper {
-            runtime.spawn_critical_task("raft bootstrapper", async move {
-                bootstrapper
-                    .bootstrap_if_needed()
-                    .await
-                    .expect("failed to run raft bootstrap process");
-            });
+            bootstrapper
+                .bootstrap_if_needed()
+                .await
+                .expect("failed to run raft bootstrap process");
         }
         Some(bound_network_ports)
     } else if node_role.is_main() {
