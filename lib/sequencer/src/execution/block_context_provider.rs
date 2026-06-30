@@ -49,6 +49,10 @@ pub struct BlockContextProvider<Subpool> {
     /// Test/bench-only: when present and `active`, block production bypasses the mempool and streams
     /// transactions directly from this channel instead of `pool.best_transactions_stream()`.
     direct_tx: Option<DirectTxSource>,
+    /// Test/bench-only: per-signer overflow carried across `produce_parallel` rounds, so an uneven
+    /// direct-injection feed never packs a block beyond `max_transactions_in_block` (which the VM
+    /// would seal early on NativeCycles, dropping the excess and opening a nonce gap).
+    direct_buffers: std::collections::HashMap<Address, std::collections::VecDeque<ZkTransaction>>,
 }
 
 /// Test/bench-only handle that feeds transactions straight into block production, bypassing the
@@ -103,6 +107,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             current_sl_chain_id,
             last_constructed_block_ctx_sender,
             direct_tx,
+            direct_buffers: std::collections::HashMap::new(),
         }
     }
 
@@ -339,34 +344,44 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .block_hashes
             .push(previous_block_hash);
 
-        // Drain a batch from the direct channel and bucket by sender into disjoint groups.
+        let max_tx = self.config.max_transactions_in_block;
+        // Refill the per-signer buffers from the direct channel. Carry-over from the previous round is
+        // kept, so an uneven feed never forces a block past `max_tx` (which would seal early on
+        // NativeCycles and drop the excess, opening a nonce gap). A bounded drain plus the channel's
+        // own backpressure keep the buffers from growing without limit.
         let rx = self
             .direct_tx
             .as_ref()
             .expect("produce_parallel requires direct injection")
             .rx
             .clone();
-        let target = k.saturating_mul(self.config.max_transactions_in_block);
-        let mut groups: std::collections::HashMap<Address, Vec<ZkTransaction>> =
-            std::collections::HashMap::new();
-        // Await the first tx (parks on an empty channel instead of busy-looping, matching the serial
-        // direct path's `poll_fn`); the lock is released between polls, not held across the await.
-        let Some(first) =
-            std::future::poll_fn(|cx| rx.lock().unwrap().poll_recv(cx)).await
-        else {
-            return Ok(Vec::new()); // channel closed
-        };
-        groups.entry(first.signer()).or_default().push(first);
+        let buffered: usize = self.direct_buffers.values().map(|q| q.len()).sum();
+        if buffered == 0 {
+            // Park until the first tx arrives (avoids busy-looping on an empty channel); the lock is
+            // released between polls, not held across the await.
+            let Some(first) = std::future::poll_fn(|cx| rx.lock().unwrap().poll_recv(cx)).await
+            else {
+                return Ok(Vec::new()); // channel closed
+            };
+            self.direct_buffers
+                .entry(first.signer())
+                .or_default()
+                .push_back(first);
+        }
         {
             let mut guard = rx.lock().unwrap();
-            let mut pulled = 1usize;
-            while pulled < target {
+            let budget = k.saturating_mul(max_tx);
+            let mut pulled = 0usize;
+            while pulled < budget {
                 match guard.try_recv() {
                     Ok(tx) => {
-                        groups.entry(tx.signer()).or_default().push(tx);
+                        self.direct_buffers
+                            .entry(tx.signer())
+                            .or_default()
+                            .push_back(tx);
                         pulled += 1;
                     }
-                    // Channel momentarily empty (pusher behind) - produce what we have.
+                    // Channel momentarily empty (readers behind) - emit what we have buffered.
                     Err(_) => break,
                 }
             }
@@ -377,17 +392,30 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             native_price,
             pubdata_price,
         } = fee_params;
+        // Emit up to `k` blocks, one signer each, capped at `max_tx`; the remainder (a signer's
+        // overflow, or signers beyond `k`) stays buffered for the next round so each signer's nonces
+        // stay contiguous.
         let mut commands = Vec::new();
-        for (i, txs) in groups.into_values().take(k).enumerate() {
-            if txs.is_empty() {
+        let signers: Vec<Address> = self.direct_buffers.keys().copied().collect();
+        for signer in signers {
+            if commands.len() >= k {
+                break;
+            }
+            let queue = self
+                .direct_buffers
+                .get_mut(&signer)
+                .expect("signer buffer present");
+            if queue.is_empty() {
                 continue;
             }
-            let block_number = base_block_number + i as u64;
+            let take = queue.len().min(max_tx);
+            let txs: Vec<ZkTransaction> = queue.drain(..take).collect();
+            let i = commands.len();
             let block_context = BlockContext {
                 eip1559_basefee,
                 native_price,
                 pubdata_price,
-                block_number,
+                block_number: base_block_number + i as u64,
                 timestamp: base_timestamp + i as u64,
                 chain_id: self.config.l2_chain_id,
                 coinbase: self.config.fee_collector_address,
@@ -402,8 +430,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             commands.push(PreparedBlockCommand {
                 block_context,
                 tx_source: MarkingTxStream::unmarkable(futures::stream::iter(txs)),
-                // Fixed group: seal when the group's stream is exhausted. `allowed_to_finish_early`
-                // stops the pipelined loop from treating exhaustion as an unexpected early seal.
+                // Group is <= max_tx (< the NativeCycles seal), so the stream exhausts before the VM
+                // seals: no tx is dropped. `allowed_to_finish_early` accepts the exhaustion seal.
                 seal_policy: SealPolicy::UntilExhausted {
                     allowed_to_finish_early: true,
                 },
@@ -422,6 +450,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 direct_injection: true,
             });
         }
+        // Drop now-empty buffers so the map doesn't accumulate idle signers.
+        self.direct_buffers.retain(|_, q| !q.is_empty());
         Ok(commands)
     }
 
