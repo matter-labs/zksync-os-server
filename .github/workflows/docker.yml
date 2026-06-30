@@ -95,6 +95,9 @@ jobs:
     name: SBOM
     needs: [ 'build-images' ]
     if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: read
     uses: ./.github/workflows/sbom-analysis-reusable.yaml
     secrets: inherit
     with:
