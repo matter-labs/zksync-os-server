@@ -110,7 +110,7 @@ use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{EthCallHandler, RpcStorage};
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::{BlockApplier, BlockCanonizer, BlockExecutor, FeeProvider};
-use zksync_os_status_server::run_status_server_on_listener;
+use zksync_os_status_server::run_status_server;
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
@@ -120,7 +120,8 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState};
 
-pub use ports::{BoundPorts, PreboundPorts};
+pub use ports::BoundPorts;
+use ports::PreboundPorts;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const RAFT_DB_NAME: &str = "raft";
@@ -130,7 +131,6 @@ const REPOSITORY_DB_NAME: &str = "repository";
 const BATCH_DB_NAME: &str = "batch";
 pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 
-#[allow(clippy::too_many_arguments)]
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
     runtime: &Runtime,
     config: Config,
@@ -138,17 +138,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let prebound_ports = PreboundPorts::bind_from_config(&config)
         .await
         .expect("failed to prebind node ports");
-    run_with_prebound_ports::<State>(runtime, config, prebound_ports).await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn run_with_prebound_ports<
-    State: ReadStateHistory + WriteState + StateInitializer + Clone,
->(
-    runtime: &Runtime,
-    config: Config,
-    prebound_ports: PreboundPorts,
-) -> BoundPorts {
     let PreboundPorts {
         rpc: rpc_listener,
         status: prebound_status_listener,
@@ -524,7 +513,7 @@ pub async fn run_with_prebound_ports<
         let (network_service, bound_network_ports) = if node_role.is_main() {
             let (_, accepted_verifier_signers) =
                 effective_verification_policy(&batch_verification_policy_config, &l1_state);
-            NetworkService::new_with_port_retry(
+            NetworkService::new(
                 config.network_config.clone().into(),
                 runtime.clone(),
                 ZksProtocolConfig::MainNode(MainNodeProtocolConfig {
@@ -546,7 +535,7 @@ pub async fn run_with_prebound_ports<
                     db_key: db_key.clone(),
                 })
                 .collect();
-            NetworkService::new_with_port_retry(
+            NetworkService::new(
                 config.network_config.clone().into(),
                 runtime.clone(),
                 ZksProtocolConfig::ExternalNode(ExternalNodeProtocolConfig {
@@ -982,7 +971,7 @@ pub async fn run_with_prebound_ports<
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "status server",
             |shutdown| async move {
-                run_status_server_on_listener(status_listener, shutdown, raft_status_rx)
+                run_status_server(status_listener, shutdown, raft_status_rx)
                     .await
                     .expect("failed to run status server");
             },

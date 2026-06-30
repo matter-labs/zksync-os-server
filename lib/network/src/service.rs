@@ -48,7 +48,9 @@ const EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NetworkPorts {
+    /// TCP port used by RLPx.
     pub tcp: u16,
+    /// UDP port used by discv5.
     pub udp: u16,
 }
 
@@ -71,28 +73,6 @@ struct ReservedTcpUdpPort {
     _udp_socket: UdpSocket,
 }
 
-impl ReservedTcpUdpPort {
-    fn port(&self) -> u16 {
-        self.port
-    }
-
-    #[cfg(test)]
-    fn tcp_port(&self) -> u16 {
-        self._tcp_listener
-            .local_addr()
-            .expect("reserved TCP listener local_addr")
-            .port()
-    }
-
-    #[cfg(test)]
-    fn udp_port(&self) -> u16 {
-        self._udp_socket
-            .local_addr()
-            .expect("reserved UDP socket local_addr")
-            .port()
-    }
-}
-
 fn try_reserve_tcp_udp_port(address: Ipv4Addr, port: u16) -> io::Result<ReservedTcpUdpPort> {
     let tcp_listener = StdTcpListener::bind(SocketAddrV4::new(address, port))?;
     let port = tcp_listener.local_addr()?.port();
@@ -104,14 +84,7 @@ fn try_reserve_tcp_udp_port(address: Ipv4Addr, port: u16) -> io::Result<Reserved
     })
 }
 
-fn reserve_ephemeral_tcp_udp_port(
-    address: Ipv4Addr,
-    preferred_port: Option<u16>,
-) -> io::Result<ReservedTcpUdpPort> {
-    if let Some(port) = preferred_port {
-        return try_reserve_tcp_udp_port(address, port);
-    }
-
+fn reserve_ephemeral_tcp_udp_port(address: Ipv4Addr) -> io::Result<ReservedTcpUdpPort> {
     let mut last_error = None;
     for _ in 0..EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS {
         match try_reserve_tcp_udp_port(address, 0) {
@@ -135,6 +108,7 @@ fn network_error_is_addr_in_use(error: &NetworkError) -> bool {
             err.kind() == io::ErrorKind::AddrInUse
         }
         NetworkError::Discv5Error(err) => {
+            // discv5 does not expose AddrInUse as an io::ErrorKind, so match its display text.
             let err = err.to_string().to_ascii_lowercase();
             err.contains("address already in use")
                 || err.contains("addrinuse")
@@ -157,7 +131,7 @@ async fn resolve_boot_nodes_with_retry(
         unresolved_boot_nodes: boot_nodes,
     }));
 
-    (|| {
+    let resolve_once = || {
         let state = Arc::clone(&state);
         async move {
             resolve_boot_nodes_once(&state, &|boot_node: TrustedPeer| async move {
@@ -165,17 +139,18 @@ async fn resolve_boot_nodes_with_retry(
             })
             .await
         }
-    })
-    .retry(BOOT_NODE_RESOLUTION_RETRY_BUILDER)
-    .notify(|error, retry_in| {
-        tracing::info!(
-            retry_in = ?retry_in,
-            unresolved_boot_nodes = error.unresolved_boot_nodes,
-            "retrying boot node resolution before starting p2p network"
-        );
-    })
-    .await
-    .map_err(|error| io::Error::new(io::ErrorKind::AddrNotAvailable, error))?;
+    };
+    resolve_once
+        .retry(BOOT_NODE_RESOLUTION_RETRY_BUILDER)
+        .notify(|error, retry_in| {
+            tracing::info!(
+                retry_in = ?retry_in,
+                unresolved_boot_nodes = error.unresolved_boot_nodes,
+                "retrying boot node resolution before starting p2p network"
+            );
+        })
+        .await
+        .map_err(|error| io::Error::new(io::ErrorKind::AddrNotAvailable, error))?;
 
     let state = state.lock().expect("boot node resolution state poisoned");
     if !state.unresolved_boot_nodes.is_empty() {
@@ -258,7 +233,11 @@ pub struct PeerVerifyBatchResult {
 }
 
 impl NetworkService {
-    pub async fn new_with_port_retry<Replay, Client>(
+    /// Builds the network service and returns the TCP/UDP ports it bound.
+    ///
+    /// When `config.port` is 0, startup first finds a port available for both TCP and UDP, then
+    /// retries if another process claims it before reth binds its sockets.
+    pub async fn new<Replay, Client>(
         mut config: NetworkConfig,
         runtime: Runtime,
         protocol_config: ZksProtocolConfig,
@@ -271,7 +250,7 @@ impl NetworkService {
         Client: ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + Clone + 'static,
     {
         if config.port != 0 {
-            return Self::new(
+            return Self::build(
                 config,
                 runtime,
                 protocol_config,
@@ -285,11 +264,12 @@ impl NetworkService {
         let mut last_error = None;
         for attempt in 1..=EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS {
             let reservation =
-                reserve_ephemeral_tcp_udp_port(config.address, None).map_err(NetworkError::from)?;
-            config.port = reservation.port();
+                reserve_ephemeral_tcp_udp_port(config.address).map_err(NetworkError::from)?;
+            config.port = reservation.port;
+            // reth binds its own sockets, so release the temporary reservation before building.
             drop(reservation);
 
-            match Self::new(
+            match Self::build(
                 config.clone(),
                 runtime.clone(),
                 protocol_config.clone(),
@@ -327,7 +307,7 @@ impl NetworkService {
         }))
     }
 
-    pub async fn new(
+    async fn build(
         config: NetworkConfig,
         runtime: Runtime,
         protocol_config: ZksProtocolConfig,
@@ -767,6 +747,7 @@ mod tests {
     use super::dispatch_verify_batch;
     use super::reserve_ephemeral_tcp_udp_port;
     use super::resolve_boot_nodes_once;
+    use super::try_reserve_tcp_udp_port;
     use crate::VerifyBatch;
     use crate::protocol::PeerConnectionHandle;
     use crate::session::PeerSessionStore;
@@ -999,15 +980,13 @@ mod tests {
         let occupied_port = udp_socket.local_addr().unwrap().port();
 
         assert!(
-            reserve_ephemeral_tcp_udp_port(Ipv4Addr::LOCALHOST, Some(occupied_port)).is_err(),
+            try_reserve_tcp_udp_port(Ipv4Addr::LOCALHOST, occupied_port).is_err(),
             "a UDP-occupied port must not be accepted as an available p2p port"
         );
 
-        let reservation = reserve_ephemeral_tcp_udp_port(Ipv4Addr::LOCALHOST, None)
+        let reservation = reserve_ephemeral_tcp_udp_port(Ipv4Addr::LOCALHOST)
             .expect("must reserve an ephemeral TCP+UDP port");
-        assert_ne!(reservation.port(), occupied_port);
-        assert_eq!(reservation.tcp_port(), reservation.port());
-        assert_eq!(reservation.udp_port(), reservation.port());
+        assert_ne!(reservation.port, occupied_port);
     }
 
     fn verify_request() -> VerifyBatch {

@@ -16,14 +16,14 @@ pub struct BoundPorts {
 
 /// Sockets bound before node startup and then handed to their servers.
 #[derive(Debug)]
-pub struct PreboundPorts {
+pub(crate) struct PreboundPorts {
     pub(crate) rpc: TcpListener,
     pub(crate) status: Option<TcpListener>,
     pub(crate) prover_api: Option<TcpListener>,
 }
 
 impl PreboundPorts {
-    pub async fn bind_from_config(config: &Config) -> anyhow::Result<Self> {
+    pub(crate) async fn bind_from_config(config: &Config) -> anyhow::Result<Self> {
         let status_address = config
             .status_server_config
             .enabled
@@ -61,25 +61,6 @@ impl PreboundPorts {
             status,
             prover_api,
         })
-    }
-
-    pub fn bound_ports(&self) -> BoundPorts {
-        BoundPorts {
-            rpc: self.rpc.local_addr().expect("rpc server local_addr").port(),
-            status: self.status.as_ref().map(|listener| {
-                listener
-                    .local_addr()
-                    .expect("status server local_addr")
-                    .port()
-            }),
-            prover_api: self.prover_api.as_ref().map(|listener| {
-                listener
-                    .local_addr()
-                    .expect("prover API server local_addr")
-                    .port()
-            }),
-            network: None,
-        }
     }
 }
 

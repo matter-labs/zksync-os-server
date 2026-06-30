@@ -10,7 +10,7 @@ pub struct NetworkConfig {
     /// IPv4 address to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
     pub address: Ipv4Addr,
     /// Port to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
-    /// Port 0 is resolved to a concrete TCP+UDP port by `NetworkService::new_with_port_retry`.
+    /// Port 0 is resolved to a concrete TCP+UDP port by `NetworkService::new`.
     pub port: u16,
     /// All boot nodes to start network discovery with. Expected format is
     /// `enode://<node ID>@<IP address-or-DNS host>:<port>`.

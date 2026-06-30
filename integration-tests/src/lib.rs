@@ -55,6 +55,7 @@ pub mod provider;
 pub mod rpc_recorder;
 pub mod test_config;
 pub mod upgrade;
+#[cfg(feature = "prover-tests")]
 mod utils;
 pub mod wallets;
 
@@ -319,8 +320,7 @@ pub struct StoppedTester {
 pub struct SupportingNode {
     runtime: Runtime,
     pub prover_tester: ProverTester,
-    // Used under #[cfg(feature = "prover-tests")] to build sequencer URLs.
-    #[allow(dead_code)]
+    #[cfg(feature = "prover-tests")]
     bound_ports: BoundPorts,
     _tempdir: Arc<TempDir>,
 }
@@ -845,6 +845,7 @@ impl SupportingNode {
     fn from_tester(tester: Tester) -> Self {
         let Tester {
             runtime,
+            #[cfg(feature = "prover-tests")]
             bound_ports,
             tempdir,
             owned_supporting_nodes,
@@ -855,6 +856,7 @@ impl SupportingNode {
         Self {
             runtime,
             prover_tester,
+            #[cfg(feature = "prover-tests")]
             bound_ports,
             _tempdir: tempdir,
         }

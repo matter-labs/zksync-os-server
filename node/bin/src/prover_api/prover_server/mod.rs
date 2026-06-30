@@ -23,8 +23,7 @@ pub(in crate::prover_api::prover_server) struct AppState {
     proof_storage: ProofStorage,
 }
 
-/// Entry point for prover API server.
-/// Starts an HTTP server on a pre-bound listener.
+/// Runs the prover API HTTP server on a pre-bound listener.
 pub async fn run(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
@@ -46,7 +45,7 @@ pub async fn run(
     let addr = listener
         .local_addr()
         .expect("failed to get prover server local addr");
-    tracing::info!("proof data server listening on {addr}");
+    tracing::info!("prover API server listening on {addr}");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown.ignore_guard())
