@@ -1,12 +1,12 @@
 name: SBOM generation and upload to Dependency Track
 
 on:
-  workflow_call:
-    inputs:
-      version:
-        description: Version string to sync (e.g. 1.2.3)
-        required: true
-        type: string
+  push:
+    branches:
+      - ZKD-3716-sbom-workflows
+
+env:
+  VERSION: "85d7700da4981bd5dfbfa812ad193af0a8f0103c"
 
 jobs:
   create-parent-project:
@@ -26,7 +26,7 @@ jobs:
           DT_BASE_URL: https://${{ vars.DEPENDENCY_TRACK_SERVER_HOSTNAME }}
           DT_API_KEY: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
           PROJECT_NAME: ${{ github.event.repository.name }}
-          PROJECT_VERSION: ${{ inputs.version }}
+          PROJECT_VERSION: ${{ env.VERSION }}
           PARENT_UUID: ${{ vars.DEPENDENCY_TRACK_PARENT_PROJECT_UUID }}
 
   sbom-code:
@@ -54,12 +54,12 @@ jobs:
           serverhostname: ${{ vars.DEPENDENCY_TRACK_SERVER_HOSTNAME }}
           apikey: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
           projectname: "${{ github.event.repository.name }}-code"
-          projectversion: ${{ inputs.version }}
+          projectversion: ${{ env.VERSION }}
           isLatest: true
           bomfilename: "bom-code.cdx.json"
           autocreate: true
           parentname: ${{ github.event.repository.name }}
-          parentversion: ${{ inputs.version }}
+          parentversion: ${{ env.VERSION }}
 
   sbom-image:
     name: Generate and upload SBOM of the container images for analysis
@@ -75,7 +75,7 @@ jobs:
       - name: Generate CycloneDX file on image analysis
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          image: ghcr.io/${{ github.repository_owner }}/${{ matrix.app }}:${{ inputs.version }}
+          image: ghcr.io/${{ github.repository_owner }}/${{ matrix.app }}:${{ env.VERSION }}
           registry-username: ${{ github.repository_owner }}
           registry-password: ${{ secrets.GITHUB_TOKEN }}
           output-file: "bom-${{ matrix.app }}-image.cdx.json"
@@ -89,9 +89,9 @@ jobs:
           serverhostname: ${{ vars.DEPENDENCY_TRACK_SERVER_HOSTNAME }}
           apikey: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
           projectname: "${{ matrix.app }}-image"
-          projectversion: ${{ inputs.version }}
+          projectversion: ${{ env.VERSION }}
           isLatest: true
           bomfilename: "bom-${{ matrix.app }}-image.cdx.json"
           autocreate: true
           parentname: ${{ github.event.repository.name }}
-          parentversion: ${{ inputs.version }}
+          parentversion: ${{ env.VERSION }}
